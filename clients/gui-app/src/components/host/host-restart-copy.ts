@@ -1,11 +1,26 @@
 /**
+ * Copy shared by the two surfaces that restart a host - the menu/tray flow
+ * (`LocalHostRestartFlow`) and Settings → Overview. Both answer the same
+ * verdicts through the same dialog, so the words live here rather than being
+ * written twice and drifting the moment one is reworded.
+ */
+
+/**
+ * Shown when this machine's host was replaced while a force offer sat open.
+ *
+ * The offer states host A's session count over a button that respawns
+ * whichever host is local NOW, so a swap underneath it makes the two disagree.
+ * Both surfaces refuse rather than dispatch, and say why.
+ */
+export const HOST_CHANGED_DESCRIPTION =
+  "This machine's host was replaced while this dialog was open, so nothing " +
+  "was stopped. Restart again to check the new host.";
+
+/**
  * What a `host.restart` busy verdict says, wherever it is put to the user.
  *
  * ONE verdict, one sentence: the host closed session admission, found work in
- * flight, reopened it, and told us the count. Both surfaces that answer it -
- * the menu/tray restart flow and Settings → Overview - render it through the
- * SAME force/defer dialog, so the copy is shared rather than written twice.
- * Two copies drifted the moment one was reworded.
+ * flight, reopened it, and told us the count.
  *
  * `forceOffered` is REQUIRED rather than assumed, because the closing sentence
  * promises a control: force is a bridge respawn of THIS machine's host process,

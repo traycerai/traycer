@@ -4,7 +4,10 @@ import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
-import { busyRestartMessage } from "@/components/host/host-restart-busy-message";
+import {
+  busyRestartMessage,
+  HOST_CHANGED_DESCRIPTION,
+} from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import {
   InstallationDetailsDisclosure,
@@ -126,7 +129,8 @@ export function HostOverviewPanel(props: {
   // The BINDING rather than `useHostClient()`: same context, re-provided by the
   // panel above for an explicit pick, but `null` instead of a throw when there
   // is no host runtime at all. Every read below is null-gated.
-  const client = useHostBinding()?.hostClient ?? null;
+  const binding = useHostBinding();
+  const client = binding?.hostClient ?? null;
   // MOUNTING, not rendering. A query hook mounted under a non-ready scope still
   // fires against the ambient host and caches the answer under this page's key,
   // however well a gate hides the result.
@@ -228,12 +232,18 @@ export function HostOverviewPanel(props: {
   //
   // Held as the OFFER rather than a boolean so the count the dialog states is
   // the count the force is sized from - captured when the verdict lands, not
-  // re-read from whatever the page shows when the button is pressed. It carries
-  // no host id: `requestHostRespawn()` is not host-scoped (it respawns whichever
-  // local host this machine has at the moment it runs), so an id here would be
-  // decoration - a field that LOOKS like it pins the target while nothing checks
-  // it is worse than no field at all. `null` is "no offer open".
+  // re-read from whatever the page shows when the button is pressed.
+  //
+  // `hostId` is the host that PRODUCED the verdict, and it is carried because
+  // the respawn is not host-scoped: `restartHost()` kills whichever host this
+  // machine has local at the moment it runs. An offer that outlived a local
+  // host identity change would therefore state A's session count above a button
+  // that kills B - whose claim was never asked and whose sessions were never
+  // counted. Both guards below compare against it, exactly as
+  // `LocalHostRestartFlow` does; an id nothing checked would be worse than no
+  // id at all. `null` is "no offer open".
   const [forceRestartOffer, setForceRestartOffer] = useState<{
+    readonly hostId: string;
     readonly hostName: string;
     readonly busySessionCount: number;
   } | null>(null);
@@ -281,14 +291,31 @@ export function HostOverviewPanel(props: {
   // under this key, which survives any number of remounts.
   const forceRestartInFlight =
     useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
-  // Whether a force offer can be made at all — a question about the ROUTE, not
-  // about any particular host id: the respawn goes over THIS machine's CLI
-  // bridge, so it exists for the local host with a bridge attached and for
-  // nothing else. A remote host has no transport that can kill its process.
-  const canForceRestart =
-    (host?.isLocalMachine ?? false) &&
+  // The host a force offer would be ABOUT, or `null` when this page has no
+  // force route at all: the respawn goes over THIS machine's CLI bridge, so it
+  // exists for the local host with a bridge attached and for nothing else. A
+  // remote host has no transport that can kill its process.
+  //
+  // One value rather than a boolean gate beside an id, because the two must
+  // never disagree - the id IS the reason the route exists, and reading them
+  // apart is how an offer ends up pinned to a host the gate already refused.
+  const forceRestartLocalHostId =
+    host !== null &&
+    host.isLocalMachine &&
     props.hasLocalBridge &&
-    management !== null;
+    management !== null
+      ? host.hostId
+      : null;
+  // The live local host at the instant of a CLICK, not as of the last committed
+  // render. A host identity change arrives as a store update, so a press
+  // processed against the previous render would compare stale against stale and
+  // sail through - the same reason the menu/tray flow re-reads here.
+  // `getLocalEntry()` is synchronous and current.
+  const liveLocalHostIdNow = (): string | null => {
+    if (binding === null) return null;
+    const entry = binding.directory.getLocalEntry();
+    return entry === null ? null : entry.hostId;
+  };
 
   // Save and Reset are the SAME write with a different argument — `null` clears
   // the override and falls the name back to the host's own default. Sharing the
@@ -477,6 +504,19 @@ export function HostOverviewPanel(props: {
     anyPending &&
     !restart.isPending &&
     !forceRestartInFlight
+  ) {
+    setForceRestartOffer(null);
+  }
+  // The other way the offer goes stale: the host it describes stopped being the
+  // one the respawn would hit. `forceRestartLocalHostId` goes null the moment
+  // this page's host is no longer this machine's - which is exactly a local
+  // host identity change under an open dialog - and non-null it can only be
+  // this host's own id, since that is where it comes from. Drop the offer
+  // rather than leave a kill button over a count that no longer describes its
+  // target; `⋯ → Restart` re-asks the new host cooperatively.
+  if (
+    forceRestartOffer !== null &&
+    forceRestartOffer.hostId !== forceRestartLocalHostId
   ) {
     setForceRestartOffer(null);
   }
@@ -744,7 +784,7 @@ export function HostOverviewPanel(props: {
                   // `toastHostRestartDeclined` is the same "deliberately not
                   // restarted, this clears on its own" register the declined
                   // respawn uses, deliberately not an error toast.
-                  if (!canForceRestart) {
+                  if (forceRestartLocalHostId === null) {
                     toastHostRestartDeclined(
                       busyRestartMessage(
                         response.verdict.busySessionCount,
@@ -754,6 +794,7 @@ export function HostOverviewPanel(props: {
                     return;
                   }
                   setForceRestartOffer({
+                    hostId: forceRestartLocalHostId,
                     hostName: displayName,
                     busySessionCount: response.verdict.busySessionCount,
                   });
@@ -797,6 +838,19 @@ export function HostOverviewPanel(props: {
         forceLabel="Force restart"
         onForce={() => {
           if (forceRestartOffer === null) return;
+          // Refuse on a POSITIVE mismatch only. `null` here is "cannot tell"
+          // (no binding, or the local entry went away because the host is
+          // down) - not evidence of a swap, and the state where a respawn is
+          // most legitimate - so it falls through to the dispatch exactly as
+          // the menu/tray flow does.
+          const liveHostId = liveLocalHostIdNow();
+          if (liveHostId !== null && liveHostId !== forceRestartOffer.hostId) {
+            setForceRestartOffer(null);
+            toast.info("Host changed", {
+              description: HOST_CHANGED_DESCRIPTION,
+            });
+            return;
+          }
           forceRestart.mutate({ hostName: forceRestartOffer.hostName });
         }}
         onDefer={() => setForceRestartOffer(null)}
