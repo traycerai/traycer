@@ -21,9 +21,16 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
- * after the "Saving - please wait" modal resolves.
+ * after the quit-intercept modal resolves.
+ *
+ * `userCancelled` abandons the quit and leaves the app running. It exists
+ * because the other two both quit, and the modal's termination guarantee used
+ * to be "waiting always ends" - which stopped being true once a dirty session
+ * could be retained across a host re-point with no transport to sync through
+ * (F10). Without a third verb the only way out of that state is "Quit and
+ * discard", i.e. destroying the work the retention exists to preserve.
  */
-type QuitDecision = "proceed" | "userConfirmedDiscard";
+type QuitDecision = "proceed" | "userConfirmedDiscard" | "userCancelled";
 
 interface AppLifecycleUnsyncedEditsEntry {
   readonly epicId: string;
@@ -191,6 +198,13 @@ export function QuitInterceptBridge(): null | React.ReactElement {
   // has drained. We subscribe directly to the registry so the state flip
   // happens from an external-event callback rather than inside a
   // snapshot-derived effect body.
+  //
+  // The gate stays "no rows at all" and deliberately does NOT skip rows that
+  // cannot sync. Skipping them would auto-quit while a retained buffer still
+  // held unsynced work, destroying it with no decision from anyone - the
+  // original F10 data loss reached through a third door. An un-syncable row
+  // therefore holds this gate open for ever by construction, which is exactly
+  // why the dialog below has to offer a real way out instead of a wait.
   useEffect(() => {
     if (quitSnapshot === null || appLifecycle === null) return;
     const check = () => {
@@ -236,6 +250,29 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     setQuitSnapshot(null);
   }, [appLifecycle, registry]);
 
+  /**
+   * Abandon the quit: the app keeps running and every unsynced edit, retained
+   * buffers included, is left exactly as it was.
+   *
+   * Main resolves its `requestQuitDecision` promise with this and calls
+   * `resetQuitting()`; it is deliberately not expressed as a rejection, because
+   * rejection already means "the window died" there and the two must stay
+   * distinguishable. Clearing `quitSnapshot` here is what actually releases the
+   * user - main staying alive is not enough on its own, since this modal is
+   * what is covering the app.
+   */
+  const handleCancel = useCallback(() => {
+    if (appLifecycle === null || quitDecisionResolvedRef.current) return;
+    quitDecisionResolvedRef.current = true;
+    void appLifecycle.respondToQuitRequest(
+      buildQuitDecisionPayload(quitRequestIdRef.current, "userCancelled"),
+    );
+    quitRequestIdRef.current = null;
+    // Both refs are re-armed by `onQuitRequested`, so a later Cmd+Q still gets
+    // a fresh decision rather than being swallowed by this one.
+    setQuitSnapshot(null);
+  }, [appLifecycle]);
+
   if (appLifecycle === null || quitSnapshot === null) {
     return null;
   }
@@ -247,15 +284,16 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     <Dialog
       open
       onOpenChange={(next) => {
+        // Escape, the close button and an overlay dismissal all land here.
+        // They now abandon the quit instead of being swallowed: refusing every
+        // close was correct only while both available decisions quit the app,
+        // and `userCancelled` is what retires that premise.
         if (!next) {
-          return;
+          handleCancel();
         }
       }}
     >
-      <DialogContent
-        showCloseButton={false}
-        data-testid="quit-intercept-dialog"
-      >
+      <DialogContent data-testid="quit-intercept-dialog">
         <DialogHeader>
           <DialogTitle>Saving - please wait</DialogTitle>
           <DialogDescription>
@@ -280,6 +318,25 @@ export function QuitInterceptBridge(): null | React.ReactElement {
           >
             Quit and discard
           </Button>
+          {/*
+            Unconditional, and not a function of whether anything can still
+            sync: a quit confirmation should always let the user not quit. Its
+            absence is what made every other exit from this dialog destructive.
+          */}
+          <Button
+            variant="secondary"
+            onClick={handleCancel}
+            data-testid="quit-intercept-cancel"
+          >
+            Cancel
+          </Button>
+          {/*
+            Inert by design - the dialog closes from the auto-proceed gate above
+            once every affected session drains, so there is nothing for a click
+            to do. It stays a distinct affordance from Cancel because the two
+            mean opposite things about the quit: Wait keeps it pending, Cancel
+            abandons it.
+          */}
           <Button variant="default" data-testid="quit-intercept-wait">
             Wait
           </Button>

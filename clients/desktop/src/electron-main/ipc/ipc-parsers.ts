@@ -212,8 +212,29 @@ export function parseFreshSnapshotResponse(
   return { requestId: obj.requestId, snapshot };
 }
 
+/**
+ * Every member of {@link QuitDecision}, as a TOTAL record.
+ *
+ * This is the enforcement, not decoration. `parseQuitDecision` used to accept
+ * the members it knew about through an `if` chain and fall back to `proceed` -
+ * i.e. quit - for everything else. Adding a member to the union left that
+ * chain compiling, so a renderer saying "do not quit" would have been parsed
+ * as "quit" and answered by quitting. A record keyed by the union cannot omit
+ * a member without failing the build, so the next member has to be decided
+ * here before it can exist.
+ */
+const QUIT_DECISION_MEMBERS: Readonly<Record<QuitDecision, true>> = {
+  proceed: true,
+  userConfirmedDiscard: true,
+  userCancelled: true,
+};
+
+function isQuitDecision(value: unknown): value is QuitDecision {
+  return typeof value === "string" && Object.hasOwn(QUIT_DECISION_MEMBERS, value);
+}
+
 export function parseQuitDecision(value: unknown): QuitDecision {
-  if (value === "proceed" || value === "userConfirmedDiscard") {
+  if (isQuitDecision(value)) {
     return value;
   }
   log.warn(
