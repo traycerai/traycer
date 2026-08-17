@@ -226,10 +226,16 @@ export function EpicSessionProvider(
       if (cleanupPatch !== null) {
         await desktopBridge.perWindowState.update(cleanupPatch);
       }
-      // Another window won the ownership claim, so this one navigates away.
-      // Involuntary - no confirmation was shown - so retained buffers stay.
-      // They remain reachable through the unsynced-edits projection, which
-      // reports retentions whose live session is gone.
+      // Another window owns this TAB, so this one navigates away. Not "another
+      // window has this epic open": `EpicWindowOwnership.claim` keys on
+      // `tabId` and stores `epicId` without ever comparing it, so a denial
+      // means the same tab id exists in two windows (a move/restore race).
+      // Two windows CAN hold the same epic live at once with different tab
+      // ids - do not reason about retention scoping as one session per epic.
+      //
+      // Involuntary either way - no confirmation was shown - so retained
+      // buffers stay. They remain reachable through the unsynced-edits
+      // projection, which reports retentions whose live session is gone.
       getOpenEpicRegistry().release(epicId, "keep");
       await desktopBridge.requestFocus(claim.currentOwner);
       void navigate({ to: "/epics", replace: true });
