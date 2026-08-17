@@ -175,6 +175,7 @@
       },
       "devDependencies": {
         "@rolldown/plugin-babel": "catalog:",
+        "@tailwindcss/vite": "catalog:",
         "@tanstack/eslint-plugin-query": "catalog:",
         "@tanstack/eslint-plugin-router": "catalog:",
         "@tanstack/react-query-devtools": "catalog:",

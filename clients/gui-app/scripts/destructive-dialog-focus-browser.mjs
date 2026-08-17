@@ -157,46 +157,6 @@ try {
   }
 }
 
-async function emitQuit(client) {
-  await evaluate(client, `window.__probeEmitQuit()`);
-  await waitFor(
-    client,
-    "the quit-intercept dialog",
-    `document.querySelector('[data-testid="quit-intercept-dialog"]') !== null`,
-  );
-  await settle(client);
-}
-
-async function decision(client) {
-  return evaluate(
-    client,
-    `document.querySelector("#probe-state").getAttribute("data-decision")`,
-  );
-}
-
-async function appClicks(client) {
-  return Number(
-    await evaluate(
-      client,
-      `document.querySelector("#probe-state").getAttribute("data-app-clicks")`,
-    ),
-  );
-}
-
-async function rectCentre(client, selector) {
-  const point = await evaluate(
-    client,
-    `(() => {
-       const el = document.querySelector(${JSON.stringify(selector)});
-       if (el === null) return null;
-       const r = el.getBoundingClientRect();
-       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-     })()`,
-  );
-  if (point === null) throw new Error(`element not found: ${selector}`);
-  return point;
-}
-
 function settle(client) {
   return evaluate(client, `new Promise((r) => setTimeout(r, 250))`);
 }
@@ -317,24 +277,4 @@ async function waitFor(client, label, expression) {
   throw new Error(
     `Timed out waiting for ${label}:\n${JSON.stringify(pageState, null, 2)}`,
   );
-}
-
-async function click(client, x, y) {
-  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await client.send("Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x,
-    y,
-    button: "left",
-    buttons: 1,
-    clickCount: 1,
-  });
-  await client.send("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x,
-    y,
-    button: "left",
-    buttons: 0,
-    clickCount: 1,
-  });
 }
