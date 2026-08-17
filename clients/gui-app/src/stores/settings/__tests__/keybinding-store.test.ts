@@ -24,6 +24,8 @@ describe("useKeybindingStore", () => {
     expect(state.bindings["group.split.horizontal"]).toBe("mod+d");
     expect(state.bindings["group.split.vertical"]).toBe("mod+shift+d");
     expect(state.bindings["app.sidebar.toggle"]).toBe("mod+b");
+    expect(state.bindings["nav.back"]).toBe("mod+shift+,");
+    expect(state.bindings["nav.forward"]).toBe("mod+shift+.");
   });
 
   it("setBinding updates an action's chord", () => {
@@ -106,6 +108,56 @@ describe("useKeybindingStore", () => {
     expect(bindings["group.split.horizontal"]).toBe("mod+alt+h");
     expect(bindings["group.split.vertical"]).toBeNull();
     expect(Object.hasOwn(bindings, "unknown.action")).toBe(false);
+  });
+
+  it("migrates legacy nav.back/nav.forward arrow defaults to mod+shift+, and mod+shift+.", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "nav.back": "mod+arrowleft",
+            "nav.forward": "alt+arrowright",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["nav.back"]).toBe(
+      "mod+shift+,",
+    );
+    expect(useKeybindingStore.getState().bindings["nav.forward"]).toBe(
+      "mod+shift+.",
+    );
+  });
+
+  it("preserves customized nav bindings during hydration", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "nav.back": "mod+alt+b",
+            "nav.forward": "mod+alt+f",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["nav.back"]).toBe(
+      "mod+alt+b",
+    );
+    expect(useKeybindingStore.getState().bindings["nav.forward"]).toBe(
+      "mod+alt+f",
+    );
   });
 
   it("migrates the legacy split default pair to right on mod+d and down on mod+shift+d", async () => {
