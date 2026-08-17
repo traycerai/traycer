@@ -357,6 +357,30 @@ section that outgrew the head yet holds nothing — and it assembles to
 `status: "ok"` with an empty log, which no reader can tell from a chat that
 never had events. It also mints content addresses and fetches for nothing.
 
+**Publisher-derived levels carry no durable chat data.** The head's part entries,
+`cdc` and `hostPrivateShard` are always RE-DERIVABLE from the owner's op log,
+which is the source of truth: a chat is single-owner, so the owner can re-cut its
+cohorts and re-plan its cut at will, and a full recut does exactly that. They are
+not re-derived on every publish — the extend road re-emits unchanged cohort
+entries verbatim and reads `cdc` back to confirm the plan has not moved — and
+that is the point: **the only round-trip any of them makes is through the owner's
+own predecessor head.** They are therefore the three head locations residual
+capture deliberately does **not** cover (§3, and the manifest note in
+`chat-sync/captured-levels.ts`), and the rule that follows binds every same-major
+minor:
+
+> A minor may add a publisher-derived field for the next publish to plan with. It
+> must NOT put durable CHAT data there — anything the chat is not still true
+> without. Durable additions go at a captured level, or inside a message / event
+> body.
+
+So the only loss scenario is a same-host downgrade: the newer part fields strip
+on the older host's next publish, and the following newer publish does a full
+recut instead of an incremental one. That is an accepted efficiency cost, never
+data loss. Runtime capture for these levels was investigated and rejected:
+it would cost a manifest id, a store op field and an encoder change per level,
+and a part-level key perturbs the head bytes the lineage digest is taken over.
+
 **Sections graduate.** Events and `hostPrivate` start inline in the head, because
 they are small and a head is rewritten every publish anyway. Each moves to its
 own content-addressed part when it alone outgrows the shard target (64 KiB —
@@ -415,6 +439,7 @@ coupled surface moves with it. Work the list top to bottom:
 | Name a new modeled field `residual` | don't — the name is reserved at every captured level (§3) |
 | Name a new modeled head field `parts` | don't — reserved for the tenant envelope (§6). The decoder strips that key, so a modeled field of that name would be silently unreadable |
 | Add a field to the `parts` envelope entry | this is the TENANT SEAM, not a record field: it changes what the sync server is handed. Coordinate with the server's `readDeclaredHeadParts` and keep chat-domain data out of it — the envelope is read by a layer that must interpret nothing |
+| Add a field to a publisher-derived level (a head part entry, `cdc`, `hostPrivateShard`) | nothing beyond the record minor — but the field must be a planning HINT, never durable chat data (§6). It is re-derived every publish and is not residual-captured, so an older publisher strips it and the next newer publish recuts. Durable data belongs at a captured level instead |
 | Add a residual-capture LEVEL (a new `withResidualCapture` site) | add a `CAPTURED_RESIDUAL_LEVELS` entry in `chat-sync/captured-levels.ts` and its frozen key set in `chat-sync-captured-levels.test.ts`. The guard fails until you do |
 | Restructure an existing captured level | a level identifier may **never** be reused with changed semantics — consumers key behaviour off it. Give the changed level a NEW id so those exceptions break loudly instead of misfiring, and update the frozen id → declared-keys table |
 | Add a `chat.subscribe` field that also lands in a publication | the subscribe stream's own minor, on top of the record minor |
