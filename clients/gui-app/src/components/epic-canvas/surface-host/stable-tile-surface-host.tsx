@@ -25,8 +25,9 @@
  * no `aria-hidden` of its own - an aria-hidden ancestor hides every
  * descendant regardless of the descendant's own `aria-hidden` value, which
  * would erase every future visible hosted body from the accessibility tree.
- * Visibility is a per-RECORD concern only. A record whose environment
- * reports `presentation.topLevelVisible: false` is `aria-hidden`, `inert`,
+ * Visibility is a per-RECORD concern only. A record that is not PRESENTED
+ * (`isTileSurfacePresented`: its top level is hidden, or its pane has another
+ * tab selected while it is merely retained) is `aria-hidden`, `inert`,
  * AND non-painted via `visibility:hidden` (Tailwind's `invisible`) rather
  * than `display:none`: `visibility:hidden` keeps the box's layout - and
  * this module's own geometry-coordinator-applied `transform`/`width`/

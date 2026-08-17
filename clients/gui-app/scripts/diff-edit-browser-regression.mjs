@@ -17,8 +17,6 @@ const fixtureUrlPath = "/src/__tests__/browser/diff-edit-focus.html";
 const chromePath = await findChrome();
 const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-diff-edit-"));
 const vitePort = await freePort();
-let devtoolsPort = await freePort();
-while (devtoolsPort === vitePort) devtoolsPort = await freePort();
 let chrome;
 let client;
 let viteProcess;
@@ -53,6 +51,8 @@ try {
   });
   await waitForHttp(pageUrl, viteProcess, () => viteError, "Vite");
 
+  const chromeEnv = { ...process.env };
+  delete chromeEnv.DBUS_SESSION_BUS_ADDRESS;
   chrome = spawn(
     chromePath,
     [
@@ -66,11 +66,11 @@ try {
       "--no-default-browser-check",
       "--no-first-run",
       "--no-sandbox",
-      `--remote-debugging-port=${devtoolsPort}`,
+      "--remote-debugging-port=0",
       `--user-data-dir=${profilePath}`,
       "about:blank",
     ],
-    { stdio: ["ignore", "ignore", "pipe"] },
+    { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"] },
   );
   let chromeError = "";
   chrome.stderr.setEncoding("utf8");
@@ -78,14 +78,23 @@ try {
     chromeError += chunk;
   });
 
+  const devtoolsWebSocketUrl = await waitForDevToolsUrl(
+    chrome,
+    () => chromeError,
+  );
+  const devtoolsUrl = new URL(devtoolsWebSocketUrl);
+  devtoolsUrl.protocol = "http:";
+  devtoolsUrl.pathname = "";
+  devtoolsUrl.search = "";
+  devtoolsUrl.hash = "";
   await waitForHttp(
-    `http://127.0.0.1:${devtoolsPort}/json/version`,
+    new URL("/json/version", devtoolsUrl).href,
     chrome,
     () => chromeError,
     "Chrome DevTools",
   );
   const targetResponse = await fetch(
-    `http://127.0.0.1:${devtoolsPort}/json/new?${encodeURIComponent(pageUrl)}`,
+    new URL(`/json/new?${encodeURIComponent(pageUrl)}`, devtoolsUrl),
     { method: "PUT" },
   );
   if (!targetResponse.ok) {
@@ -358,6 +367,23 @@ async function waitForHttp(url, process, readError, label) {
   throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
 }
 
+async function waitForDevToolsUrl(process, readError) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (process.exitCode !== null) {
+      throw new Error(
+        `Chrome exited before DevTools was ready:\n${readError()}`,
+      );
+    }
+    const match = readError().match(
+      /DevTools listening on (ws:\/\/[^\s]+\/devtools\/browser\/[^\s]+)/,
+    );
+    if (match !== null) return match[1];
+    await delay(50);
+  }
+  throw new Error(`Timed out waiting for Chrome DevTools:\n${readError()}`);
+}
+
 async function connectCdp(url) {
   return await new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -428,7 +454,11 @@ async function waitFor(client, label, expression) {
   }
   const pageState = await evaluate(
     client,
-    `({ text: document.body.innerText, html: document.body.innerHTML.slice(0, 2000) })`,
+    `({
+      text: document.body.innerText,
+      html: document.body.innerHTML.slice(0, 2000),
+      viteError: document.querySelector("vite-error-overlay")?.shadowRoot?.textContent ?? "",
+    })`,
   );
   throw new Error(
     `Timed out waiting for ${label}:\n${JSON.stringify(pageState, null, 2)}`,

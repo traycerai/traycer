@@ -1,6 +1,6 @@
 /**
  * Ticket 21 slice 4: the single centralized discriminator deciding whether a
- * pane's active tab renders through `StableTileSurfaceHost` (a `TileSurfaceSlot`
+ * pane tab renders through `StableTileSurfaceHost` (a `TileSurfaceSlot`
  * geometry anchor, real body painted elsewhere) or inline (`ActiveTabBody`'s
  * existing `EpicNodeTile` path), per the design's "chat-first migration with
  * one temporary ownership discriminator."
