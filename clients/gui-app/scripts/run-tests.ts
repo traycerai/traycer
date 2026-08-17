@@ -126,6 +126,7 @@ if (runsFirstShard) {
     // about. Runs behind the same env flag rather than a second one - a browser
     // check nobody enables is a coverage gap wearing a test's name.
     runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs");
+    runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs");
   }
 }
 
