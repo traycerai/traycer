@@ -175,6 +175,17 @@ function useFileTreeSource(args: {
   );
   // Same params the Git panel subscribes with, so both surfaces share one
   // refcounted `git.subscribeStatus` session for this workspace.
+  //
+  // Params are only HALF the precondition, and the other half is invisible
+  // here: the registry keys its shared entry on `client.instanceId` too, so
+  // sharing also requires both surfaces to hold the same stream CLIENT. They
+  // do today only because both read the app-wide `useWsStreamClient()`. Give
+  // either surface its own per-host stream client - a re-provided
+  // `StreamRuntimeContext`, as the resource monitor already does - and this
+  // sentence becomes false with no param changing and nothing failing: the
+  // host simply runs two watchers. `host-stream-client-cache.ts` is what
+  // makes two such surfaces share an object on the same host; it is a
+  // precondition for re-pointing them, not a substitute for checking.
   const gitStatusSubscription = useGitListChangedFilesSubscription({
     hostId: args.hostId,
     runningDir: args.workspacePath,
