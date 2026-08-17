@@ -609,7 +609,10 @@ describe("MobilePushRegistration permission surface", () => {
   });
 
   it("registers exactly once when the person grants from the Settings row", async () => {
-    const plugin = fakePlugin({ permission: "denied", afterRequest: "granted" });
+    const plugin = fakePlugin({
+      permission: "denied",
+      afterRequest: "granted",
+    });
     const { push, calls } = controller({
       plugin,
       registerResult: OK,
@@ -666,7 +669,10 @@ describe("MobilePushRegistration permission surface", () => {
   });
 
   it("a grant before start() registers nothing - there is no login to bind to yet", async () => {
-    const plugin = fakePlugin({ permission: "denied", afterRequest: "granted" });
+    const plugin = fakePlugin({
+      permission: "denied",
+      afterRequest: "granted",
+    });
     const { push, calls } = controller({
       plugin,
       registerResult: OK,
@@ -682,7 +688,10 @@ describe("MobilePushRegistration permission surface", () => {
   });
 
   it("grants while signed out cost nothing but the OS answer", async () => {
-    const plugin = fakePlugin({ permission: "denied", afterRequest: "granted" });
+    const plugin = fakePlugin({
+      permission: "denied",
+      afterRequest: "granted",
+    });
     const { push, calls } = controller({
       plugin,
       registerResult: OK,
