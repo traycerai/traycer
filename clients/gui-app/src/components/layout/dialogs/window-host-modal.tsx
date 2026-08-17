@@ -336,8 +336,13 @@ function modalCopy(
       // incompatibility is a bug rather than routine drift, and the copy names
       // the leg the handshake says is behind rather than a generic fatal.
       title: hostUpdateSkew(variant.detail, getClientAppVersion()).title,
-      description:
-        "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched.",
+      // Two descriptions, because on the fallback arm the first one's advice
+      // is something the reader cannot act on from here. "Update the host to
+      // continue" beside no button is an unexplained gap; naming the machine
+      // and saying where it can be updated is an honest absence.
+      description: variant.isTargetHost
+        ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
+        : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that machine, or switch to a host this one can reach.",
       reportTitle: "Host update required",
       reportMessage: "Traycer Host requires an update.",
       reportCode: "HOST_INCOMPATIBLE",

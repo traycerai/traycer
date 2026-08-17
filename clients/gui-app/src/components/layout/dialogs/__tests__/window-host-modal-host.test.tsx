@@ -642,6 +642,77 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
   });
 
+  it("arm 3: a non-target incompatible host is named, and no local action is offered for it", async () => {
+    // `deriveNoHostVariant` arm 3 - "some OTHER lease is dead because it is
+    // incompatible", reached when the target is dead for an unrelated reason.
+    // Arm 1 (target IS the incompatible host) is what the two tests around this
+    // one cover, and on that arm the named host and the acted-on host are the
+    // same machine, which is why `canManageHost` reads as a sufficient guard.
+    // It is not: it asks "is the TARGET this machine", while the card names
+    // whichever host is incompatible. Here those differ.
+    const forceProvisioning = vi.fn();
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [
+        // Target: this machine, dead but NOT incompatible - so arm 1 misses.
+        deadLease(LOCAL_HOST_ID, { reason: "offline" }),
+        // A different machine, and the incompatible one. Its version is what
+        // the card will quote, which is how the assertions below tell which
+        // lease the narration is about.
+        deadLease(REMOTE_HOST_ID, {
+          reason: "incompatible",
+          detail: {
+            code: "protocol-major-behind",
+            hostVersion: "0.9.0",
+            minSupportedVersion: "1.5.0",
+          },
+        }),
+      ],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        // `canManageHost` is TRUE here, and legitimately so: the target is this
+        // machine. That is exactly what makes the guard insufficient - it is
+        // satisfied by a fact about the target while the card is about a
+        // different host.
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        forceProvisioning,
+      },
+      false,
+      undefined,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+
+    // Premise, positively: the narration really is arm 3 - `update-host`, and
+    // quoting the REMOTE lease's version rather than the target's. Without
+    // this the assertion below could pass on an arm-1 render.
+    expect(
+      screen.getByTestId("window-host-modal").getAttribute("data-variant"),
+    ).toBe("update-host");
+    expect(screen.getByTestId("window-host-modal").textContent).toContain(
+      "0.9.0",
+    );
+
+    // Fixed: no button, because this machine's provisioning cannot fix that
+    // machine's host. Asserted alongside a POSITIVE consequence - the card
+    // still names the incompatible host and now explains the absence - so this
+    // cannot pass on a build where the whole modal failed to render.
+    expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+    expect(
+      screen.getByTestId("window-host-modal-description").textContent,
+    ).toContain("can't be updated from here");
+    expect(forceProvisioning).not.toHaveBeenCalled();
+  });
+
   it("update-host: WITHHOLDS Update host when THIS APP is the outdated leg", async () => {
     // Updating the host cannot fix an outdated client, so offering it is an
     // action that could only fail. Same fleet, same variant, opposite skew -

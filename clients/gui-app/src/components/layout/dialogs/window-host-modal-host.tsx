@@ -282,6 +282,17 @@ function resolveUpdateHost(
   presentation: DefaultHostReadinessPresentation,
 ): (() => void) | null {
   if (variant.kind !== "update-host") return null;
+  // `canManageHost` asks "is the TARGET this machine"; the card asks "which
+  // host is incompatible". Arm 1 of `deriveNoHostVariant` makes those the same
+  // host, arm 3 does not - so `canManageHost` alone is a guard argued against
+  // only the population it can see. Without this line the button offers to
+  // update the host the card names and re-provisions THIS machine instead.
+  //
+  // Fail closed rather than re-point: `forceProvisioning` is the local
+  // lifecycle's own action and there is no host-scoped equivalent to aim
+  // elsewhere. A wrong action is worse than no action, and the copy says why
+  // it is missing rather than leaving an unexplained gap.
+  if (!variant.isTargetHost) return null;
   if (!presentation.canManageHost) return null;
   if (!hostUpdateActionApplies(variant.detail, getClientAppVersion())) {
     return null;
