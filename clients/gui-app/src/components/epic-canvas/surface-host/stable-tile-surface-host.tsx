@@ -56,6 +56,7 @@ import {
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import {
   getTileSurfaceEnvironment,
+  isTileSurfacePresented,
   subscribeTileSurfaceEnvironment,
   type ReadyTileSurfaceEnvironment,
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
@@ -157,7 +158,7 @@ function TileSurfaceRecord(props: {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const [canMountBody, setCanMountBody] = useState(false);
   const slotElement = environment?.services.geometryAnchorElement ?? null;
-  const visible = environment?.presentation.topLevelVisible ?? false;
+  const visible = isTileSurfacePresented(environment);
 
   useLayoutEffect(() => {
     if (slotElement === null) return undefined;
@@ -171,9 +172,12 @@ function TileSurfaceRecord(props: {
       // mounted body cannot reflow at zero width and publish bogus item sizes.
       // Visible records must still accept a real zero rect (for example when a
       // pane is collapsed) so they do not leave an interactive stale overlay.
-      const currentlyVisible =
-        getTileSurfaceEnvironment(instanceId)?.presentation.topLevelVisible ??
-        false;
+      // A retained-but-deselected chat is the same case arriving from the
+      // pane instead of the header, hence the shared presented predicate
+      // rather than `topLevelVisible` alone.
+      const currentlyVisible = isTileSurfacePresented(
+        getTileSurfaceEnvironment(instanceId),
+      );
       if (!currentlyVisible && !hasUsableRect) return;
       applyRectToElement(element, rect);
       if (currentlyVisible || hasUsableRect) setCanMountBody(true);
