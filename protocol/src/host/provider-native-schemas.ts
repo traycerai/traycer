@@ -2075,9 +2075,10 @@ export type ModelProviderAuthResult = z.infer<
 // additive: one unknown enum member fails its array, then the object, and the
 // `.catch()` serves the empty default - a reader would lose MCP, Plugins and
 // Skills over a value it merely could not read. So every closed enum reachable
-// from the descriptor is copied; the projection down from the live descriptor
-// strips that growth away (see `projectNativeCapabilitiesToV70Preimage`)
-// instead of letting a reparse hit the trap.
+// from the descriptor is copied, and any projection down from the live
+// descriptor must STRIP that growth rather than let a reparse hit the trap.
+// There is no such projection today - the collapse deleted the hop that needed
+// one; see the note at the end of this section before writing the next.
 //
 // Only the copies that actually DIVERGED from live carry `Preimage`. The enums
 // below that still equal their live counterparts keep a bare `V70`, because an
@@ -2107,12 +2108,12 @@ export const providerSettingsTabSchemaV70Preimage = z.enum([
   "mcp",
   "plugins",
   "skills",
-  // `modelProviders` is NOT here. The tab rides the live enum (the v8.0 head
-  // line); a v7.0 peer receives `supportedTabs` through
-  // `projectNativeCapabilitiesToV70Preimage` below, which FILTERS the array rather
-  // than reparsing it - the enum rejects a whole array for one unknown
-  // member, and the capability object's `.catch()` would then serve an empty
-  // default, costing the peer MCP, Plugins and Skills over one tab id.
+  // `modelProviders` is NOT here. The tab rides the live enum, which v7.0 now
+  // binds directly. Anything that produces this pre-image shape must FILTER
+  // `supportedTabs` rather than reparse it - this enum rejects a whole array
+  // for one unknown member, and the capability object's `.catch()` would then
+  // serve an empty default, costing the reader MCP, Plugins and Skills over a
+  // single tab id.
 ]);
 export type ProviderSettingsTabV70Preimage = z.infer<
   typeof providerSettingsTabSchemaV70Preimage
@@ -2246,55 +2247,23 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE: ProviderNativeCa
     skills: null,
   };
 
-/**
- * Project a live capability descriptor onto the v7.0 PRE-IMAGE shape.
- *
- * NO PRODUCTION CALLER TODAY, and that is deliberate rather than an oversight
- * to tidy away. This fed the v8->v7 response bridge; the release collapsed v8.0
- * into v7.0 and deleted that hop, leaving the projection with only its own
- * tests. It is kept because it is the ready-made cut the next v8.0 needs - the
- * three decisions below were the hard part, not the code - and its tests keep
- * documenting what a pre-image reader sees. Delete it only together with the
- * pre-image schemas it targets.
- *
- * Three cuts, made in different ways on purpose:
- *
- * 1. `supportedTabs` is FILTERED before the parse, never reparsed:
- *    `z.array(enum)` rejects a whole array for one unknown member, the
- *    capability object fails with it, and the `.catch()` on the pre-image
- *    state would then serve the empty default - a reader would lose MCP,
- *    Plugins AND Skills over one tab id it never knew.
- * 2. `modelProviders` is dropped. The pre-image does not model it; the strict
- *    reparse through `providerNativeCapabilitiesSchemaV70Preimage` is what
- *    performs the drop, and the destructure writes it out so the projection
- *    reads as the contract it is.
- * 3. Skills `inspect` / `edit` / `update` actionScopes are dropped. The
- *    pre-image table does not model them; a live descriptor that advertises
- *    them must not leak those keys into the pre-image shape.
- */
-function projectSkillsCapabilitiesToV70Preimage(
-  skills: ProviderSkillsCapabilities | null,
-): ProviderSkillsCapabilitiesV70Preimage | null {
-  if (skills === null) {
-    return null;
-  }
-  const {
-    inspect: _inspect,
-    edit: _edit,
-    update: _update,
-    ...legacyScopes
-  } = skills.actionScopes;
-  return { actionScopes: legacyScopes };
-}
-
-export function projectNativeCapabilitiesToV70Preimage(
-  capabilities: ProviderNativeCapabilities,
-): ProviderNativeCapabilitiesV70Preimage {
-  const v70Tabs = new Set<string>(providerSettingsTabSchemaV70Preimage.options);
-  const { modelProviders: _modelProviders, ...rest } = capabilities;
-  return providerNativeCapabilitiesSchemaV70Preimage.parse({
-    ...rest,
-    skills: projectSkillsCapabilitiesToV70Preimage(capabilities.skills),
-    supportedTabs: capabilities.supportedTabs.filter((tab) => v70Tabs.has(tab)),
-  });
-}
+// A `projectNativeCapabilitiesToV70Preimage` used to sit here, feeding the
+// v8->v7 response bridge. The release collapsed v8.0 into v7.0 and deleted that
+// hop, which left the projection with no production caller at all - only its
+// own tests - so it is gone rather than kept warm by them.
+//
+// What it decided is worth more than what it executed, so the three cuts stay
+// written down. Whoever opens v8.0 needs a projection back and has to make them
+// again:
+//
+// 1. FILTER `supportedTabs` before the parse; never reparse it. `z.array(enum)`
+//    rejects a whole array over one unknown member, the capability object fails
+//    with it, and the `.catch()` on the pre-image state then serves the empty
+//    default - the peer loses MCP, Plugins AND Skills over a single tab id it
+//    never knew. This is the trap every closed enum above is copied to avoid.
+// 2. Drop `modelProviders` by destructuring it out as well as letting the
+//    strict reparse through `providerNativeCapabilitiesSchemaV70Preimage`
+//    perform the drop, so the projection reads as the contract it is.
+// 3. Drop the Skills `inspect` / `edit` / `update` actionScopes. The pre-image
+//    table does not model them, and a live descriptor that advertises them must
+//    not leak those keys into the pre-image shape.

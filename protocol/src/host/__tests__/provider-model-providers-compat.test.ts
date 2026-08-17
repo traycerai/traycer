@@ -24,7 +24,6 @@ import {
   providerMcpCapabilitiesSchema,
   providerMcpCapabilitiesSchemaV70,
   providerModelProvidersCapabilitiesSchema,
-  projectNativeCapabilitiesToV70Preimage,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaV70Preimage,
   providerEnvOverrideScopeSchema,
@@ -1909,16 +1908,6 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
         "modelProviders",
       ].sort(),
     );
-  });
-
-  it("projects a full live descriptor without losing a sibling capability", () => {
-    const projected = projectNativeCapabilitiesToV70Preimage(
-      OPENCODE_CAPABILITIES,
-    );
-    expect(projected.supportedTabs).not.toContain("modelProviders");
-    expect(projected.mcp).toEqual(OPENCODE_CAPABILITIES.mcp);
-    expect(projected.plugins).toEqual(OPENCODE_CAPABILITIES.plugins);
-    expect(projected.skills).toEqual(OPENCODE_CAPABILITIES.skills);
   });
 
   it("wires the v7.0 state to the frozen capability descriptor by identity", () => {
