@@ -21,7 +21,7 @@ import {
 } from "./provider-ids";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
   modelProviderAuthActionSchema,
   modelProviderAuthCancelContextSchema,
   modelProviderAuthPollContextSchema,
@@ -33,11 +33,11 @@ import {
   nativeAuthResultSchema,
   nativeListQuerySchema,
   nativeListResultSchema,
-  nativeListResultSchemaV70,
+  nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
   nativeMutationSchema,
   providerNativeCapabilitiesSchema,
-  providerNativeCapabilitiesSchemaV70,
+  providerNativeCapabilitiesSchemaV70Preimage,
   type ModelProviderAuthAction,
   type ModelProviderAuthCancelContext,
   type ModelProviderAuthPollContext,
@@ -52,7 +52,7 @@ import {
   type NativeMutation,
   type NativeMutationResult,
   type ProviderNativeCapabilities,
-  type ProviderNativeCapabilitiesV70,
+  type ProviderNativeCapabilitiesV70Preimage,
 } from "./provider-native-schemas";
 
 export {
@@ -487,25 +487,25 @@ export type ProviderManagedInstallErrorReasonV70 = z.infer<
 >;
 
 /**
- * Frozen `providers.list@7.0` snapshot of `providerManagedInstallStateSchema` -
- * a hand-copy of the four arms as they stand on the v7.0 line, for the same
+ * PRE-IMAGE snapshot of `providerManagedInstallStateSchema` - a hand-copy of
+ * the four arms as they stood before the version-manager work, for the same
  * reason `providerLoginCapabilitySchemaV40` is a hand-copy of the capability:
  * pinning a wire shape's KEYS while leaving one of them wired to a live
  * sub-schema leaves that sub-schema free to grow on the line it backs.
  *
- * This is not hypothetical here - it is the concrete next change. The managed-
- * versions work grows the live `downloading`/`installed` arms with the version
- * a slot refers to, so the frozen v7.0 line has to stop tracking them first.
- * Because these arms are plain (non-strict) `z.object`s inside a discriminated
- * union, a v7.0 peer's decode simply DROPS the key it does not model - the same
- * strip mechanism every downgrade bridge in this file relies on.
+ * That growth is no longer hypothetical - it happened. The managed-versions
+ * work added the version a slot refers to onto the live `downloading` /
+ * `installed` arms, and the collapse put those arms on v7.0 itself; this copy
+ * is what stayed behind. Because the arms are plain (non-strict) `z.object`s
+ * inside a discriminated union, a decode through this pre-image simply DROPS
+ * the key it does not model - the same strip mechanism every downgrade bridge
+ * in this file relies on.
  *
  * Do not add arms or fields here. Extend the live schema and let the next
  * `providers.list` major publish it.
  */
-export const providerManagedInstallStateSchemaV70 = z.discriminatedUnion(
-  "status",
-  [
+export const providerManagedInstallStateSchemaV70Preimage =
+  z.discriminatedUnion("status", [
     z.object({ status: z.literal("absent") }),
     z.object({
       status: z.literal("downloading"),
@@ -518,10 +518,9 @@ export const providerManagedInstallStateSchemaV70 = z.discriminatedUnion(
       message: z.string(),
       retryAtMs: z.number().int().nonnegative().nullable(),
     }),
-  ],
-);
-export type ProviderManagedInstallStateV70 = z.infer<
-  typeof providerManagedInstallStateSchemaV70
+  ]);
+export type ProviderManagedInstallStateV70Preimage = z.infer<
+  typeof providerManagedInstallStateSchemaV70Preimage
 >;
 
 // ── v7.0: per-pack managed version manager ─────────────────────────────────
@@ -1030,7 +1029,7 @@ export type ProviderLoginCapabilityV40 = z.infer<
  *
  * The V40 snapshot exists because the base shape it backs kept pointing at the
  * LIVE capability while its own keys were pinned, so `terminalLogin` reached
- * four already-frozen shapes. `providerCliStateBaseShapeV70` points here for
+ * four already-frozen shapes. `providerCliStateBaseShapeV70Preimage` points here for
  * exactly that reason, one line later: the fifth capability field must not
  * appear on v7.0 just because it appears on the live schema.
  *
@@ -1450,8 +1449,17 @@ export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
  * `providersListRequestSchemaBeforeV70` for that reason. v7.0 itself BINDS this
  * live schema (the release collapsed the unreleased v8.0 into it), so a request
  * field added here reaches the v7.0 wire immediately - it does not wait for a
- * new line. `providersListRequestSchemaV70` still exists, but as the shared
- * v7.0-shaped fixture the compat suites parse through, not as a contract pin.
+ * new line. `providersListRequestSchemaV70` is the hand-frozen copy of that same
+ * wire, and it keeps its `V70` name because it still earns it: the collapse
+ * moved only the response, so the frozen request and this live one are the same
+ * shape. It is not a contract pin - the contract binds this schema - but it is
+ * a real freeze rather than a fixture.
+ *
+ * Nothing enforces that equality, which is the part to watch. Add a request
+ * field here and v7.0's wire grows with it while the copy below does not,
+ * turning `providersListRequestSchemaV70` into a name for a shape no line
+ * serializes - exactly what the response side had to be renamed out of. See the
+ * equality pin in `__tests__/provider-schemas-v70-pins.test.ts`.
  */
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
@@ -1725,17 +1733,20 @@ export type ProvidersListResponseV40 = z.infer<
 // this comment once called future (a `packId`, a per-pack managed-versions
 // block, a `nextRunBinary`, and a version on `managedInstallState`) LANDED, and
 // they landed on v7.0. The `providersListV70` contract now binds the LIVE
-// request/response schemas, so this shape no longer backs a wire line. It
-// survives as the shared v7.0-shaped fixture the older bridges and the compat
-// suites parse through. Do not read it as a freeze standing between the live
-// shape and the v7.0 wire - there is nothing between them now.
+// request/response schemas, so this shape no longer backs a wire line - which
+// is why it carries `Preimage` in its name instead of a bare `V70`, leaving
+// that name for whoever takes the real v7.0 freeze. It survives as the v6 -> v7
+// bridge's first-pass target, the normalization every upgraded row is re-parsed
+// through before the version-manager fill lands on top, and as the shape the
+// provider compat suites share. Do not read it as a freeze standing between the
+// live shape and the v7.0 wire - there is nothing between them now.
 //
 // The next line's additions go on the live `providerCliStateBaseShape`, and
 // v8.0 opens with a v8->v7 strip bridge exactly as the v7->v6 bridge strips the
 // version-manager group today.
 //
 // WHAT THIS PIN DOES AND DOES NOT COVER, stated plainly so the v8.0 author does
-// not over-trust it: it freezes a v7.0-shaped KEY SET, a provider-id enum, a
+// not over-trust it: it freezes the pre-image's KEY SET, a provider-id enum, a
 // login capability and a managed-install-state union. It deliberately keeps live
 // references for `providerCliCandidateSchema`, `providerProfileSchema`,
 // `providerVersionVisibilitySchema`, `providerAdvisorySchema`,
@@ -1749,10 +1760,10 @@ export type ProvidersListResponseV40 = z.infer<
 // for exactly that reason. When it goes red, hand-freeze the sub-schema that
 // grew, or open v8.0 - do not regenerate the fixture to make it green.
 //
-// `native` on this response now uses `nativeListResultSchemaV70` because the
+// `native` on this response now uses `nativeListResultSchemaV70Preimage` because the
 // live skill row grew `origin` / `conflict`. The capabilities descriptor
-// already pointed at `providerNativeCapabilitiesSchemaV70`.
-const providerCliStateBaseShapeV70 = {
+// already pointed at `providerNativeCapabilitiesSchemaV70Preimage`.
+const providerCliStateBaseShapeV70Preimage = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
   selected: providerSelectionSchema,
@@ -1769,7 +1780,7 @@ const providerCliStateBaseShapeV70 = {
   // tidied away: it is what lets a host-side construction site omit the key
   // entirely, and dropping it here would turn "an old host omitted this" from
   // `undefined` into a parse failure. See the live shape's comments.
-  managedInstallState: providerManagedInstallStateSchemaV70
+  managedInstallState: providerManagedInstallStateSchemaV70Preimage
     .nullable()
     .catch(null)
     .optional(),
@@ -1781,27 +1792,29 @@ const providerCliStateBaseShapeV70 = {
   cliBinaryResolved: z.boolean().catch(true).optional(),
 };
 
-export const providerCliStateSchemaV70 = z.object({
+export const providerCliStateSchemaV70Preimage = z.object({
   providerId: providerIdSchemaV70,
-  ...providerCliStateBaseShapeV70,
+  ...providerCliStateBaseShapeV70Preimage,
   auth: PROVIDER_AUTH_SCHEMA_V20,
   // Hand-frozen since the live descriptor grew `modelProviders` (and its
   // `supportedTabs` member) past this line - the "hand-freeze the sub-schema
   // that grew" step the deep snapshot demands. The `.catch()` keeps the
-  // v7.0-shaped default so this line decodes byte-for-byte the way it did at
+  // pre-image default so this shape decodes byte-for-byte the way it did at
   // the freeze cut.
-  nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
-    DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+  nativeCapabilities: providerNativeCapabilitiesSchemaV70Preimage.catch(
+    DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
   ),
 });
-export type ProviderCliStateV70 = z.infer<typeof providerCliStateSchemaV70>;
+export type ProviderCliStateV70Preimage = z.infer<
+  typeof providerCliStateSchemaV70Preimage
+>;
 
-export const providersListResponseSchemaV70 = z.object({
-  providers: z.array(providerCliStateSchemaV70),
-  native: nativeListResultSchemaV70.nullable().default(null),
+export const providersListResponseSchemaV70Preimage = z.object({
+  providers: z.array(providerCliStateSchemaV70Preimage),
+  native: nativeListResultSchemaV70Preimage.nullable().default(null),
 });
-export type ProvidersListResponseV70 = z.infer<
-  typeof providersListResponseSchemaV70
+export type ProvidersListResponseV70Preimage = z.infer<
+  typeof providersListResponseSchemaV70Preimage
 >;
 
 // Frozen protocol-v1.0 provider state + list response. The v2.0 line of
@@ -1822,10 +1835,10 @@ export type ProvidersListResponseV10 = z.infer<
 
 export {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
-  providerNativeCapabilitiesSchemaV70,
+  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
+  providerNativeCapabilitiesSchemaV70Preimage,
   type ProviderNativeCapabilities,
-  type ProviderNativeCapabilitiesV70,
+  type ProviderNativeCapabilitiesV70Preimage,
 };
 
 // ── Frozen major-2.1 mutation-response provider state (pre-registry) ───────
@@ -3104,29 +3117,30 @@ export function downgradeProviderAuthV20ToV10(
 // this call.
 export type DowngradableToV10ProviderState = (
   | ProviderCliState
-  | ProviderCliStateV70
+  | ProviderCliStateV70Preimage
   | ProviderCliStateV30
   | ProviderCliStateV20
   | ProviderMutationCliStateV20
   | ProviderMutationCliStateV21
 ) & {
   profiles?: ProviderCliState["profiles"];
-  // Widened to the frozen v7.0 capability shape as well as the live one for
+  // Widened to the pre-image capability shape as well as the live one for
   // the same reason `loginCapability` below is widened across its own frozen
   // snapshots: callers reach this function holding either shape, and the
   // strict v1.0 parse strips the field either way.
   nativeCapabilities?:
-    ProviderNativeCapabilities | ProviderNativeCapabilitiesV70;
-  // Widened to the live OR the frozen v7.0 union once the version-manager work
-  // grew the live arms with `version`. `providersListDowngradeV7ToV1` feeds this function
-  // v7.0-shaped rows, which no longer satisfy the live type - and the two are
+    ProviderNativeCapabilities | ProviderNativeCapabilitiesV70Preimage;
+  // Widened to the live OR the pre-image union once the version-manager work
+  // grew the live arms with `version`. `providersListDowngradeV7ToV1` feeds
+  // this function pre-image rows, which no longer satisfy the live type - both
+  // are
   // both fine here for the same reason the widened `loginCapability` below is:
   // the strict v1.0 parse discards this field either way. Without the
   // widening the v7->v1 bridge simply stops compiling, which is the good
   // outcome; the bad one would have been a shared type loose enough to hide it.
   managedInstallState?:
     | ProviderCliState["managedInstallState"]
-    | ProviderManagedInstallStateV70
+    | ProviderManagedInstallStateV70Preimage
     | null;
   versionVisibility?: ProviderCliState["versionVisibility"];
   advisory?: ProviderCliState["advisory"];
@@ -3262,31 +3276,33 @@ export function downgradeProviderCliStateListToV50(
 }
 
 /**
- * Lift a frozen v6.0 state onto the FROZEN v7.0 shape (not the live one).
+ * Lift a frozen v6.0 state onto the v7.0 PRE-IMAGE shape (not the live one).
  *
- * The v6 -> v7 hop's target is v7.0, so its fill has to land there: pointing
- * it at the live shape would have the bridge emit whatever the live capability
- * object happens to be as its "v7.0" value, which stays correct only while the
- * two agree. `DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70`
- * is the same "old host never had this feature" reading its live counterpart
- * carries - a v6.0 host advertised no native capabilities at all.
+ * This is the v6 -> v7 hop's FIRST PASS, not the whole hop: the version-manager
+ * fields land on top of what this returns, in the caller (see
+ * `providersListUpgradeV6ToV7` in `registry.ts`). Pointing it at the live shape
+ * instead would have the bridge emit whatever the live capability object
+ * happens to be, which stays correct only while the two agree.
+ * `DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE` is the same "old host
+ * never had this feature" reading its live counterpart carries - a v6.0 host
+ * advertised no native capabilities at all.
  */
-export function upgradeProviderCliStateToV70(
+export function upgradeProviderCliStateToV70Preimage(
   state:
     ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20,
-): ProviderCliStateV70 {
-  return providerCliStateSchemaV70.parse({
+): ProviderCliStateV70Preimage {
+  return providerCliStateSchemaV70Preimage.parse({
     ...state,
-    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
   });
 }
 
-export function upgradeProviderCliStateListToV70(
+export function upgradeProviderCliStateListToV70Preimage(
   states: readonly (
     ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20
   )[],
-): ProviderCliStateV70[] {
-  return states.map(upgradeProviderCliStateToV70);
+): ProviderCliStateV70Preimage[] {
+  return states.map(upgradeProviderCliStateToV70Preimage);
 }
 
 /**
@@ -3333,12 +3349,13 @@ export function upgradeProviderMutationCliStateV20ToLatest(
   });
 }
 
-// The `providers.list` fills aimed at the v7.0 line are
-// `upgradeProviderCliStateToV70` / `...ListToV70`, named for their TARGET LINE
-// rather than for "latest". A bridge aims at a line: the moment a v8.0 opens
-// above v7.0, a fill named "latest" silently means a shape v7.0 cannot carry.
-// v7.0 is the head today, so the two coincide - which is exactly when the
-// naming stops being checkable and has to be kept by hand. The latest-named
+// The `providers.list` fills are `upgradeProviderCliStateToV70Preimage` /
+// `...ListToV70Preimage`, named for their TARGET SHAPE rather than for
+// "latest". A bridge aims at a fixed shape: the moment a v8.0 opens above v7.0,
+// a fill named "latest" silently means a shape v7.0 cannot carry. What these
+// two aim at is a stage INSIDE the v6 -> v7 hop rather than a line of its own,
+// which is why they are named for the pre-image and not for v7.0 - the
+// version-manager fill that finishes the hop runs after them. The latest-named
 // fills below aim at the HEAD line and move with it.
 
 /** Upgrade frozen list@2.0 / v3.0 state to latest by attaching the default descriptor. */

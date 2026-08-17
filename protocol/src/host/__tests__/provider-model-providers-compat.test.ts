@@ -11,7 +11,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
   modelProviderAuthActionSchema,
   modelProviderAuthResultSchema,
   modelProviderEntrySchema,
@@ -24,9 +24,8 @@ import {
   providerMcpCapabilitiesSchema,
   providerMcpCapabilitiesSchemaV70,
   providerModelProvidersCapabilitiesSchema,
-  projectNativeCapabilitiesToV70,
   providerNativeCapabilitiesSchema,
-  providerNativeCapabilitiesSchemaV70,
+  providerNativeCapabilitiesSchemaV70Preimage,
   providerEnvOverrideScopeSchema,
   providerEnvOverrideScopeSchemaV70,
   providerNativeErrorCodeSchema,
@@ -34,15 +33,15 @@ import {
   providerPluginsCapabilitiesSchemaV70,
   providerSettingsTabSchema,
   providerSkillsCapabilitiesSchema,
-  providerSkillsCapabilitiesSchemaV70,
-  providerSettingsTabSchemaV70,
+  providerSkillsCapabilitiesSchemaV70Preimage,
+  providerSettingsTabSchemaV70Preimage,
   type ProviderNativeCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import {
   PROVIDER_AUTH_SCHEMA_V20,
   providerCliStateSchema,
-  providerCliStateSchemaV70,
+  providerCliStateSchemaV70Preimage,
   providerIdSchemaV70,
   providersAwaitModelProviderAuthRequestSchema,
   providersAwaitModelProviderAuthResponseSchema,
@@ -59,7 +58,7 @@ import {
   providersListResponseSchemaV60,
   providersListRequestSchema,
   providersListRequestSchemaV70,
-  providersListResponseSchemaV70,
+  providersListResponseSchemaV70Preimage,
   providersModelProviderAuthRequestSchema,
   providersModelProviderAuthResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
@@ -200,14 +199,15 @@ const liveResponse = providersListResponseSchema.parse({
 });
 
 describe("modelProviders tab id and capability block", () => {
-  it("is on the live tab enum and NOT on the frozen v7.0 one", () => {
-    // The tab rides the head line. v7.0 is frozen; a v7.0 peer receives
-    // `supportedTabs` through the projection, never the raw member.
+  it("is on the live tab enum and NOT on the v7.0 pre-image one", () => {
+    // The tab rides the head line, which v7.0 now binds directly. Anything
+    // reading through the pre-image receives `supportedTabs` via the
+    // projection, never the raw member.
     expect(providerSettingsTabSchema.safeParse("modelProviders").success).toBe(
       true,
     );
     expect(
-      providerSettingsTabSchemaV70.safeParse("modelProviders").success,
+      providerSettingsTabSchemaV70Preimage.safeParse("modelProviders").success,
     ).toBe(false);
   });
 
@@ -252,9 +252,9 @@ describe("modelProviders tab id and capability block", () => {
     // The live default is what the head line serves; the v7.0 default is the
     // frozen line's own snapshot, which predates the member.
     expect(DEFAULT_PROVIDER_NATIVE_CAPABILITIES.modelProviders).toBeNull();
-    expect(Object.keys(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70)).not.toContain(
-      "modelProviders",
-    );
+    expect(
+      Object.keys(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE),
+    ).not.toContain("modelProviders");
   });
 });
 
@@ -382,7 +382,7 @@ describe("providers.list every older major -> the head line", () => {
     expect(Object.keys(capabilities)).toContain("modelProviders");
     expect(capabilities.modelProviders).toBeNull();
     expect(capabilities).toEqual({
-      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
+      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE,
       modelProviders: null,
     });
     expect(providersListResponseSchema.safeParse(upgraded).success).toBe(true);
@@ -1879,7 +1879,7 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
       providerSkillsCapabilitiesSchema.shape.actionScopes.shape,
     ).sort();
     const frozenKeys = Object.keys(
-      providerSkillsCapabilitiesSchemaV70.shape.actionScopes.shape,
+      providerSkillsCapabilitiesSchemaV70Preimage.shape.actionScopes.shape,
     ).sort();
     expect(liveKeys).toEqual(
       [...frozenKeys, "edit", "inspect", "update"].sort(),
@@ -1892,7 +1892,10 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
     // the live one adds. A second live-only tab would land here first, as a
     // prompt to extend the projection's coverage tests.
     expect([...providerSettingsTabSchema.options].sort()).toEqual(
-      [...providerSettingsTabSchemaV70.options, "modelProviders"].sort(),
+      [
+        ...providerSettingsTabSchemaV70Preimage.options,
+        "modelProviders",
+      ].sort(),
     );
   });
 
@@ -1901,31 +1904,25 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
       [...Object.keys(providerNativeCapabilitiesSchema.shape)].sort(),
     ).toEqual(
       [
-        ...Object.keys(providerNativeCapabilitiesSchemaV70.shape),
+        ...Object.keys(providerNativeCapabilitiesSchemaV70Preimage.shape),
         "modelProviders",
       ].sort(),
     );
-  });
-
-  it("projects a full live descriptor without losing a sibling capability", () => {
-    const projected = projectNativeCapabilitiesToV70(OPENCODE_CAPABILITIES);
-    expect(projected.supportedTabs).not.toContain("modelProviders");
-    expect(projected.mcp).toEqual(OPENCODE_CAPABILITIES.mcp);
-    expect(projected.plugins).toEqual(OPENCODE_CAPABILITIES.plugins);
-    expect(projected.skills).toEqual(OPENCODE_CAPABILITIES.skills);
   });
 
   it("wires the v7.0 state to the frozen capability descriptor by identity", () => {
     // Spot checks that name the seams a reader cares about; the deep
     // frozen-catalog snapshot is the exhaustive guarantee.
     expect(
-      unwrapSchema(providerCliStateSchemaV70.shape.nativeCapabilities),
-    ).toBe(providerNativeCapabilitiesSchemaV70);
-    expect(unwrapSchema(providerNativeCapabilitiesSchemaV70.shape.mcp)).toBe(
-      providerMcpCapabilitiesSchemaV70,
-    );
+      unwrapSchema(providerCliStateSchemaV70Preimage.shape.nativeCapabilities),
+    ).toBe(providerNativeCapabilitiesSchemaV70Preimage);
     expect(
-      unwrapSchema(providerNativeCapabilitiesSchemaV70.shape.envOverrideScope),
+      unwrapSchema(providerNativeCapabilitiesSchemaV70Preimage.shape.mcp),
+    ).toBe(providerMcpCapabilitiesSchemaV70);
+    expect(
+      unwrapSchema(
+        providerNativeCapabilitiesSchemaV70Preimage.shape.envOverrideScope,
+      ),
     ).toBe(providerEnvOverrideScopeSchemaV70);
   });
 });

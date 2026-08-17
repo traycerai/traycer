@@ -6,7 +6,7 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
-  providersListResponseSchemaV70,
+  providersListResponseSchemaV70Preimage,
   downgradeProviderCliStateToV10,
   providerAdvisoryKindSchema,
   providerAdvisorySchema,
@@ -904,7 +904,7 @@ describe("providers.list v6->v7 fills terminalLogin for an old host", () => {
     //
     // Two mechanisms currently produce it: the bridge's explicit
     // `upgradeLoginCapabilityFromV40` call, and the live re-parse inside
-    // `upgradeProviderCliStateListToV70` (which exists for
+    // `upgradeProviderCliStateListToV70Preimage` (which exists for
     // `nativeCapabilities` and incidentally runs `.catch(null)`). This test
     // asserts the OUTCOME, so it stays green while either survives and goes
     // red only if both go - which is the contract worth pinning. Do not read
