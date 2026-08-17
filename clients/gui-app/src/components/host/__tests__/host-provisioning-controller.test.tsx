@@ -1282,8 +1282,7 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     expect(readLifecycle()?.slowStartStage).toBe("slow");
   });
 
-  it("STILL promotes to slow for a lane accepted but silent, and for no lane at all", () => {
-    // Two more stalled shapes, both of which must keep the escape hatch.
+  it("STILL promotes to slow for a lane accepted but silent", () => {
     // `useHostProvisioningProgress` is explicit that a null `progress` on a
     // RUNNING lane means "accepted but has not pushed an event" rather than "no
     // progress yet" - so an install that was accepted and then said nothing for
@@ -1294,6 +1293,31 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     pushEnsureProgress(queryClient, management, null, "2026-05-15T00:00:01Z");
     advancePastSlowStartThreshold();
     expect(readLifecycle()?.slowStartStage).toBe("slow");
+  });
+
+  it("STILL promotes to slow when NO lane event ever arrives - the wait is baselined at mount", () => {
+    // THE MOST IMPORTANT ARM ON THIS SURFACE, and the one whose failure direction
+    // is unacceptable to leave inferred.
+    //
+    // A host process that never spawns is the commonest hard failure, and it
+    // produces a boot with no lane event at all - so there is never a "first
+    // position" to start a clock from. If the wait were baselined only by the
+    // first advance, this shape would NEVER promote: no Retry, no Report issue,
+    // just a screen that sits there. That is strictly worse than the defect this
+    // fix addresses, and silent where that one at least showed a button.
+    //
+    // So the timer is armed from MOUNT and progress RESETS it, rather than
+    // progress arming it. Asserted rather than reasoned about: the mutation that
+    // arms it on first advance instead reddens exactly this test.
+    vi.useFakeTimers();
+    const { readLifecycle } = mountWithLane();
+
+    // Nothing pushed at all: no mutation on the lane, no progress, ever.
+    expect(readLifecycle()?.slowStartStage).toBe("loading");
+    advancePastSlowStartThreshold();
+
+    expect(readLifecycle()?.slowStartStage).toBe("slow");
+    expect(readLifecycle()?.localHostState).toBe("unavailable");
   });
 
   /**

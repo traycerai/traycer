@@ -158,6 +158,21 @@ export function laneProgressAdvanceKey(
   // `totalBytes` is excluded on purpose: it is the SIZE of the work, not the
   // position in it, so a total arriving late would read as advancement while
   // nothing had moved. `message` is excluded for the same reason.
+  //
+  // ⚠ THE SAFETY ARGUMENT, here rather than only in the suite - this is where
+  // someone stands when they decide the line is dead weight. Returning a
+  // non-null value for an event with no comparable fields makes every repeat of
+  // that event restart the staged wait, so an installer that says "working…"
+  // forever WITHHOLDS Retry and Report issue indefinitely. Prose is not
+  // movement. The wrong direction here is silent: the user gets a screen that
+  // never offers a way out.
+  //
+  // ⚠ AND IT IS UNPROVEN. Mutating this line to report an advance passes the
+  // entire suite - three attempts at an arm for it were each vacuous, for three
+  // different reasons recorded in
+  // `__tests__/host-provisioning-controller.test.tsx`. Read those before
+  // trusting a green run on this branch, and prefer an integration-level
+  // measurement if you need to change it.
   if (stage === null && percent === null && bytes === null) return null;
   return `${stage ?? ""}|${percent ?? ""}|${bytes ?? ""}`;
 }
