@@ -130,17 +130,6 @@ function approvalRequiredMessage(): string {
   );
 }
 
-function noopProgress(): MutationProgress {
-  return {
-    stage: null,
-    percent: null,
-    bytes: null,
-    totalBytes: null,
-    message: null,
-    workUnits: null,
-  };
-}
-
 function progressFromNdjson(
   event: Extract<NdjsonEvent, { type: "progress" }>,
 ): MutationProgress {
@@ -887,11 +876,15 @@ export class HostController {
     // rather than assumed. A first draft treated one as "omitted" so it would
     // not be mistaken for a transition - but it cannot happen: this method has
     // exactly ONE caller (`progressFromNdjson`, below the stream reader) and the
-    // NDJSON progress event types `stage` as a non-null `string`. The only thing
-    // in this file producing a null stage is `noopProgress()`, which currently
-    // has no call site at all. So the clause was dead code and the arm for it was
-    // unwritable through any real path; both are gone rather than left reading as
-    // covered.
+    // NDJSON progress event types `stage` as a non-null `string`. So the clause
+    // was dead code and the arm for it was unwritable through any real path;
+    // both are gone rather than left reading as covered.
+    //
+    // This file used to hold a `noopProgress()` returning an all-null progress,
+    // the one thing here that could have produced a null stage. It had no call
+    // site and is now deleted, so the argument above no longer has an exception
+    // to carve out. Re-introducing any all-null producer puts the clause back on
+    // the table - it is the type, not this comment, that would stop being true.
     const prior = this.mutationStatus.progress;
     const isLiveness = isRegistryLivenessStage(progress.stage);
     const withinStage =
