@@ -660,6 +660,19 @@ describe("<WindowHostModalHost />", () => {
    * measured in a real engine instead, by
    * `scripts/window-host-modal-alignment-browser.mjs`, and recorded as
    * browser-verified-only rather than left reading as covered here.
+   *
+   * TWO LIMITS OF THAT HARNESS, stated here because this is where a reader comes
+   * looking for coverage:
+   *
+   *  1. It renders the COLD-START body only. Its existence check requires the
+   *     spinner, the stage line, the lane detail and the progress bar - four
+   *     members the ∅ body does not render - so pointing it at that arm makes it
+   *     FAIL rather than measure. The ∅ arm has no rendered alignment
+   *     measurement at all; the assertions below are its only coverage.
+   *  2. It cannot distinguish the shipped fix from `self-start` +
+   *     `justify-center`, which renders at the same left edge. Its own `PC4`
+   *     asserts that blindness as a truth table rather than admitting it in
+   *     prose, and the grep-style class guard is what actually pins it.
    */
   describe("the local-bootstrap body's structure", () => {
     it("gives BOTH local arms one body root, so alignment has an owner", async () => {

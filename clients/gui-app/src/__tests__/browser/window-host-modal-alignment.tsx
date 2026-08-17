@@ -40,17 +40,25 @@ const BOOTSTRAP_TAIL = [
   "[host] verifying signature",
 ].join("\n");
 
+/**
+ * Which of the disclosure's two tail states to render, from `?tail=empty`.
+ *
+ * Both are measured, in separate page loads, because they are the SAME slot in
+ * two states and only one of them was ever looked at. The empty one is not a
+ * rare branch: on the arm where nothing can serve the window the host never
+ * reported ready, so an empty `bootstrap.log` tail is the expected reading.
+ */
+const wantsEmptyTail =
+  new URLSearchParams(location.search).get("tail") === "empty";
+
 function buildRunnerHost(): MockRunnerHost {
   const traycerCli = new MockTraycerCli();
-  // A non-empty tail on purpose: an empty one draws the centred "Waiting for
-  // bootstrap output…" placeholder instead of the log `<pre>`, and the open
-  // state's left edge is one of the things being measured.
   traycerCli.hostStatusSnapshot = {
     running: false,
     pidMetadata: null,
     bootstrapMarkers: [],
     bootstrapLogPath: "/mock/bootstrap.log",
-    bootstrapLogTail: BOOTSTRAP_TAIL,
+    bootstrapLogTail: wantsEmptyTail ? "" : BOOTSTRAP_TAIL,
   };
   return new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",

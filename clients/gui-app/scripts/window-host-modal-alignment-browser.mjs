@@ -209,6 +209,22 @@ try {
         return edge(el === null ? null : el.querySelector('span'));
       })(),
       logTail: edge(byTestId('local-host-loading-log-tail')),
+      // The SAME slot's other state. Reported even when absent so the output
+      // itself records which branch this load exercised, rather than leaving a
+      // reader to assume both were covered.
+      emptyTail: edge(byTestId('local-host-loading-empty-tail')),
+      emptyTailTextAlign: (() => {
+        const el = byTestId('local-host-loading-empty-tail');
+        return el === null ? null : getComputedStyle(el).textAlign;
+      })(),
+      logTailTextAlign: (() => {
+        const el = byTestId('local-host-loading-log-tail');
+        return el === null ? null : getComputedStyle(el).textAlign;
+      })(),
+      // The ∅ arm's own member. Absent on this arm by construction - this
+      // fixture mounts the cold-start body - and reported so that absence is
+      // visible rather than inferred.
+      bootstrapDetails: edge(byTestId('local-host-bootstrap-details')),
       configureShell: edge(byTestId('local-host-open-shell-settings')),
       plantedHeading: edge(document.querySelector('[data-probe-planted-heading]')),
       plantedControl: edge(document.querySelector('[data-probe-planted-control]')),
@@ -253,6 +269,30 @@ try {
   await evaluate(client, `new Promise((r) => setTimeout(r, 400))`);
   const open = await evaluate(client, readEdges);
 
+  // SECOND LOAD: the disclosure's other tail state. Same slot, and until now
+  // measured by nothing - the fixture always supplied a tail, so the `<pre>` was
+  // the only branch ever rendered. A fresh navigation rather than a mutated
+  // snapshot, so the empty state is produced the way the component produces it.
+  await client.send("Page.navigate", { url: `${pageUrl}?tail=empty` });
+  await waitFor(
+    client,
+    "the empty-tail load's toggle to be painted",
+    `Boolean(document.querySelector('[data-testid="local-host-loading-toggle-details"]')) &&
+     Boolean(document.querySelector('[data-probe-planted-control]'))`,
+  );
+  await evaluate(client, `new Promise((r) => setTimeout(r, 600))`);
+  const emptyToggleCentre = await evaluate(
+    client,
+    `(() => {
+       const el = document.querySelector('[data-testid="local-host-loading-toggle-details"]');
+       const r = el.getBoundingClientRect();
+       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+     })()`,
+  );
+  await click(client, emptyToggleCentre.x, emptyToggleCentre.y);
+  await evaluate(client, `new Promise((r) => setTimeout(r, 400))`);
+  const emptyTailOpen = await evaluate(client, readEdges);
+
   const checks = [];
   const check = (name, passed, detail) => {
     checks.push({ name, passed, detail });
@@ -272,6 +312,14 @@ try {
 
   // PC1 - existence before absence. Every member of the alignment set is on
   // screen with a real box, so an "edges agree" verdict cannot be two nulls.
+  //
+  // NAMED FOR ITS ARM, deliberately. This member set is the cold-start body's -
+  // spinner, stage, lane detail, progress bar - so this check REQUIRES that arm
+  // and would fail rather than measure if pointed at the ∅ body, which renders
+  // the attempt panel and the disclosure and nothing else. That makes the whole
+  // script a cold-start instrument, and the name has to say so: an arm-agnostic
+  // name on an arm-specific check is how a figure gets quoted about a card it
+  // was never taken from.
   const members = {
     title: closed.title,
     description: closed.description,
@@ -284,8 +332,10 @@ try {
   const unpainted = Object.entries(members)
     .filter(([, e]) => !painted(e))
     .map(([k]) => k);
-  check("PC1_every_measured_member_is_painted", unpainted.length === 0, {
+  check("PC1_every_COLD_START_member_is_painted", unpainted.length === 0, {
+    arm: "cold-start",
     unpainted,
+    notMeasuredHere: ["local-host-bootstrap-details (∅ arm only)"],
   });
 
   // PC2 - the comparator can see a centred control. Same flex-column shape,
@@ -433,14 +483,110 @@ try {
     missingOrZero: rampMissing,
   });
 
+  // PC4 - WHAT THIS HARNESS CANNOT SEE, asserted rather than admitted in prose.
+  //
+  // A left edge of 368 does not prove `justify-center` is gone. `self-start`
+  // shrink-wraps the toggle, and a shrink-wrapped box has nothing for
+  // `justify-center` to centre the label within - so the masking combination
+  // renders at the same 368 px as the real fix. One rendered variant of this card
+  // looked fixed for exactly that reason while still carrying the class.
+  //
+  // Written as the full truth table rather than the two interesting rows: a
+  // battery only pins the rows it enumerates, and "the label moved" versus "the
+  // label did not move" is only meaningful with both polarities present.
+  const probeToggleClass = async (extra) =>
+    evaluate(
+      client,
+      `(() => {
+         const el = document.querySelector('[data-testid="local-host-loading-toggle-details"]');
+         const original = el.className;
+         el.className = original + ${JSON.stringify(` ${extra}`)};
+         const label = el.querySelector('span').getBoundingClientRect().left;
+         el.className = original;
+         const restored = el.querySelector('span').getBoundingClientRect().left;
+         return {
+           labelLeftPx: Number(label.toFixed(2)),
+           restoredLeftPx: Number(restored.toFixed(2)),
+         };
+       })()`,
+    );
+
+  const baseline = closed.toggleLabel?.left ?? null;
+  const rows = [
+    { classes: "justify-center", expectMoves: true },
+    { classes: "self-start", expectMoves: false },
+    { classes: "self-start justify-center", expectMoves: false },
+  ];
+  const truthTable = [];
+  for (const row of rows) {
+    const reading = await probeToggleClass(row.classes);
+    const moved =
+      baseline === null
+        ? null
+        : Math.abs(reading.labelLeftPx - baseline) > EDGE_TOLERANCE_PX;
+    truthTable.push({
+      added: row.classes,
+      labelLeftPx: reading.labelLeftPx,
+      movedFromBaseline: moved,
+      expectedToMove: row.expectMoves,
+      // Every probe must leave the toggle exactly as it found it, or each later
+      // row measures the previous row's damage.
+      restoredToBaselinePx: reading.restoredLeftPx,
+      restoredCleanly:
+        baseline !== null &&
+        Math.abs(reading.restoredLeftPx - baseline) <= EDGE_TOLERANCE_PX,
+    });
+  }
+  check(
+    "PC4_the_masking_substitution_is_invisible_to_this_harness",
+    truthTable.every(
+      (r) => r.movedFromBaseline === r.expectedToMove && r.restoredCleanly,
+    ),
+    {
+      baselineLabelLeftPx: baseline,
+      truthTable,
+      meaning:
+        "`justify-center` alone MOVES the label and is caught. With `self-start` " +
+        "it does not move, so this harness reports the masking combination as " +
+        "aligned. Only the class string distinguishes them - hence the step-7 " +
+        "grep guard.",
+    },
+  );
+
+  // A6 - the empty-tail placeholder obeys the same contract as the `<pre>` it
+  // alternates with. It was `text-center`: the last leaf overriding the body's
+  // one-alignment root, in the branch nothing measured, and the EXPECTED branch
+  // on the arm where the host never reported ready.
+  //
+  // Positive control built in: the placeholder must actually be the thing on
+  // screen (`present`) and the `<pre>` must be absent, or "the placeholder is
+  // left-aligned" is a claim about a node this load never rendered.
+  check(
+    "A6_empty_tail_placeholder_matches_the_pre_it_alternates_with",
+    emptyTailOpen.emptyTail !== null &&
+      emptyTailOpen.logTail === null &&
+      emptyTailOpen.emptyTailTextAlign === "left" &&
+      sameEdge(emptyTailOpen.emptyTail, emptyTailOpen.heading),
+    {
+      placeholderPresent: emptyTailOpen.emptyTail !== null,
+      preAbsentOnThisLoad: emptyTailOpen.logTail === null,
+      placeholderTextAlign: emptyTailOpen.emptyTailTextAlign,
+      preTextAlignOnFirstLoad: open.logTailTextAlign,
+      placeholderLeftPx: emptyTailOpen.emptyTail?.left ?? null,
+      headingLeftPx: emptyTailOpen.heading?.left ?? null,
+    },
+  );
+
   const failed = checks.filter((c) => !c.passed);
   console.log(
     JSON.stringify(
       {
         UNITS: "all lengths in CSS px at deviceScaleFactor 1",
+        ARM: "cold-start only - the ∅ body is NOT rendered by this fixture",
         CHECKS: checks,
         CLOSED: closed,
         OPEN: open,
+        OPEN_WITH_EMPTY_TAIL: emptyTailOpen,
         VERDICT: failed.length === 0 ? "ALL PASS" : "FAILED",
         FAILED: failed.map((c) => c.name),
       },

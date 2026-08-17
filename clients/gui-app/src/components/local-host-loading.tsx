@@ -57,18 +57,32 @@ export function BootstrapLogDisclosure(
 /**
  * The ONE alignment contract for a local-bootstrap body.
  *
- * Both bodies used to be fragments, so their children became direct children of
- * the dialog's own `flex flex-col gap-4` column and each one carried (or failed
- * to carry) its own alignment. That is the defect class, not a tidiness point: a
- * wrapper deleted from the last consumer took the alignment contract with it and
- * left nothing that owned it, so the toggle's `self-center` became the only
- * centred element in a left-aligned card - three alignments in one surface.
+ * Both bodies were fragments, so their children became direct children of the
+ * dialog's own `flex flex-col gap-4` column and each one carried (or failed to
+ * carry) its own alignment. Same defect in both, but NOT the same history, and
+ * the difference is worth keeping straight: the loading body lost its contract
+ * (every consumer that supplied a wrapper was deleted, leaving one that supplies
+ * none), while the ∅ body never had one - it was authored as a fragment into a
+ * `gap-4` column. Nothing was deleted from under it.
+ *
+ * THE COUNT, since two different threes have been cited. The rendered-evidence
+ * count is the CLOSED card and its members are: the left-aligned body, the
+ * centred toggle, and the right-aligned action footer - which branch-left
+ * deliberately KEEPS, because a footer is not part of the body's column. The
+ * other three is the OPEN card measured by
+ * `scripts/window-host-modal-alignment-browser.mjs` (body, centred toggle label,
+ * centred `Configure shell…`) and excludes the footer entirely. Cite the closed
+ * card's three; it is the one the variants were shot against.
  *
  * Branch-left, decided on rendered full-modal screenshots. Base-centred was
  * rejected on that evidence because it recreates the same defect with different
- * members, and `self-start` on the toggle was never rendered and so is not
- * adopted: alignment belongs to this root, not to each leaf that remembers to
- * ask for it.
+ * members. `self-start` on the toggle is rejected for a sharper reason: it
+ * shrink-wraps the button, which makes a stray `justify-center` INVISIBLE rather
+ * than absent. That is exactly why one rendered variant looked fixed while still
+ * carrying `justify-center`. Dropping both classes removes the defect;
+ * `self-start` would only hide it - and hide it from this file's own harness too,
+ * which measures a position that `self-start` and the real fix both produce.
+ * Alignment belongs to this root, not to each leaf that remembers to ask.
  *
  * `gap-4` deliberately matches the dialog column's own gap, so introducing this
  * root preserves the existing vertical rhythm instead of quietly re-spacing a
@@ -248,7 +262,21 @@ function DetailsDisclosure(props: DetailsDisclosureProps) {
         data-testid="local-host-loading-toggle-details"
         // No `self-center` and no `justify-center`: alignment is the shell's,
         // and this control centring itself is what made the card read as three
-        // alignments. Not `self-start` either - that was never rendered.
+        // alignments (see the shell's doc for which three).
+        //
+        // NOT `self-start` either, and not because it is untried - it was
+        // rendered. Because it shrink-wraps this button, which makes a stray
+        // `justify-center` a NO-OP: one rendered variant looked fixed while
+        // still carrying the class. `self-start` hides this defect where
+        // dropping both removes it.
+        //
+        // The consequence, accepted deliberately: with `items-stretch` on the
+        // parent, this button's box spans the card while its label sits left, so
+        // the hit area is wider than the text. Harmless here - it is a lone
+        // control on its row, with nothing adjacent to mis-hit - and the wide box
+        // is what keeps a re-added `justify-center` VISIBLE instead of masked.
+        // Shrink-wrapping it (`w-fit` as much as `self-start`) would buy a
+        // tidier target and reintroduce the blind spot.
         className="inline-flex items-center gap-1 text-ui-xs text-muted-foreground hover:text-foreground"
       >
         <span>{props.open ? "Hide details" : "Show details"}</span>
@@ -303,7 +331,18 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
       <p
         data-testid="local-host-loading-empty-tail"
         // muted-fill-ok: weak tint delimited by its own border-border/60
-        className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-center text-ui-xs text-muted-foreground"
+        //
+        // `text-left`, decided rather than inherited. This was `text-center`,
+        // which made it the last leaf overriding the body's one-alignment
+        // contract - and it is the SAME SLOT as the `<pre>` below, which is
+        // `text-left`, so the two states of one region disagreed about where
+        // their text starts. Content appearing to shift for a reason unrelated
+        // to the content is what that reads as.
+        //
+        // Not a rare branch, either: on the ∅ arm the host never reported ready,
+        // so an empty tail is the EXPECTED reading, not an edge case - and it is
+        // the one branch the alignment harness does not enter.
+        className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       >
         Waiting for bootstrap output…
       </p>
