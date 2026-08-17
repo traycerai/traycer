@@ -5,6 +5,10 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { selectEffectiveWorkspaceFoldersBucket } from "@/lib/workspace/effective-workspace-folders";
+import {
+  activeProfileOwnsPickerEdits,
+  syncActiveProfileFolders,
+} from "@/lib/workspace/sync-active-profile-folders";
 import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
 import {
   useWorkspaceFoldersStore,
@@ -214,6 +218,12 @@ export function useHomeWorkspaceSource(
         }
         if (!usingSeededWorkspace) {
           const evicted = addGlobalResolvedFolders(hostId, folders);
+          syncActiveProfileFolders({
+            hostId,
+            addPaths: folders.map((folder) => folder.path),
+            removePath: null,
+            primaryPath: null,
+          });
           if (activeDraftId === null) {
             for (const path of evicted) unstageStoreEntry(stagingKey, path);
           }
@@ -252,7 +262,16 @@ export function useHomeWorkspaceSource(
           removeModalFolder(modalEpicId, modalSeedWorkspace, folderPath);
         } else {
           if (!usingSeededWorkspace) {
-            removeGlobalFolder(hostId, folderPath);
+            if (activeProfileOwnsPickerEdits(hostId)) {
+              syncActiveProfileFolders({
+                hostId,
+                addPaths: [],
+                removePath: folderPath,
+                primaryPath: null,
+              });
+            } else {
+              removeGlobalFolder(hostId, folderPath);
+            }
           }
           if (activeDraftId !== null) {
             removeDraftFolder(activeDraftId, folderPath);
@@ -301,7 +320,16 @@ export function useHomeWorkspaceSource(
           setModalPrimaryFolder(modalEpicId, modalSeedWorkspace, folderPath);
         } else {
           if (!usingSeededWorkspace) {
-            setGlobalPrimaryFolder(hostId, folderPath);
+            if (activeProfileOwnsPickerEdits(hostId)) {
+              syncActiveProfileFolders({
+                hostId,
+                addPaths: [],
+                removePath: null,
+                primaryPath: folderPath,
+              });
+            } else {
+              setGlobalPrimaryFolder(hostId, folderPath);
+            }
           }
           if (activeDraftId !== null) {
             setDraftWorkspacePrimary(activeDraftId, folderPath);

@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { folderSeedForNewProfile } from "@/lib/workspace/project-profile-seed";
 import type { ProjectProfileSeed } from "@/lib/workspace/project-profile-seed";
+import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
+import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import {
   PROJECT_PROFILE_COLORS,
   useProjectProfilesStore,
@@ -24,16 +26,11 @@ import {
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { PROJECT_PROFILE_COLOR_DOT } from "./project-profile-colors";
 
-const SEED_OPTIONS: ReadonlyArray<{
-  readonly id: ProjectProfileSeed;
+const EXTRA_SEEDS: ReadonlyArray<{
+  readonly id: Exclude<ProjectProfileSeed, "folder">;
   readonly label: string;
   readonly hint: string;
 }> = [
-  {
-    id: "primary",
-    label: "Primary folder",
-    hint: "New chats only open this project's main folder",
-  },
   {
     id: "all",
     label: "All current folders",
@@ -42,7 +39,7 @@ const SEED_OPTIONS: ReadonlyArray<{
   {
     id: "empty",
     label: "Empty",
-    hint: "Add folders after creating the project",
+    hint: "Add this project's folder after creating it",
   },
 ];
 
@@ -54,23 +51,29 @@ export function ProjectProfileCreateDialog(props: {
   const { hostId, open, onOpenChange } = props;
   const [name, setName] = useState("");
   const [color, setColor] = useState<ProjectProfileColor>("orange");
-  const [seed, setSeed] = useState<ProjectProfileSeed>("primary");
+  const [seed, setSeed] = useState<ProjectProfileSeed>("folder");
+  const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  const catalog = useWorkspaceFoldersStore((state) =>
+    selectWorkspaceFoldersBucket(state, hostId),
+  );
+  const catalogPrimary = resolvePrimaryPath(
+    catalog.folders,
+    catalog.primaryPath,
+  );
+  const selectedFolder = pickedFolder ?? catalogPrimary;
 
   const reset = () => {
     setName("");
     setColor("orange");
-    setSeed("primary");
+    setSeed("folder");
+    setPickedFolder(null);
   };
 
   const submit = () => {
     if (hostId === null) return;
     const trimmed = name.trim();
     if (trimmed.length === 0) return;
-    const catalog = selectWorkspaceFoldersBucket(
-      useWorkspaceFoldersStore.getState(),
-      hostId,
-    );
-    const folders = folderSeedForNewProfile(catalog, seed);
+    const folders = folderSeedForNewProfile(catalog, seed, selectedFolder);
     const id = useProjectProfilesStore.getState().createProfile(hostId, {
       name: trimmed,
       color,
@@ -93,18 +96,21 @@ export function ProjectProfileCreateDialog(props: {
       }}
     >
       <DialogContent
-        className="sm:max-w-md"
+        className="max-w-[min(92vw,28rem)]"
         data-testid="project-profile-create-dialog"
       >
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
-            Isolate this chat's folders so a new worktree is not created for
-            every repo you have ever added.
+            Each project has its own main folder. New chats only open that
+            folder — not every repo you have ever added.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
-          <label className="flex flex-col gap-1.5" htmlFor="project-profile-name">
+          <label
+            className="flex flex-col gap-1.5"
+            htmlFor="project-profile-name"
+          >
             <span className="text-ui-sm font-medium">Name</span>
             <Input
               id="project-profile-name"
@@ -137,9 +143,51 @@ export function ProjectProfileCreateDialog(props: {
             </div>
           </fieldset>
           <fieldset className="flex flex-col gap-1.5">
-            <legend className="text-ui-sm font-medium">Start with</legend>
+            <legend className="text-ui-sm font-medium">
+              This project's folder
+            </legend>
+            {catalog.folders.length === 0 ? (
+              <p className="text-ui-xs text-muted-foreground">
+                Add a folder in the workspace picker first, then pick it here.
+              </p>
+            ) : (
+              <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
+                {catalog.folders.map((folderPath) => (
+                  <button
+                    key={folderPath}
+                    type="button"
+                    data-testid={`project-profile-folder-${folderPath}`}
+                    aria-pressed={
+                      seed === "folder" && selectedFolder === folderPath
+                    }
+                    onClick={() => {
+                      setSeed("folder");
+                      setPickedFolder(folderPath);
+                    }}
+                    className={cn(
+                      "flex flex-col items-start rounded-md px-2.5 py-1.5 text-left",
+                      seed === "folder" && selectedFolder === folderPath
+                        ? "bg-foreground/8"
+                        : "hover:bg-foreground/5",
+                    )}
+                  >
+                    <span className="text-ui-sm font-medium">
+                      {workspaceFolderName(folderPath)}
+                    </span>
+                    <span className="text-ui-xs text-muted-foreground">
+                      {folderPath}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </fieldset>
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="text-ui-sm font-medium text-muted-foreground">
+              Or
+            </legend>
             <div className="flex flex-col gap-1">
-              {SEED_OPTIONS.map((option) => (
+              {EXTRA_SEEDS.map((option) => (
                 <button
                   key={option.id}
                   type="button"
