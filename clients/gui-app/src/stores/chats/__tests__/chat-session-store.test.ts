@@ -1760,20 +1760,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: false,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
@@ -1859,20 +1846,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: false,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
@@ -1934,20 +1908,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: false,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
@@ -2029,20 +1990,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: false,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
 
     harness.handle.store
@@ -3340,20 +3288,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: false,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
     callbacks.onBlockDelta({
       kind: "blockDelta",
@@ -3475,15 +3410,7 @@ describe("createChatSessionStore", () => {
   it("sends the session-scoped background stop immediately when no turn is running", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -3505,15 +3432,7 @@ describe("createChatSessionStore", () => {
   it("stops the turn first when one is active, then sends the session stop once turnStateChanged reports it settled", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -3528,20 +3447,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: false,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
       turnInProgress: true,
       backgroundItems: [gatedCommand],
     });
@@ -3585,15 +3491,7 @@ describe("createChatSessionStore", () => {
   it("clears the pending session stop and records an error notice when the host rejects it", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -3663,15 +3561,7 @@ describe("createChatSessionStore", () => {
   it("clears a session stop whose phase-two frame died with the connection", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -3708,15 +3598,7 @@ describe("createChatSessionStore", () => {
   it("clears a session stop whose phase-one turn-stop frame died with the connection", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
@@ -3775,15 +3657,7 @@ describe("createChatSessionStore", () => {
   it("advances a deferred session stop from the reconnect snapshot when the settled turnStateChanged was missed", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
@@ -3870,15 +3744,7 @@ describe("createChatSessionStore", () => {
   it("releases the escalation when the turn stop is rejected while the turn still runs", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
@@ -3936,15 +3802,7 @@ describe("createChatSessionStore", () => {
   it("still advances when the turn stop's rejection loses the race with the turn's natural end", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
@@ -4119,15 +3977,7 @@ describe("createChatSessionStore", () => {
   it("clears the escalation without firing when a different turn is seen active", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
-    const gatedCommand: BackgroundItem = {
-      taskId: "task-1",
-      kind: "command",
-      title: "codex exec",
-      blockId: "tool-1",
-      parentTaskId: null,
-      scheduledFor: null,
-      individualStopUnavailable: { providerLabel: "Codex", minVersion: "0.146.0" },
-    };
+    const gatedCommand = gatedCommandItem();
     const turnOne: ChatActiveTurn = {
       agentMode: "regular",
       sameTurnSteeringSupported: false,
@@ -4296,20 +4146,7 @@ describe("createChatSessionStore", () => {
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: false,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        profileId: null,
-        userMessageId: "message-1",
-        startedAt: 3,
-        updatedAt: 3,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
+      activeTurn: runningActiveTurn(),
     });
     callbacks.onBlockDelta({
       kind: "blockDelta",
@@ -5743,6 +5580,38 @@ function createCoalesceHarness(): CoalesceHarness {
       if (callbacks === null) throw new Error("Expected callbacks");
       return callbacks;
     },
+  };
+}
+
+function gatedCommandItem(): BackgroundItem {
+  return {
+    taskId: "task-1",
+    kind: "command",
+    title: "codex exec",
+    blockId: "tool-1",
+    parentTaskId: null,
+    scheduledFor: null,
+    individualStopUnavailable: {
+      providerLabel: "Codex",
+      minVersion: "0.146.0",
+    },
+  };
+}
+
+function runningActiveTurn(): ChatActiveTurn {
+  return {
+    agentMode: "regular",
+    sameTurnSteeringSupported: false,
+    turnId: "turn-1",
+    status: "running",
+    harnessId: "codex",
+    model: "gpt-5-codex",
+    profileId: null,
+    userMessageId: "message-1",
+    startedAt: 3,
+    updatedAt: 3,
+    reasoningEffort: null,
+    serviceTier: null,
   };
 }
 
