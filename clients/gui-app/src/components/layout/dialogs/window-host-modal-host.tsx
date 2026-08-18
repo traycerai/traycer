@@ -1,6 +1,11 @@
 import { useEffect, type ReactNode } from "react";
-import { WindowHostModal } from "@/components/layout/dialogs/window-host-modal";
 import {
+  WindowHostModal,
+  WindowHostStartupCard,
+  type WindowHostModalProps,
+} from "@/components/layout/dialogs/window-host-modal";
+import {
+  gateBlocksApp,
   gateCardReadiness,
   presentsLocalHostLifecycle,
   useHostReadinessController,
@@ -181,7 +186,7 @@ function NarratingWindowHostModal(props: {
   // mounts at the app root and reading the controller there made the ROOT depend
   // on `RunnerHostProvider`, costing two root-route suites their whole tree. By
   // this point the narrator has already decided it is speaking.
-  const gateDrawn = gateCardReadiness({
+  const predicateInput = {
     readiness: controller.readinessFor("default-host", null),
     hasBeenReady: controller.hasBeenDefaultHostReady,
     signedIn: authStatus === "signed-in",
@@ -189,7 +194,16 @@ function NarratingWindowHostModal(props: {
     // null on it before this component mounts, so the gate is not drawing
     // there either and there is nothing to stand down from.
     bypassed: false,
-  });
+  };
+  const gateDrawn = gateCardReadiness(predicateInput);
+  // WHICH PRESENTATION: the same predicate the gate itself renders from, so
+  // the two can never disagree about whether an app exists behind this
+  // surface. While the gate blocks (cold start - the frame is empty), the
+  // narration is the released-style full-screen CARD in that frame: no
+  // overlay, no pointer trap, toasts alive. Once the gate has latched, a
+  // narration can only be the ∅ verdict over a mounted app, and only THAT
+  // renders the blocking dialog.
+  const blocking = gateBlocksApp(predicateInput);
   // `gateCardReadiness` rather than the boolean wrapper: the log's whole value
   // is naming WHICH card won, and re-deriving that from the readiness here
   // would be the second copy this suppression exists to avoid.
@@ -197,44 +211,56 @@ function NarratingWindowHostModal(props: {
   if (gateDrawn !== null) {
     return null;
   }
-  return (
-    <WindowHostModal
-      cause={narration.cause}
-      variant={narration.variant}
-      progress={progress}
-      localBootstrapBody={buildLocalBootstrapBody({
-        variant: narration.variant,
-        presentation,
-        localLifecycle,
-        progress,
-        // The same `settled.failed` the action row reads, deliberately: the body
-        // and the actions must agree about whether this attempt is over. Two
-        // derivations of that is how the modal ended up offering Retry beside a
-        // spinner claiming a start.
-        settledFailure: settled.failed,
-      })}
-      onRetry={retry.onRetry}
-      retryPending={retry.pending}
-      onUpdateHost={resolveUpdateHost(narration.variant, presentation)}
-      onOpenSettings={presentation.openSettings}
-      // Report issue is offered only once something has actually failed. It is
-      // the affordance that converts a false impression of breakage into
-      // support load, and on a healthy first launch there is no failure for a
-      // report to be about. Not folded into `onRetry`'s gate: Retry is also
-      // right on the slow arm, where nothing has failed yet but the wait has
-      // outrun the healthy band, and a report there would still describe a
-      // start that is merely taking its time.
-      showReportIssue={settled.failed}
-      // With no Retry and no Report issue on a healthy start, `Open settings`
-      // is the only control on screen - and as an equal-weight button it still
-      // reads as "something is wrong, pick one". Quiet link while nothing has
-      // failed, button once something has. It is never REMOVED: it is the
-      // measured escape hatch for a host that cannot start, and gating it
-      // behind the failure it exists to fix is the lockout this surface exists
-      // to prevent.
-      settingsEmphasis={settled.failed || settled.slow ? "button" : "link"}
-    />
-  );
+  const narrationProps: WindowHostModalProps = {
+    cause: narration.cause,
+    variant: narration.variant,
+    progress,
+    localBootstrapBody: buildLocalBootstrapBody({
+      variant: narration.variant,
+      presentation,
+      localLifecycle,
+      progress,
+      // The same `settled.failed` the action row reads, deliberately: the body
+      // and the actions must agree about whether this attempt is over. Two
+      // derivations of that is how the modal ended up offering Retry beside a
+      // spinner claiming a start.
+      settledFailure: settled.failed,
+    }),
+    onRetry: retry.onRetry,
+    retryPending: retry.pending,
+    onUpdateHost: resolveUpdateHost(narration.variant, presentation),
+    onOpenSettings: presentation.openSettings,
+    // Report issue is offered only once something has actually failed. It is
+    // the affordance that converts a false impression of breakage into
+    // support load, and on a healthy first launch there is no failure for a
+    // report to be about. Not folded into `onRetry`'s gate: Retry is also
+    // right on the slow arm, where nothing has failed yet but the wait has
+    // outrun the healthy band, and a report there would still describe a
+    // start that is merely taking its time.
+    showReportIssue: settled.failed,
+    // With no Retry and no Report issue on a healthy start, `Open settings`
+    // is the only control on screen - and as an equal-weight button it still
+    // reads as "something is wrong, pick one". Quiet link while nothing has
+    // failed, button once something has. It is never REMOVED from the dialog:
+    // it is the measured escape hatch for a host that cannot start, and
+    // gating it behind the failure it exists to fix is the lockout this
+    // surface exists to prevent. (The startup card additionally drops its
+    // whole action row while nothing is actionable - Settings stays reachable
+    // there through the gate frame's own header and "Configure shell…".)
+    settingsEmphasis: settled.failed || settled.slow ? "button" : "link",
+  };
+  if (blocking) {
+    return <WindowHostStartupCard {...narrationProps} />;
+  }
+  if (narration.cause === "cold-start") {
+    // Post-latch cold start: the app is mounted and interactive, and its own
+    // surfaces (tiles' bounded loading, the chip) tell the connecting story.
+    // A dialog here was a modal FLASH at the tail of every warm launch -
+    // gate open, first session still a beat away - blocking an app that was
+    // about to answer.
+    return null;
+  }
+  return <WindowHostModal {...narrationProps} />;
 }
 
 /**

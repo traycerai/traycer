@@ -14,9 +14,11 @@ import {
   HostReadinessControllerContext,
   type DefaultHostReadinessPresentation,
   type HostReadinessController,
+  type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const hostStatus = vi.hoisted(() => ({
   data: undefined as
@@ -110,12 +112,48 @@ const EMPTY_PRESENTATION: DefaultHostReadinessPresentation = {
 
 function controllerFor(
   presentation: DefaultHostReadinessPresentation,
+  readiness: SurfaceReadiness,
 ): HostReadinessController {
   return {
-    readinessFor: () => ({ kind: "ready" }),
+    readinessFor: () => readiness,
     defaultHostPresentation: presentation,
     hasBeenDefaultHostReady: false,
   };
+}
+
+/**
+ * The gate is OPEN: an app is mounted behind the narrator.
+ *
+ * `ready` makes `gateBlocksApp` false, which is what selects the narrator's
+ * DIALOG presentation - the blocking form, correct only when there is a live
+ * app the ∅ verdict has to stop the user driving.
+ */
+const GATE_OPEN: SurfaceReadiness = { kind: "ready" };
+
+/**
+ * The gate is BLOCKING: a launch, with no app behind the narrator yet.
+ *
+ * A narrator-owned kind, so the gate draws no card of its own and hands the
+ * words over - which selects the narrator's CARD presentation. This is the
+ * state every cold-start fixture below is describing, and modelling it as
+ * `ready` would have them assert the launch's action precedence against the
+ * post-latch surface instead.
+ */
+const GATE_BLOCKING: SurfaceReadiness = { kind: "loading-host" };
+
+/**
+ * The narrator's surface, whichever presentation it chose.
+ *
+ * For fixtures whose subject is WHETHER the narrator speaks - the served
+ * latch, the ∅ re-open - rather than which form it takes. Naming one testid
+ * there would couple a latch test to a presentation rule and, worse, let it
+ * pass vacuously the day the other form is the one that renders.
+ */
+function narratorSurface(): HTMLElement | null {
+  return (
+    screen.queryByTestId("window-host-modal") ??
+    screen.queryByTestId("window-host-startup-card")
+  );
 }
 
 function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
@@ -144,6 +182,20 @@ function renderHost(
   // for why a no-CLI shell can never prove that toggle's presence.
   traycerCli: ITraycerCli | null | undefined,
 ) {
+  return renderHostWithGate(presentation, bypassed, traycerCli, GATE_OPEN);
+}
+
+/**
+ * `renderHost` with the gate state stated explicitly. Used by the cold-start
+ * fixtures, which are describing a LAUNCH and therefore need the blocking gate
+ * (see {@link GATE_BLOCKING}).
+ */
+function renderHostWithGate(
+  presentation: DefaultHostReadinessPresentation,
+  bypassed: boolean,
+  traycerCli: ITraycerCli | null | undefined,
+  readiness: SurfaceReadiness,
+) {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -160,7 +212,7 @@ function renderHost(
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <HostReadinessControllerContext.Provider
-          value={controllerFor(presentation)}
+          value={controllerFor(presentation, readiness)}
         >
           <WindowHostModalHost bypassed={bypassed} />
         </HostReadinessControllerContext.Provider>
@@ -192,12 +244,24 @@ beforeEach(() => {
   // meaningful either way, since they are asserting the more restrictive of
   // two independently-sufficient gates.
   useDesktopDialogStore.getState().setReportIssueAvailable(true);
+  // SIGNED IN, because production is: this component is mounted only for a
+  // signed-in user (`useWindowNarration`'s latch doc leans on exactly that -
+  // signing out unmounts it). It matters now that the narrator picks its
+  // presentation from `gateBlocksApp`, whose first clause is `signedIn` - a
+  // signed-out harness reports "the gate is not blocking", i.e. models a
+  // window with a mounted app behind it, which is the opposite of the launch
+  // every cold-start fixture below is describing.
+  //
+  // Only `status` is set: it is the sole field this tree reads, and the
+  // store's profile invariant is about surfaces none of these fixtures mount.
+  useAuthStore.setState({ status: "signed-in" });
 });
 
 afterEach(() => {
   cleanup();
   useSelectionAuthorityStore.getState().reset();
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 describe("<WindowHostModalHost />", () => {
@@ -305,7 +369,7 @@ describe("<WindowHostModalHost />", () => {
       ],
     });
 
-    renderHost(
+    renderHostWithGate(
       {
         ...EMPTY_PRESENTATION,
         targetKind: "local",
@@ -313,13 +377,17 @@ describe("<WindowHostModalHost />", () => {
       },
       false,
       undefined,
+      GATE_BLOCKING,
     );
 
+    // A LAUNCH renders the card, not the dialog - there is no app behind it
+    // to trap pointers over, and trapping them is what made every toast dead
+    // for the whole of setup.
     await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
     expect(
-      screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
     ).toBe("cold-start");
     const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
@@ -333,6 +401,20 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
     expect(openSettings.getAttribute("data-emphasis")).toBe("link");
+
+    // ONE VOICE FOR THE EVENT. The card draws no title or description on a
+    // healthy start, so the lane's own heading is the only line - the
+    // "Setting up Traycer" / "Setting up Traycer Host…" / "Setting up…"
+    // stack the user reported is structurally unbuildable here.
+    expect(screen.queryByTestId("window-host-startup-card-title")).toBeNull();
+    expect(
+      screen.queryByTestId("window-host-startup-card-description"),
+    ).toBeNull();
+
+    // And the escape hatch survives the quiet: `AppHeader variant="host-loading"`
+    // has `navDisabled`, so this link is the ONLY route to Settings on screen.
+    // Dropping it for a tidier card is a lockout, not a simplification.
+    expect(openSettings.textContent).toContain("Open settings");
   });
 
   it("cold-start, slow (stage: slow): Retry present, Report issue absent, Open settings present as a button", async () => {
@@ -348,7 +430,7 @@ describe("<WindowHostModalHost />", () => {
       ],
     });
 
-    renderHost(
+    renderHostWithGate(
       {
         ...EMPTY_PRESENTATION,
         targetKind: "local",
@@ -358,13 +440,14 @@ describe("<WindowHostModalHost />", () => {
       },
       false,
       undefined,
+      GATE_BLOCKING,
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
     expect(
-      screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
     ).toBe("cold-start");
     const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
@@ -393,7 +476,7 @@ describe("<WindowHostModalHost />", () => {
     // an empty body.
     hostStatus.data = BOOTSTRAP_MARKERS;
 
-    renderHost(
+    renderHostWithGate(
       {
         ...EMPTY_PRESENTATION,
         targetKind: "local",
@@ -403,16 +486,22 @@ describe("<WindowHostModalHost />", () => {
       },
       false,
       new MockTraycerCli(),
+      GATE_BLOCKING,
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
     expect(
-      screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
     ).toBe("cold-start");
     const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
+    // A SETTLED failure gets its heading back - a crash report under no title
+    // reads as debris. This is the one cold-start face that is titled.
+    expect(
+      screen.getByTestId("window-host-startup-card-title").textContent,
+    ).toContain("Traycer Host didn't start");
 
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
@@ -521,19 +610,26 @@ describe("<WindowHostModalHost />", () => {
     // distinguishes them - and re-opening a window-wide modal there would be
     // the layered narration this epic deletes, because a host that goes quiet
     // after the app is working is the TILE's story, not the window's.
+    // Asserted through `narratorSurface()`: the subject is the LATCH, so this
+    // fixture must not care which presentation the narrator picked. The gate
+    // state is held BLOCKING throughout because this harness's readiness is
+    // static - in production it would open once the host served, and the
+    // narrator would move from the card to the dialog with the latch
+    // behaviour below unchanged.
     applySnapshot({
       attached: true,
       effectiveHostId: LOCAL_HOST_ID,
       targetHostId: LOCAL_HOST_ID,
       leases: [lease({ status: "connecting", dead: null })],
     });
-    renderHost(
+    renderHostWithGate(
       { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
       false,
       undefined,
+      GATE_BLOCKING,
     );
     await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(narratorSurface()).toBeTruthy();
     });
 
     applySnapshot({
@@ -544,7 +640,7 @@ describe("<WindowHostModalHost />", () => {
       selectionRevision: 2,
     });
     await waitFor(() => {
-      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      expect(narratorSurface()).toBeNull();
     });
 
     applySnapshot({
@@ -555,7 +651,7 @@ describe("<WindowHostModalHost />", () => {
       selectionRevision: 3,
     });
     await waitFor(() => {
-      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      expect(narratorSurface()).toBeNull();
     });
 
     // ...but ∅ still re-opens it. The latch silences the cold-start arm, not
@@ -569,7 +665,7 @@ describe("<WindowHostModalHost />", () => {
       selectionRevision: 4,
     });
     await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(narratorSurface()).toBeTruthy();
     });
   });
 
@@ -812,17 +908,20 @@ describe("<WindowHostModalHost />", () => {
           lease({ hostId: LOCAL_HOST_ID, status: "connecting", dead: null }),
         ],
       });
-      renderHost(
+      renderHostWithGate(
         { ...EMPTY_PRESENTATION, targetKind: "local", localBootIntent: true },
         false,
         new MockTraycerCli(),
+        GATE_BLOCKING,
       );
 
       await waitFor(() => {
-        expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+        expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
       });
       expect(
-        screen.getByTestId("window-host-modal").getAttribute("data-cause"),
+        screen
+          .getByTestId("window-host-startup-card")
+          .getAttribute("data-cause"),
       ).toBe("cold-start");
 
       // ONE root, not one per child: two roots would re-create the same defect

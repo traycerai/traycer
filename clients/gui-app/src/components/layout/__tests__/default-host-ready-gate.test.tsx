@@ -342,30 +342,80 @@ describe("<HostReadyGate />", () => {
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
   });
 
-  it("defers loading-host to the window modal: draws the frame, no card", () => {
+  it("defers loading-host to the window narrator: draws the frame and no card of the KIND's own", () => {
     // The window narrator (D10) now speaks for this kind. The gate used to
     // draw the setup card itself (the host-boot view, wrapped in a max-w-md
     // shadowed Card); it now draws only the shared frame
-    // (header + background) and leaves the card to the modal, so the two
+    // (header + background) and leaves the card to the narrator, so the two
     // surfaces never describe the same fact twice.
+    //
+    // ASSERTED PER-KIND, not as "no Card anywhere". While the authority is
+    // still DETACHED the narrator is structurally silent
+    // (`deriveWindowNarration` returns silent on `attached: false`), and the
+    // attach-pending card below covers that gap - so a blanket
+    // `[data-slot="card"]` absence would forbid the one surface that keeps
+    // the frame from being a blank page. What must not come back is the
+    // gate's own readiness-kind card.
     renderGate({ kind: "loading-host" }, PRESENTATION);
     const gate = screen.getByTestId("host-ready-gate");
     expect(gate.dataset.narratedByWindowModal).toBe("true");
-    expect(gate.querySelector('[data-slot="card"]')).toBeNull();
+    expect(screen.queryByTestId("host-ready-gate-loading-host")).toBeNull();
   });
 
-  it("defers unavailable-host (slow local start) to the window modal: no card, no Retry here", () => {
+  it("defers unavailable-host (slow local start) to the window narrator: no kind card, no Retry here", () => {
     // The lockout this used to pin (a full-screen block with no recovery) is
-    // now the window modal's job - it carries its own Retry, wired through
+    // now the window narrator's job - it carries its own Retry, wired through
     // `WindowHostModalHost` (see deliverable E). The gate itself must draw
     // nothing but the frame for this kind now, or the two surfaces would
     // offer two Retry buttons for one fact.
     renderGate({ kind: "unavailable-host" }, SLOW_PRESENTATION);
     const gate = screen.getByTestId("host-ready-gate");
     expect(gate.dataset.narratedByWindowModal).toBe("true");
-    expect(gate.querySelector('[data-slot="card"]')).toBeNull();
+    expect(screen.queryByTestId("host-ready-gate-unavailable-host")).toBeNull();
     expect(screen.queryByTestId("local-host-retry")).toBeNull();
     expect(screen.queryByText("This tab's host is unavailable.")).toBeNull();
+  });
+
+  describe("the attach gap - who speaks before the narrator can", () => {
+    /**
+     * The narrator is silent by CONSTRUCTION until the selection kernel
+     * attaches, and for a narrator-owned kind the gate draws no card. Nothing
+     * covered the interval between those two facts, so a launch showed a bare
+     * header over an empty page for the whole attach latency - under a
+     * `data-narrated-by-window-modal="true"` attribute asserting a narrator
+     * that was provably not rendering yet.
+     *
+     * One speaker at every moment: this card shows only while the narrator
+     * cannot speak, and yields the instant it can.
+     */
+    it("covers the frame while the authority is still DETACHED", () => {
+      renderGate({ kind: "loading-host" }, PRESENTATION);
+      expect(screen.getByTestId("host-gate-attach-pending")).toBeTruthy();
+    });
+
+    it("yields as soon as the authority attaches, so it can never double-speak with the narrator", () => {
+      renderGate({ kind: "loading-host" }, PRESENTATION);
+      expect(screen.getByTestId("host-gate-attach-pending")).toBeTruthy();
+
+      act(() => {
+        useSelectionAuthorityStore.getState().applyKernelSnapshot({
+          attached: true,
+          preferredHostId: null,
+          targetHostId: "local-host",
+          effectiveHostId: "local-host",
+          leases: [
+            {
+              hostId: "local-host",
+              status: "connecting",
+              dead: null,
+            },
+          ],
+          selectionRevision: 1,
+        });
+      });
+
+      expect(screen.queryByTestId("host-gate-attach-pending")).toBeNull();
+    });
   });
 
   it("no longer draws the bootstrap.log path/details itself - moved to the window modal, not dropped", () => {
@@ -516,7 +566,9 @@ describe("<HostReadyGate />", () => {
     );
     const gate = screen.getByTestId("host-ready-gate");
     expect(gate.dataset.narratedByWindowModal).toBe("true");
-    expect(gate.querySelector('[data-slot="card"]')).toBeNull();
+    // Per-kind, not "no Card anywhere" - see the loading-host pin above for
+    // why the attach-pending cover is deliberately exempt.
+    expect(screen.queryByTestId("host-ready-gate-unavailable-host")).toBeNull();
     expect(screen.queryByText("Traycer Host is unavailable")).toBeNull();
     expect(screen.queryByText("This tab's host is unavailable.")).toBeNull();
     expect(screen.queryByTestId("local-host-retry")).toBeNull();
@@ -661,11 +713,15 @@ describe("<HostReadyGate />", () => {
       ).toBe("false");
     });
 
-    it("B (positive control): the window modal CAN render in this harness, on the ∅ authority state", () => {
+    it("B (positive control): the window narrator CAN render in this harness, on the ∅ authority state", () => {
       // A NARRATED readiness kind, so the gate draws no card of its own and the
-      // only thing being proved here is that the modal reaches the DOM under
+      // only thing being proved here is that the narrator reaches the DOM under
       // this provider stack. Without this, case C would pass on a harness where
       // `WindowHostModalHost` throws or silently returns null.
+      //
+      // The STARTUP CARD is what it renders here, not the dialog: `hasBeenReady`
+      // is false, so the gate is still blocking and there is no app behind this
+      // surface to trap pointers over. The dialog form is post-latch only.
       applyEmptyFleet();
       renderGateWithModal(
         { kind: "unavailable-host" },
@@ -673,7 +729,7 @@ describe("<HostReadyGate />", () => {
         true,
         false,
       );
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
       expect(
         screen.queryByTestId("host-ready-gate-unavailable-host"),
       ).toBeNull();
@@ -698,12 +754,19 @@ describe("<HostReadyGate />", () => {
       const gateCard = screen.queryByTestId(
         "host-ready-gate-provisioning-error",
       );
-      const modal = screen.queryByTestId("window-host-modal");
+      // BOTH narrator presentations are queried. Which one the narrator would
+      // reach for depends on whether the gate is blocking, and this case runs
+      // with `hasBeenReady: false` - so querying the dialog testid alone would
+      // assert the absence of a surface that could not have rendered here
+      // anyway, and case C would go quietly vacuous while still passing.
+      const narrator =
+        screen.queryByTestId("window-host-modal") ??
+        screen.queryByTestId("window-host-startup-card");
       // Stated as a count rather than as two absences: "not both" must not be
       // satisfiable by NEITHER. One of them has to be narrating this failure -
       // a state that produces silence is a worse bug than a state that produces
       // two cards.
-      const narrators = [gateCard, modal].filter((el) => el !== null);
+      const narrators = [gateCard, narrator].filter((el) => el !== null);
       expect(narrators).toHaveLength(1);
     });
 
@@ -723,7 +786,9 @@ describe("<HostReadyGate />", () => {
 
       const narrators = [
         screen.queryByTestId("host-ready-gate-removed-host"),
-        screen.queryByTestId("window-host-modal"),
+        // Both presentations, for the reason spelled out in case C.
+        screen.queryByTestId("window-host-modal") ??
+          screen.queryByTestId("window-host-startup-card"),
       ].filter((el) => el !== null);
       expect(narrators).toHaveLength(1);
       // Named, so a future change that silenced BOTH could not satisfy this by

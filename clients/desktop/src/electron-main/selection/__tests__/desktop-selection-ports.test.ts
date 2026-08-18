@@ -748,7 +748,14 @@ describe("DesktopHostFleetSource", () => {
     fleet.dispose();
   });
 
-  it("publishes nothing on a failed fetch (network-error, unauthorized) - known membership is not clobbered", async () => {
+  it("a failed fetch on a COLD source still publishes this machine's local host - usability does not wait on the cloud", async () => {
+    // The old pin here said "publishes nothing", and that absolutism was the
+    // regression: at cold boot the source's default is an EMPTY fleet, so a
+    // flaky registry read left `effectiveHostId` null - "No host is
+    // available" over a machine with a durable, dialable local host - until
+    // the 60s poll or a host-change event happened to rescue it. The local
+    // id was already read from disk before the fetch; a cloud failure keeps
+    // the rows unknown, not the machine.
     const dir = await makeTempDir();
     const enrollmentFile = await writeEnrollment(dir, "local-host");
     const authSession = new DesktopAuthSession();
@@ -757,21 +764,81 @@ describe("DesktopHostFleetSource", () => {
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
 
-    for (const kind of ["network-error", "unauthorized"] as const) {
+    const failures: Array<() => Promise<HostListFetchResult>> = [
+      async () => ({ kind: "network-error" }),
+      async () => ({ kind: "unauthorized" }),
+      // The THROWN arm, distinct from a non-ok result: `refresh` contains it,
+      // and the containment must not swallow the local adoption either.
+      async () => {
+        throw new Error("socket hang up");
+      },
+    ];
+    for (const listRegisteredHosts of failures) {
       const fleet = buildFleetSource({
         identity,
         authSession,
         host,
-        listRegisteredHosts: async () => ({ kind }),
+        listRegisteredHosts,
       });
       const snapshots: HostFleetSnapshot[] = [];
       fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
       await fleet.refresh();
 
-      expect(snapshots).toEqual([]);
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]).toMatchObject({
+        localHostId: "local-host",
+        hosts: [{ hostId: "local-host", kind: "local" }],
+      });
       fleet.dispose();
     }
+  });
+
+  it("a failed fetch AFTER adopted membership keeps the rows and publishes nothing new - known membership is not clobbered", async () => {
+    // The half of the old pin that was always right, now stated on the
+    // fixture that actually exercises it: membership has to exist before a
+    // failure can be accused of clobbering it. The failed refresh re-adopts
+    // the same local id (a no-op by the value guard) and leaves the rows
+    // alone, so no snapshot is published at all.
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    authSession.set(signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    let fail = false;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        if (fail) return { kind: "network-error" };
+        return {
+          kind: "ok",
+          response: { hosts: [buildHostListItem("remote-1")] },
+        };
+      },
+    });
+    const snapshots: HostFleetSnapshot[] = [];
+    fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+    await fleet.refresh();
+    expect(snapshots).toHaveLength(1);
+
+    fail = true;
+    await fleet.refresh();
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      localHostId: "local-host",
+      hosts: [
+        { hostId: "local-host", kind: "local" },
+        { hostId: "remote-1", kind: "remote" },
+      ],
+    });
+    fleet.dispose();
   });
 
   it("declines a superseded same-identity completion - an older response landing last must not resurrect removed rows", async () => {
@@ -1563,10 +1630,12 @@ describe("createDesktopLocalHostEnsurePort", () => {
     await expect(port.ensureReady()).resolves.toEqual({ ok: true });
   });
 
-  it("maps busy/failed/deferred outcomes to {ok: false, reason: <kind>}", async () => {
+  it("maps busy/failed/deferred outcomes to {ok: false, reason: <kind>}, with only failed non-deferred", async () => {
     const controller = new FakeHostController();
     const port = createDesktopLocalHostEnsurePort(controller);
 
+    // `busy` is a host UP with active work - the converge declined to
+    // disrupt it. Proof of life must not become a dead lease, so it defers.
     controller.outcome = {
       kind: "busy",
       continuation: "retry-with-force",
@@ -1575,18 +1644,24 @@ describe("createDesktopLocalHostEnsurePort", () => {
     await expect(port.ensureReady()).resolves.toEqual({
       ok: false,
       reason: "busy",
+      deferred: true,
     });
 
+    // `failed` actually ran and concluded - the one arm allowed to arm the
+    // engine's dead-lease cooldown.
     controller.outcome = { kind: "failed", message: "boom" };
     await expect(port.ensureReady()).resolves.toEqual({
       ok: false,
       reason: "failed",
+      deferred: false,
     });
 
+    // `deferred` is the lane/lock being busy: nothing ran, nothing learned.
     controller.outcome = { kind: "deferred", message: "later" };
     await expect(port.ensureReady()).resolves.toEqual({
       ok: false,
       reason: "deferred",
+      deferred: true,
     });
   });
 });

@@ -375,11 +375,20 @@ describe("local-boot intent", () => {
       </RunnerHostProvider>,
     );
 
-    // The surface settles on the non-local wait: the window modal comes up
+    // The surface settles on the non-local wait: the window narrator comes up
     // with NO local bootstrap body (no spinner, no local-host-loading
     // content) - the positive proof this reached its non-local settled state.
+    //
+    // EITHER presentation counts as the anchor. This stack mounts the real
+    // gate, so which form the narrator takes depends on whether the gate is
+    // still blocking - a detail this fixture is not about, and pinning one
+    // testid here would turn a settle anchor into an accidental presentation
+    // assertion that goes vacuous when the other form renders.
     await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(
+        screen.queryByTestId("window-host-modal") ??
+          screen.queryByTestId("window-host-startup-card"),
+      ).toBeTruthy();
     });
     expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
     // …and it must never claim this machine's host is starting, nor offer any

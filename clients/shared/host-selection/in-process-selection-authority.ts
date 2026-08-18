@@ -242,5 +242,11 @@ export const inertLocalHostOutageSignal: LocalHostOutageSignal = {
  */
 export const unavailableLocalHostEnsurePort: LocalHostEnsurePort = {
   ensureReady: () =>
-    Promise.resolve({ ok: false, reason: "local-provisioning-unavailable" }),
+    Promise.resolve({
+      ok: false,
+      reason: "local-provisioning-unavailable",
+      // Not a deferral: nothing will ever run here, so pacing a retry would
+      // just delay the honest failure the ∅ definition depends on.
+      deferred: false,
+    }),
 };

@@ -520,9 +520,51 @@ export function DefaultHostReadyGate(props: {
       data-narrated-by-window-modal={cardReadiness === null ? "true" : "false"}
     >
       <AppHeader variant="host-loading" />
-      {cardReadiness === null ? null : (
+      {cardReadiness === null ? (
+        <AttachPendingCard />
+      ) : (
         <SurfaceReadinessFallback readiness={cardReadiness} />
       )}
+    </div>
+  );
+}
+
+/**
+ * The narrator-owned slot's cover for the ATTACH gap. The window narrator is
+ * structurally silent until the selection kernel attaches
+ * (`deriveWindowNarration` returns silent on `attached: false`), and this
+ * frame used to render nothing there - a blank page with only the header for
+ * the whole attach latency, under a data attribute claiming a narrator that
+ * was provably not rendering yet. One speaker at every moment: this card
+ * shows only while the narrator cannot speak, and yields the instant it can.
+ *
+ * The line is deliberately NOT from the F19 lane table - no lane is known to
+ * be running yet; this is the window finding its authority, and claiming
+ * "Starting local Traycer Host…" here would name a machine nothing has
+ * resolved.
+ */
+function AttachPendingCard(): ReactNode {
+  const attached = useSelectionAuthorityAttached();
+  if (attached) return null;
+  return (
+    <div className="flex flex-1 items-center justify-center p-6">
+      <Card
+        role="status"
+        aria-live="polite"
+        data-testid="host-gate-attach-pending"
+        className="w-full max-w-md shadow-sm"
+      >
+        <CardContent className="flex flex-col gap-4 py-6">
+          <AgentSpinningDots
+            testId={undefined}
+            variant="pulse"
+            className="h-8 min-w-8 text-title-md text-foreground"
+          />
+          <p className="text-ui font-medium text-foreground">
+            Starting Traycer…
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

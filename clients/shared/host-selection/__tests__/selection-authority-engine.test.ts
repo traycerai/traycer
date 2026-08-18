@@ -1431,6 +1431,102 @@ describe("SelectionAuthorityEngineImpl - local outage signal", () => {
 
     engine.dispose();
   });
+
+  it("COMPOSITION: a live session outranks the engine's own in-flight ensure - the warm host reads ready, not connecting, for the whole converge", async () => {
+    // The launch-time ensure fires on every cold boot (never-dialed is
+    // trivially true at t=0), and on a machine whose host is ALREADY UP it is
+    // a 30-45s CLI converge that proves nothing about the host's ability to
+    // serve. This pins the arm's live-session branch: the moment a session
+    // establishes, the lease answers `ready` with the ensure still
+    // unresolved - which is what lets the window narrator clear over a
+    // working app instead of holding "Setting up Traycer" for the converge's
+    // whole duration (the measured 30-60s startup regression).
+    const clock = createFakeAuthorityClock(0);
+    const ensure = createDeferredEnsure();
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: ensure.port,
+    });
+    const { engine } = authority;
+    // Construction derives, sees a never-dialed wanted local host, and mints
+    // the launch ensure.
+    expect(ensure.calls.count).toBe(1);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+
+    const incarnation = attachReporter(engine, "A");
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("L", "s1", "established", 1),
+    );
+    // The ensure has NOT resolved - the session alone flips the lease.
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("ready");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    expect(ensure.calls.count).toBe(1);
+
+    // When the converge later stops the host for a swap, the session drops
+    // and the arm's non-committal answer resumes - connecting, never dead,
+    // and never `restarting-expected` (the ensure arm still preempts the
+    // outage arm in both branches; that is the original COMPOSITION pin).
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("L", "s1", "lost", 1),
+    );
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    await ensure.resolve(true);
+    authority.dispose();
+  });
+
+  it("a DEFERRED ensure paces the next request without deadening the lease", async () => {
+    // Deferral means the lifecycle lane or its CLI lock was busy - another
+    // launch actor mid-work - so NOTHING ran and nothing was learned about
+    // the host. Before the split this armed the same 30s cooldown a genuine
+    // provisioning failure arms, which derives `dead: offline` and put the
+    // "No host is available" modal over a healthy machine whose lock the
+    // desktop's own launch reconcile happened to hold.
+    const clock = createFakeAuthorityClock(0);
+    const ensure = createDeferredEnsure();
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: ensure.port,
+    });
+    const { engine } = authority;
+    expect(ensure.calls.count).toBe(1);
+
+    await ensure.resolveDeferred();
+
+    // Not dead, and the host stays selectable: the lease keeps the
+    // non-committal answer a never-dialed host has always had.
+    const after = findLease(engine.snapshot().leases, "L");
+    expect(after?.status).toBe("connecting");
+    expect(after?.dead).toBeNull();
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    // ...but the request IS paced: the commit that followed completion did
+    // not immediately re-mint against the still-busy lane.
+    expect(ensure.calls.count).toBe(1);
+
+    // The hold lapses on the engine's own deadline timer, and the retry runs.
+    clock.advance(LOCAL_ENSURE_RETRY_COOLDOWN_MS);
+    expect(ensure.calls.count).toBe(2);
+
+    await ensure.resolve(true);
+    authority.dispose();
+  });
 });
 
 describe("isUsableForSelection", () => {
@@ -2718,12 +2814,16 @@ interface DeferredEnsure {
   readonly port: LocalHostEnsurePort;
   readonly calls: { count: number };
   resolve(ok: boolean): Promise<void>;
+  /** Resolves the pending ensure as a DEFERRAL - the lane was busy, nothing ran. */
+  resolveDeferred(): Promise<void>;
 }
 
 function createDeferredEnsure(): DeferredEnsure {
   const calls = { count: 0 };
   const pending: Array<
-    (value: { ok: true } | { ok: false; reason: string }) => void
+    (
+      value: { ok: true } | { ok: false; reason: string; deferred: boolean },
+    ) => void
   > = [];
   return {
     port: {
@@ -2738,7 +2838,17 @@ function createDeferredEnsure(): DeferredEnsure {
     resolve: async (ok: boolean) => {
       const resolve = pending.shift();
       if (resolve === undefined) throw new Error("no pending ensure");
-      resolve(ok ? { ok: true } : { ok: false, reason: "ensure-failed" });
+      resolve(
+        ok
+          ? { ok: true }
+          : { ok: false, reason: "ensure-failed", deferred: false },
+      );
+      await Promise.resolve();
+    },
+    resolveDeferred: async () => {
+      const resolve = pending.shift();
+      if (resolve === undefined) throw new Error("no pending ensure");
+      resolve({ ok: false, reason: "lifecycle-lane-busy", deferred: true });
       await Promise.resolve();
     },
   };

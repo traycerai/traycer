@@ -714,6 +714,16 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    */
   private localEnsureFailedUntil: number | null = null;
   /**
+   * End of the request-pacing hold after a DEFERRED ensure, or null. A
+   * deferral (the lifecycle lane or its CLI lock was busy - another launch
+   * actor mid-work) learned nothing about the host, so unlike
+   * `localEnsureFailedUntil` this holds back the NEXT request only and never
+   * deadens the lease: `deriveLease` does not read it. Without the split, a
+   * lock lost to the desktop's own launch converge rendered a healthy host
+   * `dead: offline` for 30s and put the ∅ modal over a working machine.
+   */
+  private localEnsureRetryHoldUntil: number | null = null;
+  /**
    * Monotonic count of proofs of life for the host that is LOCAL at the time
    * each one lands. Stamped onto every ensure token at mint, and the only
    * thing that lets a completion tell "my failure is the newest word on this
@@ -1220,6 +1230,10 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // own failure - whenever it lands - post-dates this moment.
     this.localProofGeneration += 1;
     this.localEnsureFailedUntil = null;
+    // The pacing hold goes with it: a host that just proved alive has no
+    // pending need the hold was protecting, and if it dies again the next
+    // request should not inherit a wait armed against a lock long released.
+    this.localEnsureRetryHoldUntil = null;
   }
 
   private ingestDial(
@@ -1608,6 +1622,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     this.usableSince.clear();
     this.pendingDampingDeadline = null;
     this.localEnsureFailedUntil = null;
+    this.localEnsureRetryHoldUntil = null;
     // Retire the outgoing account's in-flight ensure so the incoming identity
     // may ask for its own. Its completion is now state-neutral by token
     // mismatch, so nothing it does can reach B.
@@ -2012,7 +2027,10 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     const cooldownUntil = this.localEnsureFailedUntil;
     if (cooldownUntil !== null && now < cooldownUntil) return false;
+    const retryHoldUntil = this.localEnsureRetryHoldUntil;
+    if (retryHoldUntil !== null && now < retryHoldUntil) return false;
     this.localEnsureFailedUntil = null;
+    this.localEnsureRetryHoldUntil = null;
     // Stamped with the identity AND host that wanted it: a completion arriving
     // after an account switch describes a fleet this engine no longer has, and
     // must not be able to speak for whatever is running now.
@@ -2025,14 +2043,19 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     this.localEnsureExpiresAt = now + LOCAL_ENSURE_IN_FLIGHT_CEILING_MS;
     void this.options.localHostEnsure.ensureReady().then(
       (outcome) => {
+        if (outcome.ok) {
+          this.completeLocalEnsure(token, true, "", false);
+          return;
+        }
         this.completeLocalEnsure(
           token,
-          outcome.ok,
-          outcome.ok ? "" : outcome.reason,
+          false,
+          outcome.reason,
+          outcome.deferred,
         );
       },
       (error: unknown) => {
-        this.completeLocalEnsure(token, false, String(error));
+        this.completeLocalEnsure(token, false, String(error), false);
       },
     );
     return true;
@@ -2047,6 +2070,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     token: LocalEnsureToken,
     ok: boolean,
     reason: string,
+    deferred: boolean,
   ): void {
     if (this.disposed) return;
     if (this.localEnsureToken !== token) {
@@ -2133,6 +2157,16 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
         "[selection-authority] ensure failure post-dates proof of life",
         { hostId: token.hostId, reason },
       );
+    } else if (deferred) {
+      // Nothing ran, so nothing was learned about the host: pace the next
+      // request (the lane's current owner is typically doing this very
+      // converge) but leave the lease alone. Only a failure that actually
+      // provisioned and lost may arm the dead-verdict cooldown below.
+      this.localEnsureRetryHoldUntil =
+        this.options.clock.now() + LOCAL_ENSURE_RETRY_COOLDOWN_MS;
+      this.options.log.debug("[selection-authority] local ensure deferred", {
+        reason,
+      });
     } else {
       this.localEnsureFailedUntil =
         this.options.clock.now() + LOCAL_ENSURE_RETRY_COOLDOWN_MS;
@@ -2181,6 +2215,25 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       };
     }
     if (isLocal && this.localEnsureToken?.hostId === hostId) {
+      // A LIVE SESSION ANSWERS FROM INSIDE THIS ARM, and it answers `ready`.
+      // The launch-time ensure fires on every cold boot (never-dialed is
+      // trivially true at t=0), and on a machine whose host is already up the
+      // converge is a 30-45s CLI run - lock waits, a registry probe -
+      // that says nothing about the host's ability to serve. Holding the
+      // lease at `connecting` for that whole run held the window narrator's
+      // "Setting up Traycer" over a fully mounted, fully working app, which
+      // is the measured 30-60s "startup" this arm used to cost. A session is
+      // firsthand proof of service (invariant 5) and outranks the engine's
+      // own busywork; when the converge later stops the host for a swap, the
+      // session drops and this arm's non-committal answer below resumes.
+      //
+      // Deliberately INSIDE the arm rather than re-ranking it below the
+      // live-session arm at :2219: both branches here still preempt the
+      // expected-outage arm, which is the F3(c) property the COMPOSITION pin
+      // stands guard over - see the next paragraph.
+      if (this.hasLiveSession(hostId)) {
+        return { hostId, status: "ready", dead: null };
+      }
       // The engine's own provisioning request is in flight (D14). It outranks
       // the expected-outage arm below deliberately: that arm's signal is the
       // HostController mutation lane, which THIS request drives, so deferring
@@ -2368,6 +2421,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // engine ask again.
     const ensureCooldown = this.localEnsureFailedUntil;
     if (ensureCooldown !== null) consider(ensureCooldown);
+    // A deferred ensure's pacing hold changes no lease, but its lapse
+    // re-enables the request the next derivation would make - and on a quiet
+    // engine nothing else wakes that derivation up.
+    const ensureRetryHold = this.localEnsureRetryHoldUntil;
+    if (ensureRetryHold !== null) consider(ensureRetryHold);
     // An ensure still running holds the local lease usable, so its ceiling is
     // a lease change with no new evidence behind it - the same shape as the
     // cooldown above, and the arm whose absence was B2.

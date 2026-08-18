@@ -212,19 +212,30 @@ describe("the local-bootstrap body's one alignment", () => {
 });
 
 /**
- * F5: one heading per event. The dialog title is the card's only heading, and the
- * lane's stage line is subordinate to it.
+ * F5: ONE HEADING PER EVENT - now enforced by there being only one heading to
+ * begin with.
  *
- * Measured before the fix: the stage line sat 2px from the title at the IDENTICAL
- * weight and the IDENTICAL colour, so one event arrived as two competing
- * headings. The browser instrument asserts the whole type ramp (`A5`); this is
- * the CI-visible half, and it is a spelling pin - which is all jsdom can offer
- * for a purely visual change, since it computes no styles from Tailwind.
+ * HISTORY, because this pin inverted and the reason matters. The stage line
+ * originally sat 2px below the dialog title at the IDENTICAL weight and colour,
+ * so one event arrived as two competing headings; the fix DEMOTED the stage line
+ * (`text-ui-sm text-muted-foreground`) and this guard pinned that demotion.
  *
- * A one-token revert of that fix keeps every behavioural test in the tree green.
- * This is the only thing that would notice.
+ * The user then reported the whole stack - "Setting up Traycer" (dialog title),
+ * "Setting up Traycer Host…" (stage line), "Setting up…" (the bar's short
+ * label) - as one event said three times. Demoting the middle line had made the
+ * duplication quieter, not absent. The startup presentation removes the other
+ * two instead: `WindowHostStartupCard` draws NO title and NO description on a
+ * healthy start, and the progress bar's label slot is bytes-or-nothing. That
+ * leaves the stage line as the card's ONLY heading, so keeping it demoted would
+ * now be the defect - a lone heading whispering in muted small type.
+ *
+ * So the guard flips: the stage line must be the PRIMARY line (the released
+ * card's own `text-ui font-medium text-foreground`), and the duplication it was
+ * defending against is pinned where it actually lives now - the count assertion
+ * in `local-host-loading.test.tsx` ("Setting up" appears exactly once) and the
+ * title/description absence in `window-host-modal-host.test.tsx`.
  */
-describe("the host-boot stage line stays subordinate to the modal title", () => {
+describe("the host-boot stage line is the card's one heading", () => {
   const STAGE_TESTID = 'data-testid="local-host-loading-stage"';
 
   function stageElementLines(): readonly string[] {
@@ -238,19 +249,17 @@ describe("the host-boot stage line stays subordinate to the modal title", () => 
     return lines.slice(anchor, anchor + 4);
   }
 
-  it("is muted, not foreground", () => {
+  it("is foreground, not muted - it is the heading now, not a caption", () => {
     const element = stageElementLines().join("\n");
-    expect(element).toContain("text-muted-foreground");
-    // `text-muted-foreground` does not contain `text-foreground` as a substring,
-    // so this is a real exclusion rather than a coincidence of spelling.
-    expect(/\btext-foreground\b/.test(element)).toBe(false);
+    expect(/\btext-foreground\b/.test(element)).toBe(true);
+    expect(element).not.toContain("text-muted-foreground");
   });
 
-  it("is a size below the dialog title", () => {
-    // The title is `text-lg`; the stage line must not climb back to the body
-    // size that put it 2px away.
+  it("carries the released card's heading size and weight", () => {
     const element = stageElementLines().join("\n");
-    expect(element).toContain("text-ui-sm");
-    expect(/\btext-ui\b(?!-)/.test(element)).toBe(false);
+    // `text-ui`, not `text-ui-sm`: the demotion existed only to sit under a
+    // dialog title that no longer renders on this arm.
+    expect(/\btext-ui\b(?!-)/.test(element)).toBe(true);
+    expect(element).toContain("font-medium");
   });
 });

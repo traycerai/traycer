@@ -139,26 +139,20 @@ export function LocalHostLoadingContent(
         variant="pulse"
         className="h-8 min-w-8 text-title-md text-foreground"
       />
-      {/* The STAGE, subordinate to the modal's title - not a second heading.
-          It used to be `text-ui font-medium text-foreground`, which put it 2px
-          from the dialog title at the identical weight and colour, so one event
-          arrived as two competing headings ("Setting up Traycer" above
-          "Setting up Traycer Host…").
+      {/* THE ONE HEADING this surface has. The healthy startup card renders
+          no dialog title above this body anymore - the old modal put
+          "Setting up Traycer" 2px above this line's "Setting up Traycer
+          Host…" above the bar's "Setting up…", one event announced three
+          times by three layers - so this line is back to the released card's
+          own styling as the primary line.
 
-          Demoted in SIZE and COLOUR, which is the endorsed variant. `font-medium`
-          is deliberately KEPT rather than dropped: the lane's own detail line
-          directly below is already `text-ui-sm text-muted-foreground`, so
-          dropping weight too would make the stage byte-identical to the message
-          it is meant to caption, and the modal description above it is that
-          same pair. Weight is the one channel left that separates the three.
-
-          The COPY is untouched on purpose. `hostProgressHeading` is D10's shared
-          one-wording-per-event table, read by Settings ▸ Host as well; rewording
-          it here to reduce a within-surface duplication would break the
-          across-surface rule that table exists to enforce. */}
+          The COPY is untouched on purpose. `hostProgressHeading` is D10's
+          shared one-wording-per-event table, read by Settings ▸ Host as well;
+          rewording it here would break the across-surface rule that table
+          exists to enforce. */}
       <p
         data-testid="local-host-loading-stage"
-        className="text-ui-sm font-medium text-muted-foreground"
+        className="text-ui font-medium text-foreground"
       >
         {progressView?.heading ?? HOST_PROGRESS_IDLE_HEADING}
       </p>
@@ -198,11 +192,7 @@ function ProgressLines(props: {
           covers `verify`, `swap`, `service-start` and anything added later for
           free. The block also stopped being "the download's progress" the moment
           the carry-forward was scoped to one stage; it is the CURRENT stage's. */}
-      <HostProgress
-        percent={view.percent}
-        shortLabel={view.shortLabel}
-        transferLabel={view.transferLabel}
-      />
+      <HostProgress percent={view.percent} transferLabel={view.transferLabel} />
     </>
   );
 }
@@ -210,7 +200,6 @@ function ProgressLines(props: {
 interface HostProgressProps {
   /** `null` for a running stage with no measured position - see the contract above. */
   readonly percent: number | null;
-  readonly shortLabel: string;
   readonly transferLabel: string | null;
 }
 
@@ -239,8 +228,13 @@ function HostProgress(props: HostProgressProps) {
       data-indeterminate={indeterminate ? "true" : "false"}
       className="flex w-full flex-col gap-2"
     >
-      <div className="flex items-center justify-between text-ui-xs text-muted-foreground">
-        <span>{props.transferLabel ?? props.shortLabel}</span>
+      {/* Bytes and percent ONLY. This slot used to fall back to the stage's
+          short label ("Setting up…"), which merely repeated the heading two
+          lines up in fewer words - the third of the three "Setting up"s. The
+          row keeps its height either way so a transfer label appearing at the
+          download stage does not bounce the centered card. */}
+      <div className="flex min-h-4 items-center justify-between text-ui-xs text-muted-foreground">
+        <span>{props.transferLabel ?? ""}</span>
         {indeterminate ? null : (
           <span className="font-medium text-foreground">{props.percent}%</span>
         )}

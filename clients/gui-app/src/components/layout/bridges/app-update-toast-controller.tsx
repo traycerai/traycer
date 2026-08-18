@@ -18,9 +18,12 @@ import {
 } from "@/lib/app-update-analytics";
 import { requestAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
 import {
+  gateBlocksApp,
+  useHostReadinessController,
   useSurfaceReadiness,
   windowNarratorOwns,
 } from "@/components/layout/host-readiness-controller-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
@@ -49,14 +52,30 @@ export function AppUpdateToastController(): null {
   // already renders inside `HostReadinessControllerProvider`, and it sits
   // outside the router deliberately so root-route bridges survive setup.
   //
-  // The app already has a policy for what may interrupt first-run setup -
-  // `AppHeader` suppresses six surfaces on `variant === "host-loading"`,
-  // including the update BUTTON. The toast was exempt only because it is not
-  // in the file where that reasoning lives, which left the persistent fallback
-  // suppressed while the interrupting surface was not.
-  const narrated = windowNarratorOwns(
-    useSurfaceReadiness("default-host", null),
-  );
+  // SUPPRESSED ONLY WHILE THE BLOCKING DIALOG CAN BE UP - narrator-owned
+  // readiness with the gate ALREADY OPEN, i.e. the ∅ dialog over a mounted
+  // app, where a toast is visible but computed `pointer-events: none`
+  // (measured). During the LAUNCH itself the narration is the startup CARD
+  // now: no overlay, no pointer trap, and a pending update is at its most
+  // actionable exactly there - a user staring at a slow first setup should be
+  // able to take the update that may well contain the fix. That is also the
+  // released behavior this restores; the old whole-launch suppression existed
+  // because the launch surface used to be a modal.
+  //
+  // Same predicate inputs as the narrator's own presentation split
+  // (`NarratingWindowHostModal`), so the two cannot disagree about whether a
+  // dialog exists for this toast to be dead behind.
+  const readiness = useSurfaceReadiness("default-host", null);
+  const { hasBeenDefaultHostReady } = useHostReadinessController();
+  const authStatus = useAuthStore((state) => state.status);
+  const narrated =
+    windowNarratorOwns(readiness) &&
+    !gateBlocksApp({
+      readiness,
+      hasBeenReady: hasBeenDefaultHostReady,
+      signedIn: authStatus === "signed-in",
+      bypassed: false,
+    });
   const handledSequenceRef = useRef(0);
   const handledReportCapabilityRef = useRef<boolean | null>(null);
   const bridgeRef = useRef<DesktopAppUpdatesBridge | null | undefined>(

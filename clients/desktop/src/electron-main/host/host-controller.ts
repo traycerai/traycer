@@ -984,10 +984,18 @@ export class HostController {
   // acquisition IS the bound. The controller does not re-wrap that in a
   // second retry loop; it just classifies the terminal signal once.
 
-  private lockBusyOutcome<T>(isConvergeReady: boolean): MutationOutcome<T> {
-    return isConvergeReady
-      ? { kind: "failed", message: `${LOCK_BUSY_MESSAGE} Retry.` }
-      : { kind: "deferred", message: LOCK_BUSY_MESSAGE };
+  private lockBusyOutcome<T>(): MutationOutcome<T> {
+    // A held lock means another actor is mid-lifecycle-work; NOTHING ran, so
+    // nothing was learned about the host. `deferred` for every mutation,
+    // convergeReady included: the old convergeReady-only `failed` mapping
+    // served a retired renderer gate that wanted a Retry surface, and it
+    // taught the selection authority's launch ensure to arm a 30s dead-lease
+    // cooldown - the "No host is available" modal over a healthy machine -
+    // whenever it lost the lock to the desktop's own launch reconcile. Every
+    // surviving consumer is kind-agnostic (Settings/doctor throw the message
+    // whatever the kind; launch converge logs it), and the authority port
+    // maps `deferred` to request pacing instead of lease death.
+    return { kind: "deferred", message: LOCK_BUSY_MESSAGE };
   }
 
   private hostBusyOutcome<T>(
@@ -1519,7 +1527,7 @@ export class HostController {
       },
     );
     if (outcome.kind === "busy") {
-      return this.lockBusyOutcome(isConvergeReady);
+      return this.lockBusyOutcome();
     }
     const step = outcome.result;
     if (step.phase === "terminal") {
@@ -1946,7 +1954,7 @@ export class HostController {
       raw = await this.streamBundled<unknown>(args);
     } catch (err) {
       await this.reloadAfterServiceCycleFailure();
-      return this.classifyEnsureLikeError(err, true);
+      return this.classifyEnsureLikeError(err);
     }
     const result = parseEnsureResult(raw);
     // Fixup B7: a non-throwing result can still carry a post-swap start
@@ -1998,7 +2006,7 @@ export class HostController {
           : ["host", "ensure", "--no-service-register"],
       );
     } catch (err) {
-      return this.classifyEnsureLikeError(err, true);
+      return this.classifyEnsureLikeError(err);
     }
     const result = parseEnsureResult(raw);
     // Bytes-only ensure never starts the service itself - skip the
@@ -2052,21 +2060,15 @@ export class HostController {
     };
   }
 
-  private classifyEnsureLikeError<T>(
-    err: unknown,
-    isConvergeReady: boolean,
-  ): MutationOutcome<T> {
+  private classifyEnsureLikeError<T>(err: unknown): MutationOutcome<T> {
     if (err instanceof TraycerCliError) {
-      if (err.code === CLI_LOCK_BUSY_CODE)
-        return this.lockBusyOutcome<T>(isConvergeReady);
+      if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome<T>();
       if (err.code === HOST_BUSY_CODE) {
-        // Fixup B8: `classifyEnsureLikeError` is only ever called from the
-        // two `convergeReady` branches (both pass `isConvergeReady: true`),
-        // so this used to always fall into the `failed` arm - a healthy
-        // host with active work now shows a fatal gate error on a
-        // reconnect/compat ensure, instead of the pre-refactor busy-keep
-        // outcome (`host-busy`/`running: true`). `isConvergeReady` no
-        // longer distinguishes this branch; restore busy-keep for both.
+        // Fixup B8: a healthy host with active work is a busy-keep
+        // (`host-busy`/`running: true`), never a fatal gate error, on a
+        // reconnect/compat ensure. The `isConvergeReady` flag that once
+        // distinguished this branch is gone entirely - lock-busy now
+        // classifies `deferred` for every caller (see `lockBusyOutcome`).
         return this.hostBusyOutcome<T>("retry-with-force");
       }
       return { kind: "failed", message: err.message };
@@ -2568,8 +2570,7 @@ export class HostController {
     continuation: BusyContinuation,
   ): MutationOutcome<T> {
     if (err instanceof TraycerCliError) {
-      if (err.code === CLI_LOCK_BUSY_CODE)
-        return this.lockBusyOutcome<T>(false);
+      if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome<T>();
       if (err.code === HOST_BUSY_CODE)
         return this.hostBusyOutcome<T>(continuation);
       return { kind: "failed", message: err.message };
@@ -2675,7 +2676,7 @@ export class HostController {
     } catch (err) {
       await this.reloadAfterServiceCycleFailure();
       if (err instanceof TraycerCliError) {
-        if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome(false);
+        if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome();
         if (err.code === HOST_BUSY_CODE)
           return this.hostBusyOutcome("retry-with-force");
       }
@@ -2843,7 +2844,7 @@ export class HostController {
               };
             },
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
           const registration = outcome.result;
           if (registration === null) {
             return { kind: "failed", message: "No host installed." };
@@ -2892,7 +2893,7 @@ export class HostController {
         } catch (err) {
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -2930,14 +2931,14 @@ export class HostController {
             },
             async () => unregisterHostLoginItem(),
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
           return { kind: "ok", value: { registered: false } };
         }
         try {
           await this.runBundled<unknown>(["host", "service", "uninstall"]);
         } catch (err) {
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         return { kind: "ok", value: { registered: false } };
@@ -3002,7 +3003,7 @@ export class HostController {
           // CLI-lock-busy/failed restart never touched the host either.
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -3068,7 +3069,7 @@ export class HostController {
         } catch (err) {
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -3119,7 +3120,7 @@ export class HostController {
                 err instanceof TraycerCliError &&
                 err.code === CLI_LOCK_BUSY_CODE
               )
-                return this.lockBusyOutcome(false);
+                return this.lockBusyOutcome();
               return { kind: "failed", message: describeError(err) };
             }
           }
@@ -3138,7 +3139,7 @@ export class HostController {
         } catch (err) {
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -3173,7 +3174,7 @@ export class HostController {
             },
             async () => unregisterHostLoginItem(),
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
         }
         let raw: unknown;
         try {
@@ -3182,7 +3183,7 @@ export class HostController {
           );
         } catch (err) {
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseUninstallResult(raw, all);
@@ -3227,7 +3228,7 @@ export class HostController {
             },
             async () => unregisterHostLoginItem(),
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
           removedLoginItem = true;
         }
         let raw: unknown;
@@ -3235,7 +3236,7 @@ export class HostController {
           raw = await this.runBundled<unknown>(["host", "uninstall", "--all"]);
         } catch (err) {
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseUninstallResult(raw, true);

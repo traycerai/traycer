@@ -1692,20 +1692,23 @@ describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup
 });
 
 // ---------------------------------------------------------------------------
-// Fixup B3: lock-contention terminal contract has 3 outcome classes, not the
-// single "deferred" `runLockedMacActivationCycle` used to hardcode
-// regardless of caller - manual intents (`respawn`, above) resolve
-// "deferred"; `convergeReady` must resolve "failed" + a Retry-worded message
-// (the renderer's gate UI), because it is reached from the live "connecting
-// to host" gate, not a background/manual surface that can just wait quietly.
-// The bug: `convergeReadyPackagedMac`'s OWN activation cycle (reached after
-// its `ensure` CLI call, not the ensure call itself) fed the shared
-// `runLockedMacActivationCycle` helper the same hardcoded `false` every
-// other caller used, so lock contention hit during THIS phase surfaced the
-// manual "deferred" message on the gate instead of "failed" + Retry.
+// Lock-contention terminal contract: ONE class, `deferred`, for every
+// mutation - convergeReady included. This SUPERSEDES fixup B3, which split
+// convergeReady off to "failed" + a Retry-worded message for the renderer's
+// live "connecting to host" gate. That gate's automatic converge is retired
+// (D14/C5); convergeReady's launch-time caller is now the selection
+// authority's ensure - a background actor - and the engine turns a `failed`
+// completion into a 30s dead-lease cooldown, i.e. the "No host is
+// available" modal over a healthy machine whose lock the desktop's own
+// launch reconcile happened to hold. A held lock means nothing ran and
+// nothing was learned about the host; the surviving manual surfaces
+// (Settings converge, doctor) throw the outcome message whatever its kind.
+// What this pin still protects from B3's era: contention during the
+// packaged-mac ACTIVATION CYCLE (after the ensure CLI call) resolves
+// cleanly - no hang, no throw.
 // ---------------------------------------------------------------------------
-describe("lock-contention terminal contract: convergeReady classifies busy as failed+Retry (fixup B3)", () => {
-  it("convergeReady on packaged macOS resolves failed+Retry (not deferred) when the desktop lock is held during the activation cycle", async () => {
+describe("lock-contention terminal contract: convergeReady defers like every other mutation (supersedes fixup B3)", () => {
+  it("convergeReady on packaged macOS resolves deferred when the desktop lock is held during the activation cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newControllerWithLockTiming(
       "production",
@@ -1738,10 +1741,7 @@ describe("lock-contention terminal contract: convergeReady classifies busy as fa
     // cycle's desktop-lock acquisition instead of short-circuiting first.
     const outcome = await controller.convergeReady(true);
 
-    expect(outcome).toMatchObject({
-      kind: "failed",
-      message: expect.stringContaining("Retry"),
-    });
+    expect(outcome.kind).toBe("deferred");
     await held.handle.release();
   });
 });

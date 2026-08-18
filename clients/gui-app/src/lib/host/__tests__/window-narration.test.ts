@@ -49,6 +49,10 @@ function baseInput(
     targetHostId: null,
     leases: [],
     hasBeenServed: false,
+    // Desktop is this module's population: the pre-serve ∅ grace is gated on
+    // a shell that can actually boot a local host, and every case below that
+    // does not say otherwise is describing a desktop launch.
+    localHostExpected: true,
     ...overrides,
   };
 }
@@ -103,14 +107,131 @@ describe("deriveWindowNarration", () => {
     expect(state).toEqual({ kind: "silent" });
   });
 
-  it("narrates no-usable-host when attached and effectiveHostId is null (the ∅ arm)", () => {
+  it("narrates no-usable-host on ∅ once the window has been served (the ∅ arm)", () => {
     const state = deriveWindowNarration(
-      baseInput({ attached: true, effectiveHostId: null }),
+      baseInput({
+        attached: true,
+        effectiveHostId: null,
+        // The ∅ verdict is unconditional AFTER the window has worked once -
+        // the pre-serve grace below is strictly a launch statement.
+        hasBeenServed: true,
+      }),
     );
     expect(state).toEqual({
       kind: "narrating",
       cause: "no-usable-host",
       variant: { kind: "offline" },
+    });
+  });
+
+  describe("the pre-serve ∅ grace", () => {
+    /**
+     * ∅ before this window has ever been served is not automatically a
+     * verdict. Two ordinary launch shapes produce it - the attach snapshot
+     * landing before the fleet's first publish (empty leases), and the launch
+     * reconcile cycling the local host (`restarting-expected`, unusable, with
+     * no incumbent to hold at cold start) - and both used to flash "No host is
+     * available" with Retry and Report issue at every single boot.
+     *
+     * The discriminator is whether anything has CONCLUDED: a dead lease is a
+     * conclusion, an empty or merely-unsettled fleet is not.
+     */
+    it("narrates cold-start when nothing has concluded yet (empty fleet at launch)", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("narrates cold-start while the local host is cycling (restarting-expected)", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [lease({ hostId: "host-a", status: "restarting-expected" })],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("yields to the ∅ scan as soon as ANY lease is dead - a conclusion is a verdict", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [deadLease("host-a", { reason: "offline" })],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("keeps update-host reachable at first launch - the grace must not swallow a dead incompatible host", () => {
+      // The sharp edge of the rule above: `update-host` and `plan-restricted`
+      // BOTH derive from dead leases, so a grace that ignored deadness would
+      // make them unreachable on the very launch they matter most.
+      const detail = {
+        code: "protocol-major-behind",
+        hostVersion: "1.2.3",
+        minSupportedVersion: "1.3.0",
+      } as const;
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-a",
+          leases: [deadLease("host-a", { reason: "incompatible", detail })],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
+      });
+    });
+
+    it("does not apply on a shell that cannot boot a local host", () => {
+      // Web/mobile: there is no local lifecycle to be "starting", so an empty
+      // concluded-nothing fleet really is "no host is available". Softening it
+      // would promise a boot that cannot happen.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [],
+          localHostExpected: false,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
     });
   });
 

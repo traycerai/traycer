@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
@@ -25,16 +26,28 @@ import {
  * respectively, and a window-wide modal saying them is the noise this epic
  * deletes.
  *
- * Presentation only, and deliberately so - every decision (visible at all,
- * which variant, which recovery is even offered) is made above and handed down
- * as props, so the precedence rules are pinned against the pure derivation
- * rather than through rendered DOM.
+ * TWO PRESENTATIONS, one narrator. While the readiness gate still BLOCKS the
+ * window (cold start - there is no app behind this surface), the narration
+ * renders as {@link WindowHostStartupCard}: a full-screen centered card in the
+ * gate's own frame, with NO overlay, NO pointer trap and NO focus trap. A
+ * launch is not an interruption, and the modal form here is what made the
+ * update toast - and every other toast - visible but dead for the whole of
+ * first-run (measured: `pointer-events: none` computed on toast, action and
+ * close behind the Radix modal). Once the gate has latched and a real app is
+ * mounted, the ∅ verdict renders as {@link WindowHostModal}, the blocking
+ * dialog - there the app behind the surface genuinely cannot answer, which is
+ * the one situation a modal tells the truth about.
  *
- * DISMISSAL IS NOT AN INPUT. Visibility is derived from the authority, so a
- * recovery closes this by re-derivation. There is no close button, escape or
- * outside-click path, because every one of them would leave a working app
- * behind a stale modal or - worse - a dead app with the only explanation
- * dismissed.
+ * Presentation only, and deliberately so - every decision (visible at all,
+ * which presentation, which variant, which recovery is even offered) is made
+ * above and handed down as props, so the precedence rules are pinned against
+ * the pure derivation rather than through rendered DOM.
+ *
+ * DISMISSAL IS NOT AN INPUT, in either presentation. Visibility is derived
+ * from the authority, so a recovery closes this by re-derivation. The dialog
+ * additionally suppresses escape/outside-click because a dead app behind it
+ * has nothing to offer; the card needs no such suppression - it has no
+ * overlay, and the gate behind it is already inert.
  */
 export interface WindowHostModalProps {
   readonly cause: WindowNarrationCause;
@@ -130,73 +143,168 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
             progress={props.progress}
             localBootstrapBody={props.localBootstrapBody}
           />
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {props.variant.kind === "plan-restricted" ? (
-              <PlanRestrictedUpgradeAction />
-            ) : null}
-            {props.onUpdateHost === null ? null : (
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                onClick={props.onUpdateHost}
-                data-testid="window-host-modal-update-host"
-              >
-                Update host
-              </Button>
-            )}
-            {props.onRetry === null ? null : (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={props.retryPending}
-                onClick={props.onRetry}
-                data-testid="window-host-modal-retry"
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <span>Retry</span>
-                  {props.retryPending ? (
-                    <AgentSpinningDots
-                      className={undefined}
-                      testId="window-host-modal-retry-spinner"
-                      variant={undefined}
-                    />
-                  ) : null}
-                </span>
-              </Button>
-            )}
-            {/* Settings is reachable from here on purpose, and the route
-                bypasses the readiness gate - the shell page edits host
-                config without a running host, so this is the escape hatch
-                for a host that cannot start. Gating it behind the failure
-                it exists to fix is the lockout this whole surface prevents. */}
-            <Button
-              type="button"
-              size="sm"
-              variant={props.settingsEmphasis === "button" ? "outline" : "link"}
-              onClick={props.onOpenSettings}
-              data-testid="window-host-modal-open-settings"
-              data-emphasis={props.settingsEmphasis}
-            >
-              Open settings
-            </Button>
-            {props.showReportIssue ? (
-              <ReportIssueAction
-                context={createReportIssueContext({
-                  title: copy.reportTitle,
-                  message: copy.reportMessage,
-                  code: copy.reportCode,
-                  source: "Host connection",
-                })}
-                presentation="text"
-                className={undefined}
-              />
-            ) : null}
-          </div>
+          <NarrationActions {...props} copy={copy} />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
+  );
+}
+
+/**
+ * THE STARTUP PRESENTATION: the same narration, drawn as the released
+ * versions drew a host boot - a centered card in the gate's frame, not a
+ * dialog.
+ *
+ * Structural differences from the dialog, all deliberate:
+ *
+ *  - NO overlay and NO pointer trap. The wrapper is `pointer-events-none`
+ *    with only the card re-enabling itself, so toasts (the update toast
+ *    above all - a pending update is MOST actionable when the host is being
+ *    set up) and the gate frame's own header stay clickable.
+ *  - The cold-start face has NO title and NO description while the start is
+ *    healthy. "Setting up Traycer" over "Setting up Traycer Host…" over
+ *    "Setting up…" was one event announced three times by three layers; the
+ *    lane's own F19 heading inside the body is the one line, exactly as the
+ *    released card had it.
+ *  - Recovery actions are withheld until they mean something: on a healthy
+ *    start the row carries ONLY the quiet `Open settings` link, with Retry
+ *    and Report issue gated above exactly as the released card gated them.
+ *
+ * ⚠ `Open settings` IS NOT OMITTED, however quiet the start looks, and the
+ * temptation to drop it for a cleaner card is a LOCKOUT. This surface renders
+ * inside the gate's frame, whose `AppHeader variant="host-loading"` sits above
+ * the router and therefore has `navDisabled` - there is no other route to
+ * Settings on screen. A host that hangs without ever reporting a failure (so
+ * Retry never arms) would leave a user with no way to reach the Shell page
+ * that fixes it. One quiet text link is not the "something is wrong, pick
+ * one" signal a row of equal-weight buttons is.
+ */
+export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
+  const copy = modalCopy(props.variant, props.cause);
+  // The released card face: body only, one heading, for a start that is
+  // progressing or slow. A SETTLED failure gets the titled face below even on
+  // the cold-start cause - a crash report under no heading reads as debris.
+  const bareColdStart = props.cause === "cold-start" && !props.showReportIssue;
+  return (
+    <div
+      className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-6"
+      data-testid="window-host-startup-card-layer"
+    >
+      <Card
+        role="status"
+        aria-live="polite"
+        data-testid="window-host-startup-card"
+        data-variant={props.variant.kind}
+        data-cause={props.cause}
+        className="pointer-events-auto max-h-[85svh] w-full max-w-md overflow-y-auto shadow-sm"
+      >
+        <CardContent className="flex flex-col gap-4 py-6">
+          {bareColdStart ? null : (
+            <>
+              <h2
+                data-testid="window-host-startup-card-title"
+                className="font-heading text-lg leading-none font-medium"
+              >
+                {props.cause === "cold-start"
+                  ? "Traycer Host didn't start"
+                  : copy.title}
+              </h2>
+              {props.cause === "cold-start" ? null : (
+                <p
+                  className="text-ui-sm text-muted-foreground"
+                  data-testid="window-host-startup-card-description"
+                >
+                  {copy.description}
+                </p>
+              )}
+            </>
+          )}
+          <WindowHostModalBody
+            variant={props.variant}
+            progress={props.progress}
+            localBootstrapBody={props.localBootstrapBody}
+          />
+          <NarrationActions {...props} copy={copy} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * The one action row, shared by both presentations so they cannot drift
+ * apart about which recovery a state offers. Every "should this render"
+ * decision stays above (see the module doc) - this only draws what it is
+ * handed.
+ */
+function NarrationActions(
+  props: WindowHostModalProps & { readonly copy: WindowHostModalCopy },
+): ReactNode {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {props.variant.kind === "plan-restricted" ? (
+        <PlanRestrictedUpgradeAction />
+      ) : null}
+      {props.onUpdateHost === null ? null : (
+        <Button
+          type="button"
+          size="sm"
+          variant="default"
+          onClick={props.onUpdateHost}
+          data-testid="window-host-modal-update-host"
+        >
+          Update host
+        </Button>
+      )}
+      {props.onRetry === null ? null : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={props.retryPending}
+          onClick={props.onRetry}
+          data-testid="window-host-modal-retry"
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <span>Retry</span>
+            {props.retryPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId="window-host-modal-retry-spinner"
+                variant={undefined}
+              />
+            ) : null}
+          </span>
+        </Button>
+      )}
+      {/* Settings is reachable from here on purpose, and the route
+          bypasses the readiness gate - the shell page edits host
+          config without a running host, so this is the escape hatch
+          for a host that cannot start. Gating it behind the failure
+          it exists to fix is the lockout this whole surface prevents. */}
+      <Button
+        type="button"
+        size="sm"
+        variant={props.settingsEmphasis === "button" ? "outline" : "link"}
+        onClick={props.onOpenSettings}
+        data-testid="window-host-modal-open-settings"
+        data-emphasis={props.settingsEmphasis}
+      >
+        Open settings
+      </Button>
+      {props.showReportIssue ? (
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: props.copy.reportTitle,
+            message: props.copy.reportMessage,
+            code: props.copy.reportCode,
+            source: "Host connection",
+          })}
+          presentation="text"
+          className={undefined}
+        />
+      ) : null}
+    </div>
   );
 }
 

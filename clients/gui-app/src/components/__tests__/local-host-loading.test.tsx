@@ -140,7 +140,17 @@ describe("<LocalHostLoadingContent />", () => {
     expect(progress.getAttribute("aria-valuenow")).toBe("42");
   });
 
-  it("uses setup copy for non-download progress without byte counts", () => {
+  it("says the setup event ONCE - the bar carries position, never a second phrasing of the heading", () => {
+    // THE DUPLICATION RULE. This surface used to state one event three times:
+    // the dialog title ("Setting up Traycer"), the lane heading ("Setting up
+    // Traycer Host…") and the bar's own short label ("Setting up…"), stacked
+    // within ~60px. The title is gone with the modal presentation, and the
+    // bar's label slot is now bytes-or-nothing - so the F19 heading is the
+    // single voice for the event, and the bar speaks only about POSITION.
+    //
+    // `shortLabel` itself stays in the copy table: Settings ▸ Host is free to
+    // render it where no heading sits beside it. The rule is about this
+    // surface's composition, not about deleting a table entry.
     const container = mountLoadingContent(
       buildHost(),
       buildHostProgressView({
@@ -158,9 +168,17 @@ describe("<LocalHostLoadingContent />", () => {
     );
 
     expect(container.textContent).toContain("Setting up Traycer Host…");
-    expect(container.textContent).toContain("Setting up…");
+    // The lane's own message and its position both survive - what goes is the
+    // restatement.
+    expect(container.textContent).toContain("extracting host runtime");
     expect(container.textContent).toContain("80%");
+    expect(container.textContent).not.toContain("Setting up…");
     expect(container.textContent).not.toContain("Downloading…");
+    // Stated as a COUNT, not just an absence: "Setting up" may appear exactly
+    // once on this surface. An assertion that only forbids the short label
+    // would still pass if some future layer reintroduced the phrase under
+    // different wording.
+    expect(container.textContent.match(/Setting up/g)?.length ?? 0).toBe(1);
   });
 
   it("draws NO bar when no lane is running, and an indeterminate one when a lane reports no percentage", () => {

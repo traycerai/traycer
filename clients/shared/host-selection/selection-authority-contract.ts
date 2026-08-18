@@ -1119,9 +1119,24 @@ export interface AuthorityIdentitySource {
  * The engine's one sanctioned process action (C5/D14): request local-host
  * provisioning when derivation wants the local host and it is down. Progress
  * surfaces as the local lease's status; this port carries no state.
+ *
+ * `deferred` distinguishes "the lifecycle lane was busy, nothing ran" (a CLI
+ * lock another actor held, a drained queue slot) from a provisioning attempt
+ * that ran and FAILED. The engine paces its next request on both, but only a
+ * genuine failure may deaden the local lease: a deferral learned nothing
+ * about the host, and rendering it `dead: offline` for the cooldown put the
+ * "No host is available" modal over a machine whose host was fine while a
+ * concurrent launch actor merely held the lock.
  */
 export interface LocalHostEnsurePort {
-  ensureReady(): Promise<{ ok: true } | { ok: false; reason: string }>;
+  ensureReady(): Promise<
+    | { readonly ok: true }
+    | {
+        readonly ok: false;
+        readonly reason: string;
+        readonly deferred: boolean;
+      }
+  >;
 }
 
 /**

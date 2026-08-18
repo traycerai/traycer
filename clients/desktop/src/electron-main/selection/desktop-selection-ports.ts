@@ -344,14 +344,30 @@ export class DesktopHostFleetSource implements HostFleetSource {
     this.localIdentitySeq += 1;
     const identitySeq = this.localIdentitySeq;
     const localHostId = await this.readLocalHostId();
-    const result = await this.options.listRegisteredHosts(
-      this.options.authnBaseUrl,
-      bearerToken,
-    );
+    let result: HostListFetchResult;
+    try {
+      result = await this.options.listRegisteredHosts(
+        this.options.authnBaseUrl,
+        bearerToken,
+      );
+    } catch (error: unknown) {
+      // The cloud read failing must not cost the LOCAL host: its identity was
+      // already read from disk, and it is real and dialable whatever the
+      // registry says. Adopt-and-publish it before letting the error reach
+      // `refresh`'s containment, or a machine with a flaky network boots into
+      // "No host is available" for up to a full poll interval (60s) - the
+      // membership rows can wait for the next successful fetch, local
+      // usability cannot.
+      this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
+      throw error;
+    }
     if (result.kind !== "ok") {
       this.options.log.debug("[selection-fleet] registry fetch failed", {
         kind: result.kind,
       });
+      // Same rule as the thrown arm above: a refused registry read keeps the
+      // known rows AND still adopts this machine's own identity.
+      this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
       return;
     }
     // Published BEFORE the id projection is adopted, and published even when
@@ -429,6 +445,28 @@ export class DesktopHostFleetSource implements HostFleetSource {
     // Recorded even when the value is unchanged: this read is still the newest
     // observation, and saying so is what stops an older in-flight refresh from
     // adopting the id it read before this one.
+    this.adoptedLocalIdentitySeq = identitySeq;
+    if (localHostId === this.localHostId) return;
+    this.localHostId = localHostId;
+    this.publishAt(generation);
+  }
+
+  /**
+   * Adopts a local-identity read that has no registry rows to travel with -
+   * the failure arms of `refreshOrThrow`. Same fences as
+   * `refreshLocalIdentity`, in the same order: the generation guard drops a
+   * read that straddled an account switch, the seq guard drops one a newer
+   * writer has superseded, and the value guard keeps an unchanged id from
+   * publishing a no-op revision.
+   */
+  private adoptLocalIdentityRead(
+    generation: number,
+    identitySeq: number,
+    localHostId: string | null,
+  ): void {
+    if (this.disposed) return;
+    if (generation !== this.options.identity.current().generation) return;
+    if (identitySeq < this.adoptedLocalIdentitySeq) return;
     this.adoptedLocalIdentitySeq = identitySeq;
     if (localHostId === this.localHostId) return;
     this.localHostId = localHostId;
@@ -655,7 +693,16 @@ export function createDesktopLocalHostEnsurePort(
     ensureReady: async () => {
       const outcome = await hostController.convergeReady(false);
       if (outcome.kind === "ok") return { ok: true };
-      return { ok: false, reason: outcome.kind };
+      // Two non-ok outcomes say nothing dead-worthy about the host, and the
+      // engine must not turn either into a dead lease: `deferred` is the
+      // controller's word for "the lane or its CLI lock was busy, nothing
+      // ran", and `busy` is a HOST that is up with active work - the converge
+      // declined to disrupt it, which is proof of life, not death.
+      return {
+        ok: false,
+        reason: outcome.kind,
+        deferred: outcome.kind === "deferred" || outcome.kind === "busy",
+      };
     },
   };
 }

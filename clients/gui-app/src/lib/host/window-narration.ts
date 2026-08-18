@@ -109,6 +109,14 @@ export interface WindowNarrationInput {
    * window - unless the fleet empties out into ∅.
    */
   readonly hasBeenServed: boolean;
+  /**
+   * Whether this shell can boot a local host at all (`runnerHost.hasLocalHost`
+   * on desktop; false on web/mobile). Gates the pre-serve ∅ grace below: on a
+   * shell with no local lifecycle, an empty concluded fleet really is "no host
+   * is available", and softening it to "starting" would promise a boot that
+   * cannot happen.
+   */
+  readonly localHostExpected: boolean;
 }
 
 /**
@@ -247,6 +255,33 @@ export function deriveWindowNarration(
 ): WindowNarrationState {
   if (!input.attached) return { kind: "silent" };
   if (input.effectiveHostId === null) {
+    // THE PRE-SERVE GRACE: before this window has ever been served, an ∅
+    // whose fleet has not CONCLUDED anything is a start in progress, not a
+    // verdict. Two launch shapes land here and both used to flash "No host
+    // is available" with Retry and Report issue at every boot:
+    //
+    //  - the attach snapshot arriving before the fleet's first publish
+    //    (empty lease list - the same vacuity `deriveNoHostVariant` refuses
+    //    to read as plan-restricted), and
+    //  - the launch reconcile cycling the local host (`restarting-expected`
+    //    is unusable, and at cold start there is no incumbent to hold).
+    //
+    // A DEAD lease is a conclusion, so any dead lease disqualifies the grace
+    // and the ∅ scan below runs - which is also what keeps `update-host` and
+    // `plan-restricted` reachable at first launch: both derive from dead
+    // leases. After the window has served once, ∅ is always the verdict arm;
+    // the grace is strictly a launch statement.
+    if (
+      !input.hasBeenServed &&
+      input.localHostExpected &&
+      input.leases.every((lease) => lease.status !== "dead")
+    ) {
+      return {
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      };
+    }
     return {
       kind: "narrating",
       cause: "no-usable-host",

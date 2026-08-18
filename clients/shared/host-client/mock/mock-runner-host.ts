@@ -372,17 +372,28 @@ export class MockRunnerHost implements IRunnerHost {
    * ordering constraint has one place to be explained.
    */
   private async ensureLocalHostReady(): Promise<
-    { ok: true } | { ok: false; reason: string }
+    { ok: true } | { ok: false; reason: string; deferred: boolean }
   > {
     const management = this.hostManagement;
     if (management === null) {
       return this.localHost === null
-        ? { ok: false, reason: "local-provisioning-unavailable" }
+        ? {
+            ok: false,
+            reason: "local-provisioning-unavailable",
+            deferred: false,
+          }
         : { ok: true };
     }
     const outcome = await management.convergeReady(false);
     if (outcome.kind === "ok") return { ok: true };
-    return { ok: false, reason: outcome.kind };
+    // Mirrors `createDesktopLocalHostEnsurePort`: a busy lane and a busy host
+    // are deferrals (nothing dead-worthy was learned); everything else ran
+    // and concluded.
+    return {
+      ok: false,
+      reason: outcome.kind,
+      deferred: outcome.kind === "deferred" || outcome.kind === "busy",
+    };
   }
 
   listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {

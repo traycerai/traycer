@@ -9,6 +9,7 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
  * The window narrator's verdict for THIS window.
@@ -32,6 +33,12 @@ export function useWindowNarration(): WindowNarrationState {
     (state) => state.targetHostId,
   );
   const leases = useHostLeases();
+  // The NULL-TOLERANT read, deliberately: this hook mounts at the app root,
+  // and the throwing `useRunnerHost` is exactly the RunnerHostProvider
+  // coupling that once cost two root-route suites their whole tree (see
+  // `NarratingWindowHostModal`'s doc). Outside a provider - web, harnesses -
+  // there is no local host to expect, which is also the correct answer.
+  const localHostExpected = useRunnerHostOrNull()?.hasLocalHost ?? false;
 
   const servingNow =
     attached && isServingLease(findLease(leases, effectiveHostId));
@@ -60,7 +67,15 @@ export function useWindowNarration(): WindowNarrationState {
         targetHostId,
         leases,
         hasBeenServed,
+        localHostExpected,
       }),
-    [attached, effectiveHostId, hasBeenServed, leases, targetHostId],
+    [
+      attached,
+      effectiveHostId,
+      hasBeenServed,
+      leases,
+      localHostExpected,
+      targetHostId,
+    ],
   );
 }
