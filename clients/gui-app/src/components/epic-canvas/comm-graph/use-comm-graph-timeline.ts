@@ -12,8 +12,9 @@
  * too, so "an event frame arrived" says nothing about whether anything just
  * happened.
  *
- * PULSES HAVE TWO SOURCES, ONE PER MODE. While detached, the pulse is the row
- * the cursor is HELD on. While live there is no held row, so the pulse is
+ * PULSES HAVE TWO SOURCES, ONE PER MODE. During detached PLAYBACK, the pulse is
+ * the row the moving cursor is held on; pausing keeps the projection at that row
+ * but makes the canvas static. While live there is no held row, so the pulse is
  * ARRIVAL - and which row that is belongs to the subscription layer, which owns
  * the per-host initialization boundaries that define it
  * (`CommGraphSnapshot.lastArrival`). The projection hook only decides how long
@@ -36,13 +37,16 @@ import {
   commGraphPulseForEvent,
   type CommGraphPulse,
 } from "@/lib/comm-graph/comm-graph-timeline";
-import { useCommGraphCursor } from "@/stores/epics/comm-graph-timeline-store";
+import {
+  useCommGraphCursor,
+  useCommGraphPlaying,
+} from "@/stores/epics/comm-graph-timeline-store";
 
 /**
- * How long an arrival pulse stays lit in live mode. A held cursor pulses for as
- * long as it is held; an arrival has no such anchor, so it decays - otherwise
- * the newest row would sit lit indefinitely and read as "happening now" hours
- * after it happened.
+ * How long an arrival pulse stays lit in live mode. Playback pulses are anchored
+ * to each moving cursor step; an arrival has no such anchor, so it decays -
+ * otherwise the newest row would sit lit indefinitely and read as "happening
+ * now" hours after it happened.
  */
 const LIVE_PULSE_MS = 1_400;
 
@@ -55,6 +59,8 @@ export interface CommGraphTimelineProjection {
    * one fall back to `createdAt`.
    */
   readonly visibleAgentIds: ReadonlySet<string>;
+  /** Drives playback-only canvas behavior; live and paused are both false. */
+  readonly playing: boolean;
   readonly pulse: CommGraphPulse | null;
 }
 
@@ -70,6 +76,7 @@ export function useCommGraphTimelineProjection(
   lastArrival: CommGraphEvent | null,
 ): CommGraphTimelineProjection {
   const cursor = useCommGraphCursor(epicId);
+  const playing = useCommGraphPlaying(epicId);
 
   const asOfEvents = useMemo(
     () => commGraphEventsAsOfCursor(events, cursor),
@@ -109,18 +116,19 @@ export function useCommGraphTimelineProjection(
       : null;
 
   // The as-of prefix ends exactly on the cursor row when that row exists, so
-  // this is a tail check rather than another scan.
-  const heldPulseEvent = useMemo(() => {
-    if (cursor === null) return null;
-    if (asOfEvents.length === 0) return null;
+  // this is a tail check rather than another scan. A paused media transport
+  // freezes both progression and animation; retaining the held row only keeps
+  // the graph's as-of projection in place.
+  const heldPulseEvent = (() => {
+    if (cursor === null || !playing || asOfEvents.length === 0) return null;
     const last = asOfEvents[asOfEvents.length - 1];
     return commGraphCursorMatchesEvent(cursor, last) ? last : null;
-  }, [asOfEvents, cursor]);
+  })();
   const pulseEvent = cursor === null ? arrivalPulseEvent : heldPulseEvent;
   const pulse = useMemo(
     () => commGraphPulseForEvent(pulseEvent, visibleAgentIds),
     [pulseEvent, visibleAgentIds],
   );
 
-  return { asOfEvents, visibleAgentIds, pulse };
+  return { asOfEvents, visibleAgentIds, playing, pulse };
 }

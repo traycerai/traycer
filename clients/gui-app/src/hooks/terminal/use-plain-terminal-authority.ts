@@ -1,0 +1,746 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
+  type UseQueryResult,
+} from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import { isMethodIncompatibleClose } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { PlainTerminalListStreamClient } from "@traycer-clients/shared/host-transport/plain-terminal-list-stream-client";
+import type {
+  HostRpcRegistry,
+  HostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import type {
+  PlainTerminalProjection,
+  PlainTerminalScope,
+} from "@traycer/protocol/host/terminal/plain-schemas";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
+import { useHostClientFor } from "@/hooks/host/use-host-client-for";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import {
+  useHostStreamClientBindingFor,
+  type HostStreamClientBinding,
+} from "@/hooks/host/use-host-stream-client-for";
+import {
+  useHostMethodSchemaVersion,
+  useHostMethodSupport,
+} from "@/hooks/host/use-host-supports-method";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import {
+  useStreamMethodSchemaVersionFor,
+  useStreamMethodSupportFor,
+} from "@/lib/host/stream-runtime-context";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import {
+  PLAIN_TERMINAL_STREAM_METHOD,
+  capturePlainTerminalProjectionBarrier,
+  markPlainTerminalStreamIncompatible,
+  plainTerminalAuthorityCanMutate,
+  plainTerminalCollectionValues,
+  plainTerminalScopeKey,
+  replacePlainTerminalSnapshot,
+  resolvePlainTerminalCapability,
+  seedPlainTerminalList,
+  settlePlainTerminalSnapshot,
+  setPlainTerminalStreamStatus,
+  upsertPlainTerminal,
+  type PlainTerminalCapability,
+  type PlainTerminalCollection,
+  type PlainTerminalProjectionBarrier,
+  type PlainTerminalRpcMethod,
+} from "@/lib/terminals/plain-terminal-authority";
+import {
+  acknowledgedPlainTerminalPresentationIdsForScope,
+  commitPlainTerminalDeferredDeletion,
+  commitPlainTerminalDeletion,
+  commitPlainTerminalSnapshotOmission,
+  reconcileRetainedPlainTerminalTombstones,
+} from "@/lib/terminals/plain-terminal-presentation-invalidation";
+import {
+  useEpicCanvasStore,
+  type EpicCanvasStore,
+} from "@/stores/epics/canvas/store";
+import {
+  isUnsupportedEpicTerminalRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
+import {
+  useLandingTerminalStore,
+  type LandingTerminalTabRef,
+} from "@/stores/home/landing-terminal-store";
+
+interface ActivePlainTerminalStream {
+  readonly hostId: string;
+  readonly scopeKey: string;
+  readonly streamClient: IHostStreamClient<HostStreamRpcRegistry>;
+  readonly transportKey: string | null;
+  readonly capabilityIncarnation: string;
+  readonly release: () => void;
+}
+
+interface SharedPlainTerminalStreamOwner {
+  /** Consumer identity -> latest acquisition lease for stale-release safety. */
+  readonly consumers: Map<symbol, symbol>;
+  readonly streamClient: IHostStreamClient<HostStreamRpcRegistry>;
+  readonly transportKey: string | null;
+  readonly capabilityIncarnation: string;
+  readonly stream: PlainTerminalListStreamClient;
+  readonly unpin: (() => void) | null;
+}
+
+const sharedStreamOwners = new WeakMap<
+  QueryClient,
+  Map<string, SharedPlainTerminalStreamOwner>
+>();
+
+function sharedStreamOwnerKey(hostId: string, scopeKey: string): string {
+  return `${hostId}\u0000${scopeKey}`;
+}
+
+function pushHostEpicPresentationId(args: {
+  readonly ids: string[];
+  readonly prefix: string;
+  readonly tabId: string;
+  readonly instanceId: string;
+  readonly ref: EpicCanvasTileRef | null | undefined;
+  readonly hostId: string;
+  readonly tombstonedIds: ReadonlySet<string>;
+}): void {
+  if (
+    args.ref?.type === "terminal" &&
+    !isUnsupportedEpicTerminalRef(args.ref) &&
+    args.ref.hostId === args.hostId &&
+    args.tombstonedIds.has(args.ref.id)
+  ) {
+    args.ids.push(
+      `${args.prefix}:${args.tabId}:${args.instanceId}:${args.ref.id}`,
+    );
+  }
+}
+
+/**
+ * Change token for the retained-tombstone sweep, not a general presentation
+ * signature. The sweep can only ever act on a tombstoned id, so the token
+ * ignores every other ref - and short-circuits entirely while no tombstone is
+ * retained, which is the steady state. That keeps this out of the hot path:
+ * a Zustand selector runs on every store commit, including the pane-focus,
+ * layout and tile-state commits that have nothing to do with terminals, and
+ * every mounted authority in the cohort pays for it.
+ */
+function epicTombstonePresentationTokenForHost(
+  hostId: string,
+  tombstonedIds: ReadonlySet<string>,
+  state: Pick<EpicCanvasStore, "canvasByTabId" | "closedTilePayloadsByTabId">,
+): string {
+  if (tombstonedIds.size === 0) return "";
+  const ids: string[] = [];
+  for (const [tabId, canvas] of Object.entries(state.canvasByTabId)) {
+    for (const [instanceId, ref] of Object.entries(
+      canvas?.tilesByInstanceId ?? {},
+    )) {
+      pushHostEpicPresentationId({
+        ids,
+        prefix: "live",
+        tabId,
+        instanceId,
+        ref,
+        hostId,
+        tombstonedIds,
+      });
+    }
+  }
+  for (const [tabId, forTab] of Object.entries(
+    state.closedTilePayloadsByTabId,
+  )) {
+    for (const [instanceId, payload] of Object.entries(forTab ?? {})) {
+      pushHostEpicPresentationId({
+        ids,
+        prefix: "closed",
+        tabId,
+        instanceId,
+        ref: payload?.node,
+        hostId,
+        tombstonedIds,
+      });
+    }
+  }
+  return ids.sort().join("|");
+}
+
+function landingTombstonePresentationTokenForHost(
+  hostId: string,
+  tombstonedIds: ReadonlySet<string>,
+  tabs: readonly LandingTerminalTabRef[],
+): string {
+  if (tombstonedIds.size === 0) return "";
+  return tabs
+    .filter((tab) => tab.hostId === hostId && tombstonedIds.has(tab.sessionId))
+    .map((tab) => `${tab.instanceId}:${tab.sessionId}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * Scope-level retained-tombstone ingress. Observes live and closed
+ * presentation independently of mutation readiness so a reconnecting client
+ * still sweeps a late closed-only epic payload.
+ */
+function useRetainedPlainTerminalTombstoneReconciliation(args: {
+  readonly hostId: string;
+  readonly queryKey: QueryKey;
+  readonly deletedRevisionById:
+    Readonly<Partial<Record<string, number>>> | undefined;
+}): void {
+  const queryClient = useQueryClient();
+  const deletedRevisionById = args.deletedRevisionById;
+  const tombstonedIds = useMemo(
+    () => new Set(Object.keys(deletedRevisionById ?? {})),
+    [deletedRevisionById],
+  );
+  const epicToken = useEpicCanvasStore((state) =>
+    epicTombstonePresentationTokenForHost(args.hostId, tombstonedIds, state),
+  );
+  const landingToken = useLandingTerminalStore((state) =>
+    landingTombstonePresentationTokenForHost(
+      args.hostId,
+      tombstonedIds,
+      state.tabs,
+    ),
+  );
+  useEffect(() => {
+    reconcileRetainedPlainTerminalTombstones({
+      queryClient,
+      queryKey: args.queryKey,
+      hostId: args.hostId,
+    });
+  }, [
+    queryClient,
+    args.queryKey,
+    args.hostId,
+    args.deletedRevisionById,
+    epicToken,
+    landingToken,
+  ]);
+}
+
+function sharedOwnerNeedsReplacement(
+  owner: SharedPlainTerminalStreamOwner,
+  transportKey: string | null,
+  capabilityIncarnation: string,
+): boolean {
+  return (
+    owner.transportKey !== transportKey ||
+    owner.capabilityIncarnation !== capabilityIncarnation ||
+    owner.streamClient.isClosed()
+  );
+}
+
+function acquireSharedPlainTerminalStream(args: {
+  readonly queryClient: QueryClient;
+  readonly ownerKey: string;
+  readonly consumer: symbol;
+  readonly streamClient: IHostStreamClient<HostStreamRpcRegistry>;
+  readonly streamBinding: HostStreamClientBinding | null;
+  readonly capabilityIncarnation: string;
+  readonly open: () => PlainTerminalListStreamClient;
+}): () => void {
+  let owners = sharedStreamOwners.get(args.queryClient);
+  if (owners === undefined) {
+    owners = new Map();
+    sharedStreamOwners.set(args.queryClient, owners);
+  }
+  let owner = owners.get(args.ownerKey);
+  const transportKey = args.streamBinding?.transportKey ?? null;
+  const replaceOwner =
+    owner !== undefined &&
+    sharedOwnerNeedsReplacement(
+      owner,
+      transportKey,
+      args.capabilityIncarnation,
+    );
+  const existingConsumers = owner?.consumers ?? new Map<symbol, symbol>();
+  if (replaceOwner && owner !== undefined) {
+    // Mounted sibling leases transfer to the replacement owner. Their older
+    // release closures can retire only the exact lease they acquired.
+    owner.stream.close();
+    owner.unpin?.();
+    owners.delete(args.ownerKey);
+    owner = undefined;
+  }
+  if (owner === undefined) {
+    args.streamBinding?.pin();
+    let stream: PlainTerminalListStreamClient;
+    try {
+      stream = args.open();
+    } catch (error) {
+      args.streamBinding?.unpin();
+      throw error;
+    }
+    owner = {
+      consumers: existingConsumers,
+      streamClient: args.streamClient,
+      transportKey,
+      capabilityIncarnation: args.capabilityIncarnation,
+      stream,
+      unpin: args.streamBinding?.unpin ?? null,
+    };
+    owners.set(args.ownerKey, owner);
+  }
+  const lease = Symbol("plain-terminal-authority-lease");
+  owner.consumers.set(args.consumer, lease);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const current = owners.get(args.ownerKey);
+    if (current === undefined) return;
+    if (current.consumers.get(args.consumer) !== lease) return;
+    current.consumers.delete(args.consumer);
+    if (current.consumers.size > 0) return;
+    current.stream.close();
+    current.unpin?.();
+    owners.delete(args.ownerKey);
+    if (owners.size === 0) sharedStreamOwners.delete(args.queryClient);
+  };
+}
+
+export interface PlainTerminalAuthorityResult {
+  readonly hostId: string;
+  readonly scope: PlainTerminalScope;
+  readonly capability: PlainTerminalCapability;
+  readonly collection: PlainTerminalCollection | undefined;
+  readonly terminals: readonly PlainTerminalProjection[];
+  readonly canMutate: boolean;
+  readonly query: UseQueryResult<PlainTerminalCollection, HostRpcError>;
+}
+
+export function usePlainTerminalAuthority(args: {
+  readonly hostId: string;
+  readonly scope: PlainTerminalScope;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly streamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
+  /** Pins a transient transport while the shared owner still has consumers. */
+  readonly streamBinding?: HostStreamClientBinding | null;
+  /** Stable evidence for a genuine host/capability generation. */
+  readonly capabilityIncarnation: string;
+}): PlainTerminalAuthorityResult {
+  const queryClient = useQueryClient();
+  const activeStreamRef = useRef<ActivePlainTerminalStream | null>(null);
+  const [streamConsumer] = useState(() => Symbol("plain-terminal-authority"));
+  const transportKey = args.streamBinding?.transportKey ?? null;
+  const epicId = args.scope.kind === "epic" ? args.scope.epicId : null;
+  const stableScope = useMemo<PlainTerminalScope>(
+    () =>
+      epicId === null ? { kind: "independent" } : { kind: "epic", epicId },
+    [epicId],
+  );
+  const listSupport = useHostMethodSupport(args.hostId, "terminal.plain.list");
+  const createVersion = useHostMethodSchemaVersion(
+    args.hostId,
+    "terminal.plain.create",
+  );
+  const listVersion = useHostMethodSchemaVersion(
+    args.hostId,
+    "terminal.plain.list",
+  );
+  const renameVersion = useHostMethodSchemaVersion(
+    args.hostId,
+    "terminal.plain.rename",
+  );
+  const ensureVersion = useHostMethodSchemaVersion(
+    args.hostId,
+    "terminal.plain.ensureRunning",
+  );
+  const closeVersion = useHostMethodSchemaVersion(
+    args.hostId,
+    "terminal.plain.close",
+  );
+  const importVersion = useHostMethodSchemaVersion(
+    args.hostId,
+    "terminal.plain.importLegacy",
+  );
+  // Keyed by method-name literal so a reorder or extension of
+  // `PLAIN_TERMINAL_RPC_METHODS` cannot silently bind a version to the wrong
+  // method. `PlainTerminalRpcMethod` keeps the map exhaustive at compile time.
+  const versions: Readonly<
+    Record<PlainTerminalRpcMethod, SchemaVersion | null>
+  > = {
+    "terminal.plain.create": createVersion,
+    "terminal.plain.list": listVersion,
+    "terminal.plain.rename": renameVersion,
+    "terminal.plain.ensureRunning": ensureVersion,
+    "terminal.plain.close": closeVersion,
+    "terminal.plain.importLegacy": importVersion,
+  };
+  const unaryCapability = resolvePlainTerminalCapability({
+    manifestKnown: listSupport !== null,
+    versionFor: (method) => versions[method],
+  });
+
+  useHostCapabilityProbe({
+    client: args.client,
+    stale: unaryCapability.status !== "capable",
+    incarnation: [args.capabilityIncarnation],
+  });
+
+  const streamSupport = useStreamMethodSupportFor(
+    args.streamClient,
+    PLAIN_TERMINAL_STREAM_METHOD,
+  );
+  const streamVersion = useStreamMethodSchemaVersionFor(
+    args.streamClient,
+    PLAIN_TERMINAL_STREAM_METHOD,
+  );
+  const streamVersionCompatible =
+    streamVersion === null ||
+    (streamVersion.major === 1 && streamVersion.minor >= 0);
+  const queryKey = useMemo(
+    () => hostQueryKeys.plainTerminals(args.hostId, stableScope),
+    [args.hostId, stableScope],
+  );
+  const scopeKey = plainTerminalScopeKey(stableScope);
+
+  const query = useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "terminal.plain.list",
+    PlainTerminalCollection,
+    PlainTerminalProjectionBarrier
+  >({
+    client: args.client,
+    method: "terminal.plain.list",
+    params: { scope: stableScope },
+    cacheKeyIdentity: [],
+    options: {
+      enabled:
+        unaryCapability.status === "capable" &&
+        streamSupport !== "unsupported" &&
+        streamVersionCompatible,
+    },
+    captureRequestContext: () =>
+      capturePlainTerminalProjectionBarrier(
+        queryClient.getQueryData<PlainTerminalCollection>(queryKey),
+      ),
+    mapResponse: ({
+      response,
+      queryClient: cache,
+      queryKey: mappedKey,
+      requestContext,
+    }) =>
+      seedPlainTerminalList(
+        cache.getQueryData<PlainTerminalCollection>(mappedKey),
+        response.terminals,
+        requestContext ?? capturePlainTerminalProjectionBarrier(undefined),
+      ),
+  });
+
+  // Base transport identity owns unmount/host/client/scope teardown.
+  // Capability incarnation is handled by establishment below so a live-upgrade
+  // can replace a terminally incompatible session on the same transport.
+  useEffect(() => {
+    return () => {
+      const active = activeStreamRef.current;
+      if (
+        active !== null &&
+        active.hostId === args.hostId &&
+        active.scopeKey === scopeKey &&
+        active.streamClient === args.streamClient &&
+        active.transportKey === transportKey
+      ) {
+        active.release();
+        activeStreamRef.current = null;
+      }
+    };
+  }, [args.hostId, args.streamClient, scopeKey, transportKey]);
+
+  // Capability gates initial establishment. Once established, registry
+  // support/version churn in the same incarnation cannot replace the session.
+  // A genuine incarnation change may retry even when the client's local
+  // support registry still contains the prior incarnation's incompatibility.
+  useEffect(() => {
+    const streamClient = args.streamClient;
+    const active = activeStreamRef.current;
+    const sameBaseIdentity =
+      active !== null &&
+      active.hostId === args.hostId &&
+      active.scopeKey === scopeKey &&
+      active.streamClient === args.streamClient &&
+      active.transportKey === transportKey;
+    if (
+      sameBaseIdentity &&
+      active.capabilityIncarnation === args.capabilityIncarnation
+    ) {
+      return;
+    }
+    const genuineIncarnationChange =
+      sameBaseIdentity &&
+      active.capabilityIncarnation !== args.capabilityIncarnation;
+    if (
+      streamClient === null ||
+      unaryCapability.status !== "capable" ||
+      (!genuineIncarnationChange && streamSupport === "unsupported") ||
+      (!genuineIncarnationChange && !streamVersionCompatible)
+    ) {
+      return;
+    }
+    if (active !== null) {
+      active.release();
+      activeStreamRef.current = null;
+    }
+    const release = acquireSharedPlainTerminalStream({
+      queryClient,
+      ownerKey: sharedStreamOwnerKey(args.hostId, scopeKey),
+      consumer: streamConsumer,
+      streamClient,
+      streamBinding: args.streamBinding ?? null,
+      capabilityIncarnation: args.capabilityIncarnation,
+      open: () => {
+        let connectionEpisode = 0;
+        let connectionPhase: "pre-open" | "open" | "closed" = "pre-open";
+        let initialization: {
+          readonly connectionEpisode: number;
+          readonly snapshotEpoch: number;
+          readonly omittedTerminalIds: Set<string>;
+        } | null = null;
+        return new PlainTerminalListStreamClient({
+          wsStreamClient: streamClient,
+          scope: stableScope,
+          callbacks: {
+            onSnapshot: (frame) => {
+              // Remote LogicalStream delivers the current generation's first
+              // frame immediately before its open transition. Accept that
+              // snapshot, but require the ensuing open before settlement.
+              if (connectionPhase === "closed") return;
+              const current =
+                queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+              const next = replacePlainTerminalSnapshot(
+                current,
+                frame.terminals,
+              );
+              queryClient.setQueryData<PlainTerminalCollection>(queryKey, next);
+              const omittedTerminalIds = new Set<string>();
+              for (const terminalId of Object.keys(
+                current?.terminalsById ?? {},
+              )) {
+                if (next.terminalsById[terminalId] === undefined) {
+                  omittedTerminalIds.add(terminalId);
+                }
+              }
+              for (const terminalId of acknowledgedPlainTerminalPresentationIdsForScope(
+                args.hostId,
+                stableScope,
+              )) {
+                if (next.terminalsById[terminalId] === undefined) {
+                  omittedTerminalIds.add(terminalId);
+                }
+              }
+              for (const terminalId of Object.keys(
+                next.pendingPresentationDeletionRevisionById,
+              )) {
+                omittedTerminalIds.delete(terminalId);
+              }
+              initialization = {
+                connectionEpisode,
+                snapshotEpoch: next.snapshotEpoch,
+                omittedTerminalIds,
+              };
+            },
+            onInitialized: () => {
+              const pending = initialization;
+              if (
+                pending === null ||
+                connectionPhase !== "open" ||
+                pending.connectionEpisode !== connectionEpisode
+              ) {
+                return;
+              }
+              const current =
+                queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+              if (
+                current?.snapshotEpoch !== pending.snapshotEpoch ||
+                current.streamCompatibility !== "compatible" ||
+                current.streamSnapshotFresh
+              ) {
+                initialization = null;
+                return;
+              }
+              initialization = null;
+              const settled = settlePlainTerminalSnapshot(current);
+              queryClient.setQueryData<PlainTerminalCollection>(
+                queryKey,
+                settled,
+              );
+              for (const terminalId of pending.omittedTerminalIds) {
+                commitPlainTerminalSnapshotOmission({
+                  queryClient,
+                  queryKey,
+                  hostId: args.hostId,
+                  scope: stableScope,
+                  terminalId,
+                  snapshotEpoch: pending.snapshotEpoch,
+                });
+              }
+              const deferredTerminalIds = Object.keys(
+                queryClient.getQueryData<PlainTerminalCollection>(queryKey)
+                  ?.pendingPresentationDeletionRevisionById ?? {},
+              );
+              for (const terminalId of deferredTerminalIds) {
+                commitPlainTerminalDeferredDeletion({
+                  queryClient,
+                  queryKey,
+                  hostId: args.hostId,
+                  terminalId,
+                  snapshotEpoch: pending.snapshotEpoch,
+                });
+              }
+            },
+            onUpsert: (frame) => {
+              if (connectionPhase === "closed") return;
+              const current =
+                queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+              const next = upsertPlainTerminal(current, frame.terminal);
+              queryClient.setQueryData<PlainTerminalCollection>(queryKey, next);
+              if (
+                next.terminalsById[frame.terminal.record.terminalId] !==
+                undefined
+              ) {
+                initialization?.omittedTerminalIds.delete(
+                  frame.terminal.record.terminalId,
+                );
+              }
+            },
+            onDeleted: (frame) => {
+              if (connectionPhase === "closed") return;
+              const deferred = initialization !== null;
+              const accepted = commitPlainTerminalDeletion({
+                queryClient,
+                queryKey,
+                hostId: args.hostId,
+                terminalId: frame.terminalId,
+                evidence: { kind: "stream", revision: frame.revision },
+                deferPresentation: deferred,
+              });
+              if (accepted && deferred) {
+                initialization?.omittedTerminalIds.delete(frame.terminalId);
+              }
+            },
+            onConnectionStatus: (status, reason) => {
+              if (connectionPhase === "closed") return;
+              if (status === "connecting" || status === "reconnecting") {
+                connectionEpisode += 1;
+                connectionPhase = "pre-open";
+                initialization = null;
+              } else if (status === "closed") {
+                connectionEpisode += 1;
+                connectionPhase = "closed";
+                initialization = null;
+              } else {
+                connectionPhase = "open";
+              }
+              queryClient.setQueryData<PlainTerminalCollection>(
+                queryKey,
+                (current) =>
+                  isMethodIncompatibleClose(reason)
+                    ? markPlainTerminalStreamIncompatible(current)
+                    : setPlainTerminalStreamStatus(current, status),
+              );
+            },
+          },
+        });
+      },
+    });
+    activeStreamRef.current = {
+      hostId: args.hostId,
+      scopeKey,
+      streamClient,
+      transportKey,
+      capabilityIncarnation: args.capabilityIncarnation,
+      release,
+    };
+  }, [
+    args.hostId,
+    args.streamClient,
+    args.streamBinding,
+    args.capabilityIncarnation,
+    queryClient,
+    queryKey,
+    streamSupport,
+    streamVersionCompatible,
+    scopeKey,
+    stableScope,
+    streamConsumer,
+    transportKey,
+    unaryCapability.status,
+  ]);
+
+  const collection = query.data;
+  useRetainedPlainTerminalTombstoneReconciliation({
+    hostId: args.hostId,
+    queryKey,
+    deletedRevisionById: collection?.deletedRevisionById,
+  });
+  const streamIncompatible =
+    collection?.streamCompatibility === "incompatible" ||
+    streamSupport === "unsupported" ||
+    !streamVersionCompatible;
+  const capability: PlainTerminalCapability = streamIncompatible
+    ? { status: "legacy" }
+    : unaryCapability;
+  const canMutate = plainTerminalAuthorityCanMutate(capability, collection);
+
+  return {
+    hostId: args.hostId,
+    scope: stableScope,
+    capability,
+    collection,
+    terminals: plainTerminalCollectionValues(collection),
+    canMutate,
+    query,
+  };
+}
+
+/** Host-lifetime-safe adapter for terminal tabs. */
+export function useTabPlainTerminalAuthority(
+  scope: PlainTerminalScope,
+): PlainTerminalAuthorityResult {
+  const hostId = useTabHostId();
+  const client = useTabHostClient();
+  const target = useHostDirectoryEntry(hostId);
+  const auth = useStreamAuthRevalidator();
+  const streamBinding = useHostStreamClientBindingFor(target, auth);
+  return usePlainTerminalAuthority({
+    hostId,
+    scope,
+    client,
+    streamClient: streamBinding?.client ?? null,
+    streamBinding,
+    capabilityIncarnation: `${target?.version ?? "unknown"}\u0000${target?.websocketUrl ?? "unreachable"}`,
+  });
+}
+
+/** Explicit-host adapter for non-tab surfaces such as the epic sidebar. */
+export function useHostPlainTerminalAuthority(args: {
+  readonly hostId: string;
+  readonly scope: PlainTerminalScope;
+}): PlainTerminalAuthorityResult {
+  const target = useHostDirectoryEntry(args.hostId);
+  const client = useHostClientFor(target);
+  const auth = useStreamAuthRevalidator();
+  const streamBinding = useHostStreamClientBindingFor(target, auth);
+  return usePlainTerminalAuthority({
+    hostId: args.hostId,
+    scope: args.scope,
+    client,
+    streamClient: streamBinding?.client ?? null,
+    streamBinding,
+    capabilityIncarnation: `${target?.version ?? "unknown"}\u0000${target?.websocketUrl ?? "unreachable"}`,
+  });
+}

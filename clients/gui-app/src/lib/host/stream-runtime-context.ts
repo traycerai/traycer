@@ -161,3 +161,10 @@ export function useStreamMethodSupportFor(
 ): StreamMethodSupport | null {
   return useStreamMethodValueForClient(client, method, readMethodSupport);
 }
+
+export function useStreamMethodSchemaVersionFor(
+  client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  method: keyof HostStreamRpcRegistry & string,
+): SchemaVersion | null {
+  return useStreamMethodValueForClient(client, method, readMethodSchemaVersion);
+}

@@ -8,11 +8,20 @@ import type {
 } from "@traycer/protocol/host/host-status";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 
-const mocks = vi.hoisted(() => ({
-  entries: [] as readonly HostDirectoryEntry[],
-  kill: vi.fn(),
-  readySessionHosts: new Set<string>(),
-}));
+const mocks = vi.hoisted(() => {
+  const initialAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
+    "legacy";
+  const terminalsById: Readonly<Record<string, unknown>> = {};
+  return {
+    entries: [] as readonly HostDirectoryEntry[],
+    kill: vi.fn(),
+    readySessionHosts: new Set<string>(),
+    authorityStatus: initialAuthorityStatus(),
+    canMutate: false,
+    terminalsById,
+    closeAsync: vi.fn(() => Promise.resolve()),
+  };
+});
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: mocks.entries }),
@@ -22,6 +31,44 @@ vi.mock(
   () => ({
     useLandingTerminalKill: () => ({ mutate: mocks.kill }),
   }),
+);
+vi.mock(
+  "@/components/home/terminal-panel/landing-terminal-authority-fleet",
+  async () => {
+    const { useEffect } = await import("react");
+    return {
+      LandingTerminalAuthorityFleet: (props: {
+        readonly hostIds: readonly string[];
+        readonly onEntry: (hostId: string, entry: unknown) => void;
+      }) => {
+        const { onEntry } = props;
+        const hostKey = props.hostIds.join("\u0000");
+        useEffect(() => {
+          const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
+          hostIds.forEach((hostId) => {
+            onEntry(hostId, {
+              authority: {
+                capability:
+                  mocks.authorityStatus === "capable"
+                    ? {
+                        status: "capable",
+                        schemaVersion: { major: 1, minor: 0 },
+                      }
+                    : { status: mocks.authorityStatus },
+                canMutate: mocks.canMutate,
+                collection: { terminalsById: mocks.terminalsById },
+              },
+              mutations: { close: { mutateAsync: mocks.closeAsync } },
+            });
+          });
+          return () => {
+            hostIds.forEach((hostId) => onEntry(hostId, null));
+          };
+        }, [hostKey, onEntry]);
+        return null;
+      },
+    };
+  },
 );
 // The ready-session evidence the bridge now subscribes to; the poll hook
 // re-reads it on its tick, so tests drive it with fake timers.
@@ -56,11 +103,17 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.entries = [offlineHost];
     mocks.kill.mockReset();
     mocks.readySessionHosts = new Set();
+    mocks.authorityStatus = "legacy";
+    mocks.canMutate = false;
+    mocks.terminalsById = {};
+    mocks.closeAsync.mockReset();
+    mocks.closeAsync.mockImplementation(() => Promise.resolve());
     useLandingTerminalStore.getState().resetForTests();
   });
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     useLandingTerminalStore.getState().resetForTests();
   });
 
@@ -94,6 +147,239 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       });
     });
   });
+
+  it("retries an acknowledged capable-host close only through shared authority", async () => {
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-capable": {} };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "capable-tab",
+      sessionId: "session-capable",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Legacy",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "capable-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(mocks.closeAsync).toHaveBeenCalledWith({
+        terminalId: "session-capable",
+      });
+      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    });
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("does not drain capable-host tombstones while authority is stale", async () => {
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = false;
+    mocks.terminalsById = { "session-stale": {} };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "stale-tab",
+      sessionId: "session-stale",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Legacy",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "stale-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(mocks.kill).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-stale" },
+    ]);
+  });
+
+  it("retries a capable close after rejection and retires on acknowledgement", async () => {
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-retry": {} };
+    mocks.closeAsync
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(undefined);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "retry-tab",
+      sessionId: "session-retry",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Retry",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "retry-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+  });
+
+  it("backs off repeated capable close failures without concurrent retries", async () => {
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-backoff": {} };
+    mocks.closeAsync.mockRejectedValue(new Error("still unavailable"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "backoff-tab",
+      sessionId: "session-backoff",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Backoff",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "backoff-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(499);
+      await Promise.resolve();
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      vi.advanceTimersByTime(999);
+      await Promise.resolve();
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(3);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
+  it("cancels capable retries when the bound host route disappears", async () => {
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-host-change": {} };
+    mocks.closeAsync.mockRejectedValue(new Error("transient"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "host-change-tab",
+      sessionId: "session-host-change",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Host change",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "host-change-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+
+    mocks.entries = [offlineHost];
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
+  it("cancels capable retries when the bridge unmounts", async () => {
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-unmount": {} };
+    mocks.closeAsync.mockRejectedValue(new Error("transient"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "unmount-tab",
+      sessionId: "session-unmount",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Unmount",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "unmount-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    view.unmount();
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
   it("fires the kill on offline -> connectable even when the offline stretch sat inside the relay-fuse window", async () => {
     // Production-shaped entries: a registry-`offline` REMOTE host carries the
     // shared relay `websocketUrl`, and inside the fuse window

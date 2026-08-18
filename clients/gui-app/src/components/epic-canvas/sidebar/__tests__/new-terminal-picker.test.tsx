@@ -24,7 +24,10 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  isHostEpicTerminalRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 import { modLabel } from "@/lib/keybindings/platform";
 
@@ -162,6 +165,13 @@ function tabTiles(tabId: string): ReadonlyArray<EpicCanvasTileRef> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
   if (canvas === undefined) return [];
   return collectPanes(canvas.root).flatMap((pane) => paneTabRefs(canvas, pane));
+}
+
+function launchedTerminalCwd(tile: EpicCanvasTileRef): string | undefined {
+  if (tile.type !== "terminal" || !isHostEpicTerminalRef(tile)) {
+    return undefined;
+  }
+  return tile.legacyFallback.cwd;
 }
 
 describe("<NewTerminalPicker />", () => {
@@ -307,7 +317,15 @@ describe("<NewTerminalPicker />", () => {
     );
     expect(terminals).toHaveLength(1);
     expect(terminals[0].hostId).toBe("host-2");
-    expect(terminals[0].cwd).toBe("/work/traycer-wt/feature-x");
+    expect(launchedTerminalCwd(terminals[0])).toBe(
+      "/work/traycer-wt/feature-x",
+    );
+    expect(isHostEpicTerminalRef(terminals[0])).toBe(true);
+    expect(
+      useEpicCanvasStore
+        .getState()
+        .pendingCreateArtifactIds.has(terminals[0].id),
+    ).toBe(true);
   });
 
   it("launches the selected terminal with Cmd+Enter", () => {
@@ -324,7 +342,8 @@ describe("<NewTerminalPicker />", () => {
     );
     expect(terminals).toHaveLength(1);
     expect(terminals[0].hostId).toBe("host-1");
-    expect(terminals[0].cwd).toBe("/work/traycer");
+    expect(launchedTerminalCwd(terminals[0])).toBe("/work/traycer");
+    expect(isHostEpicTerminalRef(terminals[0])).toBe(true);
   });
 
   it("selects nothing and keeps Launch disabled when every row is disabled", () => {
@@ -380,7 +399,8 @@ describe("<NewTerminalPicker />", () => {
     );
     expect(terminals).toHaveLength(1);
     expect(terminals[0].hostId).toBe("host-1");
-    expect(terminals[0].cwd).toBe("/Users/tgill");
+    expect(launchedTerminalCwd(terminals[0])).toBe("/Users/tgill");
+    expect(isHostEpicTerminalRef(terminals[0])).toBe(true);
   });
 
   it("keeps Launch disabled while workspace bindings are loading", () => {
@@ -473,7 +493,9 @@ describe("<NewTerminalPicker />", () => {
     const terminals = tiles.filter((tile) => tile.type === "terminal");
     expect(terminals).toHaveLength(1);
     expect(terminals[0].hostId).toBe("host-2");
-    expect(terminals[0].cwd).toBe("/work/traycer-wt/feature-x");
+    expect(launchedTerminalCwd(terminals[0])).toBe(
+      "/work/traycer-wt/feature-x",
+    );
     expect(terminals[0].name).toBe("New Terminal");
     expect(screen.queryByTestId("new-terminal-picker-popover")).toBeNull();
   });
