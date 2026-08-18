@@ -958,6 +958,56 @@ function firstSubmitLoginCodeCall(): readonly [
   return call;
 }
 
+/** An oauth-only codex with the ambient row plus one managed "Work" profile,
+ *  so a test can hand it a different `managed-1` before and after a sign-in
+ *  and drive the reauth panel's changed-account branch. */
+function codexWithManaged(managed: ProviderProfile): ProviderCliState {
+  return {
+    ...providerState({
+      providerId: "codex",
+      selected: { kind: "bundled" },
+      candidates: [],
+      envOverrides: [],
+      profiles: [
+        profile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+          email: "ambient@example.test",
+          tier: null,
+          authStatus: "authenticated",
+          duplicateOfProfileId: null,
+          ambientDriftNotice: null,
+        }),
+        managed,
+      ],
+    }),
+    loginCapability: {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    },
+  };
+}
+
+/** `managed-1` as a given account. The pre-sign-in address is the signed-OUT
+ *  row (that is the state the row is in when its "Sign in" button shows); any
+ *  other address is the authenticated result of a sign-in. */
+function workProfileSignedInAs(email: string): ProviderProfile {
+  return profile({
+    profileId: "managed-1",
+    kind: "managed",
+    label: "Work",
+    email,
+    tier: "Pro",
+    authStatus:
+      email === "work@example.test" ? "unauthenticated" : "authenticated",
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+  });
+}
+
 function codePasteReauthProviderState(): ProviderCliState {
   return {
     ...providerState({
@@ -5447,48 +5497,8 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   it("freezes the entry row so the header and the changed-account notice survive the list committing the new identity", async () => {
-    const codexWith = (managed: ProviderProfile): ProviderCliState => ({
-      ...providerState({
-        providerId: "codex",
-        selected: { kind: "bundled" },
-        candidates: [],
-        envOverrides: [],
-        profiles: [
-          profile({
-            profileId: "ambient",
-            kind: "ambient",
-            label: "Terminal account",
-            email: "ambient@example.test",
-            tier: null,
-            authStatus: "authenticated",
-            duplicateOfProfileId: null,
-            ambientDriftNotice: null,
-          }),
-          managed,
-        ],
-      }),
-      loginCapability: {
-        oauthArgs: ["auth", "login"],
-        token: null,
-        codePaste: null,
-        terminalLogin: null,
-      },
-    });
-    const signedInAs = (email: string): ProviderProfile =>
-      profile({
-        profileId: "managed-1",
-        kind: "managed",
-        label: "Work",
-        email,
-        tier: "Pro",
-        authStatus:
-          email === "work@example.test" ? "unauthenticated" : "authenticated",
-        duplicateOfProfileId: null,
-        ambientDriftNotice: null,
-      });
-
     providerMocks.listResult.data = {
-      providers: [codexWith(signedInAs("work@example.test"))],
+      providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
     };
 
     const view = render(
@@ -5528,7 +5538,9 @@ describe("<ProvidersSettingsPanel />", () => {
     // LEAF, while the profile row is a prop from an ancestor. `setQueryData`
     // is what re-renders that ancestor in production.
     providerMocks.listResult.data = {
-      providers: [codexWith(signedInAs("personal@example.test"))],
+      providers: [
+        codexWithManaged(workProfileSignedInAs("personal@example.test")),
+      ],
     };
     view.rerender(
       <TooltipProvider>
@@ -5538,7 +5550,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     act(() => {
       awaitOptions.onSuccess({
-        state: { profiles: [signedInAs("personal@example.test")] },
+        state: { profiles: [workProfileSignedInAs("personal@example.test")] },
       });
     });
 
@@ -5564,6 +5576,58 @@ describe("<ProvidersSettingsPanel />", () => {
     // never relabelled mid-flow as an account SWITCH it never was.
     expect(screen.getByText("Signing in")).toBeDefined();
     expect(screen.queryByText("Switching account")).toBeNull();
+  });
+
+  it("closes a sign-in-intent dialog once the user acknowledges a changed account", async () => {
+    providerMocks.listResult.data = {
+      providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [workProfileSignedInAs("personal@example.test")] },
+      });
+    });
+
+    // The notice still gets its stop - that is the whole carve-out.
+    fireEvent.click(screen.getByRole("button", { name: "Keep new account" }));
+
+    // But acknowledging it ends the dialog rather than handing back an edit
+    // form with nothing staged in it: the user came here to sign in, and the
+    // sign-in is over however the account came back.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Sign in to Work" }),
+      ).toBeNull();
+    });
+    expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
+    // No toast on this path: the notice they just confirmed WAS the
+    // confirmation, so nothing was taken away for a toast to replace.
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("keeps the acknowledgment and the open dialog when a same-account reconnect came from Switch account", async () => {

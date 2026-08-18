@@ -640,16 +640,24 @@ function ProfileEditDialog({
     setSwitchingAccount(true);
   };
 
-  /** Sign-in intent opened this dialog *for* the sign-in, so a reconnect of
-   *  the same account leaves nothing to save - close the whole thing instead
-   *  of handing back an edit form whose only exit is Cancel.
+  /** Sign-in intent opened this dialog *for* the sign-in, so once the sign-in
+   *  settles there is nothing here left to save - close the whole thing
+   *  instead of handing back an edit form whose only exit is Cancel. Both
+   *  settlements below take this route; they differ only in what confirms it.
    *
    *  `switchingAccount` deliberately stays true: clearing it here would swap
    *  the edit form (and its footer) back in for the length of the dialog's
    *  exit animation. Nothing leaks, because the section keys this dialog by
    *  edit session - reopening remounts it with a fresh `switchingAccount`. */
-  const finishSignIn = (signedIn: ProviderProfile): void => {
+  const closeAfterSignIn = (): void => {
     onOpenChange(false);
+  };
+
+  /** The SAME account reconnecting, settled without an acknowledgment step.
+   *  The toast stands in for the card that no longer renders - it is the only
+   *  confirmation left, so this path is the one that needs it. */
+  const finishSignIn = (signedIn: ProviderProfile): void => {
+    closeAfterSignIn();
     toast.success(signedInMessage(signedIn));
   };
 
@@ -698,7 +706,18 @@ function ProfileEditDialog({
                 profile={profile}
                 onSameAccountReconnected={startInReauth ? finishSignIn : null}
                 onCancel={() => setSwitchingAccount(false)}
-                onDone={() => setSwitchingAccount(false)}
+                // A CHANGED account still stops for its amber notice, but
+                // acknowledging it ends a sign-in-intent dialog too - landing
+                // that user on the edit form would rebuild the same Cancel-only
+                // dead end one step later. No toast: they just read and
+                // confirmed the notice, so nothing was taken away to replace.
+                // The "Switch account" entry keeps returning to its form, which
+                // still holds their uncommitted name and color.
+                onDone={
+                  startInReauth
+                    ? closeAfterSignIn
+                    : () => setSwitchingAccount(false)
+                }
               />
             ) : (
               <TooltipWrapper
