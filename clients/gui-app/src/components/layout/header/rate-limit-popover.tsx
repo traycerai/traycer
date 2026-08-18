@@ -65,6 +65,7 @@ import {
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { isRateLimitQueryFailure } from "@/lib/rate-limits/rate-limit-read-status";
 import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
@@ -1558,7 +1559,7 @@ function SingleProfileRateLimitProviderBlock({
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: targetFetching,
-    isError: query.isError,
+    isError: isRateLimitQueryFailure(query),
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
@@ -1868,6 +1869,9 @@ function RateLimitProviderProfileRow({
     readonly isPending: boolean;
     readonly isFetching: boolean;
     readonly isError: boolean;
+    // Carried so this row can tell a real failure from a read we merely
+    // stopped waiting for (`isRateLimitQueryFailure`).
+    readonly error: unknown;
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
@@ -1883,7 +1887,7 @@ function RateLimitProviderProfileRow({
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: query.isFetching,
-    isError: query.isError,
+    isError: isRateLimitQueryFailure(query),
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);

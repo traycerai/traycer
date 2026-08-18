@@ -37,3 +37,27 @@ export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 15 * 60 * 1000;
  * up on the frame really did discard the work.
  */
 export const RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS = 3 * 60 * 1000;
+
+/**
+ * How long after giving up on a `host.getRateLimitUsage` response the queue
+ * waits before reading again.
+ *
+ * Sized from the overflow the budget above deliberately excludes: a
+ * same-profile custodian can hold the per-config-dir gate for roughly two
+ * minutes before the 150s of probe phases even begin, so a healthy probe can
+ * run to ~270s against a 180s budget. Ninety seconds covers that remainder, by
+ * which point the host has captured the finished probe in its gauge cache and
+ * can answer immediately.
+ *
+ * The follow-up travels as `force: false` on purpose - it wants the reading
+ * the abandoned probe already produced, not a second subprocess.
+ */
+export const RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS = 90 * 1000;
+
+/**
+ * Consecutive follow-ups allowed per target before the queue stops. One is
+ * enough to collect a probe that outran its budget; more would turn a host
+ * that never answers into a poll loop, and the 15-minute sweep already covers
+ * that case.
+ */
+export const RATE_LIMIT_READ_FOLLOW_UP_LIMIT = 1;

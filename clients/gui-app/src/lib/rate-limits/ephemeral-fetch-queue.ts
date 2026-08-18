@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { isRateLimitReadStillRunningOnHost } from "@/lib/rate-limits/rate-limit-read-status";
 import type { HostRpcRegistry } from "@/lib/host";
 import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { queryKeys } from "@/lib/query-keys";
@@ -16,6 +17,8 @@ import {
 } from "@/lib/rate-limits/rate-limit-envelope";
 import {
   EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS,
+  RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS,
+  RATE_LIMIT_READ_FOLLOW_UP_LIMIT,
   RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
 } from "@/lib/rate-limits/rate-limit-timing";
 
@@ -92,9 +95,52 @@ interface PendingRateLimitTarget {
   readonly resolve: () => void;
   readonly shouldSkipAutomatic: () => boolean;
   readonly fetch: () => Promise<ProviderRateLimitEnvelope>;
+  /** Re-read this target from the host gauge cache. See `scheduleReadFollowUp`. */
+  readonly followUp: () => void;
 }
 
 const pendingTargets = new Map<string, PendingRateLimitTarget>();
+
+/**
+ * Targets whose next pull is a FOLLOW-UP to a read we stopped waiting for, and
+ * must therefore ignore the freshness floor. Without this the follow-up
+ * silently no-ops whenever the last successful read is still inside the floor -
+ * precisely the impatient-refresh case it exists to rescue.
+ */
+const followUpDue = new Set<string>();
+
+/** Consecutive follow-ups spent per target; cleared on any completed read. */
+const followUpAttempts = new Map<string, number>();
+// `window.setTimeout` (not the ambient one) so the handle is a plain number,
+// matching how the poll interval is held in `rate-limit-queue-provider`.
+const followUpTimers = new Map<string, number>();
+
+function scheduleReadFollowUp(
+  target: PendingRateLimitTarget,
+  error: unknown,
+): void {
+  if (!isRateLimitReadStillRunningOnHost(error)) return;
+  if (followUpTimers.has(target.key)) return;
+  const spent = followUpAttempts.get(target.key) ?? 0;
+  if (spent >= RATE_LIMIT_READ_FOLLOW_UP_LIMIT) return;
+
+  followUpAttempts.set(target.key, spent + 1);
+  const timer = window.setTimeout(() => {
+    followUpTimers.delete(target.key);
+    target.followUp();
+  }, RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+  followUpTimers.set(target.key, timer);
+}
+
+/** Drop any pending follow-up for a key whose read has since completed. */
+function clearReadFollowUp(key: string): void {
+  const timer = followUpTimers.get(key);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    followUpTimers.delete(key);
+  }
+  followUpAttempts.delete(key);
+}
 
 /**
  * Post-`usage_fetch_failed` cool-down: how long *automatic* enqueues (the
@@ -363,6 +409,8 @@ function createPendingPromise(): {
 }
 
 function settlePendingTarget(target: PendingRateLimitTarget): void {
+  // One-shot: the bypass covers exactly the pull it was set for.
+  followUpDue.delete(target.key);
   if (pendingTargets.get(target.key) === target) {
     pendingTargets.delete(target.key);
     notifyTargets();
@@ -380,9 +428,16 @@ async function runPendingTarget(target: PendingRateLimitTarget): Promise<void> {
   notifyTargets();
   try {
     await target.fetch();
-  } catch {
+    clearReadFollowUp(target.key);
+  } catch (error) {
     // TanStack keeps the normalized failure on this target's cache entry.
     // Swallow it here so one profile cannot poison the shared serial lane.
+    //
+    // A response timeout is not a failed read though - the host is still
+    // running the probe and will capture it. Collect it shortly rather than
+    // leaving the user with a refresh that visibly failed and silently
+    // succeeded later.
+    scheduleReadFollowUp(target, error);
   } finally {
     settlePendingTarget(target);
   }
@@ -470,6 +525,11 @@ export function enqueueRateLimitFetchBatchForScope(
     >(hostId, "host.getRateLimitUsage", params);
 
     function shouldSkipAutomatic(): boolean {
+      // A follow-up is collecting a probe we already paid for, so neither the
+      // freshness floor nor the cool-down applies: both exist to stop
+      // SPECULATIVE automatic work, and this reading is already sitting in the
+      // host's gauge cache waiting to be picked up.
+      if (followUpDue.has(targetKey)) return false;
       const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
       return (
         Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS ||
@@ -521,6 +581,12 @@ export function enqueueRateLimitFetchBatchForScope(
       promise: deferred.promise,
       resolve: deferred.resolve,
       shouldSkipAutomatic,
+      followUp: () => {
+        followUpDue.add(targetKey);
+        void enqueueRateLimitFetchBatchForScope(scope, [target], {
+          force: false,
+        });
+      },
       fetch: () =>
         queryClient.fetchQuery({
           queryKey,
@@ -575,4 +641,8 @@ export function __resetRateLimitQueueForTests(): void {
   drainingListeners.clear();
   targetListeners.clear();
   cooldownUntil.clear();
+  for (const timer of followUpTimers.values()) window.clearTimeout(timer);
+  followUpTimers.clear();
+  followUpAttempts.clear();
+  followUpDue.clear();
 }

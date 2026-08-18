@@ -16,6 +16,11 @@ import {
   RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
 } from "@/lib/rate-limits/rate-limit-timing";
 import {
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
+import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
   enqueueRateLimitFetch,
@@ -151,6 +156,127 @@ describe("ephemeral-fetch-queue", () => {
 
     // ...and then runs as its OWN request, carrying force so the host probes.
     expect(forced).toEqual([false, true]);
+  });
+
+  // A response timeout after the request reached the host is not a failed read:
+  // the probe keeps running (a same-profile custodian alone can hold the gate
+  // for minutes) and the host captures it in its gauge cache. These pin that
+  // the queue goes back for it rather than leaving the user with a refresh that
+  // visibly failed and silently succeeded later.
+  describe("read follow-up after we stop waiting", () => {
+    function transportFailure(): HostTransportFailureError {
+      return new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket frame timed out after 180000ms",
+        requestId: "req-1",
+        method: "host.getRateLimitUsage",
+        fatalDetails: null,
+      });
+    }
+
+    it("re-reads the target once, as an UNFORCED pull so the host answers from its gauge cache", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      const forced: boolean[] = [];
+      let attempt = 0;
+      const request: RateLimitQueueRequestFn = (_hostId, _method, params) => {
+        attempt += 1;
+        forced.push(params.force ?? false);
+        return attempt === 1
+          ? Promise.reject(transportFailure())
+          : Promise.resolve(response());
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(forced).toEqual([true]);
+
+      // Nothing yet - the follow-up waits for the host to finish the probe.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS - 1);
+      expect(forced).toEqual([true]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      // Unforced: it wants the reading the abandoned probe already produced,
+      // not a second subprocess.
+      expect(forced).toEqual([true, false]);
+    });
+
+    it("does NOT keep re-reading when the follow-up fails too", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      let calls = 0;
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        return Promise.reject(transportFailure());
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+
+      // The cap holds: a host that never answers must not become a poll loop.
+      // The 15-minute sweep already covers that case.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS * 5);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+    });
+
+    it("does not follow up a read the host never dispatched", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      let calls = 0;
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        // Never-dispatched: the retrying messenger owns this case, and there is
+        // no in-flight probe whose result we could collect.
+        return Promise.reject(
+          new RetryableTransportError({
+            code: "RPC_ERROR",
+            message: "WebSocket dial timed out after 10000ms",
+            requestId: "req-2",
+            method: "host.getRateLimitUsage",
+            fatalDetails: null,
+          }),
+        );
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS * 3);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+    });
   });
 
   it("serializes concurrent enqueues across providers - only one request is ever in flight (guardrail 1)", async () => {
