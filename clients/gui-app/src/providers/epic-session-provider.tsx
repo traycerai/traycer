@@ -269,7 +269,12 @@ export function EpicSessionProvider(
       // line, disposing the live session under a tab that was never denied
       // anything. `discardTabState(tabId)` above has already removed this tab,
       // so the question this asks is exactly "does another one still hold it".
-      releaseOpenEpicSessionIfUnused(epicId, "keep");
+      // `null`: this window lost the epic to ANOTHER window, which opens its
+      // own session against the same room, and a retention here would surface
+      // in this window's quit sheet as work it can never flush - it has no
+      // ownership left to flush with. Deliberately unchanged by the rotation
+      // fix below, whose loss had no such continuation.
+      releaseOpenEpicSessionIfUnused(epicId, "keep", null);
       await desktopBridge.requestFocus(claim.currentOwner);
       void navigate({ to: "/epics", replace: true });
     })();
@@ -507,9 +512,23 @@ export function EpicSessionProvider(
       // while the retained buffers can belong to others, so discarding here
       // would delete host A's unsynced work because host B rotated.
       if (current !== null) {
+        const discarding = current.handle.userId !== sessionUserId;
         registry.release(
           epicId,
-          current.handle.userId !== sessionUserId ? "discard" : "keep",
+          discarding ? "discard" : "keep",
+          // A ROTATION is not a user change: the same person is still at the
+          // keyboard, nothing was shown to them, and the live handle can hold
+          // unsynced edits. Retaining it under the identity it was built for -
+          // the OLD owner key, which is the room those edits belong to - is
+          // what keeps the re-enrollment from destroying work the user was
+          // never asked about. A user change takes `null`: no prior identity's
+          // document may survive it, exactly as `disposeAll` does at sign-out.
+          discarding
+            ? null
+            : {
+                hostStamp: current.hostId,
+                ownerIdentityKey: current.ownerIdentityKey,
+              },
         );
       }
       const nextHandle = registry.acquireMounted(epicId, createHandle);

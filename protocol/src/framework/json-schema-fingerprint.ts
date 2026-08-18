@@ -39,6 +39,19 @@ export type EnumJsonSchema = {
 export type AnyOfJsonSchema = {
   readonly type: "anyOf";
   readonly variants: readonly JsonSchemaFingerprint[];
+  /**
+   * The field `z.discriminatedUnion(...)` was DECLARED on, or `null` for a
+   * plain `z.union(...)`.
+   *
+   * Carried because arm identity cannot be inferred once more than one field
+   * qualifies as a tag: `{kind:"a",outcome:"x",value}` -> `{kind:"a",outcome:"z"}`
+   * (an EDIT that drops `value`) and `{kind:"a",outcome:"x",value}` ->
+   * `{kind:"b",outcome:"x"}` (a REPLACEMENT) are structurally identical - one
+   * qualifying field agrees, one differs, in both. Only the declaration says
+   * which field is the identity, and JSON Schema does not carry it, so
+   * `toJsonSchemaFingerprint` stamps it during conversion.
+   */
+  readonly discriminator: string | null;
 };
 
 /**
@@ -77,9 +90,57 @@ export function toJsonSchemaFingerprint(
   context: string,
 ): JsonSchemaFingerprint {
   return convertJsonSchemaShape(
-    z.toJSONSchema(schema, { unrepresentable: "any" }),
+    z.toJSONSchema(schema, {
+      unrepresentable: "any",
+      // The ONE thing JSON Schema drops that arm identity needs. `oneOf`
+      // tells us the union was declared discriminated; it does not say on
+      // WHICH field, and no amount of comparing the arms can recover it (see
+      // `AnyOfJsonSchema.discriminator`). Stamped under an `x-` key so a
+      // renderer that round-trips this schema stays valid, and read back by
+      // `declaredDiscriminator` during conversion.
+      override: stampDeclaredDiscriminator,
+    }),
     context,
   );
+}
+
+/** The key `toJsonSchemaFingerprint` stamps the declared discriminator under. */
+const DECLARED_DISCRIMINATOR_KEY = "x-traycer-discriminator";
+
+interface ZodDiscriminatedUnionInternals {
+  readonly _zod?: { readonly def?: { readonly discriminator?: unknown } };
+}
+
+interface SchemaConversionContext {
+  readonly zodSchema: unknown;
+  readonly jsonSchema: Record<string, unknown>;
+}
+
+/**
+ * Writes `z.discriminatedUnion`'s declared field onto the emitted union node.
+ *
+ * Reads zod's internal `def` because the public surface exposes no accessor
+ * for it, and it is read DEFENSIVELY: a shape that does not answer with a
+ * string simply leaves the node unstamped, and identity falls back to the
+ * inferred tuple - the behaviour before this existed. A zod upgrade that moves
+ * the field therefore degrades to the old inference rather than throwing, and
+ * the fixture in `json-schema-fingerprint.test.ts` fails loudly if it does.
+ */
+function stampDeclaredDiscriminator(context: SchemaConversionContext): void {
+  const schema = context.zodSchema;
+  if (typeof schema !== "object" || schema === null) return;
+  const internals = schema as ZodDiscriminatedUnionInternals;
+  const declared = internals._zod?.def?.discriminator;
+  if (typeof declared !== "string" || declared.length === 0) return;
+  context.jsonSchema[DECLARED_DISCRIMINATOR_KEY] = declared;
+}
+
+/** The stamped discriminator on a RAW JSON Schema union node, if any. */
+function declaredDiscriminator(node: {
+  readonly [DECLARED_DISCRIMINATOR_KEY]?: unknown;
+}): string | null {
+  const declared = node[DECLARED_DISCRIMINATOR_KEY];
+  return typeof declared === "string" && declared.length > 0 ? declared : null;
 }
 
 /**
@@ -330,6 +391,7 @@ function convertJsonSchemaShape(
     anyOf?: readonly unknown[];
     oneOf?: readonly unknown[];
     items?: unknown;
+    [DECLARED_DISCRIMINATOR_KEY]?: unknown;
   };
 
   if (node.type === "object" && node.properties !== undefined) {
@@ -359,6 +421,7 @@ function convertJsonSchemaShape(
       variants: node.anyOf.map((variant, index) =>
         convertJsonSchemaShape(variant, `${context}.anyOf[${index}]`),
       ),
+      discriminator: declaredDiscriminator(node),
     };
   }
 
@@ -378,6 +441,7 @@ function convertJsonSchemaShape(
       variants: node.oneOf.map((variant, index) =>
         convertJsonSchemaShape(variant, `${context}.oneOf[${index}]`),
       ),
+      discriminator: declaredDiscriminator(node),
     };
   }
 
@@ -635,7 +699,12 @@ type ClassifiedSchemaNode =
       readonly representation: EnumJsonSchema["representation"];
       readonly values: readonly (string | number | boolean)[];
     }
-  | { readonly kind: "anyOf"; readonly variants: readonly unknown[] }
+  | {
+      readonly kind: "anyOf";
+      readonly variants: readonly unknown[];
+      /** See {@link AnyOfJsonSchema.discriminator}; `null` for a plain union. */
+      readonly discriminator: string | null;
+    }
   | { readonly kind: "array"; readonly items: unknown }
   | { readonly kind: "opaque"; readonly node: unknown };
 
@@ -657,6 +726,11 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
     anyOf?: readonly unknown[];
     oneOf?: readonly unknown[];
     items?: unknown;
+    // Two carriers, because this classifier sees BOTH forms: a normalized
+    // fingerprint node (`type:"anyOf"`, discriminator already converted) and
+    // a raw JSON Schema node nested below one (still carrying the stamp).
+    discriminator?: unknown;
+    [DECLARED_DISCRIMINATOR_KEY]?: unknown;
   };
   const requiredFields = Array.isArray(shape.required)
     ? shape.required.filter(
@@ -679,7 +753,15 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
     };
   }
   if (shape.type === "anyOf" && Array.isArray(shape.variants)) {
-    return { kind: "anyOf", variants: shape.variants };
+    return {
+      kind: "anyOf",
+      variants: shape.variants,
+      discriminator:
+        typeof shape.discriminator === "string" &&
+        shape.discriminator.length > 0
+          ? shape.discriminator
+          : null,
+    };
   }
 
   // Raw JSON Schema forms, mirroring `convertJsonSchemaShape`'s branch
@@ -731,7 +813,11 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
         values: literalEnum.values,
       };
     }
-    return { kind: "anyOf", variants: unionVariants };
+    return {
+      kind: "anyOf",
+      variants: unionVariants,
+      discriminator: declaredDiscriminator(shape),
+    };
   }
   if (
     "const" in shape &&
@@ -830,13 +916,23 @@ function findDiscriminatedSuccessor(
   previousVariant: unknown,
   previousVariants: readonly unknown[],
   nextVariants: readonly unknown[],
+  declared: string | null,
 ): number {
   const previous = classifySchemaNode(previousVariant);
   if (previous.kind !== "object") return -1;
   const nextFields = new Set(discriminatorFields(nextVariants));
-  const fields = discriminatorFields(previousVariants).filter((field) =>
+  const inferred = discriminatorFields(previousVariants).filter((field) =>
     nextFields.has(field),
   );
+  // The DECLARED field wins outright when the union names one and that field
+  // still tells the arms apart on both sides. Identity is then that field
+  // ALONE: a secondary literal moving on an arm whose declared tag is
+  // unchanged is an EDIT to that arm, and folding it into a tuple made the
+  // arm unmatchable - which handed its dropped fields to the replacement
+  // exemption. The tuple survives only as the fallback for a plain
+  // `z.union(...)`, where nothing declares which field carries identity.
+  const fields =
+    declared !== null && inferred.includes(declared) ? [declared] : inferred;
   if (fields.length === 0) return -1;
   const identity = fields.map(
     (field) => [field, discriminantValue(previous.properties[field])] as const,
@@ -1047,7 +1143,16 @@ function findNodeAdditivityViolation(
       // reduction is what gets reported - only an old form with no successor
       // is the replacement the exemption covers.
       const successorIndex = allowUnionArmReplacement
-        ? findDiscriminatedSuccessor(previous, [previous], nextNode.variants)
+        ? findDiscriminatedSuccessor(
+            previous,
+            [previous],
+            nextNode.variants,
+            // The previous node is not a union here (a single form GREW into
+            // one), so only the new union declares anything. Taking its
+            // declaration is what keeps identity from being every literal the
+            // old single form happened to pin.
+            nextNode.discriminator,
+          )
         : -1;
       if (successorIndex !== -1) {
         return findNodeAdditivityViolation(
@@ -1086,8 +1191,12 @@ function findNodeAdditivityViolation(
         // an arm with no successor is a replacement the exemption covers.
         if (
           allowUnionArmReplacement &&
-          findDiscriminatedSuccessor(variant, previousNode.variants, [next]) ===
-            0
+          findDiscriminatedSuccessor(
+            variant,
+            previousNode.variants,
+            [next],
+            previousNode.discriminator,
+          ) === 0
         ) {
           return violation;
         }
@@ -1302,6 +1411,13 @@ function findNodeAdditivityViolation(
             previousVariant,
             previousNode.variants,
             nextNode.variants,
+            // Both sides must call identity the same thing. A minor that
+            // re-declares the union on a DIFFERENT field has not edited its
+            // arms, it has redefined what an arm is, and the inferred tuple
+            // is the honest answer there.
+            previousNode.discriminator === nextNode.discriminator
+              ? previousNode.discriminator
+              : null,
           )
         : -1;
       if (successorIndex !== -1) {

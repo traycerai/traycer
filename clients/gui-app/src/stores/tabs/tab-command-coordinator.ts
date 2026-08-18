@@ -1341,7 +1341,9 @@ export class TabCommandCoordinator {
         // retention argument. `"discard"` preserves this path's existing
         // behaviour and is not a fresh adjudication of it.
         epicIds.forEach((epicId) =>
-          releaseOpenEpicSessionIfUnused(epicId, "discard"),
+          // `null` for the same reason as `"discard"`: the user answered for
+          // these edits, live handle included.
+          releaseOpenEpicSessionIfUnused(epicId, "discard", null),
         );
       },
     });
@@ -1581,7 +1583,7 @@ export class TabCommandCoordinator {
       const tab = useEpicCanvasStore.getState().tabsById[ref.id];
       // `"discard"` preserves this path's existing behaviour.
       if (tab !== undefined)
-        releaseOpenEpicSessionIfUnused(tab.epicId, "discard");
+        releaseOpenEpicSessionIfUnused(tab.epicId, "discard", null);
       return;
     }
     if (ref.kind === "draft") {
