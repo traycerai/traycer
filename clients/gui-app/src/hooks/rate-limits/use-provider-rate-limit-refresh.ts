@@ -1,7 +1,10 @@
 import { useCallback } from "react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
-import { useRateLimitQueueTargetPhase } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
+import {
+  useIsRateLimitQueueTargetForced,
+  useRateLimitQueueTargetPhase,
+} from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
 import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
@@ -104,11 +107,24 @@ export function useProviderRateLimitRefresh({
   // being skipped by its second freshness/cool-down check or reaching the host
   // as `force: false` and being served from the gauge cache.
   //
-  // A queued target is not left silent - its row renders #1268's "Queued…"
-  // label - so the spinner is not the only feedback the user has.
+  // So the two QUEUED states split, rather than the phase alone deciding:
+  //
+  //   queued + not yet forced -> stays clickable; the click promotes it.
+  //   queued + already forced -> nothing left to promote, so read as pending.
+  //
+  // Without that second arm a user who clicks while another target holds the
+  // lane gets a control that falls idle and clickable again the moment
+  // `RefreshIconButton`'s 10s internal cap lapses, with their request still
+  // pending for up to the full response budget. The popover row renders
+  // #1268's "Queued…" label, but the Settings consumers do not - so for them
+  // the spinner is the ONLY feedback that exists.
+  const targetForced = useIsRateLimitQueueTargetForced(providerId, profileId);
   const isRefreshing =
     fetchEligible &&
-    (isFetching || (lane === "ephemeralProcess" && targetPhase === "fetching"));
+    (isFetching ||
+      (lane === "ephemeralProcess" &&
+        (targetPhase === "fetching" ||
+          (targetPhase === "queued" && targetForced))));
 
   return { refresh, isRefreshing };
 }

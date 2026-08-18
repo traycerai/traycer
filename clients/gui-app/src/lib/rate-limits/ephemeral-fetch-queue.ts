@@ -230,6 +230,28 @@ export function getRateLimitQueueTargetPhase(
   );
 }
 
+/**
+ * Whether this target's queued pull is ALREADY forced - i.e. a user asked for
+ * it, rather than the background sweep enqueuing it.
+ *
+ * A control uses this to tell the two queued states apart. An automatic queued
+ * item must stay clickable, because that click is what promotes it
+ * (`pending.force = true`) and stops the pull being skipped by its second
+ * freshness/cool-down check or served from the host gauge cache. Once it IS
+ * forced, a further click can add nothing, so the control should show pending
+ * instead of sitting idle while the user waits behind the lane.
+ */
+export function isRateLimitQueueTargetForced(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  return (
+    pendingTargets.get(rateLimitQueueProfileKey(hostId, providerId, profileId))
+      ?.force ?? false
+  );
+}
+
 export function subscribeRateLimitQueueTargets(
   listener: () => void,
 ): () => void {

@@ -27,7 +27,10 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
   useRateLimitQueueScope: () => mocks.scope,
 }));
 
-import { useRateLimitQueueTargetPhase } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
+import {
+  useAnyRateLimitQueueTargetFetching,
+  useRateLimitQueueTargetPhase,
+} from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 
 function response() {
   return { totalTokens: 0, remainingTokens: 0, providerRateLimits: null };
@@ -162,5 +165,92 @@ describe("useRateLimitQueueTargetPhase", () => {
     unmount();
     // Resolving after unmount must not throw from a stale subscription.
     expect(() => codex.settlers[0]()).not.toThrow();
+  });
+});
+
+/**
+ * The fold memoizes its target list on a serialized key. These pin that the
+ * key preserves target IDENTITY for ids a delimiter join would corrupt: a
+ * profile id is a free-form string off the provider, so `""` must stay
+ * distinct from `null` (follow the default profile) and an id may contain any
+ * character - including whatever would otherwise separate the pairs. Getting
+ * this wrong reads the WRONG queue entry, so a control reports idle while its
+ * real target is mid-subprocess: the exact failure this hook exists to stop.
+ */
+describe("useAnyRateLimitQueueTargetFetching target identity", () => {
+  beforeEach(() => {
+    __resetRateLimitQueueForTests();
+    mocks.scope = { hostId: "host-1" };
+  });
+  afterEach(() => {
+    cleanup();
+    __resetRateLimitQueueForTests();
+  });
+
+  it("does not confuse an EMPTY-string profile id with the null default profile", async () => {
+    const queryClient = new QueryClient();
+    const fetching = makeControllableRequest();
+    configureRateLimitQueue({
+      hostId: "host-1",
+      queryClient,
+      request: fetching.request,
+    });
+
+    // Only the EMPTY-STRING profile is in flight.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: "host-1", queryClient, request: fetching.request },
+      [target("codex", "")],
+      { force: true },
+    );
+    await waitFor(() => expect(fetching.request).toHaveBeenCalledTimes(1));
+
+    const empty = renderHook(() =>
+      useAnyRateLimitQueueTargetFetching([
+        { providerId: "codex", profileId: "" },
+      ]),
+    );
+    const nullDefault = renderHook(() =>
+      useAnyRateLimitQueueTargetFetching([
+        { providerId: "codex", profileId: null },
+      ]),
+    );
+
+    await waitFor(() => expect(empty.result.current).toBe(true));
+    expect(nullDefault.result.current).toBe(false);
+  });
+
+  it("keeps pairs aligned when a profile id contains the character that separates them", async () => {
+    const queryClient = new QueryClient();
+    const fetching = makeControllableRequest();
+    configureRateLimitQueue({
+      hostId: "host-1",
+      queryClient,
+      request: fetching.request,
+    });
+
+    // A NUL inside the id: a delimiter join would split here and shift every
+    // later pair, so the fold would query a target nobody asked about.
+    const hostileId = "team\u0000claude-code";
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: "host-1", queryClient, request: fetching.request },
+      [target("codex", hostileId)],
+      { force: true },
+    );
+    await waitFor(() => expect(fetching.request).toHaveBeenCalledTimes(1));
+
+    const exact = renderHook(() =>
+      useAnyRateLimitQueueTargetFetching([
+        { providerId: "codex", profileId: hostileId },
+      ]),
+    );
+    const shifted = renderHook(() =>
+      useAnyRateLimitQueueTargetFetching([
+        { providerId: "codex", profileId: "team" },
+        { providerId: "claude-code", profileId: null },
+      ]),
+    );
+
+    await waitFor(() => expect(exact.result.current).toBe(true));
+    expect(shifted.result.current).toBe(false);
   });
 });

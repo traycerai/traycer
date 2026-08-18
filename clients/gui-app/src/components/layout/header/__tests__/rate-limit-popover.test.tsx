@@ -81,6 +81,7 @@ type MockState = {
   // queued/fetching registry snapshot `useRateLimitQueueTargetPhase` reads.
   // Defaults to `null` (not tracked) for any key not present.
   targetPhases: Record<string, "queued" | "fetching">;
+  forcedTargets: Record<string, boolean>;
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -123,6 +124,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   results: {},
   draining: false,
   targetPhases: {},
+  forcedTargets: {},
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
@@ -190,6 +192,14 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
         mocks.targetPhases[resultKey(target.providerId, target.profileId)] ===
         "fetching",
     ),
+  // Read from its own fixture rather than derived from the phase: the point of
+  // the flag is that two targets in the SAME "queued" phase behave
+  // differently, so a mock that inferred it from the phase could not express
+  // the case under test.
+  useIsRateLimitQueueTargetForced: (
+    providerId: string,
+    profileId: string | null,
+  ) => mocks.forcedTargets[resultKey(providerId, profileId)] ?? false,
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: (
@@ -806,6 +816,7 @@ beforeEach(() => {
   mocks.results = {};
   mocks.draining = false;
   mocks.targetPhases = {};
+  mocks.forcedTargets = {};
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();

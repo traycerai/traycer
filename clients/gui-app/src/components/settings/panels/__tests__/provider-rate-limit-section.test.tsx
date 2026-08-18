@@ -33,6 +33,7 @@ const mocks = vi.hoisted(
     isFetching: boolean;
     refetch: Mock<() => Promise<Record<string, never>>>;
     targetPhase: "queued" | "fetching" | null;
+    targetForced: boolean;
     enqueue: Mock<(...args: unknown[]) => Promise<unknown>>;
     hostId: string;
     turnRefreshCalls: TurnRefreshCall[];
@@ -46,6 +47,7 @@ const mocks = vi.hoisted(
     isFetching: false,
     refetch: vi.fn(() => Promise.resolve({})),
     targetPhase: null,
+    targetForced: false,
     enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
     hostId: "host-1",
     turnRefreshCalls: [],
@@ -89,6 +91,7 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
   useRateLimitQueueTargetPhase: () => mocks.targetPhase,
+  useIsRateLimitQueueTargetForced: () => mocks.targetForced,
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
   useRateLimitQueueScope: () => mocks.queueScope,
@@ -177,6 +180,7 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isError = false;
     mocks.isFetching = false;
     mocks.targetPhase = null;
+    mocks.targetForced = false;
     mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
     mocks.hostId = "host-1";
     mocks.turnRefreshCalls = [];
@@ -638,6 +642,7 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isFetching = false;
     mocks.targetPhase = "queued";
+    mocks.targetForced = false;
     render(
       <ProviderRateLimitForProvider
         providerId="codex"
@@ -650,6 +655,31 @@ describe("ProviderRateLimitForProvider", () => {
     expect(
       screen.getByRole("button", { name: "Refresh usage limits" }),
     ).toHaveProperty("disabled", false);
+  });
+
+  it("DISABLES the refresh button once this card's queued target is already forced", () => {
+    // The Settings card renders no "Queued…" label, so its spinner is the only
+    // feedback a waiting user gets. `RefreshIconButton` caps its own spinner at
+    // 10s, so a manual refresh stuck behind another target's probe would show
+    // an idle, clickable button while the request was still pending - for up to
+    // the lane's full response budget. Once forced there is nothing left for a
+    // further click to promote, so pending is the honest state.
+    mocks.data = envelope(CODEX_RATE_LIMITS);
+    mocks.isFetching = false;
+    mocks.targetPhase = "queued";
+    mocks.targetForced = true;
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Refresh usage limits" }),
+    ).toHaveProperty("disabled", true);
   });
 
   it("leaves the refresh button live when this target is NOT in the queue, however busy the lane is", () => {

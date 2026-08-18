@@ -26,10 +26,12 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 const mocks = vi.hoisted(
   (): {
     targetPhases: Record<string, "queued" | "fetching">;
+    forcedTargets: Record<string, boolean>;
     scope: { hostId: string };
     enqueue: Mock<(...args: unknown[]) => Promise<unknown>>;
   } => ({
     targetPhases: {},
+    forcedTargets: {},
     scope: { hostId: "host-b" },
     enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   }),
@@ -43,6 +45,10 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
     providerId: string,
     profileId: string | null,
   ) => mocks.targetPhases[`${providerId}:${profileId ?? ""}`] ?? null,
+  useIsRateLimitQueueTargetForced: (
+    providerId: string,
+    profileId: string | null,
+  ) => mocks.forcedTargets[`${providerId}:${profileId ?? ""}`] ?? false,
 }));
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy.
@@ -61,6 +67,7 @@ import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-ra
 
 beforeEach(() => {
   mocks.targetPhases = {};
+  mocks.forcedTargets = {};
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
 });
 
@@ -165,7 +172,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
     expect(result.current.isRefreshing).toBe(true);
   });
 
-  it("stays NOT refreshing while this target is merely queued, so the control can still promote it", () => {
+  it("stays NOT refreshing while this target is queued but NOT yet forced, so the control can still promote it", () => {
     // `RefreshIconButton` disables on `isRefreshing` and no-ops its trigger.
     // An enqueue for an already-queued target promotes it
     // (`pending.force = true`), which is the only thing that stops the pull
@@ -176,6 +183,44 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
       useProviderRateLimitRefresh({
         providerId: "codex",
         profileId: null,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
+        fetchEligible: true,
+        isFetching: false,
+        refetch,
+      }),
+    );
+    expect(result.current.isRefreshing).toBe(false);
+  });
+
+  it("DOES report refreshing once a queued target is already forced - the click that would promote it has happened", () => {
+    // The other half of the queued rule. `RefreshIconButton` caps its internal
+    // spinner at 10s, so without this the user's own request goes visually
+    // idle while still waiting behind the lane - and the Settings consumers
+    // render no "Queued…" label to compensate.
+    mocks.targetPhases = { "codex:": "queued" };
+    mocks.forcedTargets = { "codex:": true };
+    const { result } = renderHook(() =>
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
+        fetchEligible: true,
+        isFetching: false,
+        refetch,
+      }),
+    );
+    expect(result.current.isRefreshing).toBe(true);
+  });
+
+  it("reads its OWN forced flag, not a sibling profile's, when deciding a queued target is pending", () => {
+    mocks.targetPhases = { "codex:personal": "queued" };
+    mocks.forcedTargets = { "codex:work": true };
+    const { result } = renderHook(() =>
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: "personal",
         usageUpdatedAt: null,
         hasCachedValue: false,
         fetchEligible: true,
