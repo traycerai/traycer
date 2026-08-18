@@ -48,6 +48,7 @@ import {
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -1592,7 +1593,13 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
   const epicHandle = useOpenEpicHandle();
-  const activeHostId = useAddressableHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The SESSION's host, because this id becomes the created artifact's
+  // `fallbackHostId` and an ordinary artifact carries no intrinsic host - so it
+  // is what binds the opened tile, for life. `useEpicCreateArtifact` sends on
+  // the session client, so reading the ambient host here would have created on
+  // A and opened a B-bound tile for it: the create succeeds and the tile is
+  // wrong, which is the failure mode that looks like nothing went wrong.
+  const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,

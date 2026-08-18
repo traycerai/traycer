@@ -41,6 +41,17 @@ const state = vi.hoisted((): GateTestState => ({
   })),
 }));
 
+// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
+// to, so `git.subscribeStatus` cannot ride the window's effective host while
+// carrying the tile's host id as a param. `null` is that hook's FOLLOWING
+// answer, so the tile falls back to the ambient binding this suite supplies -
+// which is what every assertion here is about. Which transport a host resolves
+// to is a different question with its own suite:
+// `use-surface-host-stream-binding.test.tsx`.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => null,
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => state.activeHostId,
 }));

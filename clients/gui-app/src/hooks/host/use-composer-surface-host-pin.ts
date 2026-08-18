@@ -1,4 +1,10 @@
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import {
   useSurfaceHostPin,
   type SurfaceHostPin,
@@ -8,7 +14,10 @@ import {
   browserTabId,
   subscribeBrowserTabId,
 } from "@/lib/browser-tab-identity";
-import { composerSurfaceKey } from "@/stores/host/surface-host-selection-store";
+import {
+  composerSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 
 /**
  * The composer's surface key: window-scoped (selection model §2 / M4).
@@ -50,7 +59,30 @@ export function useComposerSurfaceHostKey(): string {
     [bridgeWindowId],
   );
   const windowId = useSyncExternalStore(subscribeBrowserTabId, readWindowId);
-  return useMemo(() => composerSurfaceKey(windowId), [windowId]);
+  const surfaceKey = useMemo(() => composerSurfaceKey(windowId), [windowId]);
+  // THE PIN MOVES WITH THE KEY. Rotating the id without carrying the selection
+  // loses the placement of the tab that rotates - which is the ORIGINAL, the
+  // one that observed the collision - at the exact moment of a duplication it
+  // did not initiate. Clearing the source is the other half: the duplicate is
+  // now reading the old key, and a fresh tab inheriting a pin it never chose is
+  // the cross-tab bleed the per-tab identity exists to prevent.
+  //
+  // Idempotent by construction, which matters because a window can mount this
+  // hook twice (the landing composer and the new-conversation modal over it):
+  // the migration is a no-op once the source key is gone, and it refuses to
+  // overwrite a selection already made under the new identity.
+  const previousSurfaceKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousSurfaceKeyRef.current;
+    previousSurfaceKeyRef.current = surfaceKey;
+    // First resolution is not a rotation - there is nothing to carry, and
+    // treating it as one would move a pin on every mount.
+    if (previous === null || previous === surfaceKey) return;
+    useSurfaceHostSelectionStore
+      .getState()
+      .migrateSelection(previous, surfaceKey);
+  }, [surfaceKey]);
+  return surfaceKey;
 }
 
 /**

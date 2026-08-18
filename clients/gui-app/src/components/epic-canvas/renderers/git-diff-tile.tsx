@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { use, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
 import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
@@ -16,6 +16,8 @@ import {
 } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
+import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
@@ -133,12 +135,50 @@ export function GitDiffTile(props: GitDiffTileProps): ReactNode {
   }
 
   return (
-    <GitDiffTileLive
-      node={props.node}
-      viewTabId={props.viewTabId}
-      tileId={props.tileId}
-      isActive={props.isActive}
-    />
+    <GitDiffTileStreamScope hostId={props.node.hostId}>
+      <GitDiffTileLive
+        node={props.node}
+        viewTabId={props.viewTabId}
+        tileId={props.tileId}
+        isActive={props.isActive}
+      />
+    </GitDiffTileStreamScope>
+  );
+}
+
+/**
+ * Re-provides `StreamRuntimeContext` for the host this TILE is bound to.
+ *
+ * `useGitListChangedFilesSubscription` takes no client - it reads
+ * `useWsStreamClient()` out of context - and `hostId` is only its session and
+ * cache key. So a tile bound to host B while the window's effective host moved
+ * to A subscribed on A for B's repository path, carrying B's id as a param the
+ * whole way: every call site looked correct, and A's status was written into
+ * B-keyed data this tile then displayed.
+ *
+ * This is NOT the pinned sidebar panel's case, which `3b689fe9` fixed the same
+ * way. A tab tile's host is a PERMANENT binding rather than a pin that can be
+ * deposed, so there is no auto-follow here: the tile either talks to its own
+ * host or shows the unreachable banner above.
+ *
+ * Rendered UNCONDITIONALLY (`?? ambient`), mirroring the file tree and the
+ * resource monitor: swapping between a provider and no provider changes the
+ * element type at this position, so React would unmount the tile - discarding
+ * its scroll position, expansion and find state - at the moment the effective
+ * host moves. `null` from the binding means "this IS the ambient host", and
+ * falling back there keeps the tile sharing one subscription with everything
+ * else on that host rather than opening a second.
+ */
+function GitDiffTileStreamScope(props: {
+  readonly hostId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const tileStreamBinding = useSurfaceHostStreamBinding(props.hostId);
+  const ambientStream = use(StreamRuntimeContext);
+  return (
+    <StreamRuntimeContext.Provider value={tileStreamBinding ?? ambientStream}>
+      {props.children}
+    </StreamRuntimeContext.Provider>
   );
 }
 

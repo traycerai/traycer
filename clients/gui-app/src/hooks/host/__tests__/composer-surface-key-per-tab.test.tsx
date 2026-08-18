@@ -108,16 +108,24 @@ describe("the browser composer pin is per tab", () => {
     tabIdRef.value = "tab-original";
     const { result } = renderHook(() => useComposerSurfaceHostKey());
     const sharedKey = result.current;
-    useSurfaceHostSelectionStore.getState().setSelection(sharedKey, "host-a");
+    act(() => {
+      useSurfaceHostSelectionStore.getState().setSelection(sharedKey, "host-a");
+    });
 
     regenerateTabId("tab-regenerated");
 
     const selections = useSurfaceHostSelectionStore.getState().selections;
-    // The duplicate goes on addressing the entry it inherited...
-    expect(selections[sharedKey]).toBe("host-a");
-    // ...while this tab, with no render of its own in between, has left it.
+    // This tab, with no render of its own in between, has left the shared key.
     expect(result.current).not.toBe(sharedKey);
-    expect(selections[result.current]).toBeUndefined();
+    // AND TAKEN ITS PIN WITH IT. The tab that regenerates is the ORIGINAL, so
+    // a rotation that moved only the key would drop this tab's chosen host at
+    // the moment of a duplication it did not initiate. Both sides are asserted
+    // because either alone passes a build that is wrong in the other
+    // direction: the pin is readable under the new key, and gone from the old
+    // one - so the duplicate, which is now addressing that old key, inherits
+    // nothing it never chose.
+    expect(selections[result.current]).toBe("host-a");
+    expect(selections[sharedKey]).toBeUndefined();
   });
 
   it("keeps the desktop path on its bridge window id", async () => {

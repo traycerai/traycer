@@ -186,6 +186,21 @@ interface SurfaceHostSelectionStoreState {
     selection: SurfaceHostSelection,
   ) => void;
   /**
+   * Carries a selection from one surface key to another, and clears the
+   * source.
+   *
+   * For a surface whose KEY can change under a stable surface - today only the
+   * browser composer, whose tab identity rotates when a duplicated tab claims
+   * the same id. The tab that rotates is the ORIGINAL, so without this its own
+   * placement is dropped on the floor at the moment of the collision, while the
+   * duplicate inherits the old key and reads a pin it never chose. Clearing the
+   * source is therefore half the fix, not tidiness.
+   *
+   * Refuses to overwrite a selection already at `toKey`: that is a decision
+   * made under the new identity and outranks one carried from the old one.
+   */
+  readonly migrateSelection: (fromKey: string, toKey: string) => void;
+  /**
    * G4 latch-on-first-use for the tree/diff class: if this instance is
    * still following, pin it to `resolvedHostId` so a later failover cannot
    * swap the tree underneath.
@@ -254,11 +269,12 @@ interface PersistedSurfaceSelections {
  * every pin the user just cleared, turning a lost-write bug into an
  * undeletable one.
  *
- * So the merge is three-way, with this instance's PREVIOUS map as the base:
- * keys it dropped since that base are deletions and are applied; every other
- * stored key is another window's business and is carried through untouched.
- * Same-key conflicts resolve to the writer, which is correct because the
- * writer is the window that just acted.
+ * So the merge is three-way, with this instance's PREVIOUS map as the base.
+ * Only keys that CHANGED against that base are written - added, updated, or
+ * dropped; everything else in this instance's map is stale hydrated state
+ * about which it has no opinion, and storage stands. Same-key conflicts
+ * resolve to the writer, which is correct because the writer is the window
+ * that just acted.
  *
  * Ownership is deliberately not inferred from the key. Sidebar surfaces are
  * keyed by TAB id precisely so a tab keeps its pins when it moves windows, so
@@ -292,8 +308,27 @@ function crossWindowSafeStorage(): PersistStorage<PersistedSurfaceSelections> {
         throw new Error("surface host selection storage must be synchronous");
       }
       const own = value.state.selections;
+      // ONLY THE KEYS THIS INSTANCE ACTUALLY CHANGED are written; the rest of
+      // `own` is stale hydrated state and must assert nothing.
+      //
+      // Spreading `own` wholesale was the earlier version's bug, and it was the
+      // mirror of the one this merge exists to fix: two windows hydrate pin
+      // `x`, window B unpins it and persists the deletion, and then ANY
+      // unrelated write from window A - which still carries `x` in memory -
+      // republished it. `x` also survived the deletion loop, because it was
+      // still present in `own`. So an explicit return-to-following was undone
+      // by ordinary activity in another window.
+      //
+      // A key equal in `base` and `own` was not touched between these two
+      // writes, so this instance has no opinion about it and whatever storage
+      // holds - including its absence - stands.
       const merged: Partial<Record<string, string>> =
-        current === null ? { ...own } : { ...current.state.selections, ...own };
+        current === null ? {} : { ...current.state.selections };
+      for (const surfaceKey of Object.keys(own)) {
+        if (own[surfaceKey] !== base[surfaceKey]) {
+          merged[surfaceKey] = own[surfaceKey];
+        }
+      }
       for (const surfaceKey of Object.keys(base)) {
         if (!(surfaceKey in own)) delete merged[surfaceKey];
       }
@@ -327,6 +362,16 @@ export const useSurfaceHostSelectionStore =
           }
           if (existing === selection) return;
           set({ selections: { ...current, [surfaceKey]: selection } });
+        },
+        migrateSelection: (fromKey, toKey) => {
+          if (fromKey === toKey) return;
+          const current = get().selections;
+          const moving = current[fromKey];
+          if (moving === undefined) return;
+          const next = { ...current };
+          delete next[fromKey];
+          if (current[toKey] === undefined) next[toKey] = moving;
+          set({ selections: next });
         },
         latchOnFirstUse: (surfaceKey, resolvedHostId) => {
           if (resolvedHostId.length === 0) return;

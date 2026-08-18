@@ -188,6 +188,48 @@ describe("useSurfaceHostSelectionStore", () => {
     expect(storedSelections()).toEqual({ [TREE_KEY]: "host-c" });
   });
 
+  /**
+   * The MIRROR of the lost-write bug, and the one a "spread my whole map over
+   * theirs" merge creates while fixing it.
+   *
+   * Two windows hydrate pin `x`. Window B unpins it - an explicit
+   * return-to-following - and persists the deletion. Window A still carries `x`
+   * in memory, having never touched it. Any unrelated write from A then
+   * republished `x`, and it also survived a deletion loop keyed on absence
+   * because `x` was still present in A's map. So ordinary activity in another
+   * window silently undid the user's choice.
+   *
+   * The rule that fixes it: a key equal in this instance's base and its current
+   * map was not touched between those two writes, so this instance has no
+   * opinion about it and storage stands - including storage's absence.
+   */
+  it("does not resurrect a pin another window deleted", async () => {
+    // Both windows know `x` and this instance knows an unrelated key.
+    useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, "host-b");
+    useSurfaceHostSelectionStore.getState().setSelection(TREE_KEY, "host-c");
+    await flushPersist();
+    expect(storedSelections()).toEqual({
+      [GIT_KEY]: "host-b",
+      [TREE_KEY]: "host-c",
+    });
+
+    // Window B unpins GIT_KEY and persists that deletion.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { selections: { [TREE_KEY]: "host-c" } },
+        version: CURRENT_PERSIST_VERSION,
+      }),
+    );
+
+    // This instance writes something UNRELATED. It still holds GIT_KEY in
+    // memory and must not re-assert it.
+    useSurfaceHostSelectionStore.getState().setSelection(TREE_KEY, "host-d");
+    await flushPersist();
+
+    expect(storedSelections()).toEqual({ [TREE_KEY]: "host-d" });
+  });
+
   it("persists pins and drops invalid rehydrated entries", async () => {
     useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, "host-b");
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
