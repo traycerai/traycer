@@ -16,6 +16,7 @@ import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
   enqueueRateLimitFetchBatchForScope,
+  getRateLimitQueueTargetPhase,
   type RateLimitQueueRequestFn,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
@@ -29,6 +30,7 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
 
 import {
   useAnyRateLimitQueueTargetFetching,
+  useIsRateLimitQueueTargetForced,
   useRateLimitQueueTargetPhase,
 } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 
@@ -252,5 +254,64 @@ describe("useAnyRateLimitQueueTargetFetching target identity", () => {
 
     await waitFor(() => expect(exact.result.current).toBe(true));
     expect(shifted.result.current).toBe(false);
+  });
+});
+
+describe("useIsRateLimitQueueTargetForced", () => {
+  beforeEach(() => {
+    __resetRateLimitQueueForTests();
+    mocks.scope = { hostId: "host-1" };
+  });
+  afterEach(() => {
+    cleanup();
+    __resetRateLimitQueueForTests();
+  });
+
+  it("re-renders when a QUEUED target is promoted to forced in place", async () => {
+    // The promotion mutates `pending.force` without changing the phase, so
+    // nothing else publishes it. If the queue does not notify, the control the
+    // user just clicked keeps reading as unforced and never shows pending.
+    const queryClient = new QueryClient();
+    const blocker = makeControllableRequest();
+    const codex = makeControllableRequest();
+    const scope = { hostId: "host-1", queryClient, request: blocker.request };
+    configureRateLimitQueue(scope);
+
+    // Occupy the lane so codex's own item stays queued.
+    void enqueueRateLimitFetchBatchForScope(
+      scope,
+      [target("claude-code", null)],
+      {
+        force: true,
+      },
+    );
+    await waitFor(() => expect(blocker.request).toHaveBeenCalledTimes(1));
+
+    const { result } = renderHook(() =>
+      useIsRateLimitQueueTargetForced("codex", null),
+    );
+    expect(result.current).toBe(false);
+
+    // An AUTOMATIC pull queues behind it - still not forced.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: "host-1", queryClient, request: codex.request },
+      [target("codex", null)],
+      { force: false },
+    );
+    await waitFor(() =>
+      expect(getRateLimitQueueTargetPhase("host-1", "codex", null)).toBe(
+        "queued",
+      ),
+    );
+    expect(result.current).toBe(false);
+
+    // The user clicks Refresh, promoting it in place.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: "host-1", queryClient, request: codex.request },
+      [target("codex", null)],
+      { force: true },
+    );
+
+    await waitFor(() => expect(result.current).toBe(true));
   });
 });

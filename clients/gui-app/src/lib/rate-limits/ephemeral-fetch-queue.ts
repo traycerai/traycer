@@ -472,7 +472,17 @@ export function enqueueRateLimitFetchBatchForScope(
       // Manual intent upgrades QUEUED automatic work in place - it has not
       // reached the wire yet, so flipping the flag is enough.
       if (opts.force && pending.phase === "queued") {
-        pending.force = true;
+        if (!pending.force) {
+          pending.force = true;
+          // Publish it. Subscribers snapshot this flag through
+          // `subscribeRateLimitQueueTargets` (`useIsRateLimitQueueTargetForced`),
+          // and mutating in place without notifying leaves a promoted target
+          // still reading as unforced - so the control that was just clicked
+          // stays "clickable, nothing pending" until some unrelated queue event
+          // happens to notify. The phase does not change here, which is exactly
+          // why nothing else publishes it for us.
+          notifyTargets();
+        }
         joinedPromises.push(pending.promise);
         continue;
       }
