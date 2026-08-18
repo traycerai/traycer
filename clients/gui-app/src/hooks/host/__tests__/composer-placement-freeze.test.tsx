@@ -26,6 +26,9 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 // this suite asserts against is the one the hook actually builds.
 vi.mock("@/lib/browser-tab-identity", () => ({
   browserTabId: () => "tab-test",
+  // See `composer-surface-pin.test.tsx` - the hook subscribes, so a wholesale
+  // mock must carry this export even when the id never moves.
+  subscribeBrowserTabId: () => () => {},
 }));
 
 const COMPOSER_KEY = composerSurfaceKey("tab-test");

@@ -403,8 +403,7 @@ function installSearchHost(script: Partial<SearchScript>): void {
   // fixture's messenger has no handlers for. Nothing routed here is recorded,
   // which is what turns "the panel read the ambient host" into a visible
   // absence rather than an indistinguishable pass.
-  ambientHostClientRef.current =
-    spine.createRequesterForHostId("host-ambient");
+  ambientHostClientRef.current = spine.createRequesterForHostId("host-ambient");
 }
 
 function fileResult(relPath: string): WorkspaceSearchPathResult {
@@ -490,7 +489,7 @@ describe("sidebar file tree source selection", () => {
     pinnedStreamBindingRef.value = null;
   });
 
-  it("opens the stream on the PINNED host's transport, not the app-wide one", async () => {
+  it("opens the stream on the PINNED host's transport, not the app-wide one", () => {
     // The panel re-provides `StreamRuntimeContext` for the host its pin
     // resolved to, and this is the arm that proves the provider actually sits
     // ABOVE the hooks that read it - an adjacency neither the hook's own suite

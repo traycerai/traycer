@@ -883,9 +883,7 @@ describe("eslint config gates the read-path import restriction to its allowlist"
   );
 
   it("restricts the read-path import for tab-content outside the allowlist", async () => {
-    expect(await fileHasReadPathImportRestriction(TAB_CONTENT_FILE)).toBe(
-      true,
-    );
+    expect(await fileHasReadPathImportRestriction(TAB_CONTENT_FILE)).toBe(true);
   });
 
   it("lifts the read-path import restriction inside an allowlisted directory", async () => {
@@ -985,9 +983,9 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
   const SELECTION_PRODUCTION_FILE_PATH = "src/lib/routes.ts";
 
   it("anchors lintText on the production file, which must exist on disk", () => {
-    expect(existsSync(path.join(guiAppRoot, SELECTION_PRODUCTION_FILE_PATH))).toBe(
-      true,
-    );
+    expect(
+      existsSync(path.join(guiAppRoot, SELECTION_PRODUCTION_FILE_PATH)),
+    ).toBe(true);
   });
 
   function selectByIdRestrictedSyntaxMessages(
@@ -1028,7 +1026,7 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
     },
     {
       name: "computed template member",
-      code: "const directoryService = { selectById: () => {} };\ndirectoryService[`selectById`](\"host-1\");\n",
+      code: 'const directoryService = { selectById: () => {} };\ndirectoryService[`selectById`]("host-1");\n',
     },
     {
       name: "declaration destructuring",
@@ -1060,7 +1058,7 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
         'import type { SelectionEvidenceKernel } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";',
         "function describeKernel(kernel: SelectionEvidenceKernel | null): string {",
         "  const hostId = useEffectiveHostId();",
-        "  return `${hostId ?? \"none\"}:${kernel === null ? \"none\" : \"present\"}`;",
+        '  return `${hostId ?? "none"}:${kernel === null ? "none" : "present"}`;',
         "}",
         "void describeKernel;",
         "",
@@ -1070,7 +1068,8 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
     expect(selectByIdRestrictedSyntaxMessages(messages)).toHaveLength(0);
     expect(
       messages.filter(
-        (message) => message.ruleId === "@typescript-eslint/no-restricted-imports",
+        (message) =>
+          message.ruleId === "@typescript-eslint/no-restricted-imports",
       ),
     ).toHaveLength(0);
   });

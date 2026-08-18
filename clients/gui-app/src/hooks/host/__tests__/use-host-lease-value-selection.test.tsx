@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -8,18 +9,31 @@ import type {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useHostLease } from "../use-host-lease";
 
-// Module-scope so the probe component (mounted fresh per test) can increment
-// it from render, and so assertions read the CURRENT count without threading
+// Module-scope so the probe component (mounted fresh per test) can record from
+// its commit effect, and so assertions read the CURRENT count without threading
 // state through props. Reset in `beforeEach`; asserted on DELTAS across a
 // publish, never on absolute totals, because React may render a mounted tree
 // more than once for reasons unrelated to the selection claim under test.
 let renderCount = 0;
 let lastLease: HostLeaseSnapshot | null = null;
 
-/** Reads `useHostLease("host-a")` and records every render it causes. */
+/**
+ * Reads `useHostLease("host-a")` and records every render it causes.
+ *
+ * The recording sits in a DEPS-LESS effect, not in the render body:
+ * react-compiler forbids reassigning a module-scope variable during render.
+ * The substitution is safe for what these arms assert because they only ever
+ * ask whether a re-render happened AT ALL, and a re-render that runs commits -
+ * so a deps-less effect fires exactly when the render-body counter would have.
+ * It would NOT be safe for an arm counting renders React discards; there is
+ * none here, and adding one means moving this back to a ref.
+ */
 function HostALeaseProbe(): null {
-  renderCount += 1;
-  lastLease = useHostLease("host-a");
+  const lease = useHostLease("host-a");
+  useEffect(() => {
+    renderCount += 1;
+    lastLease = lease;
+  });
   return null;
 }
 
@@ -119,8 +133,15 @@ describe("useHostLease selects by value, not by lease-object identity", () => {
       hostVersion: "1.2.3",
       minSupportedVersion: "1.3.0",
     };
-    const dead1: HostLeaseDeadState = { reason: "incompatible", detail: detail1 };
-    const first: HostLeaseSnapshot = { hostId: "host-a", status: "dead", dead: dead1 };
+    const dead1: HostLeaseDeadState = {
+      reason: "incompatible",
+      detail: detail1,
+    };
+    const first: HostLeaseSnapshot = {
+      hostId: "host-a",
+      status: "dead",
+      dead: dead1,
+    };
     publish([first]);
     render(<HostALeaseProbe />);
     const beforeEqualRepublish = renderCount;
@@ -135,13 +156,21 @@ describe("useHostLease selects by value, not by lease-object identity", () => {
       hostVersion: "1.2.3",
       minSupportedVersion: "1.3.0",
     };
-    const dead2: HostLeaseDeadState = { reason: "incompatible", detail: detail2 };
-    const second: HostLeaseSnapshot = { hostId: "host-a", status: "dead", dead: dead2 };
+    const dead2: HostLeaseDeadState = {
+      reason: "incompatible",
+      detail: detail2,
+    };
+    const second: HostLeaseSnapshot = {
+      hostId: "host-a",
+      status: "dead",
+      dead: dead2,
+    };
     expect(dead2).not.toBe(dead1);
     expect(detail2).not.toBe(detail1);
     publish([second]);
 
-    const equalValuedDeadDetailRerenderDelta = renderCount - beforeEqualRepublish;
+    const equalValuedDeadDetailRerenderDelta =
+      renderCount - beforeEqualRepublish;
     expect(equalValuedDeadDetailRerenderDelta).toBe(0);
 
     // (b) Positive control for (a): an ACTUAL field change inside

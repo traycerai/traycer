@@ -36,9 +36,7 @@ import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
  * lowering transition purely to undo something we should not have started, and
  * a cancel would strand it raised for the next quit.
  */
-export function requestAppUpdateInstall(
-  bridge: DesktopAppUpdatesBridge,
-): void {
+export function requestAppUpdateInstall(bridge: DesktopAppUpdatesBridge): void {
   const unsyncable = unsyncableWork();
   if (unsyncable.length === 0) {
     void bridge.installUpdate();

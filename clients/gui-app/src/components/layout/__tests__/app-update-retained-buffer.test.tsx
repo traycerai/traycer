@@ -1,6 +1,13 @@
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
@@ -254,9 +261,7 @@ function expectPromptedInsteadOfInstalling(
   expect(dialog.activeDialog).toBe("update-unsynced-confirm");
   expect(dialog.updateUnsyncedEpics.map((row) => row.epicId)).toEqual([epicId]);
   // And the work is still there to be decided about.
-  expect(
-    __getOpenEpicRegistryForTests().retainedCountForTests(epicId),
-  ).toBe(1);
+  expect(__getOpenEpicRegistryForTests().retainedCountForTests(epicId)).toBe(1);
 }
 
 describe("app update install vs a retained unsynced buffer", () => {

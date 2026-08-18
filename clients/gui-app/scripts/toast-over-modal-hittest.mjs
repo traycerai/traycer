@@ -93,7 +93,9 @@ try {
     { method: "PUT" },
   );
   if (!targetResponse.ok) {
-    throw new Error(`Chrome could not open the fixture: ${targetResponse.status}`);
+    throw new Error(
+      `Chrome could not open the fixture: ${targetResponse.status}`,
+    );
   }
   const target = await targetResponse.json();
   client = await connectCdp(target.webSocketDebuggerUrl);
@@ -163,7 +165,8 @@ try {
   })()`;
 
   const withModal = await evaluate(client, readState);
-  if (withModal.action === null) throw new Error("probe action button not found");
+  if (withModal.action === null)
+    throw new Error("probe action button not found");
   await click(client, withModal.action.x, withModal.action.y);
   await evaluate(client, `new Promise((r) => setTimeout(r, 250))`);
   const afterActionClick = await evaluate(
@@ -191,7 +194,8 @@ try {
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     })()`,
   );
-  if (dismissPoint === null) throw new Error("in-dialog dismiss button not found");
+  if (dismissPoint === null)
+    throw new Error("in-dialog dismiss button not found");
   await click(client, dismissPoint.x, dismissPoint.y);
   await evaluate(client, `new Promise((r) => setTimeout(r, 700))`);
   const inDialogClickClosedIt = await evaluate(
@@ -276,7 +280,8 @@ function freePort() {
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : 0;
+      const port =
+        typeof address === "object" && address !== null ? address.port : 0;
       server.close(() => resolve(port));
     });
   });
@@ -308,7 +313,9 @@ function connectCdp(url) {
       () => reject(new Error("CDP connect timed out")),
       15_000,
     );
-    socket.addEventListener("error", (event) => reject(new Error(String(event))));
+    socket.addEventListener("error", (event) =>
+      reject(new Error(String(event))),
+    );
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
       if (typeof message.id !== "number") return;

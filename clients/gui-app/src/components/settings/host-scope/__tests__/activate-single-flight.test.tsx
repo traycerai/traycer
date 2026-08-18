@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ActivateResult } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import { hostOptionsFixture, hostScopeOptionFixture } from "../host-scope-fixture";
+import {
+  hostOptionsFixture,
+  hostScopeOptionFixture,
+} from "../host-scope-fixture";
 
 /**
  * Activate is SINGLE-FLIGHT.

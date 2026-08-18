@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
-import { LandingTerminalTile } from "../landing-terminal-tile";
+import { LandingTerminalLegacyBootstrap } from "../landing-terminal-tile";
 
 interface TestReachability {
   readonly status: string;
@@ -83,15 +83,17 @@ describe("<LandingTerminalTile /> S5 bounded pre-bootstrap wait", () => {
         unavailability: null,
       };
 
+      // Renders the legacy bootstrap directly rather than the `<LandingTerminalTile>`
+      // wrapper: the wrapper's capability switch treats a `null` authorityEntry
+      // as neither "legacy" nor "capable" and falls through to the wordless
+      // `<LandingTerminalWaiting />`, never reaching this suite's subject.
+      // Same pattern as landing-terminal-error-retry.test.tsx.
       render(
-        <LandingTerminalTile
+        <LandingTerminalLegacyBootstrap
           landingPageId="landing-1"
           tab={TAB}
           active
           createEnabled={false}
-          // This suite is about the bounded pre-bootstrap wait, not
-          // authority; `null` matches the no-authority tile pattern used
-          // elsewhere (landing-terminal-error-retry.test.tsx).
           authorityEntry={null}
         />,
       );

@@ -743,7 +743,10 @@ describe("armFirstInstallOnSignIn", () => {
     // wrong reason.
     const base = fakeHostController(
       neverInstalled(false),
-      { kind: "ok", value: { appliedVersion: "1.4.1", runningActivated: true } },
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
       { kind: "ok", value: { activated: true } },
     );
     const convergeCalls: boolean[] = [];

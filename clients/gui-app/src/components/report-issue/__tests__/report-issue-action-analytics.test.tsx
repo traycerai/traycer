@@ -68,7 +68,9 @@ describe("ReportIssueAction analytics", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /report issue/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /report issue/i }),
+    );
 
     expect(trackedReportOpens(track.mock.calls)).toEqual([
       { source: "direct_ui", surface: "App update" },
@@ -93,7 +95,9 @@ describe("ReportIssueAction analytics", () => {
         className={undefined}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /report issue/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /report issue/i }),
+    );
     cleanup();
 
     render(
@@ -103,7 +107,9 @@ describe("ReportIssueAction analytics", () => {
         className={undefined}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /report issue/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /report issue/i }),
+    );
 
     const opens = trackedReportOpens(track.mock.calls);
     expect(opens).toEqual([
@@ -138,7 +144,9 @@ describe("ReportIssueAction analytics", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /report issue/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /report issue/i }),
+    );
 
     expect(trackedReportOpens(track.mock.calls)).toEqual([
       { source: "direct_ui", surface: "Host startup" },

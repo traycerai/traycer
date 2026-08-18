@@ -367,11 +367,13 @@ describe("QuitInterceptBridge", () => {
     // action (`unsynced-close-dialog`, `unsynced-epic-move-dialog`), and it
     // used to hold "Wait" - which has no `onClick` and, against a retained
     // buffer, can never resolve.
-    expect(buttons.map((button) => button.getAttribute("data-testid"))).toEqual([
-      "quit-intercept-discard",
-      "quit-intercept-wait",
-      "quit-intercept-cancel",
-    ]);
+    expect(buttons.map((button) => button.getAttribute("data-testid"))).toEqual(
+      [
+        "quit-intercept-discard",
+        "quit-intercept-wait",
+        "quit-intercept-cancel",
+      ],
+    );
 
     // Stated as "which controls carry the primary fill", not as "Wait does
     // not", so the assertion reports the real ranking on failure and cannot be
@@ -789,7 +791,9 @@ describe("QuitInterceptBridge", () => {
     act(() => {
       fake.emitQuitRequest({
         requestId: "quit-cancel-1",
-        snapshot: [{ epicId: "eRetained", title: "Retained Epic", queueSize: 3 }],
+        snapshot: [
+          { epicId: "eRetained", title: "Retained Epic", queueSize: 3 },
+        ],
       });
     });
 

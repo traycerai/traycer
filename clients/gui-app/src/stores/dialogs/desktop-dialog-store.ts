@@ -132,7 +132,10 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
     set({ activeDialog: "install-guidance" });
   },
   openUpdateUnsyncedConfirm: (epics) => {
-    set({ activeDialog: "update-unsynced-confirm", updateUnsyncedEpics: epics });
+    set({
+      activeDialog: "update-unsynced-confirm",
+      updateUnsyncedEpics: epics,
+    });
   },
   close: () => {
     set({

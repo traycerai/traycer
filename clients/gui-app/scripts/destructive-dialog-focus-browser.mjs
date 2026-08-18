@@ -99,7 +99,9 @@ try {
     { method: "PUT" },
   );
   if (!targetResponse.ok) {
-    throw new Error(`Chrome could not open the fixture: ${targetResponse.status}`);
+    throw new Error(
+      `Chrome could not open the fixture: ${targetResponse.status}`,
+    );
   }
   const target = await targetResponse.json();
   client = await connectCdp(target.webSocketDebuggerUrl);
@@ -141,7 +143,9 @@ try {
     /^epic-tab-unsynced-wait/,
     `the tab-close confirmation must open with focus on "Keep open", not on "Close anyway" (order: ${order}, focused: ${focused})`,
   );
-  console.log("destructive-dialog focus regression passed: " + focused + " | " + order);
+  console.log(
+    "destructive-dialog focus regression passed: " + focused + " | " + order,
+  );
 } catch (error) {
   console.error("MEASUREMENT FAILED:", error);
   process.exitCode = 1;

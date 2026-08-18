@@ -59,7 +59,8 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostRuntimeClient: getSpine,
   // The AMBIENT client, pinned to host A. Any hook still reading this instead
   // of its own `hostId` lands on A, which is the whole point of the fixture.
-  useHostClient: () => getSpine().createRequesterForHostId(mockLocalHostEntry.hostId),
+  useHostClient: () =>
+    getSpine().createRequesterForHostId(mockLocalHostEntry.hostId),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -155,6 +156,7 @@ describe("a pinned surface's unary reads reach the pinned host", () => {
   it("lists the SURFACE's host's file tree, not the app-wide one", async () => {
     renderHook(
       () =>
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- pinning the DEPRECATED fallback's host routing is the point: it is still the old-host path in `epic-sidebar-file-tree.tsx`, and it routed to the app-wide host before this epic
         useWorkspaceListFileTree({
           hostId: HOST_B.hostId,
           workspacePath: "/repo",
@@ -176,6 +178,7 @@ describe("a pinned surface's unary reads reach the pinned host", () => {
     // in its params, never resolving anything.
     renderHook(
       () =>
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- pinning the DEPRECATED fallback's host routing is the point: it is still the old-host path in `epic-sidebar-file-tree.tsx`, and it routed to the app-wide host before this epic
         useWorkspaceListFileTree({
           hostId: null,
           workspacePath: "/repo",

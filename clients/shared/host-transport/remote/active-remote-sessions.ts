@@ -434,7 +434,8 @@ export function acquireRemoteSession<
     onClosed: (listener) => session.onClosed(listener),
     subscribeAvailabilityRecovered: (listener) =>
       session.subscribeAvailabilityRecovered(listener),
-    subscribeReadinessLost: (listener) => session.subscribeReadinessLost(listener),
+    subscribeReadinessLost: (listener) =>
+      session.subscribeReadinessLost(listener),
     close: release,
   };
 }

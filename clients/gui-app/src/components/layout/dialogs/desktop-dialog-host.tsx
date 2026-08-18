@@ -86,7 +86,8 @@ export function DesktopDialogHost(): ReactNode {
         store, so the confirm path calls the same bridge every other update
         action uses and no callback has to be parked in state to go stale.
       */}
-      {activeDialog === "update-unsynced-confirm" && appUpdates.bridge !== null ? (
+      {activeDialog === "update-unsynced-confirm" &&
+      appUpdates.bridge !== null ? (
         <ConfirmDestructiveDialog
           open
           onOpenChange={(open) => {
@@ -124,6 +125,8 @@ function describeUnsyncableWork(
 ): string {
   const titles = epics.map((epic) => epic.title).join(", ");
   const subject =
-    epics.length === 1 ? "1 Epic has changes" : `${epics.length} Epics have changes`;
+    epics.length === 1
+      ? "1 Epic has changes"
+      : `${epics.length} Epics have changes`;
   return `${subject} that cannot be saved - they were kept when their host changed and have nowhere left to sync to. Installing restarts Traycer and discards them: ${titles}.`;
 }

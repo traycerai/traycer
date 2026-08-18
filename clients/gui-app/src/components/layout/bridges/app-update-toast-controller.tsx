@@ -54,7 +54,9 @@ export function AppUpdateToastController(): null {
   // including the update BUTTON. The toast was exempt only because it is not
   // in the file where that reasoning lives, which left the persistent fallback
   // suppressed while the interrupting surface was not.
-  const narrated = windowNarratorOwns(useSurfaceReadiness("default-host", null));
+  const narrated = windowNarratorOwns(
+    useSurfaceReadiness("default-host", null),
+  );
   const handledSequenceRef = useRef(0);
   const handledReportCapabilityRef = useRef<boolean | null>(null);
   const bridgeRef = useRef<DesktopAppUpdatesBridge | null | undefined>(

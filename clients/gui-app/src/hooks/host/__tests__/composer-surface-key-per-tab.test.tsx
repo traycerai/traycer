@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 
 /**
  * Two browser tabs must not share a composer host pin.
@@ -18,10 +18,30 @@ import { cleanup, renderHook } from "@testing-library/react";
  * resolved to one stored entry would pass a string comparison.
  */
 const tabIdRef = vi.hoisted(() => ({ value: "tab-1" }));
+/** The real module's subscriber set, so a case can drive a regeneration. */
+const identity = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 
 vi.mock("@/lib/browser-tab-identity", () => ({
   browserTabId: () => tabIdRef.value,
+  subscribeBrowserTabId: (listener: () => void) => {
+    identity.listeners.add(listener);
+    return () => {
+      identity.listeners.delete(listener);
+    };
+  },
 }));
+
+/**
+ * A duplicated tab claiming this tab's id, as the real claim channel delivers
+ * it: the id changes and subscribers are notified, with NO render of this
+ * tab's own doing anywhere in the sequence.
+ */
+function regenerateTabId(next: string): void {
+  tabIdRef.value = next;
+  act(() => {
+    for (const listener of identity.listeners) listener();
+  });
+}
 
 // No desktop windows bridge - this is the browser path the defect lived on.
 vi.mock("@/providers/windows-bridge-context", () => ({
@@ -45,6 +65,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  identity.listeners.clear();
   tabIdRef.value = "tab-1";
   useSurfaceHostSelectionStore.setState({ selections: {} });
 });
@@ -73,6 +94,32 @@ describe("the browser composer pin is per tab", () => {
     expect(keyForTab("tab-1")).toBe(keyForTab("tab-1"));
   });
 
+  it("stops reading the duplicate's pin the moment a MOUNTED tab regenerates", () => {
+    // Stability (the case above) is only true until a tab is DUPLICATED. The
+    // tab that observes the collision is the one already holding the id - the
+    // ORIGINAL - and it regenerates asynchronously, off any render of its own.
+    // Resolving the id once per mount therefore left this hook on the
+    // superseded key, so the original kept reading the very pin its duplicate
+    // was reading, until an unrelated render happened to move it.
+    //
+    // Asserted as INVISIBILITY, on this file's standing rule: that the two
+    // keys differ is how the fix happens to work; that the original stops
+    // resolving the shared entry is what the defect was about.
+    tabIdRef.value = "tab-original";
+    const { result } = renderHook(() => useComposerSurfaceHostKey());
+    const sharedKey = result.current;
+    useSurfaceHostSelectionStore.getState().setSelection(sharedKey, "host-a");
+
+    regenerateTabId("tab-regenerated");
+
+    const selections = useSurfaceHostSelectionStore.getState().selections;
+    // The duplicate goes on addressing the entry it inherited...
+    expect(selections[sharedKey]).toBe("host-a");
+    // ...while this tab, with no render of its own in between, has left it.
+    expect(result.current).not.toBe(sharedKey);
+    expect(selections[result.current]).toBeUndefined();
+  });
+
   it("keeps the desktop path on its bridge window id", async () => {
     // Desktop already had stable, finite per-window ids and no bug. If the
     // browser fallback started applying there, every desktop window would key
@@ -82,9 +129,8 @@ describe("the browser composer pin is per tab", () => {
     vi.doMock("@/providers/windows-bridge-context", () => ({
       useWindowsBridge: () => ({ windowId: "desktop-window-7" }),
     }));
-    const { useComposerSurfaceHostKey: useKeyOnDesktop } = await import(
-      "@/hooks/host/use-composer-surface-host-pin"
-    );
+    const { useComposerSurfaceHostKey: useKeyOnDesktop } =
+      await import("@/hooks/host/use-composer-surface-host-pin");
 
     tabIdRef.value = "tab-should-be-ignored";
     const { result } = renderHook(() => useKeyOnDesktop());

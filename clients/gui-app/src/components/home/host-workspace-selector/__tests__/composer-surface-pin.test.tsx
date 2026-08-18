@@ -28,6 +28,11 @@ import {
 // so this suite asserts against the key the hook actually builds.
 vi.mock("@/lib/browser-tab-identity", () => ({
   browserTabId: () => "tab-test",
+  // The hook SUBSCRIBES to identity regeneration; a wholesale mock that omits
+  // this throws on import rather than failing an assertion. This tab's id
+  // never changes here, so the subscription is inert - see
+  // `composer-surface-key-per-tab.test.tsx` for the arm that drives it.
+  subscribeBrowserTabId: () => () => {},
 }));
 
 const COMPOSER_KEY = composerSurfaceKey("tab-test");

@@ -181,7 +181,9 @@ describe("<WindowHostModal />", () => {
     expect(description.textContent).toContain("can't be updated from here");
     // And it must NOT still tell the reader to do the thing there is no
     // control for.
-    expect(description.textContent).not.toContain("Update the host to continue");
+    expect(description.textContent).not.toContain(
+      "Update the host to continue",
+    );
   });
 
   it("update-host: the Update host button is absent when onUpdateHost is null", () => {

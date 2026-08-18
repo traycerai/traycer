@@ -230,7 +230,9 @@ const QUIT_DECISION_MEMBERS: Readonly<Record<QuitDecision, true>> = {
 };
 
 function isQuitDecision(value: unknown): value is QuitDecision {
-  return typeof value === "string" && Object.hasOwn(QUIT_DECISION_MEMBERS, value);
+  return (
+    typeof value === "string" && Object.hasOwn(QUIT_DECISION_MEMBERS, value)
+  );
 }
 
 export function parseQuitDecision(value: unknown): QuitDecision {

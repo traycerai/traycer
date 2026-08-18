@@ -99,7 +99,9 @@ try {
     { method: "PUT" },
   );
   if (!targetResponse.ok) {
-    throw new Error(`Chrome could not open the fixture: ${targetResponse.status}`);
+    throw new Error(
+      `Chrome could not open the fixture: ${targetResponse.status}`,
+    );
   }
   const target = await targetResponse.json();
   client = await connectCdp(target.webSocketDebuggerUrl);
@@ -197,7 +199,10 @@ try {
   // Also the second-quit-after-cancel case: quitting is now a state the shell
   // enters and leaves deliberately, so a request arriving after a cancel has to
   // be serviced with its own id rather than swallowed by the resolved one.
-  await evaluate(client, `document.querySelector("#probe-state").setAttribute("data-decision", "")`);
+  await evaluate(
+    client,
+    `document.querySelector("#probe-state").setAttribute("data-decision", "")`,
+  );
   await emitQuit(client);
   const cancelButton = await rectCentre(
     client,

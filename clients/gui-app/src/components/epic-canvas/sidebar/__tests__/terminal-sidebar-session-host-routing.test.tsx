@@ -75,6 +75,26 @@ vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
   useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// This suite is about the LEGACY unary path (`useTerminalList` above), not
+// the durable stream authority main added alongside it; wholesale-mocked out
+// of scope, same as its sibling terminal-sidebar-durable-projection.test.tsx.
+vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
+  useHostPlainTerminalAuthority: () => ({
+    hostId: SESSION_HOST,
+    scope: { kind: "epic", epicId: "epic-1" },
+    capability: { status: "legacy" },
+    canMutate: false,
+    collection: undefined,
+  }),
+}));
+
+vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
+  useHostPlainTerminalMutations: () => ({
+    close: { mutateAsync: vi.fn(), isPending: false },
+    rename: { mutate: vi.fn(), isPending: false },
+  }),
+}));
+
 import { TerminalsPanelBody } from "../epic-terminal-sidebar";
 import {
   findOpenArtifactInTab,

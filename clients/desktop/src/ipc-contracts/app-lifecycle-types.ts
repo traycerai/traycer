@@ -31,10 +31,7 @@ export type UnsyncedEditsSnapshot = ReadonlyArray<UnsyncedEditsSnapshotEntry>;
  * quit without reading the decision at all. Both are exhaustive `switch`es now,
  * so the NEXT member fails to compile rather than silently meaning "quit".
  */
-export type QuitDecision =
-  | "proceed"
-  | "userConfirmedDiscard"
-  | "userCancelled";
+export type QuitDecision = "proceed" | "userConfirmedDiscard" | "userCancelled";
 
 export interface QuitRequest {
   readonly requestId: string;

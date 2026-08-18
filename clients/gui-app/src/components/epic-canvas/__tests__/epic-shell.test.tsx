@@ -228,9 +228,7 @@ function buildPresentation(state: {
  */
 async function waitForSessionReady(): Promise<void> {
   await waitFor(() => {
-    expect(screen.getByTestId("epic-shell").dataset.sessionReady).toBe(
-      "true",
-    );
+    expect(screen.getByTestId("epic-shell").dataset.sessionReady).toBe("true");
   });
 }
 

@@ -1,10 +1,13 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import {
   useSurfaceHostPin,
   type SurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
-import { browserTabId } from "@/lib/browser-tab-identity";
+import {
+  browserTabId,
+  subscribeBrowserTabId,
+} from "@/lib/browser-tab-identity";
 import { composerSurfaceKey } from "@/stores/host/surface-host-selection-store";
 
 /**
@@ -32,10 +35,21 @@ import { composerSurfaceKey } from "@/stores/host/surface-host-selection-store";
  */
 export function useComposerSurfaceHostKey(): string {
   const bridgeWindowId = useWindowsBridge()?.windowId ?? null;
-  // Resolved OUTSIDE the memo's dependency list on purpose: `browserTabId()`
-  // is stable for this tab's lifetime after its first call, and reading it
-  // here keeps `composerSurfaceKey` a pure function of its argument.
-  const windowId = bridgeWindowId ?? browserTabId();
+  // SUBSCRIBED, not resolved once. The tab id is NOT stable for a tab's
+  // lifetime, which is what an earlier version of this comment claimed: when a
+  // tab is duplicated, the tab that observes the collision - the one already
+  // holding the id, i.e. the ORIGINAL - regenerates, asynchronously and off
+  // any render. Resolving it straight into the memo below left this key on the
+  // superseded id, so the original kept reading the pin its duplicate was also
+  // reading, until an unrelated render happened to move it.
+  //
+  // Desktop is untouched: `readWindowId` short-circuits on the bridge, so a
+  // desktop window still mints no tab identity and opens no claim channel.
+  const readWindowId = useCallback(
+    () => bridgeWindowId ?? browserTabId(),
+    [bridgeWindowId],
+  );
+  const windowId = useSyncExternalStore(subscribeBrowserTabId, readWindowId);
   return useMemo(() => composerSurfaceKey(windowId), [windowId]);
 }
 

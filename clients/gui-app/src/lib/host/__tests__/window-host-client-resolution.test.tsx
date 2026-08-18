@@ -275,7 +275,10 @@ describe("useHostClient under a re-provided binding", () => {
   });
 
   it("sends the request to the binding's host, not the effective one", async () => {
-    bindingRef.value = { hostClient: requesterForHostB(), hostId: HOST_B.hostId };
+    bindingRef.value = {
+      hostClient: requesterForHostB(),
+      hostId: HOST_B.hostId,
+    };
 
     render(<HostClientProbe />);
 

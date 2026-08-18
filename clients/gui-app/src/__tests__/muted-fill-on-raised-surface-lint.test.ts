@@ -364,11 +364,13 @@ describe("muted fills on raised surfaces", () => {
     expect(
       ALLOW_MARKER.test("// muted-fill-ok: /15 wash under its own border-b"),
     ).toBe(true);
+    expect(ALLOW_MARKER.test("// muted-fill-ok: 40% over a bordered row")).toBe(
+      true,
+    );
     expect(
-      ALLOW_MARKER.test("// muted-fill-ok: 40% over a bordered row"),
-    ).toBe(true);
-    expect(
-      ALLOW_MARKER.test("{/* muted-fill-ok: --canvas remaps here, no collapse */}"),
+      ALLOW_MARKER.test(
+        "{/* muted-fill-ok: --canvas remaps here, no collapse */}",
+      ),
     ).toBe(true);
   });
 

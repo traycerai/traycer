@@ -64,6 +64,28 @@ function readClaimedTabId(data: unknown): string | null {
 
 let currentBrowserTabId: string | null = null;
 let tabClaimChannel: BroadcastChannel | null = null;
+const identityListeners = new Set<() => void>();
+
+/**
+ * Subscribe to REGENERATION of this tab's identity, for `useSyncExternalStore`.
+ *
+ * This id used to be read only imperatively - `file-edit-recovery-store` asks
+ * for it at save/recover time and therefore always observes the current value.
+ * A React consumer that resolves it once per mount does not: the collision
+ * handler below fires asynchronously, off any render, so a mounted component
+ * would keep addressing the superseded id - and so keep sharing state with the
+ * duplicate that displaced it - until something unrelated re-rendered it.
+ *
+ * The rule that follows: anything keying COMPONENT state by this id subscribes;
+ * anything reading it at the moment of an action may still just call
+ * `browserTabId()`.
+ */
+export function subscribeBrowserTabId(listener: () => void): () => void {
+  identityListeners.add(listener);
+  return () => {
+    identityListeners.delete(listener);
+  };
+}
 
 function ensureTabClaimChannel(): BroadcastChannel | null {
   if (typeof globalThis.BroadcastChannel !== "function") return null;
@@ -95,6 +117,13 @@ function claimBrowserTabId(id: string): string | null {
   } catch {
     return null;
   }
+  // Only a REGENERATION notifies, never the first claim of a tab's life. That
+  // first claim runs inside `browserTabId()`, which a subscriber calls from
+  // `getSnapshot` - i.e. DURING render, where publishing a store change is not
+  // allowed. A regeneration can only originate in the channel listener above,
+  // which is asynchronous and safely outside every render.
+  const regenerated =
+    currentBrowserTabId !== null && currentBrowserTabId !== id;
   currentBrowserTabId = id;
   const channel = ensureTabClaimChannel();
   try {
@@ -102,6 +131,9 @@ function claimBrowserTabId(id: string): string | null {
   } catch {
     // Best-effort - a missed claim just means a duplicate tab isn't caught
     // until its own next regeneration cycle.
+  }
+  if (regenerated) {
+    for (const listener of identityListeners) listener();
   }
   return id;
 }
@@ -130,7 +162,6 @@ export function browserTabId(): string {
     return "default";
   }
 }
-
 
 /**
  * Test seam. Drops the cached id and closes the claim channel, so a suite can

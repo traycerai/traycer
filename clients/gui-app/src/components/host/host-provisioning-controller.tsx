@@ -165,7 +165,13 @@ export const LOCAL_HOST_SLOW_START_THRESHOLD_MS = 10_000;
  * evidence of movement. When there is nothing comparable to compare, the wait
  * runs, which fails toward keeping the escape hatch.
  */
-export function laneProgressAdvanceKey(
+// Deliberately NOT exported: nothing outside this file imports it, and a
+// non-component export here costs the whole module its fast refresh
+// (`react-refresh/only-export-components`, which the package lints at
+// `--max-warnings 0`). Its behaviour is reached through the controller in
+// `host-provisioning-controller.test.tsx`; if it ever needs a direct unit
+// test, move it to its own module rather than re-exporting it from here.
+function laneProgressAdvanceKey(
   progress: MutationProgress | null,
 ): string | null {
   if (progress === null) return null;

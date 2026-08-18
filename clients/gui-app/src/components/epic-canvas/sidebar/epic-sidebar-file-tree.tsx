@@ -492,7 +492,9 @@ export function FileTreePanelBodyForWorkspace(
   );
 }
 
-function FileTreeBodyForResolvedHost(props: FileTreePanelBodyForWorkspaceProps) {
+function FileTreeBodyForResolvedHost(
+  props: FileTreePanelBodyForWorkspaceProps,
+) {
   // The file-tree panel resolves against its surface pin (`selection ??
   // effective`). Opened tabs stamp this host id onto their `WorkspaceFileRef`
   // so they keep resolving against the same host after a later swap
