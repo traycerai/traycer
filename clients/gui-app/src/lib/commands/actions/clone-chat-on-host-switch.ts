@@ -86,6 +86,13 @@ export interface CloneChatOnHostSwitchArgs {
    */
   readonly sourceOwnerUserId: string | null;
   readonly sourceHostId: string;
+  /** The source chat's RAW stored title from the local projection - `""` for
+   *  a still-untitled source, never the rendered "Untitled agent" fallback.
+   *  Decorated into the clone's stamped title by {@link cloneChatTitle};
+   *  passed client-side (not left to the host's fork-seed gap-fill) so the
+   *  title survives the settings-only retry, where no fork seed exists at
+   *  all. */
+  readonly sourceTitle: string;
   readonly targetHostId: string;
   readonly directory: IHostDirectoryService;
   readonly createChat: CreateChatCommand;
@@ -120,9 +127,51 @@ export interface CloneChatOnHostSwitchArgs {
   readonly navigateNestedFocus: NavigateNestedFocus | null;
 }
 
+/**
+ * The title stamped on the clone: the manual fork dialog's `Fork - ` prefix
+ * (a clone IS a fork, and the sidebar should say so) plus the target host's
+ * label, which is the one fact that tells two clones of the same chat onto
+ * different machines apart. A still-untitled source stays `""` so the clone
+ * remains eligible for AI titling on its first send, exactly like a fresh
+ * chat; a target that has vanished from the directory (the flow proceeds
+ * anyway, into ambient fallback) just drops the label.
+ */
+export function cloneChatTitle(
+  sourceTitle: string,
+  targetHostLabel: string | null,
+): string {
+  if (sourceTitle.trim() === "") return "";
+  return targetHostLabel === null
+    ? `Fork - ${sourceTitle}`
+    : `Fork - ${sourceTitle} (${targetHostLabel})`;
+}
+
+/** See the title computation in {@link cloneChatOnHostSwitch} for why this
+ *  swallows instead of propagating. */
+function lookupHostLabelOrNull(
+  directory: IHostDirectoryService,
+  hostId: string,
+): string | null {
+  try {
+    return directory.findById(hostId)?.label ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function cloneChatOnHostSwitch(
   args: CloneChatOnHostSwitchArgs,
 ): CancelFn {
+  // Fixed once for both attempts: the fork attempt and the settings-only
+  // retry must land under the same name. The label lookup is best-effort -
+  // a directory seam that throws must end this flow through the settings
+  // resolution's own catch arm (-> onCloneFailed), not as a synchronous
+  // throw out of this call; the title just drops the label.
+  const title = cloneChatTitle(
+    args.sourceTitle,
+    lookupHostLabelOrNull(args.directory, args.targetHostId),
+  );
+
   let cancelled = false;
   let innerCancel: CancelFn | null = null;
 
@@ -142,6 +191,7 @@ export function cloneChatOnHostSwitch(
       tabId: args.tabId,
       hostId: args.targetHostId,
       worktreeIntent: null,
+      title,
       settings,
       forkSource,
       source: "direct_ui",

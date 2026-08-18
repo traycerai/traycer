@@ -40,6 +40,7 @@ const ABSENT_HOST_ID = "absent-host-id";
 
 interface ChatForkCreateInput {
   readonly hostId: string;
+  readonly title: string;
   readonly worktreeIntent: WorktreeIntent | null;
   readonly forkSource: {
     readonly boundary: "assistantMessage";
@@ -1401,5 +1402,65 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
       false,
     );
+  });
+
+  it('untitled source: empty input, "Untitled agent" placeholder, submit enabled, sends title ""', async () => {
+    renderDialog(forkTarget({ sourceChatTitle: "" }), ignoreOpenChange);
+
+    const input = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Fork agent title",
+    });
+    expect(input.value).toBe("");
+    expect(input.getAttribute("placeholder")).toBe("Untitled agent");
+    // No fillTitle() here on purpose: an untitled source must not need one.
+    expect(forkButton().disabled).toBe(false);
+
+    fireEvent.click(forkButton());
+    await waitFor(() => {
+      expect(dialogMocks.createMutate).toHaveBeenCalled();
+    });
+    const request = dialogMocks.createMutate.mock.calls[0][0];
+    expect(request.title).toBe("");
+  });
+
+  it("untitled source with a user-typed title still sends the typed title", async () => {
+    renderDialog(forkTarget({ sourceChatTitle: "" }), ignoreOpenChange);
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Fork agent title" }),
+      { target: { value: "My chosen name" } },
+    );
+    expect(forkButton().disabled).toBe(false);
+
+    fireEvent.click(forkButton());
+    await waitFor(() => {
+      expect(dialogMocks.createMutate).toHaveBeenCalled();
+    });
+    const request = dialogMocks.createMutate.mock.calls[0][0];
+    expect(request.title).toBe("My chosen name");
+  });
+
+  it("titled source: prefills 'Fork - <title>' and clearing the field disables submit", () => {
+    // The default title is only computed on an open TRANSITION (`if (open
+    // !== dialogState.open)`), not on an initial mount that is already
+    // `open`. Mounting closed and then flipping to open, like the
+    // boundary-notice tests above, is what actually exercises the prefill.
+    const target = forkTarget({ sourceChatTitle: "Source chat" });
+    const view = render(
+      <ChatForkDialog {...dialogProps(target, ignoreOpenChange, false)} />,
+    );
+    view.rerender(
+      <ChatForkDialog {...dialogProps(target, ignoreOpenChange, true)} />,
+    );
+
+    const input = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Fork agent title",
+    });
+    expect(input.value).toBe("Fork - Source chat");
+    expect(input.getAttribute("placeholder")).toBe("");
+    expect(forkButton().disabled).toBe(false);
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(forkButton().disabled).toBe(true);
   });
 });

@@ -216,6 +216,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       source: "direct_ui",
       worktreeIntent: null,
+      title: "",
       settings: null,
       forkSource: null,
       onCreateError: () => undefined,
@@ -257,6 +258,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       source: "direct_ui",
       worktreeIntent: SEEDED_WORKTREE_INTENT,
+      title: "",
       settings: null,
       forkSource: null,
       onCreateError: () => undefined,
@@ -267,6 +269,27 @@ describe("new chat command actions", () => {
     expect(createChat.calls[0].request.worktreeIntent).toBe(
       SEEDED_WORKTREE_INTENT,
     );
+  });
+
+  it("sends the caller-supplied title on the create request (clone-on-host-switch keeps its name)", () => {
+    const createChat = createChatRecorder();
+    const opened = openIntentsRecorder();
+
+    openNewChatInActiveTile({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      hostId: "test-host",
+      source: "direct_ui",
+      worktreeIntent: null,
+      title: "Cloned chat title",
+      settings: null,
+      forkSource: null,
+      onCreateError: () => undefined,
+      createChat: createChat.createChat,
+      openWhenProjected: opened.openWhenProjected,
+    });
+
+    expect(createChat.calls[0].request.title).toBe("Cloned chat title");
   });
 
   it("opens an active-tile tab only after the host-created chat appears in projection", () => {
@@ -480,6 +503,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         source: "direct_ui",
         worktreeIntent: null,
+        title: "",
         settings: null,
         forkSource: null,
         onCreateError: () => undefined,
@@ -504,6 +528,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         source: "direct_ui",
         worktreeIntent: null,
+        title: "",
         settings: null,
         forkSource: null,
         onCreateError: () => undefined,

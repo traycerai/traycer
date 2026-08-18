@@ -541,6 +541,9 @@ export function ChatDeadTileBannerContainer(
     chatId: props.chatId,
     sourceHostId: props.sourceHostId,
     sourceSettings: chatRecord?.settings ?? null,
+    // Raw stored title, `""` when this dead tile has no record left to read
+    // one from - the host's fork-seed gap-fill names the clone in that case.
+    sourceTitle: chatRecord?.title ?? "",
     sourceOwnerUserId,
   });
   return (

@@ -80,6 +80,7 @@ const ARGS = {
   chatId: "chat-1",
   sourceHostId: "host-source",
   sourceSettings: null,
+  sourceTitle: "",
   sourceOwnerUserId: null,
 };
 

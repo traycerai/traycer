@@ -2266,6 +2266,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       sourceChatId: surface.ownerId,
       sourceOwnerUserId,
       sourceHostId: surface.hostId,
+      sourceTitle: sourceChatRecord?.title ?? "",
       targetHostId: pendingCloneHostId,
       directory: binding.directory,
       sourceSettings: sourceChatRecord?.settings ?? null,
