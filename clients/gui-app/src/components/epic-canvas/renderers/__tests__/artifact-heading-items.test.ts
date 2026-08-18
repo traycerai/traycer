@@ -7,6 +7,7 @@ import {
   ARTIFACT_HEADING_HIT_STRIP_MAX_WIDTH,
   ARTIFACT_HEADING_LABEL_MAX_CHARS,
   ARTIFACT_HEADING_RAIL_EDGE_INSET,
+  ARTIFACT_HEADING_SCROLL_PADDING,
   compactArtifactHeadingLabel,
   deriveArtifactHeadingItems,
   measureArtifactHeadingTops,
@@ -267,6 +268,18 @@ describe("resolveArtifactHeadingActiveIndex", () => {
         tops: [0, 200, 400],
         scrollTop: 200,
         clientHeight: 400,
+        scrollHeight: 2000,
+      }),
+    ).toBe(1);
+  });
+
+  it("keeps a jumped-to heading active at its padded landing offset", () => {
+    const tops = [0, 300, 600];
+    expect(
+      resolveArtifactHeadingActiveIndex({
+        tops,
+        scrollTop: tops[1] - ARTIFACT_HEADING_SCROLL_PADDING,
+        clientHeight: 100,
         scrollHeight: 2000,
       }),
     ).toBe(1);

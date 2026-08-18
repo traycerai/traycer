@@ -124,7 +124,8 @@ function mostVisibleQueryIndex(
       0,
       Math.min(top + height, viewportBottom) - Math.max(top, viewportTop),
     );
-    if (overlap >= bestOverlap && overlap > 0) {
+    // Equal overlap keeps the earlier query current.
+    if (overlap > bestOverlap) {
       bestIndex = index;
       bestOverlap = overlap;
     }

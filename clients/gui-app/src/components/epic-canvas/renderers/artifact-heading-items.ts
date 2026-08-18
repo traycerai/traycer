@@ -160,9 +160,10 @@ export function resolveArtifactHeadingActiveIndex(input: {
     input.scrollTop + input.clientHeight >= input.scrollHeight - 1;
   if (atBottom) return input.tops.length - 1;
 
+  const activationLine = input.scrollTop + ARTIFACT_HEADING_SCROLL_PADDING;
   let active = 0;
   for (let index = 1; index < input.tops.length; index += 1) {
-    if (input.tops[index] > input.scrollTop) return active;
+    if (input.tops[index] > activationLine) return active;
     active = index;
   }
   return active;

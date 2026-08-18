@@ -187,7 +187,7 @@ describe("ArtifactHeadingMinimap", () => {
     );
   });
 
-  it("opens at the section occupying most of the viewport with one active row", async () => {
+  it("opens at the top section with one active row", async () => {
     const editor = makeEditor(CONTENT);
     const scroller = makeScroller(undefined);
     stubLayout(editor, undefined);

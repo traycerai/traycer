@@ -37,6 +37,10 @@ describe("chat turn minimap logic", () => {
     expect(currentAt(500, 250)).toBe(2);
   });
 
+  it("keeps the earlier query on an equal visibility tie", () => {
+    expect(currentAt(0, 400)).toBe(0);
+  });
+
   it("falls back to the nearest user query when no turn intersects", () => {
     expect(currentAt(-200, 50)).toBe(0);
   });

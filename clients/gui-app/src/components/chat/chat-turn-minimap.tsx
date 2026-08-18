@@ -286,6 +286,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       >
         <button
           aria-label="Message minimap"
+          aria-expanded={open}
           className={cn(
             "relative block h-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
             continuationMaskClassName,
