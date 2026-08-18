@@ -214,6 +214,7 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
   const current: LegendListRef = {
     clearCaches: notImplemented,
     flashScrollIndicators: notImplemented,
+    getAnimatableRef: () => node,
     getNativeScrollRef: () => node,
     getScrollableNode: () => node,
     getScrollResponder: () => null,

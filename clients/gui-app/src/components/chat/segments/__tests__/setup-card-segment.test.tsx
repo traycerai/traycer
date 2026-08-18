@@ -543,10 +543,11 @@ describe("<SetupCardSegment /> Open terminal liveness", () => {
     expect(focusTerminal).toHaveBeenCalledWith(
       "term-1",
       "/worktrees/repo/feature",
-      // A setup terminal owns its own session and stays an ordinary shell
-      // tile - no ref overrides. Only a provider sign-in terminal passes
-      // them, and only it is barred from re-creating its session.
-      null,
+      {
+        name: "Terminal",
+        origin: "setup",
+        originProviderId: undefined,
+      },
     );
   });
 

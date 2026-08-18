@@ -64,6 +64,7 @@ export interface UseHostQueryWithResponseMapOptions<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
+  TRequestContext = undefined,
 > {
   readonly client: HostRequester<Registry> | null;
   readonly method: Method;
@@ -79,6 +80,8 @@ export interface UseHostQueryWithResponseMapOptions<
    * and queryFn are owned by this hook so the invalidation contract holds.
    */
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
+  /** Captures cache-side ordering state immediately before request dispatch. */
+  readonly captureRequestContext?: () => TRequestContext;
   /**
    * Transforms the raw RPC response into what TanStack caches/returns for
    * this query. Runs inside the queryFn, so its return value - not the raw
@@ -96,6 +99,7 @@ export interface UseHostQueryWithResponseMapOptions<
     readonly response: ResponseOfMethod<Registry, Method>;
     readonly queryClient: QueryClient;
     readonly queryKey: QueryKey;
+    readonly requestContext: TRequestContext | undefined;
   }) => TData;
 }
 
@@ -152,8 +156,14 @@ export function useHostQueryWithResponseMap<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
+  TRequestContext = undefined,
 >(
-  args: UseHostQueryWithResponseMapOptions<Registry, Method, TData>,
+  args: UseHostQueryWithResponseMapOptions<
+    Registry,
+    Method,
+    TData,
+    TRequestContext
+  >,
 ): UseQueryResult<TData, HostRpcError> {
   const { client, method, params, mapResponse } = args;
   const queryClient = useQueryClient();
@@ -201,8 +211,9 @@ export function useHostQueryWithResponseMap<
       if (client === null) {
         return Promise.reject<TData>(hostClientUnavailableError(method));
       }
+      const requestContext = args.captureRequestContext?.();
       const response = await client.requestWithSignal(method, params, signal);
-      return mapResponse({ response, queryClient, queryKey });
+      return mapResponse({ response, queryClient, queryKey, requestContext });
     });
 
   return useQuery<TData, HostRpcError, TData>(

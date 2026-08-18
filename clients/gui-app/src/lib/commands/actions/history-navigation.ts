@@ -18,6 +18,7 @@ import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { queryClient } from "@/lib/query-client";
+import { rejectClosedPlainTerminalRestore } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import {
   cloudChatViewerIdSnapshot,
   readCloudKnownChatIds,
@@ -216,6 +217,15 @@ function reopenClosedTilePreview(href: string): void {
   }
   if (state.selfDeletedArtifactIds.has(preserved.node.id)) {
     state.discardClosedTilePayload(epicTab.tabId, nestedTarget.tileInstanceId);
+    return;
+  }
+  if (
+    rejectClosedPlainTerminalRestore({
+      queryClient,
+      epicId: epicTab.epicId,
+      node: preserved.node,
+    })
+  ) {
     return;
   }
   if (

@@ -12,9 +12,11 @@ import {
   WORKSPACE_FILE_TAB_KIND,
   isRecordBackedEpicNodeKind,
   type EpicArtifactRef,
+  type LegacyEpicTerminalEvidence,
   type EpicNodeRef,
   type EpicTerminalRef,
   type WorkspaceFileRef,
+  type TerminalTitleSource,
 } from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
@@ -23,12 +25,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isDesktopJsonValue(value: unknown): value is DesktopJsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.every(isDesktopJsonValue);
+  return isRecord(value) && Object.values(value).every(isDesktopJsonValue);
+}
+
 // `undefined` for every ref written before this field existed, and for every
 // ordinary shell tile - both read as "the tile owns this session". Only the
-// exact `"provider-login"` marker suppresses the tile's own `terminal.create`,
-// so an unrecognized future value degrades to the safe, existing behaviour.
+// exact `"provider-login"` marker suppresses the tile's own `terminal.create`.
+// `"setup"` skips durable import but may still recreate as an ordinary shell.
+// An unrecognized future value degrades to the safe, existing behaviour.
 function parseTerminalOrigin(value: unknown): EpicTerminalRef["origin"] {
-  if (value === "shell" || value === "provider-login") return value;
+  if (value === "shell" || value === "provider-login" || value === "setup") {
+    return value;
+  }
   return undefined;
 }
 
@@ -45,9 +63,101 @@ function parseTerminalOriginProviderId(
 function parseTerminalTitleSource(
   value: unknown,
   name: string,
-): EpicTerminalRef["titleSource"] {
+): TerminalTitleSource {
   if (value === "manual" || value === "default") return value;
   return name === DEFAULT_TERMINAL_TITLE ? "default" : "manual";
+}
+
+function parseLegacyTerminalEvidence(
+  value: unknown,
+): LegacyEpicTerminalEvidence | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.name !== "string" ||
+    typeof value.cwd !== "string" ||
+    value.cwd.length === 0
+  ) {
+    return null;
+  }
+  const shellCommand =
+    typeof value.shellCommand === "string" && value.shellCommand.length > 0
+      ? value.shellCommand
+      : undefined;
+  const shellArgs =
+    Array.isArray(value.shellArgs) &&
+    value.shellArgs.every((arg) => typeof arg === "string")
+      ? value.shellArgs
+      : undefined;
+  return {
+    name: value.name,
+    titleSource: parseTerminalTitleSource(value.titleSource, value.name),
+    cwd: value.cwd,
+    ...(shellCommand === undefined ? {} : { shellCommand }),
+    ...(shellArgs === undefined ? {} : { shellArgs }),
+  };
+}
+
+interface EpicTerminalIdentity {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly name: string;
+  readonly hostId: string;
+}
+
+function parseEpicTerminalNodeRef(
+  value: Record<string, unknown>,
+  identity: EpicTerminalIdentity,
+): EpicTerminalRef | null {
+  if (value.authority === "host") {
+    const legacyFallback =
+      parseLegacyTerminalEvidence(value.legacyFallback) ??
+      parseLegacyTerminalEvidence(value);
+    if (legacyFallback === null) return null;
+    return {
+      id: identity.id,
+      instanceId: identity.instanceId,
+      type: "terminal",
+      name: identity.name,
+      hostId: identity.hostId,
+      authority: "host",
+      legacyFallback,
+      origin: parseTerminalOrigin(value.origin),
+      originProviderId: parseTerminalOriginProviderId(value.originProviderId),
+    };
+  }
+  // Only a genuinely absent discriminator is legacy import evidence. A future
+  // authority remains presentation-only and round-trips its raw marker so the
+  // current client cannot accidentally claim or rewrite its terminal.
+  const compatibleFallback =
+    parseLegacyTerminalEvidence(value) ??
+    parseLegacyTerminalEvidence(value.legacyFallback);
+  if (compatibleFallback === null) return null;
+  if (value.authority !== undefined) {
+    if (!isDesktopJsonValue(value.authority)) return null;
+    return {
+      id: identity.id,
+      instanceId: identity.instanceId,
+      type: "terminal",
+      name: identity.name,
+      hostId: identity.hostId,
+      authority: "unsupported",
+      rawAuthority: value.authority,
+      legacyFallback: compatibleFallback,
+      origin: parseTerminalOrigin(value.origin),
+      originProviderId: parseTerminalOriginProviderId(value.originProviderId),
+    };
+  }
+  return {
+    id: identity.id,
+    instanceId: identity.instanceId,
+    type: "terminal",
+    name: identity.name,
+    titleSource: compatibleFallback.titleSource,
+    hostId: identity.hostId,
+    cwd: compatibleFallback.cwd,
+    origin: parseTerminalOrigin(value.origin),
+    originProviderId: parseTerminalOriginProviderId(value.originProviderId),
+  };
 }
 
 export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
@@ -79,20 +189,12 @@ export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
     };
   }
   if (value.type === "terminal") {
-    if (typeof value.cwd !== "string" || value.cwd.length === 0) {
-      return null;
-    }
-    return {
+    return parseEpicTerminalNodeRef(value, {
       id: value.id,
       instanceId,
-      type: "terminal",
       name: value.name,
-      titleSource: parseTerminalTitleSource(value.titleSource, value.name),
       hostId: value.hostId,
-      cwd: value.cwd,
-      origin: parseTerminalOrigin(value.origin),
-      originProviderId: parseTerminalOriginProviderId(value.originProviderId),
-    };
+    });
   }
   if (!isRecordBackedEpicNodeKind(value.type)) {
     return null;
@@ -119,6 +221,53 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
     };
   }
   if (node.type === "terminal") {
+    if (node.authority === "host") {
+      return {
+        id: node.id,
+        instanceId: node.instanceId,
+        type: node.type,
+        name: node.name,
+        hostId: node.hostId,
+        authority: "host",
+        // Rollback-only compatibility projection. Released clients require a
+        // non-empty top-level cwd and read titleSource from this flat shape.
+        // Capable clients never treat either field as semantic authority.
+        titleSource: node.legacyFallback.titleSource,
+        cwd: node.legacyFallback.cwd,
+        legacyFallback: {
+          name: node.legacyFallback.name,
+          titleSource: node.legacyFallback.titleSource,
+          cwd: node.legacyFallback.cwd,
+          shellCommand: node.legacyFallback.shellCommand ?? null,
+          shellArgs: node.legacyFallback.shellArgs ?? null,
+        },
+        origin: node.origin ?? null,
+        originProviderId: node.originProviderId ?? null,
+      };
+    }
+    if (node.authority === "unsupported") {
+      return {
+        id: node.id,
+        instanceId: node.instanceId,
+        type: node.type,
+        name: node.name,
+        hostId: node.hostId,
+        authority: node.rawAuthority,
+        // Released-reader compatibility only. Current code never promotes
+        // these fields to semantic evidence for an unsupported authority.
+        titleSource: node.legacyFallback.titleSource,
+        cwd: node.legacyFallback.cwd,
+        legacyFallback: {
+          name: node.legacyFallback.name,
+          titleSource: node.legacyFallback.titleSource,
+          cwd: node.legacyFallback.cwd,
+          shellCommand: node.legacyFallback.shellCommand ?? null,
+          shellArgs: node.legacyFallback.shellArgs ?? null,
+        },
+        origin: node.origin ?? null,
+        originProviderId: node.originProviderId ?? null,
+      };
+    }
     return {
       id: node.id,
       instanceId: node.instanceId,

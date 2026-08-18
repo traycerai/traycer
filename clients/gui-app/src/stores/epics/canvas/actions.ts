@@ -19,6 +19,8 @@
  * `instanceId`; dedup and rename key on the payload's content `id`.
  */
 import { v4 as uuidv4 } from "uuid";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import type {
   CommGraphTileViewState,
   EpicCanvasTileRef,
@@ -34,6 +36,8 @@ import {
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
   isPrDiffTileRef,
+  isHostEpicTerminalRef,
+  isUnsupportedEpicTerminalRef,
 } from "./types";
 import {
   activationHistoryEqual,
@@ -1359,6 +1363,18 @@ function sizesEqual(
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+function shellArgsEqual(
+  left: ReadonlyArray<string> | undefined,
+  right: ReadonlyArray<string> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 /**
  * Commit a group's child fractions (clamped + normalized). Touches ONLY
  * `sizesByGroupId` - the tree object is untouched, so layout subscribers
@@ -1421,6 +1437,27 @@ export function renameArtifact(
       if (ref.type !== "terminal") {
         return ref.name === name ? ref : { ...ref, name };
       }
+      if (isHostEpicTerminalRef(ref)) {
+        if (
+          ref.name === name &&
+          ref.legacyFallback.name === name &&
+          ref.legacyFallback.titleSource === "manual"
+        ) {
+          return ref;
+        }
+        return {
+          ...ref,
+          name,
+          legacyFallback: {
+            ...ref.legacyFallback,
+            name,
+            titleSource: "manual",
+          },
+        };
+      }
+      if (isUnsupportedEpicTerminalRef(ref)) {
+        return ref.name === name ? ref : { ...ref, name };
+      }
       if (ref.name === name && ref.titleSource === "manual") return ref;
       return { ...ref, name, titleSource: "manual" };
     },
@@ -1447,10 +1484,117 @@ export function renameTerminalTiles(
       ref.type === "terminal" && ref.id === sessionId && ref.hostId === hostId,
     (ref) => {
       if (ref.type !== "terminal") return ref;
+      if (isHostEpicTerminalRef(ref)) {
+        if (
+          ref.name === name &&
+          ref.legacyFallback.name === name &&
+          ref.legacyFallback.titleSource === "manual"
+        ) {
+          return ref;
+        }
+        return {
+          ...ref,
+          name,
+          legacyFallback: {
+            ...ref.legacyFallback,
+            name,
+            titleSource: "manual",
+          },
+        };
+      }
+      if (isUnsupportedEpicTerminalRef(ref)) return ref;
       if (ref.name === name && ref.titleSource === "manual") return ref;
       return { ...ref, name, titleSource: "manual" };
     },
   );
+}
+
+/** Adopt a capable host's canonical winner without changing canvas topology. */
+export function adoptHostTerminalProjection(
+  state: EpicCanvasState,
+  hostId: string,
+  terminal: PlainTerminalProjection,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) =>
+      ref.type === "terminal" &&
+      ref.hostId === hostId &&
+      ref.id === terminal.record.terminalId,
+    (ref) => {
+      if (ref.type !== "terminal") return ref;
+      if (isUnsupportedEpicTerminalRef(ref)) return ref;
+      const fallbackName =
+        terminal.record.manualTitle ?? DEFAULT_TERMINAL_TITLE;
+      const titleSource =
+        terminal.record.manualTitle === null ? "default" : "manual";
+      // `updateTilesWhere` treats any new object as a change, so an already
+      // adopted ref that matches the projection byte-for-byte would still mint
+      // a new canvas identity on every stream tick - re-rendering every canvas
+      // subscriber and invalidating the persist cache for every tab.
+      if (
+        isHostEpicTerminalRef(ref) &&
+        ref.legacyFallback.name === fallbackName &&
+        ref.legacyFallback.titleSource === titleSource &&
+        ref.legacyFallback.cwd === terminal.record.launch.cwd &&
+        ref.legacyFallback.shellCommand ===
+          terminal.record.launch.shellCommand &&
+        shellArgsEqual(
+          ref.legacyFallback.shellArgs,
+          terminal.record.launch.shellArgs,
+        )
+      ) {
+        return ref;
+      }
+      return {
+        id: ref.id,
+        instanceId: ref.instanceId,
+        type: "terminal",
+        name: ref.name,
+        hostId: ref.hostId,
+        authority: "host",
+        legacyFallback: {
+          name: fallbackName,
+          titleSource,
+          cwd: terminal.record.launch.cwd,
+          shellCommand: terminal.record.launch.shellCommand,
+          shellArgs: terminal.record.launch.shellArgs,
+        },
+        ...(ref.origin === undefined ? {} : { origin: ref.origin }),
+        ...(ref.originProviderId === undefined
+          ? {}
+          : { originProviderId: ref.originProviderId }),
+      };
+    },
+  );
+}
+
+/**
+ * Remove every supported local presentation ref for an authoritative host
+ * deletion. Legacy refs are migration evidence, but a deletion/tombstone is
+ * conclusive; only unknown future-authority refs remain presentation-only.
+ */
+export function removeTerminalTiles(
+  state: EpicCanvasState,
+  hostId: string,
+  terminalId: string,
+): EpicCanvasState {
+  const instanceIds = Object.values(state.tilesByInstanceId).flatMap((ref) =>
+    ref?.type === "terminal" &&
+    !isUnsupportedEpicTerminalRef(ref) &&
+    ref.hostId === hostId &&
+    ref.id === terminalId
+      ? [ref.instanceId]
+      : [],
+  );
+  return instanceIds.reduce((current, instanceId) => {
+    const pane = collectPanes(current.root).find((candidate) =>
+      candidate.tabInstanceIds.includes(instanceId),
+    );
+    return pane === undefined
+      ? current
+      : closeTab(current, pane.id, instanceId);
+  }, state);
 }
 
 export function updateGitDiffTileView(

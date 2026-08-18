@@ -2114,6 +2114,7 @@ const RPC_ERROR_BLOCKERS: Readonly<Record<string, AnalyticsBlocker>> = {
   RPC_ERROR: "host_unavailable",
   SENDER_TUI_UNSUPPORTED: "unsupported",
   TERMINAL_ID_TAKEN: "conflict",
+  TERMINAL_DELETING: "conflict",
   UNAUTHORIZED: "authentication",
   WORKSPACE_BINDING_REQUIRED: "invalid_input",
   WORKTREE_BUSY: "conflict",

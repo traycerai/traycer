@@ -383,6 +383,15 @@ import {
   terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  terminalPlainCloseV10,
+  terminalPlainCreateV10,
+  terminalPlainEnsureRunningV10,
+  terminalPlainImportLegacyV10,
+  terminalPlainListV10,
+  terminalPlainRenameV10,
+} from "@traycer/protocol/host/terminal/plain-contracts";
+import { terminalPlainSubscribeListV10 } from "@traycer/protocol/host/terminal/plain-subscribe-list";
+import {
   hostNotificationHooksSave,
   hostNotificationHooksStatus,
   hostNotificationHooksTest,
@@ -6151,6 +6160,88 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Durable plain terminals use their own optional family. The released
+  // generic terminal methods also carry terminal-agent sessions and remain
+  // frozen; a peer without this family continues on the legacy client-owned
+  // lifecycle until capability-gated migration is available.
+  "terminal.plain.create": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainCreateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "terminal.plain.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "terminal.plain.rename": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainRenameV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "terminal.plain.ensureRunning": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainEnsureRunningV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "terminal.plain.close": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainCloseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "terminal.plain.importLegacy": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainImportLegacyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "worktree.listByWorkspacePaths": {
     1: {
       latestMinor: 4,
@@ -7537,6 +7628,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         5: {
           contract: terminalSubscribeV15,
+        },
+      },
+    },
+  },
+  // Snapshot-first durable plain-terminal collection. Unsupported on older
+  // hosts, where the capability-gated client keeps its legacy local model.
+  "terminal.plain.subscribeList": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainSubscribeListV10,
         },
       },
     },

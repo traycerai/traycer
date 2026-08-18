@@ -136,8 +136,14 @@ export interface TerminalTileBootstrapResult {
   readonly hostSessionExited: boolean;
   readonly handle: TerminalSessionStoreHandle | null;
   readonly createIsError: boolean;
+  readonly createIsPending: boolean;
+  readonly createRetryIsPending: boolean;
   readonly createIsSuccess: boolean;
   readonly createError: {
+    readonly message?: string;
+    readonly code?: string;
+  } | null;
+  readonly createRetryError: {
     readonly message?: string;
     readonly code?: string;
   } | null;
@@ -162,6 +168,10 @@ export function useTerminalTileBootstrap(
   const hostClient = useHostClientFor(hostEntry);
   const list = useTerminalList(input.scope, hostClient);
   const create = useTerminalCreate(hostClient);
+  const [createRetryError, setCreateRetryError] = useState<{
+    readonly message?: string;
+    readonly code?: string;
+  } | null>(null);
 
   // Measure-before-subscribe state. `measuredGrid` holds the probe's latest
   // report (last write wins - the freshest measurement should seed the
@@ -317,22 +327,29 @@ export function useTerminalTileBootstrap(
           measuredGrid ??
           peekXtermHostGrid(input.instanceId) ??
           peekXtermHostGridForSession(input.sessionId);
-        createMutateRef.current({
-          scope: input.scope,
-          sessionKind: input.sessionKind,
-          tuiHarnessId: payload.tuiHarnessId,
-          desiredSessionId: input.sessionId,
-          cols: openingGrid !== null ? openingGrid.cols : TERMINAL_DEFAULT_COLS,
-          rows: openingGrid !== null ? openingGrid.rows : TERMINAL_DEFAULT_ROWS,
-          cwd: payload.cwd,
-          shellCommand: payload.shellCommand,
-          shellArgs: payload.shellArgs === null ? null : [...payload.shellArgs],
-          worktreeBusyPaths: [...payload.worktreeBusyPaths],
-        });
+        createMutateRef.current(
+          {
+            scope: input.scope,
+            sessionKind: input.sessionKind,
+            tuiHarnessId: payload.tuiHarnessId,
+            desiredSessionId: input.sessionId,
+            cols:
+              openingGrid !== null ? openingGrid.cols : TERMINAL_DEFAULT_COLS,
+            rows:
+              openingGrid !== null ? openingGrid.rows : TERMINAL_DEFAULT_ROWS,
+            cwd: payload.cwd,
+            shellCommand: payload.shellCommand,
+            shellArgs:
+              payload.shellArgs === null ? null : [...payload.shellArgs],
+            worktreeBusyPaths: [...payload.worktreeBusyPaths],
+          },
+          { onSettled: () => setCreateRetryError(null) },
+        );
       })
       .catch(() => {
         // The upstream prepare hook surfaces the error via its own state;
         // keep the latch closed so we do not retry without `retry()`.
+        setCreateRetryError(null);
       });
   }, [
     enabled,
@@ -398,20 +415,37 @@ export function useTerminalTileBootstrap(
   }, [handle, sessionId]);
 
   const resetPrepare = input.resetPrepare;
+  const retrySessionId = input.sessionId;
+  const retrySessionKind = input.sessionKind;
   const retry = useCallback(() => {
     hasDispatchedRef.current = false;
+    setCreateRetryError(create.error);
     create.reset();
     if (resetPrepare !== undefined) resetPrepare();
-    void list.refetch();
-  }, [create, list, resetPrepare]);
+    void list.refetch().then((result) => {
+      if (
+        result.data?.sessions.some(
+          (session) =>
+            session.sessionId === retrySessionId &&
+            session.sessionKind === retrySessionKind &&
+            session.status === "running",
+        ) === true
+      ) {
+        setCreateRetryError(null);
+      }
+    });
+  }, [create, list, resetPrepare, retrySessionId, retrySessionKind]);
 
   return {
     hostHasSession,
     hostSessionExited,
     handle,
     createIsError: create.isError,
+    createIsPending: create.isPending,
+    createRetryIsPending: createRetryError !== null,
     createIsSuccess: create.isSuccess,
     createError: create.error,
+    createRetryError,
     retry,
     reportMeasuredGrid,
   };
