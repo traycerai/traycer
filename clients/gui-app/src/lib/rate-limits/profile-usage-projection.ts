@@ -369,6 +369,34 @@ function projectedLiveWindows(
       const credits = huggingFaceCreditProjection(rateLimits);
       return credits === null ? [] : [credits];
     }
+    case "cursor":
+      // Cursor rides the shared window path via its synthesized billing-cycle
+      // bucket windows, exactly like grok - NOT the credit projection its
+      // money-shaped fields might suggest - so severity and the compact bar
+      // come straight from `classifyProviderRateLimits`. This is also why
+      // cursor is absent from the credit-provider severity exception below:
+      // that exception exists for providers whose `providerRateLimitWindows`
+      // is empty by design, and cursor's is not.
+      //
+      // The two windows mirror Cursor's Spending page buckets; the compact
+      // bar picks the most consumed of the two via `mostConstrainedWindow`,
+      // so the headline number always matches one of the dashboard's bars.
+      return [
+        windowProjection({
+          id: "cursor-models",
+          role: "primary",
+          name: "Cursor Models",
+          window: rateLimits.cursorModels,
+          now,
+        }),
+        windowProjection({
+          id: "other-models",
+          role: "secondary",
+          name: "Other Models",
+          window: rateLimits.otherModels,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
     case "kilocode":
       return [];
   }
@@ -411,7 +439,20 @@ function emptyDetailProjection(
   // framing, which reads as a fetch/account failure. A grok snapshot whose
   // period merely rolled (window present but expired) still falls through to
   // `expired` below, the correct stale framing.
-  if (rateLimits.provider === "grok" && rateLimits.period === null) {
+  //
+  // Cursor is the same case for the same reason: its bucket windows are
+  // synthesized only when the payload reports the bucket percentages, and
+  // proto3 JSON omits zero-valued fields, so a reachable account can
+  // legitimately arrive with both windows null. Without this arm that account
+  // renders as unavailable (`missing_windows`) purely because Cursor reported
+  // nothing to meter. A cursor snapshot whose cycle merely rolled still falls
+  // through to `expired`, exactly as grok's does.
+  if (
+    (rateLimits.provider === "grok" && rateLimits.period === null) ||
+    (rateLimits.provider === "cursor" &&
+      rateLimits.cursorModels === null &&
+      rateLimits.otherModels === null)
+  ) {
     return {
       kind: "not_checked",
       severity: "unknown",

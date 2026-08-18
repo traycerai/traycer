@@ -9,6 +9,7 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import { recordSetupTerminal } from "@/stores/worktree/setup-terminals";
 
 /**
  * Ref fields a caller may set on the tile it is opening. Applied on the OPEN
@@ -46,6 +47,12 @@ export function useFocusEpicTerminalSession(
     (terminalSessionId, cwd, overrides) => {
       if (terminalSessionId === null) return;
       if (terminalSessionId.length === 0) return;
+      if (overrides?.origin === "setup") {
+        recordSetupTerminal({
+          hostId: activeHostId,
+          sessionId: terminalSessionId,
+        });
+      }
       // This is a committed user open/focus, so the nested route search must
       // become the new focus authority - otherwise route sync re-applies the
       // stale target and the tab opens without ever becoming visible.

@@ -1,8 +1,9 @@
 import { createRef } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  advanceLegendListTime,
   installLegendListTestClock,
   installLegendListViewportMetrics,
   restoreLegendListTestClock,
@@ -173,6 +174,43 @@ describe("LegendList estimate recovery", () => {
     expect(list.getState().getAverageItemSizes().assistant).toEqual(
       averageBefore,
     );
+  });
+
+  it("cancels consecutive imperative scrolls without rebinding the browser canceller", async () => {
+    const listRef = createRef<LegendListRef | null>();
+    render(createTestList(rows(20), listRef));
+    await settleLegendList();
+
+    const list = listRef.current;
+    if (list === null) throw new Error("LegendList ref did not mount");
+
+    const clearTimeout = globalThis.clearTimeout;
+    const clearTimeoutSpy = vi
+      .spyOn(globalThis, "clearTimeout")
+      .mockImplementation(function receiverCheckedClearTimeout(
+        this: unknown,
+        handle: NodeJS.Timeout | string | number | undefined,
+      ): void {
+        if (this !== undefined && this !== globalThis) {
+          throw new TypeError("Illegal invocation");
+        }
+        clearTimeout(handle);
+      });
+
+    try {
+      void list.scrollToIndex({ animated: false, index: 18 });
+      const replacementScroll = list.scrollToIndex({
+        animated: false,
+        index: 19,
+      });
+      const replacementSettled =
+        expect(replacementScroll).resolves.toBeUndefined();
+      await advanceLegendListTime(100);
+
+      await replacementSettled;
+    } finally {
+      clearTimeoutSpy.mockRestore();
+    }
   });
 
   /**

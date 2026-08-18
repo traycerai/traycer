@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSetupTerminalRegistrationStore } from "@/stores/chats/setup-terminal-registration-store";
+import { recordSetupTerminal } from "@/stores/worktree/setup-terminals";
 import {
   setupTerminalCwd,
   setupTerminalTitle,
@@ -67,6 +68,10 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
       const sessionId = entry.setupTerminalSessionId;
       if (sessionId === null || sessionId.length === 0) return;
 
+      // Record even when this view already registered the tab: sidebar and
+      // palette reopen consult the registry, not the canvas origin stamp.
+      recordSetupTerminal({ hostId, sessionId });
+
       // Exactly once per (view, session): `registerOnce` returns false on
       // every call after the first, so a binding update or a remount while
       // setup is still running cannot re-open a tab the user has closed.
@@ -85,6 +90,7 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
         titleSource: "manual",
         hostId,
         cwd: setupTerminalCwd(entry),
+        origin: "setup",
       });
     });
   }, [

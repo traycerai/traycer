@@ -35,6 +35,10 @@ import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import {
+  selectPlainTerminalViewModel,
+  type PlainTerminalViewModel,
+} from "@/lib/terminals/plain-terminal-authority";
 import { isPanelResizeInteractionActive } from "@/lib/layout/panel-resizing-class";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
@@ -59,6 +63,12 @@ import {
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
 import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-picker";
 import { LandingTerminalTile } from "./landing-terminal-tile";
+import {
+  LandingTerminalAuthorityFleet,
+  type LandingTerminalAuthorityEntries,
+  type LandingTerminalAuthorityEntry,
+} from "./landing-terminal-authority-fleet";
+import { LandingTerminalBoundHostReconciliationFleet } from "./landing-terminal-bound-host-reconciliation";
 import { useLandingTerminalKill } from "./use-landing-terminal-kill-mutation";
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
@@ -107,6 +117,29 @@ interface LandingTerminalDirectoryRequest {
   readonly selectedTarget: LandingTerminalTarget | null;
 }
 
+/**
+ * Whether this host's authority can back a tab mutation right now - the single
+ * predicate behind create, close, close-all, and rename.
+ *
+ * A missing or `"unknown"` entry means the capability probe has not answered,
+ * so neither branch of the tile lifecycle can be chosen yet; a `"capable"`
+ * host that cannot mutate has a stale or reconnecting list stream. `"legacy"`
+ * needs no stream - its tiles create and kill through the session RPCs.
+ *
+ * Creation gates on this too, and must: a tab persisted while the probe is
+ * unresolved lands as `hostAuthorityAcknowledged: false, pendingCreate: false`,
+ * which is precisely the shape of LEGACY evidence. The next capable pass then
+ * tries to `importLegacy` a terminal that was never created on any host.
+ */
+function landingTerminalAuthorityReady(
+  entry: LandingTerminalAuthorityEntry | null | undefined,
+): entry is LandingTerminalAuthorityEntry {
+  if (entry === null || entry === undefined) return false;
+  const capability = entry.authority.capability;
+  if (capability.status === "legacy") return true;
+  return capability.status === "capable" && entry.authority.canMutate;
+}
+
 function directoryRequestFor(
   target: LandingTerminalTarget,
   mode: LandingTerminalDirectoryRequestMode,
@@ -146,7 +179,7 @@ function settleDirectoryRequest(args: {
   readonly request: LandingTerminalDirectoryRequest | null;
   readonly generation: number;
   readonly context: LandingTerminalHostContext;
-  readonly addTerminalTab: (hostId: string, cwd: string) => string;
+  readonly addTerminalTab: (hostId: string, cwd: string) => string | null;
   readonly replaceDirectoryRequest: (
     request: LandingTerminalDirectoryRequest | null,
   ) => void;
@@ -182,7 +215,7 @@ function settleDirectoryRequest(args: {
 
   const shouldFocusTerminal = args.ownsFocus();
   const state = useLandingTerminalStore.getState();
-  let instanceId: string;
+  let instanceId: string | null;
   if (request.mode === "always-create") {
     instanceId = args.addTerminalTab(hostId, launchCwd);
   } else {
@@ -200,6 +233,18 @@ function settleDirectoryRequest(args: {
         state.activateTab(existing.instanceId);
       }
     }
+  }
+  // Creation refused: the host's authority went unready between this
+  // generation's reconciliation and its settlement. Surface the same
+  // recoverable state as an unusable target rather than consuming the
+  // selection silently - the picker stays up and the choice can be remade.
+  if (instanceId === null) {
+    args.replaceDirectoryRequest({
+      ...request,
+      selectedTarget: null,
+      error: "The terminal directory could not be opened.",
+    });
+    return true;
   }
   args.replaceDirectoryRequest(null);
   args.clearPending();
@@ -231,6 +276,32 @@ export function LandingTerminalPanel(): ReactNode {
   const landingPageId = focusedLandingPageId ?? "unbound-landing-page";
   const targetLandingPageId = target.draftId ?? "unbound-landing-page";
   const tabs = useLandingTerminalStore((state) => state.tabs);
+  const [authorityEntries, setAuthorityEntries] =
+    useState<LandingTerminalAuthorityEntries>({});
+  const authorityHostIds = useMemo(
+    () =>
+      [...new Set([...tabs.map((tab) => tab.hostId), target.hostId])].filter(
+        (hostId): hostId is string => hostId !== null,
+      ),
+    [tabs, target.hostId],
+  );
+  const handleAuthorityEntry = useCallback(
+    (hostId: string, entry: LandingTerminalAuthorityEntry | null): void => {
+      setAuthorityEntries((current) => {
+        if (entry !== null) {
+          if (current[hostId] === entry) return current;
+          return { ...current, [hostId]: entry };
+        }
+        if (current[hostId] === undefined) return current;
+        const next = { ...current };
+        delete next[hostId];
+        return next;
+      });
+    },
+    [],
+  );
+  const targetAuthority =
+    target.hostId === null ? null : (authorityEntries[target.hostId] ?? null);
   const activeInstanceId = useLandingTerminalStore(
     (state) => state.activeInstanceId,
   );
@@ -255,7 +326,6 @@ export function LandingTerminalPanel(): ReactNode {
   const activateTab = useLandingTerminalStore((state) => state.activateTab);
   const renameTab = useLandingTerminalStore((state) => state.renameTab);
   const closeTab = useLandingTerminalStore((state) => state.closeTab);
-  const closeAllTabs = useLandingTerminalStore((state) => state.closeAllTabs);
   const kill = useLandingTerminalKill();
   const killTerminal = kill.mutate;
   const killTerminalAsync = kill.mutateAsync;
@@ -303,8 +373,16 @@ export function LandingTerminalPanel(): ReactNode {
     [landingPageId, setPanelMaximizedForPage],
   );
 
+  // The single creation point every path funnels through - the "+", the
+  // `app.terminal.new` / `tab.new` chords, the directory picker's settlement,
+  // and reconciliation's auto-spawn - so the authority gate lives here rather
+  // than being restated at each caller. `null` means "not created": the host's
+  // authority is not ready, and a tab written now would be indistinguishable
+  // from legacy evidence.
   const addTerminalTab = useCallback(
-    (hostId: string, cwd: string): string => {
+    (hostId: string, cwd: string): string | null => {
+      const authority = authorityEntries[hostId];
+      if (!landingTerminalAuthorityReady(authority)) return null;
       const instanceId = `landing-terminal-${uuidv4()}`;
       addTab({
         instanceId,
@@ -317,10 +395,12 @@ export function LandingTerminalPanel(): ReactNode {
           currentCwd: cwd,
         }),
         titleSource: "default",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: authority.authority.capability.status === "capable",
       });
       return instanceId;
     },
-    [addTab],
+    [addTab, authorityEntries],
   );
 
   // Manual create paths: the routing target's primary folder, else the last
@@ -579,6 +659,13 @@ export function LandingTerminalPanel(): ReactNode {
         clearIfPending();
         return;
       }
+      // Creation can be refused (the host's authority went unready between
+      // this generation's reconciliation and its settlement), so the focus
+      // hand-off is conditional on a tab actually existing.
+      const spawnAndFocus = (focus: boolean): void => {
+        const created = addTerminalTab(context.hostId, launchCwd);
+        if (focus && created !== null) focusTerminalInstance(created);
+      };
       if (state.tabs.length === 0) {
         // Empty-panel auto-spawn is pinned to the opening draft. A gesture
         // spawns its captured draft; a gesture-less live settlement (post-clear,
@@ -589,8 +676,7 @@ export function LandingTerminalPanel(): ReactNode {
           clearIfPending();
           return;
         }
-        const created = addTerminalTab(context.hostId, launchCwd);
-        if (pending) focusTerminalInstance(created);
+        spawnAndFocus(pending);
         clearIfPending();
         return;
       }
@@ -602,8 +688,7 @@ export function LandingTerminalPanel(): ReactNode {
         launchCwd,
       );
       if (existing === undefined) {
-        const created = addTerminalTab(context.hostId, launchCwd);
-        focusTerminalInstance(created);
+        spawnAndFocus(true);
         clearIfPending();
         return;
       }
@@ -669,21 +754,42 @@ export function LandingTerminalPanel(): ReactNode {
     primaryWorkspacePath: target.launchWorkspacePath,
     generation: target.generation,
     client: target.client,
+    plainAuthority: targetAuthority,
     killTerminal: killTerminalAsync,
     onReconciled: setReconciledContext,
     onError: handleReconciliationError,
     onSettled: handleReconciliationSettled,
   });
 
+  // One predicate for every tab mutation, so the affordance and the action it
+  // fires can never disagree. Before this, close silently no-oped behind an
+  // enabled button whenever authority was not ready, with nothing said.
+  const canMutateTab = useCallback(
+    (tab: LandingTerminalTabRef): boolean =>
+      landingTerminalAuthorityReady(authorityEntries[tab.hostId]),
+    [authorityEntries],
+  );
+
   const closeTerminalTab = useCallback(
     (tab: LandingTerminalTabRef) => {
       replaceDirectoryRequest(null);
       clearPending();
-      // `closeTab` is the atomic tombstone-first durable write. Dispatch the
-      // host mutation only after that state transition has completed.
+      const authorityEntry = authorityEntries[tab.hostId];
+      if (!landingTerminalAuthorityReady(authorityEntry)) return;
       const closed = closeTab(landingPageId, tab.instanceId);
       if (closed === null) return;
-      killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
+      if (authorityEntry.authority.capability.status === "capable") {
+        void authorityEntry.mutations.close
+          .mutateAsync({ terminalId: closed.sessionId })
+          .then(() => {
+            useLandingTerminalStore
+              .getState()
+              .clearPendingKill(closed.hostId, closed.sessionId);
+          })
+          .catch(() => undefined);
+      } else {
+        killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
+      }
       // Closing a non-last tab promotes a surviving neighbor - keep the
       // keyboard with the panel. The last-tab case collapses the panel, and
       // the open-transition effect hands focus back to the composer instead.
@@ -701,6 +807,7 @@ export function LandingTerminalPanel(): ReactNode {
     [
       clearPending,
       closeTab,
+      authorityEntries,
       killTerminal,
       landingPageId,
       replaceDirectoryRequest,
@@ -712,18 +819,13 @@ export function LandingTerminalPanel(): ReactNode {
     // durably tombstoned in one write before the first kill is dispatched.
     replaceDirectoryRequest(null);
     clearPending();
-    closeAllTabs(landingPageId).forEach((closed) => {
-      killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
-    });
+    const closable = useLandingTerminalStore
+      .getState()
+      .tabs.filter(canMutateTab);
+    closable.forEach(closeTerminalTab);
     clearPendingTerminalFocus(null);
     focusActiveComposer();
-  }, [
-    clearPending,
-    closeAllTabs,
-    killTerminal,
-    landingPageId,
-    replaceDirectoryRequest,
-  ]);
+  }, [canMutateTab, clearPending, closeTerminalTab, replaceDirectoryRequest]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
@@ -766,6 +868,7 @@ export function LandingTerminalPanel(): ReactNode {
     primaryWorkspacePath: target.primaryWorkspacePath,
     clientReady: target.client !== null,
     reconciledContext,
+    authority: targetAuthority,
   });
 
   const visibleDirectoryRequest = useMemo(() => {
@@ -784,46 +887,93 @@ export function LandingTerminalPanel(): ReactNode {
     workspace.primaryWorkspacePath,
   ]);
 
+  const terminalViewModels = useMemo<
+    Readonly<Partial<Record<string, PlainTerminalViewModel>>>
+  >(() => {
+    const viewModels: Partial<Record<string, PlainTerminalViewModel>> = {};
+    for (const tab of tabs) {
+      const projection =
+        authorityEntries[tab.hostId]?.authority.collection?.terminalsById[
+          tab.sessionId
+        ];
+      if (projection !== undefined) {
+        viewModels[tab.instanceId] = selectPlainTerminalViewModel(projection);
+      }
+    }
+    return viewModels;
+  }, [authorityEntries, tabs]);
+
   // Several remote hosts can exist without a default selection. This is a
   // real page state, not an unsupported/unknown verdict: leave persistence
   // untouched and render no terminal affordance until one is selected. Read the
   // captured verdict so a mid-gesture switch to an unsupported host cannot
   // unmount the panel (and destroy the captured host's reconciliation).
-  if (
+  const panelUnavailable =
     target.availability === "no-active-host" ||
-    target.availability === "unsupported"
-  ) {
-    return null;
-  }
+    target.availability === "unsupported";
+
+  const renameTerminalTab = (instanceId: string, name: string): void => {
+    const tab = useLandingTerminalStore
+      .getState()
+      .tabs.find((entry) => entry.instanceId === instanceId);
+    if (tab === undefined) return;
+    const entry = authorityEntries[tab.hostId];
+    if (!landingTerminalAuthorityReady(entry)) return;
+    if (entry.authority.capability.status === "legacy") {
+      renameTab(instanceId, name);
+      return;
+    }
+    entry.mutations.rename.mutate({
+      terminalId: tab.sessionId,
+      manualTitle: name.trim(),
+    });
+  };
 
   return (
-    <LandingTerminalPanelContents
-      landingPageId={landingPageId}
-      tabs={tabs}
-      activeInstanceId={activeInstanceId}
-      availability={target.availability}
-      panelOpen={panelOpen}
-      panelWidthFraction={panelWidthFraction}
-      primaryWorkspacePath={target.primaryWorkspacePath}
-      activeHostId={target.hostId}
-      createEnabled={createEnabled}
-      createDisabledReason={createDisabledReason}
-      reconciledContext={reconciledContext}
-      maximized={layout.maximized}
-      directoryPicker={visibleDirectoryRequest}
-      onTogglePanel={togglePanel}
-      onOpenPanel={openPanel}
-      onToggleMaximized={() => setMaximized(!layout.maximized)}
-      onSetPanelWidthFraction={setPanelWidthFraction}
-      onCreateTerminal={revealAndCreateTerminal}
-      onRevealAndCreate={revealAndCreateTerminal}
-      onSelectDirectory={selectDirectory}
-      onCancelDirectoryPicker={cancelDirectoryRequest}
-      onActivateTab={activateTerminalTab}
-      onCloseTab={closeTerminalTab}
-      onCloseAllTabs={closeAllTerminalTabs}
-      onRenameTab={renameTab}
-    />
+    <>
+      <LandingTerminalAuthorityFleet
+        hostIds={authorityHostIds}
+        onEntry={handleAuthorityEntry}
+      />
+      <LandingTerminalBoundHostReconciliationFleet
+        landingPageId={landingPageId}
+        selectedHostId={target.hostId}
+        entries={authorityEntries}
+      />
+      {panelUnavailable ? null : (
+        <LandingTerminalPanelContents
+          landingPageId={landingPageId}
+          tabs={tabs}
+          activeInstanceId={activeInstanceId}
+          availability={target.availability}
+          panelOpen={panelOpen}
+          panelWidthFraction={panelWidthFraction}
+          primaryWorkspacePath={target.primaryWorkspacePath}
+          activeHostId={target.hostId}
+          createEnabled={createEnabled}
+          createDisabledReason={createDisabledReason}
+          reconciledContext={reconciledContext}
+          maximized={layout.maximized}
+          directoryPicker={visibleDirectoryRequest}
+          onTogglePanel={togglePanel}
+          onOpenPanel={openPanel}
+          onToggleMaximized={() => setMaximized(!layout.maximized)}
+          onSetPanelWidthFraction={setPanelWidthFraction}
+          onCreateTerminal={revealAndCreateTerminal}
+          onRevealAndCreate={revealAndCreateTerminal}
+          onSelectDirectory={selectDirectory}
+          onCancelDirectoryPicker={cancelDirectoryRequest}
+          onActivateTab={activateTerminalTab}
+          onCloseTab={closeTerminalTab}
+          onCloseAllTabs={closeAllTerminalTabs}
+          onRenameTab={renameTerminalTab}
+          canRenameTab={canMutateTab}
+          canCloseTab={canMutateTab}
+          authorityEntries={authorityEntries}
+          terminalViewModels={terminalViewModels}
+        />
+      )}
+    </>
   );
 }
 
@@ -853,6 +1003,12 @@ interface LandingTerminalPanelContentsProps {
   readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
   readonly onCloseAllTabs: () => void;
   readonly onRenameTab: (instanceId: string, name: string) => void;
+  readonly canRenameTab: (tab: LandingTerminalTabRef) => boolean;
+  readonly canCloseTab: (tab: LandingTerminalTabRef) => boolean;
+  readonly authorityEntries: LandingTerminalAuthorityEntries;
+  readonly terminalViewModels: Readonly<
+    Partial<Record<string, PlainTerminalViewModel>>
+  >;
 }
 
 function LandingTerminalPanelContents(
@@ -1007,6 +1163,9 @@ function LandingTerminalPanelContents(
           onClose={props.onCloseTab}
           onCloseAll={props.onCloseAllTabs}
           onRename={props.onRenameTab}
+          canRename={props.canRenameTab}
+          canClose={props.canCloseTab}
+          terminalViewModels={props.terminalViewModels}
         />
         <LandingTerminalPanelBody
           landingPageId={props.landingPageId}
@@ -1021,6 +1180,7 @@ function LandingTerminalPanelContents(
           directoryPicker={props.directoryPicker}
           onSelectDirectory={props.onSelectDirectory}
           onCancelDirectoryPicker={props.onCancelDirectoryPicker}
+          authorityEntries={props.authorityEntries}
         />
         <LandingTerminalMobileKeyBar
           active={keyBarActive}
@@ -1086,9 +1246,15 @@ function landingTerminalCreateDisabledReason(args: {
   readonly clientReady: boolean;
   readonly activeHostId: string | null;
   readonly reconciledContext: LandingTerminalHostContext | null;
+  readonly authority: LandingTerminalAuthorityEntry | null;
 }): string | null {
   if (!args.clientReady) return "Connecting to the selected host…";
   if (args.availability !== "supported") {
+    return "Connecting to the selected host…";
+  }
+  // Same predicate `addTerminalTab` enforces, so the "+" cannot look live for
+  // a host whose authority would refuse the create.
+  if (!landingTerminalAuthorityReady(args.authority)) {
     return "Connecting to the selected host…";
   }
   if (args.primaryWorkspacePath !== null) return null;
@@ -1119,6 +1285,7 @@ function landingTerminalCreateGate(args: {
   readonly primaryWorkspacePath: string | null;
   readonly clientReady: boolean;
   readonly reconciledContext: LandingTerminalHostContext | null;
+  readonly authority: LandingTerminalAuthorityEntry | null;
 }): {
   readonly createEnabled: boolean;
   readonly createDisabledReason: string | null;
@@ -1129,6 +1296,7 @@ function landingTerminalCreateGate(args: {
     clientReady: args.clientReady,
     activeHostId: args.hostId,
     reconciledContext: args.reconciledContext,
+    authority: args.authority,
   });
   // Derived from the reason rather than restated, so the two cannot drift.
   // They previously did: a captured workspace path makes the reason `null`
@@ -1484,6 +1652,7 @@ function LandingTerminalPanelBody(props: {
   readonly directoryPicker: LandingTerminalDirectoryRequest | null;
   readonly onSelectDirectory: (workspacePath: string) => void;
   readonly onCancelDirectoryPicker: () => void;
+  readonly authorityEntries: LandingTerminalAuthorityEntries;
 }): ReactNode {
   if (props.availability === "unknown" && props.directoryPicker === null) {
     return (
@@ -1530,6 +1699,7 @@ function LandingTerminalPanelBody(props: {
                   props.panelOpen &&
                   (props.createEnabled || tab.hostId !== props.activeHostId),
                 )}
+                authorityEntry={props.authorityEntries[tab.hostId] ?? null}
               />
             </div>
           ))

@@ -317,6 +317,14 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           title: "Copilot sign-in",
           cwd: "~",
         },
+        {
+          sessionId: "term-setup",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionKind: "terminal",
+          status: "running",
+          title: "Setup: traycer feature",
+          cwd: "/work/repo",
+        },
       ],
     },
   }),
@@ -348,6 +356,11 @@ import {
   recordProviderLoginTerminal,
   useProviderLoginTerminalsStore,
 } from "@/stores/providers/provider-login-terminals";
+import {
+  recordSetupTerminal,
+  useSetupTerminalsStore,
+} from "@/stores/worktree/setup-terminals";
+import { isHostEpicTerminalRef } from "@/stores/epics/canvas/types";
 
 const navigateNestedFocusSpy = vi.fn<NavigateNestedFocus>();
 
@@ -398,6 +411,15 @@ function lastTileOpen(): OpenTileIntoTargetGroupArgs {
   return call[0];
 }
 
+function launchedTerminalCwd(
+  ref: OpenTileIntoTargetGroupArgs["ref"],
+): string | undefined {
+  if (ref.type !== "terminal" || !isHostEpicTerminalRef(ref)) {
+    return undefined;
+  }
+  return ref.legacyFallback.cwd;
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -413,6 +435,10 @@ afterEach(() => {
   useNewConversationModalStore.getState().resetForTests();
   useProviderLoginTerminalsStore.setState(
     useProviderLoginTerminalsStore.getInitialState(),
+    true,
+  );
+  useSetupTerminalsStore.setState(
+    useSetupTerminalsStore.getInitialState(),
     true,
   );
 });
@@ -555,7 +581,8 @@ describe("Terminals opener sub-page", () => {
     if (opened.ref.type !== "terminal") {
       throw new Error("expected terminal ref");
     }
-    expect(opened.ref.cwd).toBe("/work/active-repo");
+    expect(isHostEpicTerminalRef(opened.ref)).toBe(true);
+    expect(launchedTerminalCwd(opened.ref)).toBe("/work/active-repo");
   });
 
   it("offers other hosts as fuzzy subpages and launches through their transient client", () => {
@@ -587,7 +614,8 @@ describe("Terminals opener sub-page", () => {
     if (opened.ref.type !== "terminal") {
       throw new Error("expected terminal ref");
     }
-    expect(opened.ref.cwd).toBe("/remote/feature-worktree");
+    expect(isHostEpicTerminalRef(opened.ref)).toBe(true);
+    expect(launchedTerminalCwd(opened.ref)).toBe("/remote/feature-worktree");
   });
 
   it("rechecks remote host reachability when a workspace leaf is invoked", () => {
@@ -788,6 +816,28 @@ describe("Terminals opener sub-page", () => {
     }
     expect(signInOpened.ref.origin).toBe("provider-login");
     expect(signInOpened.ref.originProviderId).toBe("copilot");
+
+    runById(items, "open:terminals:term-1");
+    const plainOpened = lastTileOpen();
+    if (plainOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(plainOpened.ref.origin).toBeUndefined();
+  });
+
+  it("carries setup origin for a recorded setup session, and leaves an unrecorded one plain", () => {
+    recordSetupTerminal({
+      hostId: "default-host",
+      sessionId: "term-setup",
+    });
+    const items = renderItems(useTerminalsOpenerItems);
+
+    runById(items, "open:terminals:term-setup");
+    const setupOpened = lastTileOpen();
+    if (setupOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(setupOpened.ref.origin).toBe("setup");
 
     runById(items, "open:terminals:term-1");
     const plainOpened = lastTileOpen();

@@ -306,6 +306,11 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   {
+    camelName: "setupTerminals",
+    leaf: "setup-terminals",
+    kind: "static",
+  },
+  {
     camelName: "githubMentionFilters",
     leaf: "github-mention-filters",
     kind: "static",

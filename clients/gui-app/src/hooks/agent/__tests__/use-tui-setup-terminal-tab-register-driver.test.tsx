@@ -8,6 +8,7 @@ import type {
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { useSetupTerminalRegistrationStore } from "@/stores/chats/setup-terminal-registration-store";
+import { useSetupTerminalsStore } from "@/stores/worktree/setup-terminals";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -39,6 +40,10 @@ function Wrapper(props: { readonly children: ReactNode }): ReactNode {
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useSetupTerminalRegistrationStore.getState().reset();
+  useSetupTerminalsStore.setState(
+    useSetupTerminalsStore.getInitialState(),
+    true,
+  );
 }
 
 describe("useTuiSetupTerminalTabRegisterDriver", () => {
@@ -81,6 +86,7 @@ describe("useTuiSetupTerminalTabRegisterDriver", () => {
       titleSource: "manual",
       hostId: HOST_ID,
       cwd: WORKTREE_ENTRY.worktreePath,
+      origin: "setup",
     });
     // `instanceId` is a freshly minted per-tab-instance id (NOT the session
     // id - reusing it would alias stream handles across views).

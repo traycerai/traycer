@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
+  PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
@@ -8,10 +9,11 @@ import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue
 import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 /**
- * On mount (and whenever `providerId` changes), fetches rate limits only when
- * there has never been a successful reading to show. Once either the host's
- * persisted summary or the renderer query envelope has a successful value,
- * the normal invalidation timer and the manual refresh action own freshness.
+ * On mount (and whenever `providerId` changes), fetches when no successful
+ * detailed value is cached OR the host's persisted summary is at least one
+ * freshness window old. A fresh summary plus a cached detailed value no-ops.
+ * This matters for managed profiles: the app-shell interval cannot assume
+ * every one is already represented in this renderer's query cache.
  *
  * This exists because `providerRateLimitQueryOptions` deliberately sets
  * `refetchOnMount: false` for this lane: TanStack's own default would
@@ -46,7 +48,10 @@ export function useRefreshProviderRateLimitsOnMount({
   const queueScope = useRateLimitQueueScope();
   useEffect(() => {
     if (!fetchEligible) return;
-    if (usageUpdatedAt !== null || hasCachedValue) return;
+    const summaryFresh =
+      usageUpdatedAt !== null &&
+      Date.now() - usageUpdatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS;
+    if (summaryFresh && hasCachedValue) return;
     if (rateLimitFetchLane(providerId) === "httpFetch") {
       if (refetch === null) return;
       void refetch();

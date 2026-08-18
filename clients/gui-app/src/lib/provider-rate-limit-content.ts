@@ -256,9 +256,9 @@ export function titleCaseFromToken(value: string): string {
  * A provider's plan/tier label, where one is fetched - the header popover
  * shows this as a chip next to the provider name (Core Flows: "where the
  * provider reports one"). Codex (`planType`), Claude Code (`subscriptionType`),
- * and Grok (`subscriptionTier`) report a plan/tier; OpenRouter, Kilo Code and
- * Hugging Face have no analogous field, so they always resolve to `null` and
- * render no chip.
+ * and Grok (`subscriptionTier`) report a plan/tier; OpenRouter, Kilo Code,
+ * Hugging Face and Cursor have no analogous field, so they always resolve to
+ * `null` and render no chip.
  */
 export function resolveProviderPlanLabel(
   data: AvailableProviderRateLimits,
@@ -279,10 +279,13 @@ export function resolveProviderPlanLabel(
     case "opencode":
       return "Go";
     // None of the credit providers report a tier - Hugging Face's billing-usage
-    // endpoint carries no plan field either - so all three render no chip.
+    // endpoint carries no plan field either, and Cursor's current-period usage
+    // reports the plan's SIZE (an included-credit allowance) but never its
+    // NAME - so all four render no chip.
     case "openrouter":
     case "kilocode":
     case "huggingface":
+    case "cursor":
       return null;
   }
 }

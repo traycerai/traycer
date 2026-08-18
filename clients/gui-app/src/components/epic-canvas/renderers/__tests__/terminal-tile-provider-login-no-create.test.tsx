@@ -67,6 +67,26 @@ vi.mock("@/lib/analytics", () => ({
   analyticsTargetForCanvasTileType: () => null,
 }));
 
+const authorityMock = vi.hoisted(() => ({
+  capability: "legacy",
+}));
+
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: authorityMock.capability,
+    projection: undefined,
+    viewModel: null,
+    canMutate: authorityMock.capability === "capable",
+    migrationPending: false,
+    migrationError: null,
+    retryMigration: () => undefined,
+    create: {},
+    ensureRunning: {},
+    rename: {},
+    close: {},
+  }),
+}));
+
 // Stands in for the real measure-before-subscribe probe (which mounts the
 // heavy xterm engine): reports a fixed grid immediately so the bootstrap's
 // gated create is free to fire in the "no host record" scenario below.
@@ -166,6 +186,7 @@ describe("<TerminalTile /> provider-login origin never dispatches terminal.creat
   beforeEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    authorityMock.capability = "legacy";
     mockCreate = {
       isError: false,
       isIdle: true,
@@ -223,5 +244,17 @@ describe("<TerminalTile /> provider-login origin never dispatches terminal.creat
     expect(mockCreate.mutate).not.toHaveBeenCalled();
     // Not the "ended" retry panel - the session is still alive.
     expect(screen.queryByText("Sign-in terminal ended.")).toBeNull();
+  });
+
+  it("keeps the ended panel and never creates against a capable host", async () => {
+    authorityMock.capability = "capable";
+    renderTile(signInNode("term-signin-capable", "inst-term-signin-capable"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Sign-in terminal ended.")).toBeDefined();
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
   });
 });

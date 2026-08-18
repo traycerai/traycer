@@ -48,6 +48,20 @@ vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
   useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
+  useHostPlainTerminalAuthority: () => ({
+    capability: { status: "legacy" },
+    canMutate: false,
+  }),
+}));
+
+vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
+  useHostPlainTerminalMutations: () => ({
+    close: { mutateAsync: vi.fn(), isPending: false },
+    rename: { mutate: vi.fn(), isPending: false },
+  }),
+}));
+
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: (props: { readonly children: ReactNode }) => props.children,
   DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>
@@ -80,6 +94,10 @@ import {
   recordProviderLoginTerminal,
   useProviderLoginTerminalsStore,
 } from "@/stores/providers/provider-login-terminals";
+import {
+  recordSetupTerminal,
+  useSetupTerminalsStore,
+} from "@/stores/worktree/setup-terminals";
 
 function openedTerminalTile(tabId: string, sessionId: string) {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
@@ -149,6 +167,10 @@ describe("terminal sidebar reopen carries provider-login origin", () => {
       useProviderLoginTerminalsStore.getInitialState(),
       true,
     );
+    useSetupTerminalsStore.setState(
+      useSetupTerminalsStore.getInitialState(),
+      true,
+    );
   });
 
   afterEach(() => {
@@ -185,5 +207,39 @@ describe("terminal sidebar reopen carries provider-login origin", () => {
 
     const opened = openedTerminalTile(TAB_ID, OTHER_SESSION_ID);
     expect(opened.origin).toBeUndefined();
+  });
+});
+
+describe("terminal sidebar reopen carries setup origin", () => {
+  beforeEach(() => {
+    seedTab();
+    useProviderLoginTerminalsStore.setState(
+      useProviderLoginTerminalsStore.getInitialState(),
+      true,
+    );
+    useSetupTerminalsStore.setState(
+      useSetupTerminalsStore.getInitialState(),
+      true,
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("opens a recorded setup session with origin: setup", () => {
+    recordSetupTerminal({
+      hostId: HOST_ID,
+      sessionId: SESSION_ID,
+    });
+    terminalSessions.value = [sessionInfo(SESSION_ID)];
+
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    fireEvent.click(getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`));
+
+    const opened = openedTerminalTile(TAB_ID, SESSION_ID);
+    expect(opened.origin).toBe("setup");
   });
 });

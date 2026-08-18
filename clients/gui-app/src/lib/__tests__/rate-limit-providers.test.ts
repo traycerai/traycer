@@ -65,14 +65,24 @@ describe("rateLimitFetchLane", () => {
     expect(rateLimitFetchLane("openrouter")).toBe("httpFetch");
     expect(rateLimitFetchLane("kilocode")).toBe("httpFetch");
   });
+
+  it("maps cursor to the httpFetch lane despite its two round trips", () => {
+    // Cursor mints a dashboard session from the API key before reading usage,
+    // so it costs two requests - but no subprocess, so it stays off the serial
+    // ephemeral queue.
+    expect(rateLimitFetchLane("cursor")).toBe("httpFetch");
+  });
 });
 
 describe("isRateLimitCapableProvider", () => {
-  it("accepts the four rate-limit-capable providers and rejects others", () => {
+  it("accepts rate-limit-capable providers and rejects others", () => {
     expect(isRateLimitCapableProvider("codex")).toBe(true);
     expect(isRateLimitCapableProvider("kilocode")).toBe(true);
-    expect(isRateLimitCapableProvider("cursor")).toBe(false);
+    // Cursor became rate-limit-capable once its dashboard usage arm landed; it
+    // used to be this test's negative example.
+    expect(isRateLimitCapableProvider("cursor")).toBe(true);
     expect(isRateLimitCapableProvider("traycer")).toBe(false);
+    expect(isRateLimitCapableProvider("copilot")).toBe(false);
   });
 });
 

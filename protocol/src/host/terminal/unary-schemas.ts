@@ -295,10 +295,10 @@ export type ReadTerminalOutputResponse = z.infer<
   typeof readTerminalOutputResponseSchema
 >;
 
-// `terminal.rename@1.0` - overrides the session's display title. Title
-// lives on the in-memory session record only; it does not persist across
-// host restarts (PTYs themselves don't either). `updated: false` means
-// the session was missing or already had the requested title.
+// `terminal.rename@1.0` - overrides the session's display title. New hosts may
+// durably persist it for registry-owned plain terminals; manager-owned legacy
+// sessions retain the released in-memory lifetime. The wire schema and
+// `updated` response semantics remain frozen.
 export const renameTerminalRequestSchema = z.object({
   sessionId: z.string(),
   title: z.string(),
