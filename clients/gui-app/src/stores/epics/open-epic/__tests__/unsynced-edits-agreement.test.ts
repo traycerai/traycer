@@ -156,7 +156,7 @@ describe("hasUnsyncedEdits agrees with getUnsyncedEdits", () => {
     // gate means the work is discarded without asking.
     //
     // Reached through a real product path, not by poking internals:
-    // `release(epicId, "keep")` is the ownership-denial arm, which drops the
+    // `release(epicId, "keep", null)` is the ownership-denial arm, which drops the
     // live entry and deliberately preserves retained buffers.
     const registry = __getOpenEpicRegistryForTests();
     const outgoing = makeHandle("epic-orphaned", "Orphaned");
@@ -172,7 +172,7 @@ describe("hasUnsyncedEdits agrees with getUnsyncedEdits", () => {
         editsTransferredToReplacement: false,
       },
     );
-    registry.release("epic-orphaned", "keep");
+    registry.release("epic-orphaned", "keep", null);
 
     // Premise, positively: the live entry really is gone and the retention
     // really did survive. Without this the arm below could pass for the wrong

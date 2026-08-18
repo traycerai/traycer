@@ -20,6 +20,42 @@ function fingerprint(schema: z.ZodType) {
  * replacements - at ANY depth), lenient where stripping or a designed
  * refusal handles it (additions and widenings - at ANY depth).
  */
+describe("toJsonSchemaFingerprint - the declared discriminator", () => {
+  // POSITIVE CONTROL for the one thing in this file that reads zod's internal
+  // `def`. `z.toJSONSchema` renders a discriminated union as `oneOf` and drops
+  // WHICH field was declared, so the fingerprint stamps it during conversion -
+  // and `findDiscriminatedSuccessor` needs it, because with two qualifying
+  // tags an edit and a replacement are structurally identical.
+  //
+  // The read degrades silently by design (an unrecognised shape leaves the
+  // node unstamped and identity falls back to the inferred tuple), so a zod
+  // upgrade that moves the field would quietly restore the old defect. This
+  // test is what makes that loud.
+  it("carries the field a discriminated union was declared on", () => {
+    const declared = fingerprint(
+      z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("a"), value: z.string() }),
+        z.object({ kind: z.literal("b") }),
+      ]),
+    );
+    expect(declared.type).toBe("anyOf");
+    if (declared.type !== "anyOf") throw new Error("unreachable");
+    expect(declared.discriminator).toBe("kind");
+  });
+
+  it("carries null for a plain union, which declares nothing", () => {
+    const plain = fingerprint(
+      z.union([
+        z.object({ kind: z.literal("a") }),
+        z.object({ id: z.string() }),
+      ]),
+    );
+    expect(plain.type).toBe("anyOf");
+    if (plain.type !== "anyOf") throw new Error("unreachable");
+    expect(plain.discriminator).toBeNull();
+  });
+});
+
 describe("findAdditivityViolation - projection-feasibility semantics", () => {
   describe("additions are legal at any depth", () => {
     it("accepts a new top-level optional field", () => {
