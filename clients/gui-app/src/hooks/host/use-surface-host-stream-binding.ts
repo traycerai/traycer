@@ -66,6 +66,16 @@ import {
  * context as "no client" and its subscriptions wait, which is the honest
  * state; the ambient socket is only the answer when the pin resolves TO the
  * ambient host.
+ *
+ * THE FOLLOWING BRANCH IS FENCED THE SAME WAY. `HostStreamProvider` holds its
+ * binding in state and replaces it in a passive effect too, so for the commit
+ * after the effective host moves A -> B it still serves A's client under A's
+ * name while `useEffectiveHostId()` already answers B. A surface pinned to B
+ * flips to `isFollowing` on that same commit, and handing it the ambient
+ * binding there would move it OFF its own correctly-built B stream and onto
+ * A's socket for one commit - the exact shape the pinned branch refuses. So
+ * the ambient binding is only handed on once it NAMES the host this surface
+ * resolves to; until then the surface is pending, as it is for its own pin.
  */
 export function useSurfaceHostStreamBinding(
   resolvedHostId: string | null,
@@ -91,5 +101,12 @@ export function useSurfaceHostStreamBinding(
     () => (client === null ? null : { wsStreamClient: client, hostId }),
     [client, hostId],
   );
-  return isFollowing ? ambientStream : pinned;
+  if (!isFollowing) return pinned;
+  // Following: the ambient binding, once it names the host this surface
+  // resolves to. `effectiveHostId` IS the resolved host on this branch
+  // (`resolvedHostId` is null or equal to it), so the comparison is against
+  // the one value both readings must agree on.
+  return ambientStream !== null && ambientStream.hostId === effectiveHostId
+    ? ambientStream
+    : null;
 }

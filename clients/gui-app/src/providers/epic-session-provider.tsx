@@ -596,13 +596,68 @@ export function EpicSessionProvider(
       settled = true;
       nextHandle.dispose();
     };
+    // ONE Epic can be mounted in TWO tabs of the same window (a duplicated
+    // tab: `mostRecentTabIdByEpicId`, `duplicateEpicTab`), and every provider
+    // for it shares the registry's mounted handle. So a re-point is started by
+    // EACH of them, each with its own candidate, and the registry's atomic
+    // `replaceMounted` lets exactly one win. The loser must ADOPT the winner's
+    // handle - not dispose its candidate and return, which left it presenting
+    // `establishing` forever on the old handle the winner had already disposed
+    // or detached, past a deadline that `settled` had already disarmed.
+    //
+    // Adoption publishes the winner under ITS construction stamp, exactly as a
+    // warm handle is adopted at acquire time (F1 above): if the stamp is not
+    // this provider's target the next pass takes the safe re-point arm from
+    // the winner rather than relabelling it. Mounted refs are untouched - the
+    // replacement inherited this provider's count, and its unmount still
+    // releases one.
+    const adoptWinner = (winner: OpenEpicStoreHandle): void => {
+      settled = true;
+      nextHandle.dispose();
+      const stampedHostId = handleHostIds.get(winner);
+      if (stampedHostId === undefined || stampedHostId === null) {
+        throw new Error(
+          "epic session handle carries no construction host stamp",
+        );
+      }
+      const nextSession = {
+        handle: winner,
+        hostId: stampedHostId,
+        ownerIdentityKey: ownerIdentityKeyForHost(
+          stampedHostId,
+          ownerIdentityKey,
+          ownerIdentityKeyHostId,
+        ),
+      };
+      sessionRef.current = nextSession;
+      setSession(nextSession);
+      if (stampedHostId === targetHostId) {
+        presentSession({
+          kind: "ready",
+          targetHostId,
+          originalHostId: originalHostIdRef.current,
+        });
+      }
+    };
     const commitReplacement = (): void => {
       if (lifecycle.cancelled || settled) return;
-      if (!nextHandle.store.getState().snapshotLoaded) return;
       if (sessionRef.current !== current) {
         disposePending();
         return;
       }
+      // Woken by the registry as well as by the candidate's own store, so a
+      // sibling's win is seen the moment it lands - not only once this
+      // provider's candidate happens to load its snapshot.
+      const mounted = registry.peek(epicId);
+      if (
+        mounted !== null &&
+        mounted !== current.handle &&
+        mounted !== nextHandle
+      ) {
+        adoptWinner(mounted);
+        return;
+      }
+      if (!nextHandle.store.getState().snapshotLoaded) return;
       settled = true;
       const previousRoomId =
         current.handle.store.getState().snapshotMeta?.roomId;
@@ -644,7 +699,21 @@ export function EpicSessionProvider(
         previousDisposition,
       );
       if (!replaced) {
+        // Lost the race between the `peek` above and here, or the entry is
+        // gone. A sibling's winner is adopted; anything else is presented as
+        // failed so the retry affordance exists, instead of an `establishing`
+        // that nothing will ever advance.
+        const winner = registry.peek(epicId);
+        if (winner !== null && winner !== current.handle) {
+          adoptWinner(winner);
+          return;
+        }
         nextHandle.dispose();
+        presentSession({
+          kind: "failed",
+          targetHostId,
+          originalHostId: originalHostIdRef.current,
+        });
         return;
       }
       const nextSession = {
@@ -678,6 +747,7 @@ export function EpicSessionProvider(
       });
     };
     const unsubscribe = nextHandle.store.subscribe(commitReplacement);
+    const unsubscribeRegistry = registry.subscribe(commitReplacement);
     const deadline = window.setTimeout(() => {
       if (lifecycle.cancelled || settled) return;
       disposePending();
@@ -693,6 +763,7 @@ export function EpicSessionProvider(
       lifecycle.cancelled = true;
       window.clearTimeout(deadline);
       unsubscribe();
+      unsubscribeRegistry();
       disposePending();
     };
   }, [

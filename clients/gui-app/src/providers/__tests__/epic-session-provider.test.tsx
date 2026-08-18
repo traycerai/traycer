@@ -930,6 +930,89 @@ describe("<EpicSessionProvider />", () => {
     ).toBeUndefined();
   });
 
+  it("two mounted tabs of ONE epic re-point once: the loser adopts the winner's handle instead of parking in establishing", async () => {
+    // A duplicated tab mounts a second provider for the same epic; both share
+    // the registry's mounted handle, so both start the A -> B re-point with
+    // their own candidate. `replaceMounted` lets exactly one win. The loser
+    // used to dispose its candidate and return - past a deadline `settled`
+    // had already disarmed - and present `establishing` forever on the old
+    // handle the winner had just disposed.
+    const streams: ControlledEpicStream[] = [];
+    const handlesA: OpenEpicStoreHandle[] = [];
+    const handlesB: OpenEpicStoreHandle[] = [];
+    const presentationsA: Array<EpicSessionPresentation | null> = [];
+    const presentationsB: Array<EpicSessionPresentation | null> = [];
+    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+    const body = (): React.JSX.Element => (
+      <>
+        <EpicSessionProvider epicId="epic-session-test" tabId="tab-a">
+          <HandleProbe onHandle={(handle) => handlesA.push(handle)} />
+          <PresentationProbe onPresentation={(p) => presentationsA.push(p)} />
+        </EpicSessionProvider>
+        <EpicSessionProvider epicId="epic-session-test" tabId="tab-b">
+          <HandleProbe onHandle={(handle) => handlesB.push(handle)} />
+          <PresentationProbe onPresentation={(p) => presentationsB.push(p)} />
+        </EpicSessionProvider>
+      </>
+    );
+    const view = render(body());
+    await waitFor(() => {
+      expect(handlesA).toHaveLength(1);
+      expect(handlesB).toHaveLength(1);
+    });
+    // One shared handle, one stream, two mounted refs.
+    expect(handlesB[0]).toBe(handlesA[0]);
+    expect(streams).toHaveLength(1);
+    act(() => {
+      deliverSnapshot(streams[0], "room-a");
+    });
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(body());
+    });
+    // Both providers start a candidate toward host-b.
+    await waitFor(() => expect(streams).toHaveLength(3));
+
+    // The first candidate to load its snapshot wins the atomic replacement.
+    act(() => {
+      deliverSnapshot(streams[1], "room-a");
+    });
+    await waitFor(() => {
+      expect(handlesA.at(-1)).not.toBe(handlesA[0]);
+      expect(handlesB.at(-1)).not.toBe(handlesB[0]);
+    });
+    // Both providers publish the SAME replacement, the losing candidate is
+    // disposed, and the registry holds exactly one entry.
+    expect(handlesB.at(-1)).toBe(handlesA.at(-1));
+    expect(streams[2].closeCount).toBe(1);
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    await waitFor(() => {
+      expect(presentationsA.at(-1)?.kind).toBe("ready");
+      expect(presentationsB.at(-1)?.kind).toBe("ready");
+    });
+    // The losing candidate's snapshot arriving later changes nothing.
+    act(() => {
+      deliverSnapshot(streams[2], "room-a");
+    });
+    await act(() => Promise.resolve());
+    expect(handlesB.at(-1)).toBe(handlesA.at(-1));
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
   it("bounds a re-point that never snapshots and returns to the original host", async () => {
     vi.useFakeTimers();
     try {

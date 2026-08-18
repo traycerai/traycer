@@ -127,13 +127,17 @@ if (runsFirstShard) {
     // check nobody enables is a coverage gap wearing a test's name.
     runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs");
     runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs");
-    // Geometry: every element of the window host modal's local-bootstrap body
-    // on ONE left edge. jsdom has no layout engine, so `self-center` there is
-    // a class-attribute substring and nothing else. Same gate as its siblings.
-    // (`scripts/toast-over-modal-hittest.mjs` is deliberately NOT here: it is
-    // a measurement that prints hit-test figures and asserts nothing, so a
-    // gate on it would be a gate on a number nobody reads - run it by hand.)
-    runBrowserRegression("scripts/window-host-modal-alignment-browser.mjs");
+    // NOT here, deliberately, and each for its own reason:
+    // - `scripts/window-host-modal-alignment-browser.mjs` measures the
+    //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
+    //   `HostBootCard` superseded when the boot card became a CENTRED surface
+    //   (`local-host-loading.tsx`: "the card is centred now"). Run against the
+    //   current component it reports the centring as a 58px misalignment. It
+    //   is a manual instrument for the left-aligned arrangement it was written
+    //   for, not a gate on the current one; re-base it before wiring it here.
+    // - `scripts/toast-over-modal-hittest.mjs` prints hit-test figures and
+    //   asserts nothing, so a gate on it would be a gate on a number nobody
+    //   reads - run it by hand.
   }
 }
 
