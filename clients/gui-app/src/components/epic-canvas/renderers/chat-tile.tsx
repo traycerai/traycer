@@ -1080,6 +1080,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
               onRevert={view.revertOnEdit.onRevert}
               onDontRevert={view.revertOnEdit.onDontRevert}
               artifactCount={view.revertOnEdit.artifactCount}
+              queuedCount={view.revertOnEdit.queuedCount}
             />
             <SteerSettingsConflictDialog
               open={view.steerRestart.open}
@@ -1764,6 +1765,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       setForkTarget,
       worktreeBinding: state.worktreeBinding,
       revertOnEditOpen: uiState.revertOnEditOpen,
+      queuedCount: state.queue.items.length,
     });
 
   const submitMessage = useCallback(
