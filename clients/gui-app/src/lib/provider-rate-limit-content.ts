@@ -191,7 +191,17 @@ export function resolvePopoverProviderRateLimitState(
     // Once a queued fetch actually fails, TanStack moves the observer out of
     // `isPending` and into `isError`, revealing retryable error content instead
     // of staying hidden in Overview.
-    return props.isFetching || props.isPending
+    //
+    // `isError` is consulted rather than inferred from "idle with no data".
+    // Callers pass the SUPPRESSED value (`isRateLimitQueryFailure`), which is
+    // false while a read we stopped waiting for still has its delayed
+    // collection coming. On a COLD read there is no envelope to fall back on,
+    // so inferring the failure from idleness reported one anyway - and then
+    // silently succeeded when the collection landed, which is the exact
+    // visible-failure-then-silent-success transition the suppression exists to
+    // remove. A read that genuinely failed still arrives here with `isError`
+    // true (including once the follow-up budget is spent) and still reports.
+    return props.isFetching || props.isPending || !props.isError
       ? { kind: "cold" }
       : { kind: "error" };
   }
