@@ -1,4 +1,8 @@
 import { z } from "zod";
+import type {
+  $ZodDiscriminatedUnionDef,
+  ToJSONSchemaContext,
+} from "zod/v4/core";
 
 /**
  * Normalized JSON-Schema fingerprint shared by the versioned-record
@@ -107,32 +111,48 @@ export function toJsonSchemaFingerprint(
 /** The key `toJsonSchemaFingerprint` stamps the declared discriminator under. */
 const DECLARED_DISCRIMINATOR_KEY = "x-traycer-discriminator";
 
-interface ZodDiscriminatedUnionInternals {
-  readonly _zod?: { readonly def?: { readonly discriminator?: unknown } };
-}
+/**
+ * The exact object zod hands the `override` hook, taken from zod's own
+ * context type instead of restated here. A hand-written mirror of it would go
+ * on compiling after an upgrade changed the real one, which is the failure
+ * mode this whole stamp exists to avoid.
+ */
+type SchemaOverrideContext = Parameters<ToJSONSchemaContext["override"]>[0];
 
-interface SchemaConversionContext {
-  readonly zodSchema: unknown;
-  readonly jsonSchema: Record<string, unknown>;
+/**
+ * Narrows zod's base def to a discriminated union's, against zod's OWN
+ * exported def type rather than a local restatement of its shape.
+ *
+ * The runtime string check is load-bearing, not belt-and-braces. `_zod.def`
+ * is internal and the public surface exposes no accessor for it, so an
+ * upgrade that renames or retypes `discriminator` must leave the node
+ * UNSTAMPED - identity then falls back to the inferred tuple, the behaviour
+ * before this existed - rather than stamp `undefined` as though some field
+ * had been declared. Structural, so it is a narrowing and not a cast.
+ */
+function isDiscriminatedUnionDef(
+  def: object,
+): def is $ZodDiscriminatedUnionDef {
+  return (
+    "discriminator" in def &&
+    typeof def.discriminator === "string" &&
+    def.discriminator.length > 0
+  );
 }
 
 /**
  * Writes `z.discriminatedUnion`'s declared field onto the emitted union node.
  *
- * Reads zod's internal `def` because the public surface exposes no accessor
- * for it, and it is read DEFENSIVELY: a shape that does not answer with a
- * string simply leaves the node unstamped, and identity falls back to the
- * inferred tuple - the behaviour before this existed. A zod upgrade that moves
- * the field therefore degrades to the old inference rather than throwing, and
- * the fixture in `json-schema-fingerprint.test.ts` fails loudly if it does.
+ * A plain `z.union` has no `discriminator` in its def and is left alone, which
+ * is the honest answer: nothing was declared, so identity stays the inferred
+ * tuple. `json-schema-fingerprint.test.ts` pins the stamp as a positive
+ * control, so a zod upgrade that silently stops producing it fails loudly
+ * there instead of quietly restoring the defect this closes.
  */
-function stampDeclaredDiscriminator(context: SchemaConversionContext): void {
-  const schema = context.zodSchema;
-  if (typeof schema !== "object" || schema === null) return;
-  const internals = schema as ZodDiscriminatedUnionInternals;
-  const declared = internals._zod?.def?.discriminator;
-  if (typeof declared !== "string" || declared.length === 0) return;
-  context.jsonSchema[DECLARED_DISCRIMINATOR_KEY] = declared;
+function stampDeclaredDiscriminator(context: SchemaOverrideContext): void {
+  const def = context.zodSchema._zod.def;
+  if (!isDiscriminatedUnionDef(def)) return;
+  context.jsonSchema[DECLARED_DISCRIMINATOR_KEY] = def.discriminator;
 }
 
 /** The stamped discriminator on a RAW JSON Schema union node, if any. */
