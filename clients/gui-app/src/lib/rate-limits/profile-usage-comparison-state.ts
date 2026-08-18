@@ -19,7 +19,14 @@ import type {
  *  `deriveProfileUsageDetailState`). */
 export type ProfileUsageSemanticWarning = "near_limit" | "hard_limit";
 
-export type ProfileUsageRefreshStatus = "idle" | "queued" | "refreshing";
+/**
+ * There is deliberately no `queued` member. A user-initiated refresh starts the
+ * moment it is requested (`ephemeral-fetch-queue`'s forced pulls skip the serial
+ * lane), so "asked for, not started yet" is no longer a state this UI can be in
+ * - and a label for it would only ever appear when a person's click had not
+ * taken effect.
+ */
+export type ProfileUsageRefreshStatus = "idle" | "refreshing";
 type UnavailableProviderRateLimits = Extract<
   ProviderRateLimits,
   { available: false }
@@ -182,20 +189,17 @@ export function deriveProfileUsageDetailState(
 
 /**
  * Pure classifier for the refresh axis, orthogonal to `detail`: whether THIS
- * profile's own query key is actively fetching (`refreshing`), waiting its
- * turn behind another entry in the shared serial queue (`queued` - only a
- * concept for the `ephemeralProcess` lane, which the caller passes as
- * `lane`), or neither (`idle`). Mirrors `useProviderRateLimitRefresh`'s
- * existing `isFetching || (lane === "ephemeralProcess" && draining)` fold,
- * split into three states instead of two booleans so callers can render
- * "queued" and "refreshing" distinctly.
+ * profile's own query key is actively fetching, or not.
+ *
+ * It takes no lane and no queue-wide flag on purpose. This used to fold in the
+ * shared lane's process-wide `draining` state to describe a pull waiting its
+ * turn, which made every profile read as busy whenever any unrelated background
+ * probe was in flight; the scoping that hid that lived two layers up, in
+ * `scopeProfileUsageRefreshStatus`. Forced pulls no longer wait, so the state
+ * that flag described is gone and the honest input is this profile's own query.
  */
 export function deriveProfileUsageRefreshStatus(args: {
   readonly isFetchingThisProfile: boolean;
-  readonly queueDraining: boolean;
-  readonly lane: "httpFetch" | "ephemeralProcess" | null;
 }): ProfileUsageRefreshStatus {
-  if (args.isFetchingThisProfile) return "refreshing";
-  if (args.lane === "ephemeralProcess" && args.queueDraining) return "queued";
-  return "idle";
+  return args.isFetchingThisProfile ? "refreshing" : "idle";
 }

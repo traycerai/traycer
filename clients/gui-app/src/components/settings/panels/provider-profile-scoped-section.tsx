@@ -230,7 +230,6 @@ export function ProviderProfileScopedSection(
             <ProviderProfilesRefreshButton
               providerId={state.providerId}
               profileId={profileCommitId(selectedProfile)}
-              usageUpdatedAt={selectedProfile.usageUpdatedAt}
               fetchEligible={profileRateLimitFetchEligible(
                 state,
                 selectedProfile,
@@ -360,7 +359,6 @@ export function ProviderProfileScopedSection(
         <EmbeddedProviderRateLimitForProvider
           providerId={state.providerId}
           profileId={profileCommitId(selectedProfile)}
-          usageUpdatedAt={selectedProfile.usageUpdatedAt}
           fetchEligible={profileRateLimitFetchEligible(state, selectedProfile)}
         />
       </div>

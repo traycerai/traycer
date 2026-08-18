@@ -275,7 +275,11 @@ describe("useVisibleRateLimitProviders", () => {
     expect(configured.result.current).toEqual([]);
   });
 
-  it("keeps an authenticated managed profile visible without cache under aggregate authPending while excluding the unauthenticated ambient target from the queue", () => {
+  // The widened `useConfiguredRateLimitProviders` gate (was: ambient-only) now
+  // keeps a provider whose ambient login is signed out as long as an
+  // independently-authenticated managed profile can still perform its own
+  // usage pull - a managed profile does not inherit an ambient sign-out.
+  it("keeps an authenticated managed profile visible AND queue-configured under aggregate authPending, even with the ambient target unauthenticated", () => {
     const ambient: ProviderProfile = {
       profileId: "ambient",
       kind: "ambient",
@@ -313,14 +317,55 @@ describe("useVisibleRateLimitProviders", () => {
     const visible = renderHook(() => useVisibleRateLimitProviders());
     const configured = renderHook(() => useConfiguredRateLimitProviders());
 
-    expect(visible.result.current).toEqual([
+    const expected = [
       {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: [ambient, managed],
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
-    ]);
+    ];
+    expect(visible.result.current).toEqual(expected);
+    expect(configured.result.current).toEqual(expected);
+  });
+
+  it("excludes a provider whose ambient is ineligible and every managed profile is also fetch-ineligible", () => {
+    const ambient: ProviderProfile = {
+      profileId: "ambient",
+      kind: "ambient",
+      authType: "oauth",
+      label: "Terminal",
+      auth: auth("unauthenticated"),
+      identity: null,
+      usageUpdatedAt: null,
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      duplicateOfProfileId: null,
+      accentColor: null,
+      ambientDriftNotice: null,
+    };
+    const managed: ProviderProfile = {
+      ...ambient,
+      profileId: "work-profile",
+      kind: "managed",
+      label: "Work",
+      auth: auth("unauthenticated"),
+    };
+    mocks.providers = [
+      {
+        ...providerState({
+          providerId: "codex",
+          status: "unauthenticated",
+          enabled: true,
+          authPending: false,
+          availabilityPending: false,
+        }),
+        profiles: [ambient, managed],
+      },
+    ];
+
+    const configured = renderHook(() => useConfiguredRateLimitProviders());
+
     expect(configured.result.current).toEqual([]);
   });
 

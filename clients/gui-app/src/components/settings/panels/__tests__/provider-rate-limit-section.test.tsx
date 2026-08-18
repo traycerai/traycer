@@ -28,11 +28,16 @@ type TurnRefreshCall = {
 const mocks = vi.hoisted(
   (): {
     data: ProviderRateLimitEnvelope | undefined;
+    dataUpdatedAt: number;
     isPending: boolean;
     isError: boolean;
     isFetching: boolean;
     refetch: Mock<() => Promise<Record<string, never>>>;
-    draining: boolean;
+    // Backs `useIsRateLimitFetchPending` (this provider/profile's own
+    // queue-pending flag), not the lane-wide `draining` flag - the refresh
+    // control's disable is now scoped to its own work, never an unrelated
+    // provider's queued pull.
+    pending: Mock<(...args: unknown[]) => boolean>;
     enqueue: Mock<(...args: unknown[]) => Promise<unknown>>;
     hostId: string;
     turnRefreshCalls: TurnRefreshCall[];
@@ -41,11 +46,12 @@ const mocks = vi.hoisted(
     refreshOnMount: Mock<(...args: unknown[]) => void>;
   } => ({
     data: undefined,
+    dataUpdatedAt: 0,
     isPending: false,
     isError: false,
     isFetching: false,
     refetch: vi.fn(() => Promise.resolve({})),
-    draining: false,
+    pending: vi.fn(() => false),
     enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
     hostId: "host-1",
     turnRefreshCalls: [],
@@ -65,6 +71,7 @@ function envelope(data: ProviderRateLimits): ProviderRateLimitEnvelope {
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: () => ({
     data: mocks.data,
+    dataUpdatedAt: mocks.dataUpdatedAt,
     isPending: mocks.isPending,
     isError: mocks.isError,
     isFetching: mocks.isFetching,
@@ -87,8 +94,8 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => mocks.hostId,
 }));
-vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
-  useIsRateLimitQueueDraining: () => mocks.draining,
+vi.mock("@/hooks/rate-limits/use-is-rate-limit-fetch-pending", () => ({
+  useIsRateLimitFetchPending: (...args: unknown[]) => mocks.pending(...args),
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
   useRateLimitQueueScope: () => mocks.queueScope,
@@ -173,10 +180,11 @@ const CODEX_RATE_LIMITS: ProviderRateLimits = {
 describe("ProviderRateLimitForProvider", () => {
   beforeEach(() => {
     mocks.data = undefined;
+    mocks.dataUpdatedAt = 0;
     mocks.isPending = false;
     mocks.isError = false;
     mocks.isFetching = false;
-    mocks.draining = false;
+    mocks.pending = vi.fn(() => false);
     mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
     mocks.hostId = "host-1";
     mocks.turnRefreshCalls = [];
@@ -189,11 +197,11 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("renders the embedded variant as an integrated section without a nested card border", () => {
+    mocks.dataUpdatedAt = 123;
     const { container } = render(
       <EmbeddedProviderRateLimitForProvider
         providerId="codex"
         profileId="work-profile"
-        usageUpdatedAt={123}
         fetchEligible
       />,
     );
@@ -206,8 +214,7 @@ describe("ProviderRateLimitForProvider", () => {
     expect(mocks.refreshOnMount).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "work-profile",
-      usageUpdatedAt: 123,
-      hasCachedValue: false,
+      dataUpdatedAt: 123,
       fetchEligible: true,
       refetch: mocks.refetch,
     });
@@ -218,7 +225,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="traycer"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -232,7 +238,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="claude-code"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -245,7 +250,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId="work-profile"
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -266,7 +270,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="claude-code"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -280,7 +283,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="claude-code"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -297,7 +299,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="claude-code"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -310,7 +311,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="claude-code"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -346,7 +346,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="claude-code"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -366,7 +365,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="claude-code"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -384,7 +382,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -402,7 +399,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -431,7 +427,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -451,7 +446,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -471,7 +465,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -489,7 +482,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -503,7 +495,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -517,7 +508,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -532,7 +522,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -564,7 +553,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -591,7 +579,6 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderProfilesRefreshButton
         providerId="codex"
         profileId="work-profile"
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -614,15 +601,16 @@ describe("ProviderRateLimitForProvider", () => {
     );
   });
 
-  it("keeps the refresh button disabled while the shared queue is draining, even once this provider's own isFetching has settled", () => {
+  it("keeps the refresh button disabled while this profile's own pull is pending in the queue, even once its own isFetching has settled", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isFetching = false;
-    mocks.draining = true;
+    mocks.pending = vi.fn(
+      (...args: unknown[]) => args[0] === "codex" && args[1] === null,
+    );
     render(
       <ProviderRateLimitForProvider
         providerId="codex"
         profileId={null}
-        usageUpdatedAt={null}
         fetchEligible
       />,
     );
@@ -630,5 +618,29 @@ describe("ProviderRateLimitForProvider", () => {
     expect(
       screen.getByRole("button", { name: "Refresh usage limits" }),
     ).toHaveProperty("disabled", true);
+  });
+
+  it("does not disable the refresh button merely because an unrelated provider's pull is pending in the shared queue", () => {
+    // Regression guard: `isRefreshing` used to OR in the lane-wide `draining`
+    // flag, so any queued work anywhere (a background sweep, one wedged
+    // probe) disabled every rate-limit refresh control - including the
+    // priority scheduler's own forced click. Scoping to this provider's own
+    // pending flag keeps that click reachable.
+    mocks.data = envelope(CODEX_RATE_LIMITS);
+    mocks.isFetching = false;
+    mocks.pending = vi.fn(
+      (...args: unknown[]) => args[0] === "claude-code" && args[1] === null,
+    );
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        fetchEligible
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Refresh usage limits" }),
+    ).toHaveProperty("disabled", false);
   });
 });

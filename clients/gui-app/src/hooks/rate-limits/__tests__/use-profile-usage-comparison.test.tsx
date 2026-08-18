@@ -336,6 +336,7 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-managed",
+        force: true,
       },
     ]);
   });
@@ -369,6 +370,7 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-a",
+        force: true,
       },
     ]);
   });
@@ -483,6 +485,7 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-tab",
+        force: true,
       },
     ]);
     expect(
@@ -513,25 +516,15 @@ describe("useProfileUsageComparison", () => {
     ).toBeUndefined();
   });
 
-  it("serializes two profiles' ephemeralProcess refreshes through the shared queue, one at a time", async () => {
+  it("does not mark a sibling profile as refreshing merely because this profile's own pull is in flight", async () => {
     const queryClient = new QueryClient();
-    const order: string[] = [];
-    const releaseFirstRef: { current: (() => void) | null } = { current: null };
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirstRef.current = resolve;
+    const releaseGateRef: { current: (() => void) | null } = { current: null };
+    const gate = new Promise<void>((resolve) => {
+      releaseGateRef.current = resolve;
     });
-    const { scope } = buildHostScope("default-host", queryClient, (params) => {
-      const profileId = (params as { readonly profileId: string }).profileId;
-      order.push(`start:${profileId}`);
-      if (profileId === "p-a") {
-        return firstGate.then(() => {
-          order.push(`end:${profileId}`);
-          return goodResponse();
-        });
-      }
-      order.push(`end:${profileId}`);
-      return goodResponse();
-    });
+    const { scope } = buildHostScope("default-host", queryClient, () =>
+      gate.then(() => goodResponse()),
+    );
     scopesRef.byHostId.set(null, scope);
 
     const profileA = profile("p-a", "managed", "A", {});
@@ -548,24 +541,27 @@ describe("useProfileUsageComparison", () => {
     );
 
     const refreshA = result.current.entries.get("p-a")?.refresh();
-    const refreshB = result.current.entries.get("p-b")?.refresh();
 
-    await waitFor(() => expect(order).toEqual(["start:p-a"]));
-    // p-b's own fetch has not started yet (it is waiting its turn behind p-a
-    // in the shared serial queue), so it reads as queued, not refreshing.
+    // p-a's own pull is now in flight - forced refreshes no longer wait a
+    // turn in a shared serial lane, so there is no "queued" state left to
+    // read here at all.
     await waitFor(() =>
-      expect(result.current.entries.get("p-b")?.refreshStatus).toBe("queued"),
+      expect(result.current.entries.get("p-a")?.refreshStatus).toBe(
+        "refreshing",
+      ),
     );
-    expect(result.current.entries.get("p-a")?.refreshStatus).toBe("refreshing");
+    // p-b's own query was never asked to fetch - a sibling's in-flight pull
+    // must never leak into it, now that there is no shared `queued`/`draining`
+    // state for the two to share.
+    expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle");
 
-    releaseFirstRef.current?.();
+    releaseGateRef.current?.();
     await refreshA;
-    await refreshB;
 
-    expect(order).toEqual(["start:p-a", "end:p-a", "start:p-b", "end:p-b"]);
     await waitFor(() =>
-      expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle"),
+      expect(result.current.entries.get("p-a")?.refreshStatus).toBe("idle"),
     );
+    expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle");
   });
 
   it("retains the last-good reading (dimmed) after a refresh resolves with a transient failure", async () => {

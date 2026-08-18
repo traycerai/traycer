@@ -1092,7 +1092,6 @@ function ProviderTabBody({
             <ProviderRateLimitForProvider
               providerId={state.providerId}
               profileId={null}
-              usageUpdatedAt={null}
               fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
               onOpenModelProviders={() => onActiveTabChange("modelProviders")}
             />

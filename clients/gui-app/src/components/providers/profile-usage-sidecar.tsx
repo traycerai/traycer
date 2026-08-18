@@ -291,9 +291,7 @@ function FreshnessLine({
       entry.projection.kind === "stale" ? "Last checked" : "Checked";
     freshness = `${prefix} ${formatRelativeTimestamp(checkedAt, now)}`;
   }
-  let activity: "Queued" | "Refreshing" | null = null;
-  if (entry.refreshStatus === "queued") activity = "Queued";
-  else if (entry.refreshStatus === "refreshing") activity = "Refreshing";
+  const activity = entry.refreshStatus === "refreshing" ? "Refreshing" : null;
   return (
     <div className="mt-0.5 flex flex-wrap items-center gap-1 text-ui-xs text-muted-foreground">
       <span>{freshness}</span>

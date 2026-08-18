@@ -10,7 +10,6 @@ import type { HostRequestSpec } from "@/hooks/host/use-host-queries";
 import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
-import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
 import { useRunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -92,7 +91,6 @@ export function useProfileUsageComparison({
     enabled: target.isReady,
     subscribed: true,
   });
-  const draining = useIsRateLimitQueueDraining();
   const rateLimitProviderId: RateLimitProviderId | null =
     isRateLimitCapableProvider(providerId) ? providerId : null;
   const lane =
@@ -159,8 +157,6 @@ export function useProfileUsageComparison({
       );
       const refreshStatus = deriveProfileUsageRefreshStatus({
         isFetchingThisProfile: query?.isFetching ?? false,
-        queueDraining: draining,
-        lane,
       });
       const fetchEligible =
         fetchEligibility !== null &&
@@ -201,7 +197,6 @@ export function useProfileUsageComparison({
     return map;
   }, [
     cacheQueries,
-    draining,
     fetchEligibility,
     lane,
     now,

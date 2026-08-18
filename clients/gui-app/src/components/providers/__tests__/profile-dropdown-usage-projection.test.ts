@@ -39,10 +39,16 @@ function entry(
 }
 
 describe("picker comparison projection adapter", () => {
-  it("only exposes queued state for a refresh initiated by this profile", () => {
-    expect(scopeProfileUsageRefreshStatus("queued", false)).toBe("idle");
-    expect(scopeProfileUsageRefreshStatus("idle", true)).toBe("queued");
-    expect(scopeProfileUsageRefreshStatus("queued", true)).toBe("queued");
+  // `ProfileUsageRefreshStatus` dropped its `queued` member (see
+  // `scopeProfileUsageRefreshStatus`'s own doc comment): a locally pending
+  // refresh now reads the same as an observed one, "refreshing" - never a
+  // separate "queued" state for this profile to be in.
+  it("treats a locally pending refresh as refreshing, matching the observed-refreshing case", () => {
+    expect(scopeProfileUsageRefreshStatus("idle", false)).toBe("idle");
+    expect(scopeProfileUsageRefreshStatus("idle", true)).toBe("refreshing");
+    expect(scopeProfileUsageRefreshStatus("refreshing", true)).toBe(
+      "refreshing",
+    );
     expect(scopeProfileUsageRefreshStatus("refreshing", false)).toBe(
       "refreshing",
     );

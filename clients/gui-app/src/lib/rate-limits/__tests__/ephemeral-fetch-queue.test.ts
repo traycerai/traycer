@@ -11,15 +11,19 @@ import { queryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
-import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
+import {
+  EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS,
+  RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+} from "@/lib/rate-limits/rate-limit-timing";
 import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
   enqueueRateLimitFetch,
   enqueueRateLimitFetchBatch,
   enqueueRateLimitFetchForScope,
+  isRateLimitFetchPending,
   isRateLimitQueueDraining,
-  subscribeRateLimitQueueDraining,
+  subscribeRateLimitQueue,
   type RateLimitQueueRequestFn,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
@@ -96,25 +100,29 @@ describe("ephemeral-fetch-queue", () => {
     vi.useRealTimers();
   });
 
-  it("serializes concurrent enqueues across providers - only one request is ever in flight (guardrail 1)", async () => {
+  // Ticket 06's guardrail 1 was "only one subprocess-spawning fetch in flight at
+  // a time, even under rapid manual clicking", refined by #369 to one TRIGGER at
+  // a time. The manual-clicking half was deliberately given up: a click paid for
+  // that bound by waiting behind work it never asked for, under a "Queued" label.
+  // What survives is asserted across the next three tests - automatic work still
+  // serializes, and now also yields to anything a person asked for.
+  it("serializes concurrent AUTOMATIC enqueues across providers - only one request is ever in flight", async () => {
     const queryClient = newQueryClient();
     const { request, calls, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
 
-    // Fire two ephemeralProcess providers concurrently, as a rapid "Refresh all"
-    // across providers would. Force bypasses the freshness floor.
+    // Two background sweeps landing together. Nobody is waiting on either, so
+    // the lane still spends exactly one subprocess at a time.
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
-      force: true,
+      force: false,
       profileId: null,
     });
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
-      force: true,
+      force: false,
       profileId: null,
     });
 
     await flush();
-    // Despite two concurrent enqueues, only the first provider's request has
-    // started - the second is queued behind it, not spawned in parallel.
     expect(request).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(["codex"]);
     expect(
@@ -133,7 +141,66 @@ describe("ephemeral-fetch-queue", () => {
     await flush();
   });
 
-  it("starts every profile in one refresh batch concurrently, then waits before running the next queue item", async () => {
+  it("starts a forced pull immediately even while an automatic pull is running - a click never waits on work nobody asked for", async () => {
+    const queryClient = newQueryClient();
+    const { request, calls, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    // A background sweep takes the lane and is left in flight for the whole test.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(calls).toEqual(["codex"]);
+
+    // The click. Under the old lane this sat behind the sweep for up to the full
+    // response budget; it now spawns straight away.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    await flush();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual(["codex", "claude-code"]);
+
+    settlers[0].ok();
+    settlers[1].ok();
+    await flush();
+    expect(isRateLimitQueueDraining()).toBe(false);
+  });
+
+  it("does not start automatic work while a forced pull is in flight, and resumes it once that pull settles", async () => {
+    const queryClient = newQueryClient();
+    const { request, calls, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    await flush();
+    expect(calls).toEqual(["codex"]);
+
+    // Background work must not pile a second subprocess on top of the click.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(["codex"]);
+
+    settlers[0].ok();
+    await flush();
+    expect(calls).toEqual(["codex", "claude-code"]);
+
+    settlers[1].ok();
+    await flush();
+    expect(isRateLimitQueueDraining()).toBe(false);
+  });
+
+  it("starts every profile in one refresh batch concurrently, then defers a later automatic item until the batch settles", async () => {
     const queryClient = newQueryClient();
     const profileStarts: Array<string | null> = [];
     const settlers: Array<() => void> = [];
@@ -162,8 +229,10 @@ describe("ephemeral-fetch-queue", () => {
       ],
       { force: true },
     );
+    // Automatic, so it demonstrates the deferral: a forced batch fans out
+    // concurrently (#369) while later background work still waits its turn.
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
-      force: true,
+      force: false,
       profileId: null,
     });
 
@@ -171,6 +240,7 @@ describe("ephemeral-fetch-queue", () => {
     expect(profileStarts).toEqual([null, "work-profile"]);
     expect(request).toHaveBeenCalledTimes(2);
 
+    // One of the batch's two pulls settling is not the batch settling.
     settlers[0]();
     await flush();
     expect(request).toHaveBeenCalledTimes(2);
@@ -217,7 +287,9 @@ describe("ephemeral-fetch-queue", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "codex",
         profileId: "work-profile",
+        force: true,
       },
+      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     );
     expect(
       queryClient.getQueryData(keyForHost("host-b", "codex", "work-profile")),
@@ -232,7 +304,7 @@ describe("ephemeral-fetch-queue", () => {
     ).toBeUndefined();
   });
 
-  it("serializes default-host and selected-host subprocess work on the same lane", async () => {
+  it("serializes default-host and selected-host AUTOMATIC subprocess work on the same lane", async () => {
     const queryClient = newQueryClient();
     const defaultHost = makeControllableRequest();
     const selectedHost = makeControllableRequest();
@@ -242,8 +314,11 @@ describe("ephemeral-fetch-queue", () => {
       request: defaultHost.request,
     });
 
+    // An explicit scope feeds the same lane as the app-shell default, so
+    // background work for two different hosts still costs one subprocess at a
+    // time. (Forced pulls from either scope bypass the lane by design.)
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
-      force: true,
+      force: false,
       profileId: null,
     });
     void enqueueRateLimitFetchForScope(
@@ -254,7 +329,7 @@ describe("ephemeral-fetch-queue", () => {
       },
       "claude-code",
       DEFAULT_ACCOUNT_CONTEXT,
-      { force: true, profileId: "selected-profile" },
+      { force: false, profileId: "selected-profile" },
     );
 
     await flush();
@@ -270,33 +345,30 @@ describe("ephemeral-fetch-queue", () => {
     expect(isRateLimitQueueDraining()).toBe(false);
   });
 
-  it("serializes many rapid same-provider force refreshes one at a time", async () => {
+  it("collapses many rapid same-profile force refreshes into one request - fetchQuery dedupes on the query key", async () => {
     const queryClient = newQueryClient();
     const { request, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
 
-    for (let i = 0; i < 4; i++) {
-      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+    // Four clicks on one row in quick succession. Forced pulls no longer queue,
+    // so the lane is not what stops four CLI spawns here - `fetchQuery` joining
+    // the in-flight fetch for the same key is (and, underneath, the host's
+    // per-(provider, effective profile) single-flight).
+    const settled = Array.from({ length: 4 }, () =>
+      enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
         force: true,
         profileId: null,
-      });
-    }
+      }),
+    );
 
     await flush();
     expect(request).toHaveBeenCalledTimes(1);
 
     settlers[0].ok();
+    await Promise.all(settled);
     await flush();
-    expect(request).toHaveBeenCalledTimes(2);
-
-    settlers[1].ok();
-    await flush();
-    expect(request).toHaveBeenCalledTimes(3);
-
-    settlers[2].ok();
-    settlers[3]?.ok();
-    await flush();
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(isRateLimitQueueDraining()).toBe(false);
   });
 
   it("writes into the same query key the per-provider hook reads", async () => {
@@ -373,21 +445,24 @@ describe("ephemeral-fetch-queue", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("one provider's failure does not block the next provider's turn", async () => {
+  it("one provider's failure does not block the next provider's turn in the lane", async () => {
     const queryClient = newQueryClient();
     const { request, calls, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
 
+    // Automatic, so the second genuinely has a turn to be blocked from - two
+    // forced pulls would both already be running and prove nothing here.
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
-      force: true,
+      force: false,
       profileId: null,
     });
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
-      force: true,
+      force: false,
       profileId: null,
     });
 
     await flush();
+    expect(request).toHaveBeenCalledTimes(1);
     settlers[0].fail();
     await flush();
     // The rejection was swallowed by the chain; the queue advanced to the next.
@@ -465,7 +540,7 @@ describe("ephemeral-fetch-queue", () => {
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
 
     const notified: boolean[] = [];
-    const unsubscribe = subscribeRateLimitQueueDraining(() => {
+    const unsubscribe = subscribeRateLimitQueue(() => {
       notified.push(isRateLimitQueueDraining());
     });
 
@@ -561,6 +636,325 @@ describe("ephemeral-fetch-queue", () => {
     });
     await flush();
     expect(request).not.toHaveBeenCalled();
+    expect(isRateLimitQueueDraining()).toBe(false);
+    // No scope was ever bound to write against, so nothing was ever marked
+    // pending either.
+    expect(isRateLimitFetchPending(HOST_ID, "codex", null)).toBe(false);
+  });
+
+  it("passes the extended response-frame budget as the request fn's 4th argument", async () => {
+    const queryClient = newQueryClient();
+    const request = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    await enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      HOST_ID,
+      "host.getRateLimitUsage",
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "codex",
+        profileId: null,
+        force: true,
+      },
+      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    );
+  });
+
+  it("sends the enqueue's force value on the wire: an automatic pull sends force: false, a forced one sends force: true", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    // No cached data yet, so the automatic pull passes its freshness check
+    // and actually reaches the request fn rather than no-opping.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      HOST_ID,
+      "host.getRateLimitUsage",
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "codex",
+        profileId: null,
+        force: false,
+      },
+      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    );
+
+    settlers[0].ok();
+    await flush();
+
+    // A different provider so this second pull's own freshness check (an
+    // empty cache entry) is unaffected by the first pull's write.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    await flush();
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      HOST_ID,
+      "host.getRateLimitUsage",
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        profileId: null,
+        force: true,
+      },
+      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    );
+
+    settlers[1].ok();
+    await flush();
+  });
+
+  it("a forced pull and an automatic pull for the same host/provider/profile write the same query cache key - force never partitions the cache", async () => {
+    const queryClient = newQueryClient();
+    const request = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    // A user-initiated (force: true) pull writes first.
+    await enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // `keyFor` builds the exact force-less key an automatic-lane observer
+    // (`providerRateLimitQueryOptions`) uses for this same provider/profile -
+    // not a key this test invents. Reading the forced fetch's own result
+    // straight out of the cache through that key is the proof the two lanes
+    // share one entry, rather than two key arrays compared to each other.
+    const observedByAutomaticLane = queryClient.getQueryState(keyFor("codex"));
+    expect(observedByAutomaticLane?.data).toEqual({
+      latest: null,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+    });
+    expect(observedByAutomaticLane?.dataUpdatedAt).toBeGreaterThan(0);
+
+    // The behavioral proof: an automatic pull for the exact same triple,
+    // enqueued right after, must see the forced pull's write as fresh and
+    // skip re-fetching entirely. If `force` partitioned the cache, this
+    // automatic pull would find its own key still empty and spawn a second
+    // subprocess.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts forced items at once alongside a running automatic item and each other, and defers the waiting automatic item until they all settle", async () => {
+    // Round 1 shipped a priority scheduler here: a forced item was spliced ahead
+    // of every waiting automatic one, but still waited for the RUNNING item - so
+    // a click could sit for that item's whole response budget. Superseded: a
+    // click waits for nothing. The ordering below IS the behaviour change.
+    const queryClient = newQueryClient();
+    const { request, calls, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    // A: automatic, takes the lane and stays in flight throughout.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(calls).toEqual(["codex"]);
+
+    // B: automatic, waits behind the running A.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(calls).toEqual(["codex"]);
+
+    // C: forced. Starts at once without waiting for A. A distinct profile, so
+    // this is a genuinely new request rather than a dedupe onto A's.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: "profile-c",
+    });
+    await flush();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    // D: a second forced item - forced pulls do not serialize against each
+    // other either.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: "profile-d",
+    });
+    await flush();
+    expect(request).toHaveBeenCalledTimes(3);
+
+    // Releasing A does NOT start B: forced work is in flight, and background
+    // spawns must not stack on top of what a person asked for.
+    settlers[0].ok();
+    await flush();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(calls).toEqual(["codex", "codex", "codex"]);
+
+    // Still deferred with one forced pull outstanding.
+    settlers[1].ok();
+    await flush();
+    expect(request).toHaveBeenCalledTimes(3);
+
+    // Both forced pulls settled - only now does the deferred automatic item run.
+    settlers[2].ok();
+    await flush();
+    expect(calls).toEqual(["codex", "codex", "codex", "claude-code"]);
+
+    settlers[3].ok();
+    await flush();
+    expect(isRateLimitQueueDraining()).toBe(false);
+  });
+
+  it("marks a pull pending from enqueue until its item settles, including while it only waits behind another item", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    const notified: boolean[] = [];
+    const unsubscribe = subscribeRateLimitQueue(() => {
+      notified.push(isRateLimitFetchPending(HOST_ID, "claude-code", null));
+    });
+
+    expect(isRateLimitFetchPending(HOST_ID, "claude-code", null)).toBe(false);
+
+    // A forced codex pull is in flight, which defers automatic work.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    await flush();
+
+    // claude-code is automatic, so it genuinely only waits - not yet running -
+    // but is pending from the moment it was enqueued. This is what lets a row
+    // read as "Refreshing" instead of looking ignored.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    expect(isRateLimitFetchPending(HOST_ID, "claude-code", null)).toBe(true);
+    expect(notified.at(-1)).toBe(true);
+
+    await flush();
+    expect(isRateLimitFetchPending(HOST_ID, "claude-code", null)).toBe(true);
+
+    // codex settles - claude-code now starts running, still pending.
+    settlers[0].ok();
+    await flush();
+    expect(isRateLimitFetchPending(HOST_ID, "claude-code", null)).toBe(true);
+
+    // claude-code itself settles - pending flips false and listeners fire.
+    settlers[1].ok();
+    await flush();
+    expect(isRateLimitFetchPending(HOST_ID, "claude-code", null)).toBe(false);
+    expect(notified.at(-1)).toBe(false);
+
+    unsubscribe();
+  });
+
+  it("never marks a still-fresh automatic enqueue as pending - it resolves without entering the lane", async () => {
+    const queryClient = newQueryClient();
+    const { request } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+    queryClient.setQueryData(keyFor("codex"), response());
+
+    const settled = enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    // Fresh data skips the lane entirely, so the pull is never queued as
+    // waiting-or-running - nothing to mark pending.
+    expect(isRateLimitFetchPending(HOST_ID, "codex", null)).toBe(false);
+    await settled;
+    expect(isRateLimitFetchPending(HOST_ID, "codex", null)).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("resolves an enqueue against a null scope and never marks anything pending", async () => {
+    await expect(
+      enqueueRateLimitFetchForScope(null, "codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      }),
+    ).resolves.toBeUndefined();
+    expect(isRateLimitFetchPending(HOST_ID, "codex", null)).toBe(false);
+    expect(isRateLimitQueueDraining()).toBe(false);
+  });
+
+  it("does not let one fetch's rejection inside a batch block its sibling fetches or the next queue item", async () => {
+    const queryClient = newQueryClient();
+    const profileStarts: Array<string | null> = [];
+    const settlers: Array<{ ok: () => void; fail: () => void }> = [];
+    const request = vi.fn<RateLimitQueueRequestFn>(
+      (_hostId, _method, params) => {
+        profileStarts.push(params.profileId);
+        return new Promise((resolve, reject) => {
+          settlers.push({
+            ok: () => resolve(response()),
+            fail: () => reject(new Error("boom")),
+          });
+        });
+      },
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetchBatch(
+      [
+        {
+          providerId: "codex",
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          profileId: "fails",
+        },
+        {
+          providerId: "codex",
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          profileId: "succeeds",
+        },
+      ],
+      { force: true },
+    );
+    // Automatic, so "the next queue item" is a real queue item with a turn to
+    // wait for - a forced one would already be running and prove nothing.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+
+    await flush();
+    expect(profileStarts).toEqual(["fails", "succeeds"]);
+
+    // The failing sibling rejects - its sibling in the same batch is
+    // unaffected and the next queue item still gets its turn once the batch
+    // as a whole settles.
+    settlers[0].fail();
+    await flush();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    settlers[1].ok();
+    await flush();
+    expect(profileStarts).toEqual(["fails", "succeeds", null]);
+
+    settlers[2].ok();
+    await flush();
     expect(isRateLimitQueueDraining()).toBe(false);
   });
 });

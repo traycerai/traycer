@@ -85,9 +85,29 @@ function rateLimitProviderCandidates(
 }
 
 /**
+ * Whether `provider` currently has at least one target a usage pull may run
+ * against: its ambient login, or - independently, since managed profiles
+ * authenticate on their own and deliberately do not inherit an ambient
+ * sign-out - any fetch-eligible managed profile. A provider that reports no
+ * profile metadata (older hosts) is judged on its ambient credential alone.
+ */
+function hasRateLimitRefreshTarget(
+  provider: ConfiguredRateLimitProvider,
+): boolean {
+  if (provider.fetchEligibility.ambient) return true;
+  return provider.profiles.some((profile) =>
+    isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+  );
+}
+
+/**
  * The currently-configured rate-limit-capable providers on the default host,
- * each tagged with its fetch lane. Drives both the interval timer (walks the
- * `ephemeralProcess` entries) and, later, the popover rail.
+ * each tagged with its fetch lane. Drives the interval timer, which walks every
+ * fetch-eligible profile of each `ephemeralProcess` entry (see
+ * `refreshTargetsForProvider`) - not just the ambient login, so a managed
+ * profile the header glyph or a popover row shows is kept as fresh as the
+ * terminal login. A provider whose ambient login is signed out therefore still
+ * belongs here while any managed profile of it can fetch.
  *
  * Mounted persistently at the app-shell level (via `RateLimitQueueProvider`),
  * so `providers.list` is subscribed for the window's lifetime rather than
@@ -105,8 +125,8 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
   const providers = providersQuery.data?.providers;
   return useMemo(() => {
     if (providers === undefined) return [];
-    return rateLimitProviderCandidates(providers).flatMap((provider) =>
-      provider.fetchEligibility.ambient ? [provider] : [],
+    return rateLimitProviderCandidates(providers).filter(
+      hasRateLimitRefreshTarget,
     );
   }, [providers]);
 }
