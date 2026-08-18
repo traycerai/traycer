@@ -478,11 +478,19 @@ describe("<TraycerApp />", () => {
     );
 
     expect(await screen.findByTestId("epics-list-empty")).not.toBeNull();
+    // Bucketed on the canonical `user-1`, not on the address it signed in
+    // with. This fixture is the only one in the suite whose seeded userId and
+    // email DIFFER, so it is the only place an assertion can tell the two
+    // apart - the per-bridge tests all seed `userId: email`, which is how the
+    // email-keyed scoping survived unnoticed in the first place.
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
-        epicCanvasKey("test@example.com"),
+        epicCanvasKey("user-1"),
       );
     });
+    expect(useEpicCanvasStore.persist.getOptions().name).not.toBe(
+      epicCanvasKey("test@example.com"),
+    );
 
     const staleNotification: NotificationEntry = {
       id: "stale-notification",
