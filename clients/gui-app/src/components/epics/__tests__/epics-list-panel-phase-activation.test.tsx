@@ -130,8 +130,15 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
 // Worktree sweep reaches the host runtime; this suite renders the panel
 // without a <HostRuntimeProvider>, so stub both hooks the way the sibling
 // epics-list-panel suite does.
+// The list panel hands the sweep dialog the app-wide following client; the
+// panel renders outside a HostRuntimeProvider here, and the sweep query is
+// mocked below anyway.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
-  useEpicSweepWorktreeCandidates: () => ({
+  useEpicSweepWorktreeCandidatesForClient: () => ({
     hostId: "host-test",
     rows: [],
     isPending: false,

@@ -92,9 +92,11 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
 function buildClient(
   profiles: ProviderProfile[] | null,
 ): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -109,11 +111,10 @@ function buildClient(
             },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return client;
+  return spine.createRequester(mockLocalHostEntry);
 }
 
 describe("mapProfileIdAcrossHosts", () => {

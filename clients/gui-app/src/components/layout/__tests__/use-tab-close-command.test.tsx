@@ -30,6 +30,7 @@ describe("useTabCloseCommand", () => {
       kind: "epic",
       id: tabId,
       epicId: "epic-x",
+      hostId: null,
       name: "Epic X",
       route: `/epics/epic-x/${tabId}`,
       icon: null,

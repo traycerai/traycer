@@ -29,11 +29,6 @@ import {
   promoteTileFindUiToDurable,
 } from "@/stores/tile-find/tile-find-store";
 import {
-  evictChatTurnMinimapActiveEntryForChat,
-  evictChatTurnMinimapActiveEntriesForEpic,
-  promoteChatTurnMinimapActiveEntryToDurable,
-} from "@/stores/chats/chat-turn-minimap-active-entry-store";
-import {
   chatTabPersistenceChatKey,
   type ChatTabPersistenceIdentity,
 } from "@/stores/chats/chat-tab-persistence-key";
@@ -52,7 +47,7 @@ type ChatIdentity = Pick<ChatTabPersistenceIdentity, "epicId" | "chatId">;
 /**
  * Ticket 15 (decision #29): drops the durable chat-key entry from EVERY
  * registry in the per-tab restoration family - the single point of truth
- * for "all seven registries", called from the chat-deletion mutation's
+ * for every registry, called from the chat-deletion mutation's
  * `onSuccess`. Unlike a tab close (tab-key only, LRU-bounded), a deleted
  * chat can never be reopened, so there is nothing worth keeping.
  *
@@ -76,12 +71,11 @@ export function evictChatTabPersistenceForChat(identity: ChatIdentity): void {
   evictToolOpenStoreForChat(identity);
   evictSubagentOpenStoreForChat(identity);
   evictTileFindUiForChat(identity);
-  evictChatTurnMinimapActiveEntryForChat(identity);
 }
 
 /**
  * Same, for a deleted/access-lost epic - drops every durable entry under
- * that epic across all seven registries. Called from the epic
+ * that epic across every registry. Called from the epic
  * access-loss/delete reactor alongside its existing tab-close sweep.
  */
 export function evictChatTabPersistenceForEpic(epicId: string): void {
@@ -109,14 +103,13 @@ export function evictChatTabPersistenceForEpics(
     evictToolOpenStoresForEpic(epicId);
     evictSubagentOpenStoresForEpic(epicId);
     evictTileFindUiForEpic(epicId);
-    evictChatTurnMinimapActiveEntriesForEpic(epicId);
   }
 }
 
 /**
  * Ticket 15 review round 3 (mandated simplification - the ONE close-commit
  * choke point): promotes a closing chat tile's CURRENT tab-side state to
- * durable across all seven registries - called from the canvas close
+ * durable across every registry - called from the canvas close
  * sweep, BEFORE any of the tab-key eviction functions above run, for every
  * removed tile the sweep resolves a chat identity for. Reading each
  * registry's live/tab-side state directly (not depending on a component's
@@ -134,5 +127,4 @@ export function promoteChatTabPersistenceToDurable(
   promoteToolOpenToDurable(identity);
   promoteSubagentOpenToDurable(identity);
   promoteTileFindUiToDurable(identity);
-  promoteChatTurnMinimapActiveEntryToDurable(identity);
 }

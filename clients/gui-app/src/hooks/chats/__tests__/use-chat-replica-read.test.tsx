@@ -47,9 +47,11 @@ describe("useChatReplicaRead degrade path", () => {
       defaultOptions: { queries: { retry: false } },
     });
     const requestCount = { value: 0 };
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => `req-replica-scope-${String(requestCount.value)}`,
@@ -61,10 +63,10 @@ describe("useChatReplicaRead degrade path", () => {
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
+    const client = spine.createRequester(mockLocalHostEntry);
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
       createElement(
         QueryClientProvider,
@@ -106,18 +108,18 @@ describe("useChatReplicaRead degrade path", () => {
 
   it("reads an E_HOST_UNSUPPORTED rejection as no replica, surfacing the error without retrying", async () => {
     const fixture = createFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     const rendered = renderHook(
       () =>
         useChatReplicaRead({
-          client: fixture.client,
+          client,
           epicId: "epic-1",
           chatId: "chat-1",
           enabled: true,
@@ -164,6 +166,8 @@ function createFixture(): {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-replica-1",

@@ -20,6 +20,41 @@ import {
   isTabStructurallyLocked,
   subscribeTabStructuralLocks,
 } from "@/stores/tabs/tab-structural-lock";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+
+/**
+ * Revision over "which host serves which open epic".
+ *
+ * The epic tab's `hostId` is projected from the live session at `build()`
+ * time, and a session RE-POINT (failover, retry, open-on-original-host)
+ * replaces the registry's handle without touching the canvas store - so
+ * nothing in the source-store subscriptions above would re-run the
+ * projection, and the strip would keep serving the previous host's id.
+ *
+ * Same shape as `structuralLockRevision`: an external revision that forces
+ * re-projection, with the per-source cache below keyed on the derived value so
+ * a bump that changed nothing keeps every tab's referential identity. The
+ * registry's own emit is already gated on an eligibility key, so per-keystroke
+ * store churn does not reach this.
+ */
+let epicSessionHostRevision = 0;
+const epicSessionHostListeners = new Set<() => void>();
+let epicSessionHostSubscription: (() => void) | null = null;
+
+function subscribeEpicSessionHosts(listener: () => void): () => void {
+  epicSessionHostListeners.add(listener);
+  epicSessionHostSubscription ??= getOpenEpicRegistry().subscribe(() => {
+    epicSessionHostRevision += 1;
+    for (const each of epicSessionHostListeners) each();
+  });
+  return () => {
+    epicSessionHostListeners.delete(listener);
+  };
+}
+
+function getEpicSessionHostRevision(): number {
+  return epicSessionHostRevision;
+}
 
 /**
  * Projects the canonical strip order into render-ready `HeaderTab[]`.
@@ -33,6 +68,11 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
     subscribeTabStructuralLocks,
     getTabStructuralLockRevision,
     getTabStructuralLockRevision,
+  );
+  const epicSessionHostRevisionValue = useSyncExternalStore(
+    subscribeEpicSessionHosts,
+    getEpicSessionHostRevision,
+    getEpicSessionHostRevision,
   );
   const stripOrder = useTabsStore(useShallow((s) => s.stripOrder));
   const epicTabs = useEpicCanvasStore(
@@ -64,10 +104,12 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
           draftTabsById,
           systemTabs,
           structuralLockRevision,
+          epicSessionHostRevision: epicSessionHostRevisionValue,
         }),
       ),
     [
       draftTabsById,
+      epicSessionHostRevisionValue,
       epicTabsById,
       stripOrder,
       structuralLockRevision,
@@ -109,6 +151,11 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
     getTabStructuralLockRevision,
     getTabStructuralLockRevision,
   );
+  const epicSessionHostRevisionValue = useSyncExternalStore(
+    subscribeEpicSessionHosts,
+    getEpicSessionHostRevision,
+    getEpicSessionHostRevision,
+  );
   const items = useTabsStore(useShallow((s) => s.items));
   const epicTabs = useEpicCanvasStore(
     useShallow((s) =>
@@ -138,9 +185,17 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
           draftTabsById,
           systemTabs,
           structuralLockRevision,
+          epicSessionHostRevision: epicSessionHostRevisionValue,
         }),
       ),
-    [draftTabsById, epicTabsById, items, structuralLockRevision, systemTabs],
+    [
+      draftTabsById,
+      epicSessionHostRevisionValue,
+      epicTabsById,
+      items,
+      structuralLockRevision,
+      systemTabs,
+    ],
   );
 }
 
@@ -302,9 +357,25 @@ type EpicHeaderTabLockState =
   | "structurally-locked"
   | "structurally-and-close-locked";
 
+/**
+ * Cache key for one epic tab's projection: its lock state and the host its
+ * session is on. Both are derived rather than stored on the source, so both
+ * have to be in the key - a re-point that kept the same `EpicViewTab` object
+ * would otherwise be memoized away and the strip would serve the old host id
+ * forever.
+ */
+type EpicHeaderTabCacheKey = string;
+
+function epicHeaderTabCacheKey(
+  lockState: EpicHeaderTabLockState,
+  hostId: string | null,
+): EpicHeaderTabCacheKey {
+  return `${lockState}\u001f${hostId ?? ""}`;
+}
+
 const epicHeaderTabCache = new WeakMap<
   EpicViewTab,
-  Map<EpicHeaderTabLockState, HeaderTab>
+  Map<EpicHeaderTabCacheKey, HeaderTab>
 >();
 const draftHeaderTabCache = new WeakMap<LandingDraftTab, HeaderTab>();
 const historyHeaderTabCache = new WeakMap<SystemTab, HeaderTab>();
@@ -330,16 +401,27 @@ interface HeaderTabSources {
     readonly settings: SystemTab | null;
   };
   readonly structuralLockRevision: number;
+  /**
+   * Forces re-projection when a session re-points. Not read by `build()` -
+   * the projection reads the registry directly; this only invalidates the
+   * memo above it, exactly as `structuralLockRevision` does for the locks.
+   */
+  readonly epicSessionHostRevision: number;
 }
 
 function memoizedEpicHeaderTab(source: EpicViewTab): HeaderTab {
-  const lockState = epicHeaderTabLockState(source);
-  const cached = epicHeaderTabCache.get(source);
-  const cachedTab = cached?.get(lockState);
-  if (cachedTab !== undefined) return cachedTab;
+  // Built FIRST, then keyed on what it turned out to be: the host is the
+  // projection's own output, so there is nothing to look it up by until the
+  // build has run. The build is a store read and an object literal; the cache
+  // exists to preserve referential identity for the header rows, not to avoid
+  // that cost.
   const tab = TAB_KINDS.epic.build(source);
-  const next = cached ?? new Map<EpicHeaderTabLockState, HeaderTab>();
-  next.set(lockState, tab);
+  const key = epicHeaderTabCacheKey(epicHeaderTabLockState(source), tab.hostId);
+  const cached = epicHeaderTabCache.get(source);
+  const cachedTab = cached?.get(key);
+  if (cachedTab !== undefined) return cachedTab;
+  const next = cached ?? new Map<EpicHeaderTabCacheKey, HeaderTab>();
+  next.set(key, tab);
   epicHeaderTabCache.set(source, next);
   return tab;
 }
@@ -410,6 +492,7 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
       draftTabsById,
       systemTabs,
       structuralLockRevision: getTabStructuralLockRevision(),
+      epicSessionHostRevision: getEpicSessionHostRevision(),
     }),
   );
 }

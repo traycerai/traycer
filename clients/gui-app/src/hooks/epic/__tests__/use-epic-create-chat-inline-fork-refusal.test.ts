@@ -26,10 +26,6 @@ vi.mock("@/lib/host/runtime", async () => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
-}));
-
 const { beginPendingChatCreation, clearPendingChatCreation } = vi.hoisted(
   () => ({
     beginPendingChatCreation: vi.fn(),

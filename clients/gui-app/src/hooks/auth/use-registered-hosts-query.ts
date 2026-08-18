@@ -28,8 +28,6 @@ import { authQueryKeys } from "@/lib/query-keys";
  * TanStack pauses the interval while the tab is backgrounded
  * (`refetchIntervalInBackground` defaults to `false`).
  */
-const REGISTERED_HOSTS_POLL_MS = 60_000;
-
 function registeredHostsQueryOptions(
   auth: AuthService | null,
   userId: string | null,
@@ -119,12 +117,16 @@ export function useRegisteredHostsPollLiveness(): void {
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  useQuery(
-    registeredHostsQueryOptions(
-      auth,
-      userId,
-      signedIn,
-      REGISTERED_HOSTS_POLL_MS,
-    ),
-  );
+  // NO INTERVAL (redesign P4.1 / F22). This used to be the app's SECOND 60s
+  // timer against `GET /api/v3/hosts`; the host directory's poll was the
+  // first, and its own comment already said two independent timers on one
+  // endpoint was not the goal. That tick now invalidates this query's key, so
+  // this observer refetches on the same cadence - through its OWN
+  // credential-fenced `fetchRegisteredHosts(era)` path, which is why the
+  // directory invalidates rather than seeding.
+  //
+  // The hook stays rather than collapsing into `useRegisteredHosts`: it is
+  // still the declaration that a surface RENDERS liveness, and `refetchOnWindowFocus`
+  // (the thing that actually keeps the list feeling live) is what it turns on.
+  useQuery(registeredHostsQueryOptions(auth, userId, signedIn, false));
 }

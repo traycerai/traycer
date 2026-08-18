@@ -13,7 +13,10 @@ import type {
 } from "@/stores/epics/canvas/types";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { resolveNestedFocusTarget } from "@/lib/epic-nested-focus-route";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getOpenEpicRegistry,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -53,6 +56,11 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
+    // The app-wide client for a non-React caller (P4.2). The subject reached
+    // it through `getHostBindingSnapshot()?.hostClient` - the SPINE, answering
+    // from the active slot - until the slot was deleted; this is the same
+    // question asked of the effective host's own requester.
+    getAppHostClientSnapshot: () => boundHostClient.value,
     getHostBindingSnapshot: () =>
       boundHostClient.value === null
         ? null
@@ -69,9 +77,15 @@ function bindActiveHost(): string {
       requestId: () => "request-1",
       handlers: {},
     }),
+    // Resolves the row the requester below is pinned to. Supplied explicitly
+    // rather than relying on the client's own slot-reading fallback, which is
+    // what `bind()` used to populate here.
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
   });
-  client.bind(mockLocalHostEntry);
-  boundHostClient.value = client;
+  boundHostClient.value = client.createRequesterForHostId(
+    mockLocalHostEntry.hostId,
+  );
   useAuthStore.setState({
     contextMetadata: { userId: VIEWER_USER_ID, username: VIEWER_USER_ID },
   });
@@ -272,7 +286,7 @@ afterEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   for (const handle of liveEpicHandles.splice(0)) {
-    getOpenEpicRegistry().release(handle.epicId);
+    getOpenEpicRegistry().release(handle.epicId, "discard");
   }
   boundHostClient.value = null;
   queryClient.clear();
@@ -1201,6 +1215,57 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     });
     // The list answered, and this chat is not in it. `epic.listCloudChats`
     // already excludes rows this host has tombstoned, so that IS the deletion.
+    seedCloudChatList(hostId, []);
+
+    const landing = nestedHref("e1", tabId, paneId, chat.instanceId);
+    const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+    const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
+
+    goBack({ history });
+
+    expect(goSpy).toHaveBeenCalledWith(-1);
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    const pane =
+      canvas !== undefined && canvas.activePaneId !== null
+        ? findPaneById(canvas.root, canvas.activePaneId)
+        : null;
+    expect(pane?.previewTabId).toBeNull();
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        chat.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("judges a same-host chat against the Epic SESSION's host, not the app-wide one that has moved on", () => {
+    // Session handle stamped host A (the chat's host); the app-wide effective
+    // host has moved to B - the state of a re-point that is establishing or
+    // one that failed, when the provider keeps A's handle rendered. Read B
+    // and the chat reads as CROSS-host: the exemption fires and a deleted
+    // record is restored over. Read A (the projection's own host) and this
+    // is the same-host answered-and-absent case one arm up: discard.
+    const hostId = mockLocalHostEntry.hostId;
+    const chat = chatRef(hostId);
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("e1", "Task");
+    store.openTileInTab(tabId, chat);
+    const paneId = requirePaneId(tabId);
+    store.closeCanvasTab(tabId, paneId, chat.instanceId);
+
+    seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
+    const sessionHandle = getOpenEpicRegistry().peek("e1");
+    expect(sessionHandle).not.toBeNull();
+    if (sessionHandle === null) throw new Error("unreachable");
+    handleHostIds.set(sessionHandle, hostId);
+    boundHostClient.value = { getActiveHostId: () => "host-b" };
+    useAuthStore.setState({
+      contextMetadata: { userId: VIEWER_USER_ID, username: VIEWER_USER_ID },
+    });
+    // The list answered UNDER THE SESSION HOST (the only slot its writers
+    // fill for this Epic), and this chat is not in it.
     seedCloudChatList(hostId, []);
 
     const landing = nestedHref("e1", tabId, paneId, chat.instanceId);

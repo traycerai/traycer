@@ -441,6 +441,7 @@ async function prepareInstallStage(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   return stageHostInstallSource({
     environment: opts.runtime.environment,
@@ -531,6 +532,7 @@ async function runServiceRegister(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   const cli = await resolveServiceCliInvocation({
     environment: opts.runtime.environment,
@@ -594,6 +596,7 @@ async function runStart(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   // First attempt: plain start (on win32 this already polls for post-baseline
   // spawn evidence and surfaces Last Run Result on failure - finding F).
@@ -618,6 +621,7 @@ async function runStart(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     const cli = await resolveServiceCliInvocation({
       environment: opts.runtime.environment,

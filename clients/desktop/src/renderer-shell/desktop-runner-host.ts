@@ -28,7 +28,6 @@ import type {
   TraycerUninstallResult,
   FreePortAndRestartInput,
   IHostManagement,
-  IHostPicker,
   IHostTray,
   IFileDropHost,
   IMigrationHost,
@@ -43,6 +42,7 @@ import type {
   IZoomHost,
   LocalHostSnapshot,
   MigrationRunningSnapshot,
+  RegisteredHostsChange,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -81,6 +81,7 @@ export type {
   Vibrancy as DesktopVibrancy,
 };
 
+import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
@@ -206,6 +207,9 @@ export interface DesktopPreloadBridge {
   onLocalHostChange(handler: (snapshot: LocalHostSnapshot | null) => void): {
     dispose: () => void;
   };
+  onRegisteredHostsChange(handler: (push: RegisteredHostsChange) => void): {
+    dispose: () => void;
+  };
   onSystemResumed(handler: () => void): { dispose: () => void };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
@@ -215,11 +219,6 @@ export interface DesktopPreloadBridge {
     onEpicSelected(handler: (epicId: string) => void): {
       dispose: () => void;
     };
-  };
-  hostPicker: {
-    requestOpen(): Promise<void>;
-    requestClose(): Promise<void>;
-    onChange(handler: (isOpen: boolean) => void): { dispose: () => void };
   };
   workspaceFolders: {
     pickFolders(): Promise<readonly string[]>;
@@ -239,6 +238,13 @@ export interface DesktopPreloadBridge {
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
+  /**
+   * The preload-built client of the main-process selection authority. It
+   * already carries this load's engine-issued `attachSeq` and its own
+   * buffering, so the renderer only has to attach and subscribe.
+   */
+  selectionAuthority: SelectionAuthorityClient;
+  refreshSelectionFleet: () => Promise<void>;
 }
 
 export interface DesktopFileDropsBridge {
@@ -578,7 +584,6 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState;
-  readonly hostPicker: IHostPicker;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
   readonly windows: DesktopWindowsBridge;
@@ -595,6 +600,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
+  readonly selectionAuthority: SelectionAuthorityClient;
+  private readonly refreshSelectionFleet: () => Promise<void>;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -617,6 +624,12 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
+    // Passed straight through: the client instance, its issued attach
+    // generation and its buffering all belong to the preload load, so
+    // re-wrapping it here could only add a second identity for the same
+    // generation.
+    this.selectionAuthority = options.bridge.selectionAuthority;
+    this.refreshSelectionFleet = options.bridge.refreshSelectionFleet;
     this.zoom = {
       ladder: options.bridge.zoom.ladder,
       get: () => options.bridge.zoom.get(),
@@ -696,7 +709,6 @@ export class DesktopRunnerHost implements IRunnerHost {
         toDisposable(this.bridge.trayState.onEpicSelected(handler)),
     };
 
-    this.hostPicker = this.buildHostPicker();
     this.workspaceFolders = {
       canPickNatively: true,
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
@@ -781,6 +793,20 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   requestMicrophoneAccess(): Promise<"granted" | "denied"> {
     return this.bridge.requestMicrophoneAccess();
+  }
+
+  refreshHostFleet(): Promise<void> {
+    return this.refreshSelectionFleet();
+  }
+
+  /**
+   * Desktop OWNS the registry cadence, so this is never null here: main runs
+   * one `GET /api/v3/hosts` for the whole app and fans the rows out (P4.1/F22).
+   */
+  onRegisteredHostsChange(
+    handler: (push: RegisteredHostsChange) => void,
+  ): Disposable | null {
+    return toDisposable(this.bridge.onRegisteredHostsChange(handler));
   }
 
   openMicrophoneSettings(): Promise<void> {
@@ -914,39 +940,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     }
     this.localHostHandlers.clear();
     this.systemResumedHandlers.clear();
-  }
-
-  private buildHostPicker(): IHostPicker {
-    const state: { open: boolean } = { open: false };
-    const handlers = new Set<(isOpen: boolean) => void>();
-    this.bridgeSubscriptions.push(
-      this.bridge.hostPicker.onChange((next) => {
-        state.open = next;
-        for (const handler of handlers) {
-          handler(next);
-        }
-      }),
-    );
-    const bridge = this.bridge;
-    return {
-      get isOpen(): boolean {
-        return state.open;
-      },
-      requestOpen(): void {
-        void bridge.hostPicker.requestOpen();
-      },
-      requestClose(): void {
-        void bridge.hostPicker.requestClose();
-      },
-      onChange(handler: (isOpen: boolean) => void): Disposable {
-        handlers.add(handler);
-        return {
-          dispose: () => {
-            handlers.delete(handler);
-          },
-        };
-      },
-    };
   }
 }
 

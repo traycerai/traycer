@@ -16,6 +16,16 @@ const mockHostClient = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mockHostClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mockHostClient,
+}));
+// `useGitCapabilitiesQuery` resolves its client from the `hostId` it is HANDED,
+// not from the app-wide host - both callers are host-pinned surfaces. Mocked
+// here so this suite keeps driving one transport; the routing itself is
+// asserted against a real spine in
+// `hooks/host/__tests__/pinned-surface-unary-routing.test.tsx`.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => mockHostClient,
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({

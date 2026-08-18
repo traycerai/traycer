@@ -36,6 +36,16 @@ vi.mock("@/lib/host", () => ({
 
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
 
+// The readiness cache is PUSH now (redesign P4.1): the hook under test
+// subscribes via `subscribeRemoteSessionReadiness` instead of polling, so a
+// test that only flips `readySessionHosts` and waits produces no event and
+// the hook never re-renders. A test-local listener set stands in for the
+// cache's own, and every place the old fake-timer tick used to drive a
+// re-read now fires this instead.
+const readinessListeners = vi.hoisted(() => ({
+  value: new Set<() => void>(),
+}));
+
 vi.mock(
   "@traycer-clients/shared/host-transport/remote/index",
   async (importOriginal) => {
@@ -47,9 +57,21 @@ vi.mock(
       ...actual,
       hasReadyRemoteSession: (hostId: string) =>
         readySessionHosts.value.has(hostId),
+      subscribeRemoteSessionReadiness: (listener: () => void) => {
+        readinessListeners.value.add(listener);
+        return () => {
+          readinessListeners.value.delete(listener);
+        };
+      },
     };
   },
 );
+
+function fireReadinessChanged(): void {
+  for (const listener of [...readinessListeners.value]) {
+    listener();
+  }
+}
 
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 
@@ -129,6 +151,7 @@ afterEach(() => {
   cleanup();
   directoryRef.value = null;
   readySessionHosts.value = new Set();
+  readinessListeners.value.clear();
 });
 
 describe("useHostReachability — composed against real hostListItemToDirectoryEntry output", () => {
@@ -312,15 +335,15 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
       expect(result.current.status).toBe("unreachable");
     });
 
-    // The dial completes: readiness flips, the directory does not.
+    // The dial completes: readiness flips, the directory does not. Driving
+    // the push notification directly (not a fake-timer tick) is the point of
+    // this test post-P4.1 - the hook must react to the cache's own signal.
     readySessionHosts.value.add("host-late-ready");
+    fireReadinessChanged();
 
-    await waitFor(
-      () => {
-        expect(result.current.status).toBe("reachable");
-      },
-      { timeout: 5_000 },
-    );
+    await waitFor(() => {
+      expect(result.current.status).toBe("reachable");
+    });
     expect(result.current.unavailability).toBeNull();
   });
 
@@ -347,13 +370,11 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     });
 
     readySessionHosts.value.delete("host-session-lost");
+    fireReadinessChanged();
 
-    await waitFor(
-      () => {
-        expect(result.current.status).toBe("unreachable");
-      },
-      { timeout: 5_000 },
-    );
+    await waitFor(() => {
+      expect(result.current.status).toBe("unreachable");
+    });
     expect(result.current.unavailability).toBe("offline");
   });
 

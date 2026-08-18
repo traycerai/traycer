@@ -24,6 +24,7 @@ import {
   usePrListSubscription,
   __resetPrListSubscriptionsForTesting,
 } from "../use-pr-list-subscription";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 /**
  * Mock stream session for `pr.subscribeListForEpic`. Unlike git's status
@@ -98,6 +99,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");

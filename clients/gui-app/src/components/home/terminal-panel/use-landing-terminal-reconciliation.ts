@@ -6,6 +6,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { subscribeHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type {
@@ -165,15 +166,31 @@ export function useLandingTerminalReconciliation(
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const reconciliationRef = useRef<string | null>(null);
 
+  // TWO WAKES, because two different things can make this panel's list stale
+  // and only one of them is an event about the client.
+  //
+  // The row signal is the host's: its directory entry moving (a restart that
+  // re-published an endpoint, a re-enrollment) means the terminals the panel
+  // listed were listed against a route that no longer exists. That used to
+  // arrive as `bind()`'s `host-updated`, which required this host to be the
+  // BOUND one - the registry reports it per host, so P4.2 deleted the slot arm
+  // without deleting the wake. `host-bound` needed no replacement at all: this
+  // hook is keyed on `activeHostId`, so a host becoming effective already
+  // re-runs the reconciliation below through the key.
+  //
+  // Availability recovery stays on the client, because it is not a row change:
+  // nothing about the host moved, a stalled endpoint started answering again.
+  useEffect(() => {
+    if (activeHostId === null) return;
+    return subscribeHostRowChanged(activeHostId, () => {
+      setConnectionEpoch((current) => current + 1);
+    });
+  }, [activeHostId]);
   useEffect(() => {
     if (client === null) return;
     return client.onChange((event) => {
       if (event.currentHostId !== activeHostId) return;
-      if (
-        event.reason === "availability-recovered" ||
-        event.reason === "host-updated" ||
-        event.reason === "host-bound"
-      ) {
+      if (event.reason === "availability-recovered") {
         setConnectionEpoch((current) => current + 1);
       }
     });

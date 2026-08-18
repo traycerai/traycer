@@ -29,9 +29,14 @@ export class ShellQuitState implements ShellQuitStateReader {
   /**
    * Reverts to not-quitting. Called from every `before-quit` stay-alive
    * branch (host-update-install failure, dirty-edit decision rejected/failed,
-   * fresh-snapshot query failed) so a later mid-session window close is not
-   * mistaken for part of that aborted quit attempt. Idempotent - safe to call
-   * even when a quit was never in progress.
+   * the user declining the quit outright via `userCancelled`, fresh-snapshot
+   * query failed) so a later mid-session window close is not mistaken for part
+   * of that aborted quit attempt. Idempotent - safe to call even when a quit
+   * was never in progress.
+   *
+   * The `userCancelled` arm is the one that makes quitting a state the shell
+   * enters and leaves DELIBERATELY, rather than only on failure, so
+   * cancel-then-quit-again is a first-class sequence rather than an edge.
    */
   resetQuitting(): void {
     this.quitting = false;

@@ -66,18 +66,18 @@ describe("combineTaskPinnedStateResults", () => {
     expect([...pinnedStates.entries()]).toEqual([]);
   });
 
-  it("merges batch responses and skips null or incomplete task entries", () => {
+  it("merges found rows and skips unknown or incomplete task entries", () => {
     const pinnedStates = combineTaskPinnedStateResults([
       {
         data: taskContexts({
-          first: listTaskLight("epic-a", true),
-          missing: null,
-          incomplete: listTaskLight(null, true),
+          first: { status: "found", task: listTaskLight("epic-a", true) },
+          missing: { status: "unknown", reason: "transport" },
+          incomplete: { status: "found", task: listTaskLight(null, true) },
         }),
       },
       {
         data: taskContexts({
-          second: listTaskLight("epic-b", false),
+          second: { status: "found", task: listTaskLight("epic-b", false) },
         }),
       },
       { data: undefined },

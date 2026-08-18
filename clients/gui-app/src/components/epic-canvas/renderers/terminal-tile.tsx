@@ -29,7 +29,12 @@ import {
   useTerminalTileBootstrap,
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  useHostReachability,
+  resolvedHostLabel,
+} from "@/hooks/agent/use-host-reachability";
+import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { TileHostLoadState } from "./tile-host-load-state";
 import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
@@ -95,6 +100,17 @@ export function TerminalTile(props: TerminalTileProps) {
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
   const reachability = useHostReachability(hostId);
+  // Invariant 6: the pre-bootstrap wait is bounded and it says which host it
+  // is waiting on. This tile used to render a wordless skeleton for both
+  // `checking` and `host-starting` (audit S5) - indistinguishable from a
+  // terminal that was about to appear, and it never ended.
+  const hostLoad = useBoundedHostLoad({
+    hostId,
+    hostLabel: resolvedHostLabel(reachability),
+    pending:
+      reachability.status === "checking" ||
+      reachability.status === "host-starting",
+  });
   const crashReportedRef = useRef(false);
   const reportCrashExit = useCallback(() => {
     if (epicId === null) return;
@@ -185,6 +201,14 @@ export function TerminalTile(props: TerminalTileProps) {
     // persisted "closed" entry in the feed for a terminal an upgrade would hand
     // straight back.
     if (reachability.unavailability === "plan-restricted") return;
+    // So does the BASIS, for the same reason one level up. Since F4 this
+    // verdict also arrives from a starting host that overran its budget, and
+    // that is the UI's patience expiring, not proof the PTY died - the tile
+    // stops waiting (it must), but writing "permanently closed" into the feed
+    // off a timer would persist a claim about a machine that is very likely
+    // still running. Presentation falls; the death event needs directory
+    // evidence.
+    if (reachability.basis !== "directory") return;
     if (epicId === null) return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
@@ -203,6 +227,7 @@ export function TerminalTile(props: TerminalTileProps) {
     reachability.status,
     reachability.hostLabel,
     reachability.unavailability,
+    reachability.basis,
     epicId,
     hostId,
     props.node.id,
@@ -223,18 +248,19 @@ export function TerminalTile(props: TerminalTileProps) {
   }
   // "host-starting" = the directory is empty because the local host hasn't
   // published yet (boot/ensure/wake). Rendering the dead banner there showed
-  // "permanently closed" for terminals that were seconds from reconnecting.
-  if (
-    reachability.status === "checking" ||
-    reachability.status === "host-starting"
-  ) {
+  // "permanently closed" for terminals that were seconds from reconnecting -
+  // so this stays a non-destructive wait, but a wait WITH WORDS and an end.
+  // Past its budget the reachability hook itself falls to `unreachable` (F4),
+  // which the arm above answers; `timed-out` here covers the directory that
+  // never resolved at all.
+  if (hostLoad.kind !== "ready") {
     return (
-      <div
-        className="flex h-full w-full items-center justify-center bg-canvas"
-        data-testid={`terminal-tile-${props.tileId}`}
-      >
-        <TerminalLoadingSkeleton />
-      </div>
+      <TileHostLoadState
+        load={hostLoad}
+        subject="terminal"
+        onRetry={null}
+        testId={`terminal-tile-${props.tileId}`}
+      />
     );
   }
   // Keyed on `recoverNonce`: a recovery remounts the bootstrap subtree, re-running

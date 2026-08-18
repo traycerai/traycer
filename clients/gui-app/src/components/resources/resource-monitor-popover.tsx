@@ -1116,7 +1116,7 @@ function resolveResourceMonitorHostReading(input: {
 }): ResourceMonitorHostReading {
   // ONE value answers "which machine is this reading about", and it answers it
   // for both the data and the actions. Deriving the kill target from a second
-  // reader of the active host — `useReactiveActiveHostId`, which this used to
+  // reader of the active host — `useAddressableHostId`, which this used to
   // call — is what let the two disagree: on an ambient host swap it moved to
   // the new machine a commit before the stream transport did, so the panel
   // showed the old host's processes with kills aimed at the new one. That

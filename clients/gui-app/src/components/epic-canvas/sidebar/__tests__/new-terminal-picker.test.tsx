@@ -15,6 +15,7 @@ import type {
   WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import { NewTerminalPicker } from "../new-terminal-picker";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   PaneSurfaceActivityContext,
@@ -51,6 +52,26 @@ const bindingsQuery = vi.hoisted(() => ({
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => bindingsQuery.current,
+  useWorktreeListBindingsForEpicForClient: () => bindingsQuery.current,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({
+    status: "reachable",
+    hostLabel: "MacBook",
+    unavailability: null,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [{ hostId: "host-1" }],
+    fetchStatus: "idle",
+  }),
 }));
 
 function stubLoadedBindings(): void {
@@ -87,8 +108,15 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
 
 // `NewTerminalPickerBody` also reads this directly (the folderless-launch
 // target's host id), independent of `useHostOptions`.
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
+}));
+
+// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign
+// P1.2) resolves the picker's own pin row when it has none, so an unmocked
+// authority store would read a null effective host here.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-1",
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -181,6 +209,7 @@ describe("<NewTerminalPicker />", () => {
     usePanelHeaderMenuStore.setState({ openBySurfaceKey: {} });
     selectById.mockClear();
     refreshDirectory.mockClear();
+    useSurfaceHostSelectionStore.getState().resetForTests();
     stubLoadedBindings();
   });
 
@@ -514,14 +543,21 @@ describe("<NewTerminalPicker />", () => {
     expect(tiles.filter((tile) => tile.type === "terminal")).toHaveLength(0);
   });
 
-  it("swaps the bound host without creating a tile when a host row is clicked", () => {
+  it("pins the surface host without creating a tile when a host row is clicked", () => {
     const tabId = openPicker();
 
     // The host row is one click behind the switcher trigger now.
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
     fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-1"));
 
-    expect(selectById).toHaveBeenCalledWith("host-1");
+    expect(selectById).not.toHaveBeenCalled();
+    const surfaceKey = Object.keys(
+      useSurfaceHostSelectionStore.getState().selections,
+    )[0];
+    expect(surfaceKey).toMatch(/^new-terminal/);
+    expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
+      "host-1",
+    );
     const tiles = tabTiles(tabId);
     expect(tiles.filter((tile) => tile.type === "terminal")).toHaveLength(0);
   });

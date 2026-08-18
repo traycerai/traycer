@@ -14,7 +14,7 @@ import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -781,11 +781,13 @@ function normalizeChatRunSettings(
 
 function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
   // A new draft is created on the landing surface, which follows the
-  // app-wide active host - snapshot THAT host's folder bucket, not another
-  // machine's paths.
+  // app-wide effective host - snapshot THAT host's folder bucket, not another
+  // machine's paths. Through the shared reader: the spine stopped carrying an
+  // identity at P4.2, so asking it here selected the unresolved-host bucket
+  // and silently dropped the real host's folders.
   const bucket = selectWorkspaceFoldersBucket(
     useWorkspaceFoldersStore.getState(),
-    getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+    activeHostIdOrNull(),
   );
   return normalizeLandingDraftWorkspace({
     folders: [...bucket.folders],

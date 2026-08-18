@@ -10,6 +10,15 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { HostRpcRegistry } from "@/lib/host";
 import { useWorkspaceEntries } from "../use-workspace-entries";
 
+const HOST_ENTRY: HostDirectoryEntry = {
+  hostId: "host-test",
+  label: "Test Host",
+  kind: "mock",
+  websocketUrl: "ws://host.test",
+  version: "test",
+  transportDialability: "dialable",
+};
+
 const OTHER_HOST_ENTRY: HostDirectoryEntry = {
   hostId: "host-test-2",
   label: "Test Host 2",
@@ -21,6 +30,7 @@ const OTHER_HOST_ENTRY: HostDirectoryEntry = {
 
 let messenger: MockHostMessenger<HostRpcRegistry>;
 let hostClient: HostClient<HostRpcRegistry>;
+let hostClientSpine: HostClient<HostRpcRegistry>;
 
 function createHostClient(): HostClient<HostRpcRegistry> {
   messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -28,20 +38,17 @@ function createHostClient(): HostClient<HostRpcRegistry> {
     handlers: {},
     requestId: () => "request-test",
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     messenger,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (hostId) => {
+      if (hostId === HOST_ENTRY.hostId) return HOST_ENTRY;
+      if (hostId === OTHER_HOST_ENTRY.hostId) return OTHER_HOST_ENTRY;
+      return null;
+    },
   });
-  client.bind({
-    hostId: "host-test",
-    label: "Test Host",
-    kind: "mock",
-    websocketUrl: "ws://host.test",
-    version: "test",
-    transportDialability: "dialable",
-  });
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContext({
       identity: {
         userId: "user-test",
@@ -55,7 +62,8 @@ function createHostClient(): HostClient<HostRpcRegistry> {
       externalAbortSignal: undefined,
     }),
   );
-  return client;
+  hostClientSpine = spine;
+  return spine.createRequester(HOST_ENTRY);
 }
 
 function wrapper(props: { children: ReactNode }) {
@@ -163,8 +171,12 @@ describe("useWorkspaceEntries", () => {
 
     await waitFor(() => expect(result.current.data).toHaveLength(1));
 
+    // A host switch is now a NEW pinned requester, not a mutation of the
+    // same client (redesign P4.2 deleted the active-slot change event that
+    // `bind()` used to drive `useReactiveHostReadiness` off). The hook
+    // reads whatever `client` it is re-rendered with.
     act(() => {
-      hostClient.bind(OTHER_HOST_ENTRY);
+      hostClient = hostClientSpine.createRequester(OTHER_HOST_ENTRY);
     });
     rerender({ root: "/repo-2" });
 

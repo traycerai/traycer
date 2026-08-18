@@ -533,8 +533,17 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostBinding: () => null,
+    // The SAME binding the `@/lib/host/runtime` mock below supplies, because
+    // `@/lib/host` re-exports that symbol and the two must not disagree. They
+    // used to: this returned `null` while the runtime mock returned the
+    // ambient binding, and nothing noticed because the panel read the runtime
+    // path. It now re-provides through `useScopedHostBinding`, which reads
+    // this one - so a fixture answering `null` here silently withholds the
+    // wrapper and the selected-host refresh lands on the ambient host.
+    useHostBinding: () => providerMocks.ambientBinding,
     useHostClient: () => null,
+    // The SPINE, a separate export since redesign P2.1.
+    useHostRuntimeClient: () => null,
   };
 });
 
@@ -551,8 +560,8 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 // The Traycer provider mounts the subscription card; stub its credits query so
@@ -610,8 +619,8 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`
 // returns null without a `<HostRuntimeProvider>`.
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({

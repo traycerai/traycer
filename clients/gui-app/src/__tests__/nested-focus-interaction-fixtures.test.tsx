@@ -37,6 +37,7 @@ import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/
 import { ArtifactChildIndex } from "@/components/epic-canvas/renderers/artifact-child-index";
 import { useTraycerReferenceOpenHandler } from "@/markdown/components/use-traycer-reference-open";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { GitChangedFileV11 } from "@traycer/protocol/host";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 
@@ -69,8 +70,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   epicNodeRefForNodeId: () => epicSelectors.sameEpicNodeRef,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 const referenceOpenEpicHandle = vi.hoisted<{
@@ -238,8 +239,27 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
   },
 ];
 
+/**
+ * Naming the effective host is part of building an app-wide host fixture
+ * (P2.1's sweep convention). The markdown reference chip resolves its host
+ * through `useCanvasHostId()` -> `useEffectiveHostId()` -> the selection
+ * authority store, so the STORE carries the host here rather than a hook
+ * mock, which would strand again on the next plumbing change.
+ */
+function setEffectiveHostId(hostId: string | null): void {
+  useSelectionAuthorityStore.getState().applyKernelSnapshot({
+    attached: true,
+    preferredHostId: hostId,
+    targetHostId: hostId,
+    effectiveHostId: hostId,
+    leases: [],
+    selectionRevision: 1,
+  });
+}
+
 function resetCanvas(): void {
   window.localStorage.clear();
+  setEffectiveHostId("host-1");
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   epicSelectors.childIdsByParent = {};
   epicSelectors.nodesById = {};
@@ -253,7 +273,10 @@ describe("nested focus interaction fixtures", () => {
     resetCanvas();
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useSelectionAuthorityStore.getState().reset();
+  });
 
   it.each(ROWS)(
     "commits a nested route focus target for: $name",

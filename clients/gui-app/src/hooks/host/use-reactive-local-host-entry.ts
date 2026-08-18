@@ -6,7 +6,7 @@ import { hostDirectoryEntryEquals } from "@/hooks/host/use-host-directory-entry"
 /**
  * Reactively projects the LOCAL host's directory entry - the machine this
  * client is running on - independent of whichever host is currently active
- * (`useReactiveActiveHostId`) or tab-bound (`useTabHostId`). This is a third,
+ * (`useAddressableHostId`) or tab-bound (`useTabHostId`). This is a third,
  * narrower scope: consumers that must always talk to "this machine"
  * regardless of what the user has selected elsewhere in the app (currently
  * only the notifications stream, per the G8 decision - notifications never

@@ -18,6 +18,8 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import { useHostClient } from "@/lib/host";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import {
   useWorkspaceFoldersStore,
@@ -91,6 +93,17 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
+/** The composer's resolved placement (P1.2), pointed at the mocked host. */
+function useTestPlacementTarget(): LandingPlacementTarget {
+  return {
+    resolvedHostId: homeMocks.getActiveHostId(),
+    client: useHostClient(),
+    hostLabel: "Local",
+    isPinned: false,
+    namedHostDead: false,
+  };
+}
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({
     request: homeMocks.request,
@@ -100,9 +113,14 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
   // `landing-draft-store.ts` (real, unmocked) and `use-landing-composer-actions.ts`
   // (also real - invoked through the mocked `LandingComposer`'s `handleClick`)
-  // both resolve the per-host workspace-folder bucket through this imperative
-  // snapshot, not through a hook. A whole-module mock without it would leave
-  // the import `undefined` and throw on the very first call.
+  // both resolve the per-host workspace-folder bucket through an imperative
+  // read, not through a hook. A whole-module mock missing one leaves the
+  // import `undefined` and throws on the very first call.
+  //
+  // `activeHostIdOrNull` is that read now: the spine stopped carrying an
+  // identity at P4.2/D17, so it resolves the authority projection instead.
+  // Same knob as the spine below, so a test that moves the host moves both.
+  activeHostIdOrNull: () => homeMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
@@ -114,7 +132,7 @@ vi.mock("@/lib/host/runtime", () => ({
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgent: () => ({
+  useCreateTuiAgentForClient: () => ({
     create: () => Promise.resolve(),
     isPending: false,
   }),
@@ -143,7 +161,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
     // The real composer reads surface activity from context (provided by
     // HomePage); the mock mirrors that so the gating stays observable.
     const activityEnabled = useSurfaceActivity();
-    const actions = useLandingComposerActions();
+    const actions = useLandingComposerActions(useTestPlacementTarget());
     const draftId = props.draftId;
     const pendingCreateId = props.pendingCreateId;
     const effectiveKey = draftId ?? pendingCreateId;

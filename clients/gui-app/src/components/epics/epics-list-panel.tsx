@@ -43,6 +43,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   Tooltip,
   TooltipContent,
@@ -386,6 +387,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // candidate.
   const [sweepEpicIds, setSweepEpicIds] =
     useState<ReadonlyArray<string> | null>(null);
+  const sweepHostClient = useHostClientForHostId(null);
   const requestSweep = useCallback(
     (epicId: string) => {
       if (!selectionEnabled) return;
@@ -649,6 +651,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       />
       <SweepWorktreesDialog
         epicIds={sweepEpicIds}
+        // The Epics list is app chrome: its sweep proves and sweeps the
+        // app-wide host's worktrees (the following client - `null` resolves
+        // to the effective host's requester, the same seam the landing
+        // composer's following state uses).
+        hostClient={sweepHostClient}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
           if (!open) setSweepEpicIds(null);

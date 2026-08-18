@@ -1,4 +1,5 @@
 import type { UseMutationResult } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   RequestOfMethod,
@@ -10,20 +11,36 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { editorMutationKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
+export type EditorOpenMutation = UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "editor.openPaths">,
+  HostRpcError,
+  RequestOfMethod<HostRpcRegistry, "editor.openPaths">
+>;
+
+/**
+ * App-wide form, for a FOLLOWING surface with no host of its own - the dead-tile
+ * "open in editor" button (selection model §2). Every Epic-scoped caller (a diff
+ * tile, a workspace-file tile) must use {@link useEditorOpenForClient} with its
+ * own tab client instead: `editor.openPaths` resolves the path on the host it is
+ * sent to, so an app-wide read opens the wrong machine's file during an A→B
+ * re-point (D15).
+ */
+export function useEditorOpen(
+  intent: "file" | "workspace",
+): EditorOpenMutation {
+  return useEditorOpenForClient(useHostClient(), intent);
+}
+
 /**
  * `intent` is the caller's declared gesture: only opening a workspace ROOT
  * counts toward `workspace_opened_in_editor` - single-file opens (e.g. a
  * changed file from a diff tile) would overstate editor workspace adoption
  * and deliberately emit nothing here.
  */
-export function useEditorOpen(
+export function useEditorOpenForClient(
+  client: HostClient<HostRpcRegistry> | null,
   intent: "file" | "workspace",
-): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "editor.openPaths">,
-  HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "editor.openPaths">
-> {
-  const client = useHostClient();
+): EditorOpenMutation {
   return useHostMutation<HostRpcRegistry, "editor.openPaths">({
     client,
     method: "editor.openPaths",

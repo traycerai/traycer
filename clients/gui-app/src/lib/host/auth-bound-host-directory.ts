@@ -83,6 +83,8 @@ export interface AuthBoundHostDirectoryOptions {
   /** Shell/test override; `null` uses {@link buildDefaultRemoteFetcher}. */
   readonly remoteFetcher: RemoteHostFetcher | null;
   readonly localHostIdSeeder: () => Promise<string | null>;
+  /** Forwarded to {@link HostDirectoryService}; see its own doc (F22). */
+  readonly onRegistryPollTick: (() => void) | null;
 }
 
 /**
@@ -106,6 +108,7 @@ export function createAuthBoundHostDirectory(
     remoteFetcher:
       options.remoteFetcher ?? buildDefaultRemoteFetcher(auth, runnerHost),
     localHostIdSeeder: options.localHostIdSeeder,
+    onRegistryPollTick: options.onRegistryPollTick,
     // Both accessors are halves of the SAME era, read from the same method the
     // fetch layer checks a request against. That is deliberate: the directory
     // builds an ambient era from these two, `AuthService.fetchRegisteredHosts`

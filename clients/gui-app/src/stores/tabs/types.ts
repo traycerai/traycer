@@ -47,6 +47,24 @@ export type HeaderTab =
       readonly kind: "epic";
       readonly id: string;
       readonly epicId: string;
+      /**
+       * The host serving this epic's session, or `null` when no session is
+       * live for it (a background tab past the MRU cap, or a cold boot before
+       * the provider has acquired one).
+       *
+       * A PROJECTION of the session provider's answer, never a second one.
+       * The epic session resolves its own host (`requestedHostId ??
+       * effectiveHostId`) and stamps it on the handle; this field carries that
+       * value out to the app-global tab strip, which sits outside every
+       * `EpicSessionContext` and so cannot read it any other way. Nothing here
+       * decides a host - persisting one on the tab record would create a
+       * second authority that goes stale the first time a session re-points.
+       *
+       * `null` is not an error: a tab-strip surface that needs a host falls
+       * back to the app-wide client, which is what it did before this field
+       * existed. Treat it as "not known here", never as "no host".
+       */
+      readonly hostId: string | null;
       readonly route: string;
       readonly name: string;
       readonly icon: TabIcon | null;

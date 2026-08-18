@@ -1,7 +1,8 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { FileEditReason } from "@traycer/protocol/persistence/epic/content-blocks";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /**
@@ -13,12 +14,18 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
  * diff row is expanded), so the unsynced doc stays small and the (common)
  * non-expanded case fetches nothing.
  *
- * Scope: the machine-local / active host (`useHostClient`), where snapshot
- * blobs physically live. A snapshot whose blob is gone (or on another machine
- * for a shared epic) resolves with a `blob_missing`/`binary`/`too_large`
- * reason rather than content - the renderer shows the matching banner.
+ * Scope: the host that WROTE the snapshot - the caller's own client, passed
+ * in. It used to read `useHostClient()`, so every mounting surface (the
+ * snapshot-diff tile, the chat transcript's file-change rows) asked the
+ * app-wide host for blobs its own host holds: during a re-point that host
+ * answers B while the tile still renders A's expands, and the read resolves
+ * `blob_missing` for content that exists. A snapshot whose blob is genuinely
+ * gone (or on another machine for a shared epic) still resolves with a
+ * `blob_missing`/`binary`/`too_large` reason rather than content - the
+ * renderer shows the matching banner.
  */
 export function useSnapshotDiffQuery(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly beforeHash: string | null;
   readonly afterHash: string | null;
   readonly enabled: boolean;
@@ -30,10 +37,9 @@ export function useSnapshotDiffQuery(args: {
   },
   HostRpcError
 > {
-  const client = useHostClient();
   return useHostQuery<HostRpcRegistry, "snapshots.readSnapshotDiff">({
     cacheKeyIdentity: undefined,
-    client,
+    client: args.client,
     method: "snapshots.readSnapshotDiff",
     params: {
       beforeHash: args.beforeHash,

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
+import type { UnsyncedEditsEntry } from "@/stores/epics/open-epic/session-registry";
 import {
   buildReportIssueDraftContext,
   type ReportIssueDraftContext,
@@ -10,7 +11,20 @@ export type DesktopDialogKind =
   | "logs"
   | "open-epic-in-new-window"
   | "report-issue"
-  | "install-guidance";
+  | "install-guidance"
+  | "update-unsynced-confirm";
+
+/**
+ * What the update-install door learned before it asked. `epics` are the rows
+ * the decision is taken against; `otherWindowsUnknown` is true when the
+ * APP-WIDE check failed, so `epics` is only this window's answer and every
+ * other window's work is unaccounted for - the prompt then has to say so,
+ * because "nothing listed" is not "nothing to lose" in that state.
+ */
+export interface UpdateUnsyncedConfirmation {
+  readonly epics: ReadonlyArray<UnsyncedEditsEntry>;
+  readonly otherWindowsUnknown: boolean;
+}
 
 export interface DesktopDialogState {
   readonly activeDialog: DesktopDialogKind | null;
@@ -34,6 +48,16 @@ export interface DesktopDialogState {
    * it). A replacement then toasts this id before the draft below is
    * overwritten, since the confirmation holds the only copy of it.
    */
+  /**
+   * The epics whose work cannot survive an update restart, captured when the
+   * confirmation opens. Held here rather than re-derived by the dialog so the
+   * rows the user is shown are the ones the decision was taken against - a
+   * retention can be reclaimed while the dialog is up, and a body that
+   * re-queried would silently disagree with the gate that raised it.
+   */
+  readonly updateUnsyncedEpics: ReadonlyArray<UnsyncedEditsEntry>;
+  /** See {@link UpdateUnsyncedConfirmation.otherWindowsUnknown}. */
+  readonly updateUnsyncedOtherWindowsUnknown: boolean;
   readonly lastConfirmedReport: {
     readonly draftId: number;
     readonly reportId: string;
@@ -51,6 +75,9 @@ export interface DesktopDialogState {
     report: { readonly draftId: number; readonly reportId: string } | null,
   ) => void;
   readonly openInstallGuidance: () => void;
+  readonly openUpdateUnsyncedConfirm: (
+    confirmation: UpdateUnsyncedConfirmation,
+  ) => void;
   readonly close: () => void;
 }
 
@@ -60,6 +87,8 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   reportIssueContext: null,
   reportIssueDraftContext: null,
   reportIssueDraftId: 0,
+  updateUnsyncedEpics: [],
+  updateUnsyncedOtherWindowsUnknown: false,
   lastConfirmedReport: null,
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });
@@ -116,6 +145,13 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   },
   openInstallGuidance: () => {
     set({ activeDialog: "install-guidance" });
+  },
+  openUpdateUnsyncedConfirm: (confirmation) => {
+    set({
+      activeDialog: "update-unsynced-confirm",
+      updateUnsyncedEpics: confirmation.epics,
+      updateUnsyncedOtherWindowsUnknown: confirmation.otherWindowsUnknown,
+    });
   },
   close: () => {
     set({

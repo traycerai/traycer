@@ -25,9 +25,11 @@ const mutationMocks = vi.hoisted(() => ({ createWorktree: vi.fn() }));
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => FAKE_CLIENT,
+  // Spine and app-wide client are separate exports since redesign P2.1.
+  useHostRuntimeClient: () => FAKE_CLIENT,
 }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-test",
 }));
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => FAKE_CLIENT,
@@ -97,7 +99,9 @@ vi.mock("@/hooks/workspace/use-workspace-binding-add-folder-mutation", () => ({
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({ mutate: vi.fn(), isPending: false }),
+  // Host-parametric clone create (redesign P1.2, D6): the panel now runs the
+  // clone on the target host's own client via this hook, not the app-wide one.
+  useEpicCreateChatForHostClient: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => vi.fn(),

@@ -521,7 +521,7 @@ async function verifyDownloadedFile(
       }),
     };
   }
-  const sha256 = await hashFileSha256(opts.destPath);
+  const sha256 = await hashFileSha256(opts.destPath, null);
   if (sha256 !== opts.expectedSha256) {
     return {
       kind: "mismatch",
@@ -765,7 +765,7 @@ async function downloadFileScheme(
     writer.on("close", () => resolve());
     reader.pipe(writer);
   });
-  const sha256 = await hashFileSha256(opts.destPath);
+  const sha256 = await hashFileSha256(opts.destPath, null);
   if (sha256 !== opts.expectedSha256) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,

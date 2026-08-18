@@ -121,12 +121,16 @@ beforeEach(() => {
       },
     },
   });
-  hostClient = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     messenger,
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
   });
-  hostClient.bind(mockLocalHostEntry);
+  // `bind()` died with the active slot (D17): a requester over the spine is
+  // how a test addresses a host now; everything non-request proxies through.
+  hostClient = spine.createRequester(mockLocalHostEntry);
   hostClient.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",

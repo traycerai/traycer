@@ -25,9 +25,10 @@ import {
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
+  createHostReconnectEngine,
   HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
   HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
-} from "@/lib/host/stream-reopen";
+} from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   __resetHostNotificationsStoreForTests,
   compareHostNotificationEntries,
@@ -36,6 +37,9 @@ import {
   selectHostNotificationIds,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+
+const reconnectEngine = createHostReconnectEngine();
 
 const EMPTY_SUMMARY: HostNotificationsSummary = {
   unreadCount: 0,
@@ -211,6 +215,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");
@@ -848,7 +853,7 @@ describe("host notifications store", () => {
       recentCursor: null,
       attentionNext: null,
     });
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 123,
       displayChannelEmission: () => undefined,
@@ -1298,7 +1303,7 @@ describe("host notifications store", () => {
       recentCursor: null,
       attentionNext: null,
     });
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-binary",
       now: () => 123,
       displayChannelEmission: () => undefined,
@@ -1420,7 +1425,7 @@ describe("host notifications store", () => {
       readonly kind: string;
       readonly entityRefs?: unknown;
     }> = [];
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 123,
       displayChannelEmission: () => undefined,
@@ -1461,7 +1466,7 @@ describe("host notifications store", () => {
       recentCursor: null,
       attentionNext: null,
     });
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 123,
       displayChannelEmission: () => undefined,
@@ -1503,7 +1508,7 @@ describe("host notifications store", () => {
       recentCursor: null,
       attentionNext: null,
     });
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 123,
       displayChannelEmission: () => undefined,
@@ -1530,7 +1535,7 @@ describe("host notifications store", () => {
     const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
     const liveEntry = entry("live", 200, null);
 
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 123,
       displayChannelEmission: (entries) => {
@@ -1585,7 +1590,7 @@ describe("host notifications store", () => {
       },
     };
 
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 123,
       displayChannelEmission: (entries) => {
@@ -1622,7 +1627,7 @@ describe("host notifications store", () => {
     const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
     const liveEntry = entry("webhook-live", 240, null);
 
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 123,
       displayChannelEmission: (entries) => {
@@ -1653,7 +1658,7 @@ describe("host notifications store", () => {
   it("sends flat presence frames when the stream opens", () => {
     const client = new MockWsStreamClient();
 
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 456,
       displayChannelEmission: () => undefined,
@@ -1688,7 +1693,7 @@ describe("host notifications store", () => {
     try {
       const client = new MockWsStreamClient();
 
-      const close = openHostNotificationsStream(client, null, {
+      const close = openHostNotificationsStream(reconnectEngine, client, null, {
         windowId: "window-1",
         now: () => 456,
         displayChannelEmission: () => undefined,
@@ -1723,7 +1728,7 @@ describe("host notifications store", () => {
   it("notifies presence locally on focus changes while the stream is not open", () => {
     const client = new MockWsStreamClient();
     const notified: HostNotificationsSubscribeClientFrame[] = [];
-    const close = openHostNotificationsStream(client, null, {
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
       windowId: "window-1",
       now: () => 456,
       displayChannelEmission: () => undefined,
@@ -1753,7 +1758,7 @@ describe("host notifications store", () => {
     vi.useFakeTimers();
     try {
       const client = new MockWsStreamClient();
-      const close = openHostNotificationsStream(client, null, {
+      const close = openHostNotificationsStream(reconnectEngine, client, null, {
         windowId: "window-1",
         now: () => 456,
         displayChannelEmission: () => undefined,
@@ -1797,7 +1802,7 @@ describe("host notifications store", () => {
     try {
       const client = new MockWsStreamClient();
       const notified: HostNotificationsSubscribeClientFrame[] = [];
-      const close = openHostNotificationsStream(client, null, {
+      const close = openHostNotificationsStream(reconnectEngine, client, null, {
         windowId: "window-1",
         now: () => 456,
         displayChannelEmission: () => undefined,
@@ -1849,7 +1854,7 @@ describe("host notifications store", () => {
     vi.useFakeTimers();
     try {
       const client = new MockWsStreamClient();
-      const close = openHostNotificationsStream(client, null, {
+      const close = openHostNotificationsStream(reconnectEngine, client, null, {
         windowId: "window-1",
         now: () => 456,
         displayChannelEmission: () => undefined,
@@ -1936,14 +1941,19 @@ describe("host notifications store", () => {
         },
       ]) {
         const client = new MockWsStreamClient();
-        const close = openHostNotificationsStream(client, null, {
-          windowId: "window-1",
-          now: () => 456,
-          displayChannelEmission: () => undefined,
-          onFeedFrame: () => undefined,
-          onPresenceChanged: () => undefined,
-          onStreamOpened: () => undefined,
-        });
+        const close = openHostNotificationsStream(
+          reconnectEngine,
+          client,
+          null,
+          {
+            windowId: "window-1",
+            now: () => 456,
+            displayChannelEmission: () => undefined,
+            onFeedFrame: () => undefined,
+            onPresenceChanged: () => undefined,
+            onStreamOpened: () => undefined,
+          },
+        );
         client.session.emitClosed(reason);
         vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
         expect(client.subscribeCount).toBe(1);
@@ -1958,7 +1968,7 @@ describe("host notifications store", () => {
     vi.useFakeTimers();
     try {
       const client = new MockWsStreamClient();
-      const close = openHostNotificationsStream(client, null, {
+      const close = openHostNotificationsStream(reconnectEngine, client, null, {
         windowId: "window-1",
         now: () => 456,
         displayChannelEmission: () => undefined,

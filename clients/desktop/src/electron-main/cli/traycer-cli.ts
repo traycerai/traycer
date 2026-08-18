@@ -87,6 +87,10 @@ export type NdjsonEvent =
       readonly bytes: number | null;
       readonly totalBytes: number | null;
       readonly message: string | null;
+      // Monotonic count of completed units of work within the stage (archive
+      // entries). Absent from any CLI predating it, which the parser below
+      // normalises to `null` like every other numeric.
+      readonly workUnits: number | null;
     }
   | {
       readonly type: "result";
@@ -847,6 +851,14 @@ function parseNdjsonEvent(value: unknown): NdjsonEvent | null {
           ? obj.totalBytes
           : null,
       message: typeof obj.message === "string" ? obj.message : null,
+      // An older bundled CLI omits this entirely; the same numeric guard the
+      // other three use turns that into `null`, so skew degrades to the
+      // pre-field behaviour instead of breaking. That is the whole
+      // forward-compatibility story for this field.
+      workUnits:
+        typeof obj.workUnits === "number" && Number.isFinite(obj.workUnits)
+          ? obj.workUnits
+          : null,
     };
   }
   if (type === "result") {

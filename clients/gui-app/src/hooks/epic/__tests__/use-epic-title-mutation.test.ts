@@ -5,6 +5,7 @@ import type {
   GetTaskContextsResponse,
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { isFoundTaskContext } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
@@ -108,7 +109,7 @@ describe("useEpicUpdateTitle", () => {
       hasMore: false,
     });
     queryClient.setQueryData<GetTaskContextsResponse>(batchKey, {
-      tasks: { "epic-1": row },
+      tasks: { "epic-1": { status: "found", task: row } },
     });
     renderUseEpicUpdateTitle(queryClient);
 
@@ -122,10 +123,14 @@ describe("useEpicUpdateTitle", () => {
       queryClient.getQueryData<ListTasksResponse>(listKey)?.tasks[0]?.epic
         ?.light?.title,
     ).toBe("Renamed");
-    expect(
+    const taskContext =
       queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
         "epic-1"
-      ]?.epic?.light?.title,
+      ];
+    expect(
+      isFoundTaskContext(taskContext)
+        ? taskContext.task.epic?.light?.title
+        : undefined,
     ).toBe("Renamed");
   });
 

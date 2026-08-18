@@ -48,6 +48,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
+import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamClient } from "./i-stream-client";
 import type {
   IStreamWebSocketFactory,
@@ -95,6 +96,21 @@ export interface WsStreamClientOptions<
    * another and leave the host with nothing.
    */
   readonly hostCredentialMint: HostCredentialMintFlow | null;
+  /**
+   * Where this transport's observations reach the selection authority.
+   *
+   * `/stream` is the LOCAL host's long-lived connection - a remote host's
+   * streams ride the relay mux instead - so this is the leg that hears a
+   * restart tombstone from a local host somebody else restarted: a
+   * `traycer host restart` on the box, an update install, a second app
+   * window. The desktop's own mutation lane covers restarts IT issued and is
+   * structurally blind to those.
+   *
+   * Required, not defaulted, for the same reason the unary transport's is:
+   * a new construction site has to say whether it feeds an authority or
+   * `NO_TRANSPORT_EVIDENCE`.
+   */
+  readonly evidence: TransportEvidenceReporter;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly dialTimeoutMs: number;
   readonly openAckTimeoutMs: number;
@@ -174,6 +190,14 @@ function createInertStreamSession(closedReason: string): IStreamSession {
 
 /** Monotonic source for `WsStreamClient.instanceId` (log correlation only). */
 let nextStreamClientId = 1;
+
+/**
+ * Monotonic source for announced stream SESSION ids. Module-scoped rather than
+ * per-connection so the id names one connectivity episode uniquely across
+ * every stream in the process - the authority keys live sessions by id, and
+ * two connections reusing `s1` would let one's retraction clear the other's.
+ */
+let streamSessionSeq = 0;
 
 export class WsStreamClient<
   Registry extends VersionedStreamRpcRegistry,
@@ -281,6 +305,7 @@ export class WsStreamClient<
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
       auth: this.options.auth,
+      evidence: this.options.evidence,
       webSocketFactory: this.options.webSocketFactory,
       dialTimeoutMs: this.options.dialTimeoutMs,
       openAckTimeoutMs: this.options.openAckTimeoutMs,
@@ -409,9 +434,9 @@ export class WsStreamClient<
    * host-event-loop-stall case, where an established stream survives the
    * 60s pong cutoff while fresh unary dials time out and strand their
    * queries in a permanent error state. Consumers use this to drive
-   * `HostClient.notifyAvailabilityRecovered()` so those stranded queries
-   * refetch; multiple sessions recovering at once each fire, so consumers
-   * should coalesce.
+   * `HostClient.notifyHostAvailabilityRecovered(hostId)` so those stranded
+   * queries refetch; multiple sessions recovering at once each fire, so
+   * consumers should coalesce.
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void {
     this.availabilityRecoveredListeners.add(listener);
@@ -786,6 +811,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator | null;
+  readonly evidence: TransportEvidenceReporter;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly dialTimeoutMs: number;
   readonly openAckTimeoutMs: number;
@@ -891,6 +917,25 @@ class StreamSession<
    * the one mistake this path must not make.
    */
   private openFrameHostId: string | null = null;
+  /**
+   * The live session this connection has announced to the selection authority,
+   * or `null` while it has none.
+   *
+   * `/stream` is a LIVE SESSION and the authority's strongest evidence class
+   * (invariant 5): it suppresses death accumulation entirely. Until this was
+   * announced, a healthy long-lived stream counted for nothing, so three fresh
+   * unary dials refused during an accept-loop or descriptor-pressure stall
+   * reached the confirmed-death streak and failed the local host over while
+   * its stream was still carrying frames.
+   *
+   * The hostId is stored ALONGSIDE the id rather than re-read at retraction
+   * time: `openFrameHostId` is cleared on the same paths that retract, and a
+   * session announced for host A must never be retracted against host B. An
+   * announcement that is never retracted means the host can never be declared
+   * dead again, so every path that drops the dialed identity retracts here
+   * first - which is exactly the two places that clear `openFrameHostId`.
+   */
+  private announcedSession: { hostId: string; sessionId: string } | null = null;
   // Whether the host advertised `credentialUpdate` support in the current
   // connection's openAck. Gates `pushCredentialUpdate`; reset on every
   // reconnect and re-read from the next openAck.
@@ -1443,6 +1488,10 @@ class StreamSession<
     // "open") is NOT recovery - nothing was stuck - so it stays silent.
     const recoveredFromUnavailable = this.status === "reconnecting";
     this.phase = "subscribed";
+    // The subscription is established: this is a live session, and the
+    // authority is told so before any outbound callback below can re-enter.
+    this.announceSession();
+
     // Deliberately NOT resetting `reconnectAttempt` /
     // `noProgressUnauthorizedReconnects` here. The subscribe-ack only proves
     // the transport handshake; resolver-side initialization failures land
@@ -1486,6 +1535,64 @@ class StreamSession<
     }
   }
 
+  /**
+   * Forwards a host-published restart tombstone to the selection authority.
+   *
+   * Silent when the host published none - every host predating the tombstone,
+   * and every ordinary fatal on a host that does publish them. Duplicates are
+   * forwarded rather than filtered here: the authority keys episodes by
+   * (hostId, tombstoneId) and treats a repeat as inert, and that rule belongs
+   * in the one place that can apply it across every window in the app.
+   */
+  /**
+   * Announces this connection's live session once its subscription is
+   * established. Idempotent: a repeat while one is already announced is inert,
+   * so a re-entrant handshake callback cannot double-count.
+   */
+  private announceSession(): void {
+    if (this.announcedSession !== null) return;
+    const hostId = this.openFrameHostId;
+    if (hostId === null) return;
+    streamSessionSeq += 1;
+    const sessionId = `local-stream:s${streamSessionSeq}`;
+    this.announcedSession = { hostId, sessionId };
+    this.config.evidence.sessionEstablished(hostId, sessionId, "local-ws");
+  }
+
+  /**
+   * Retracts the announced session, against the host it was announced FOR.
+   * Idempotent, and called on every path that drops the dialed identity.
+   */
+  private retractSession(): void {
+    const announced = this.announcedSession;
+    if (announced === null) return;
+    this.announcedSession = null;
+    this.config.evidence.sessionLost(
+      announced.hostId,
+      announced.sessionId,
+      "local-ws",
+    );
+  }
+
+  private reportRestartIntentIfPresent(details: FatalErrorDetails): void {
+    const restartIntent = details.restartIntent;
+    if (restartIntent === undefined) {
+      return;
+    }
+    const hostId = this.openFrameHostId;
+    if (hostId === null) {
+      // No dialed identity captured yet, so there is no host to file the
+      // tombstone against. Dropping is right: a guess would hold the wrong
+      // lease, and a fatal this early means nothing was serving anyway.
+      return;
+    }
+    this.config.evidence.reportRestartIntent(
+      hostId,
+      restartIntent.tombstoneId,
+      restartIntent.expiresAt,
+    );
+  }
+
   private handleFatalErrorFrame(parsed: object): void {
     const termParse = hostStreamFatalErrorFrameSchema.safeParse(parsed);
     if (!termParse.success) {
@@ -1494,6 +1601,16 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
+    // The restart tombstone (P1.4 / D5 / M1), read BEFORE the frame is routed
+    // by `retryable`/`UNAUTHORIZED` so every arm reports it. The host is
+    // stating that the outage it is about to cause is deliberate - the one
+    // thing this window cannot infer for a restart it did not issue.
+    //
+    // `openFrameHostId`, not `endpoint()`: the identity THIS connection
+    // dialed, for the same reason the credential path reads it - the endpoint
+    // provider may already point somewhere else, and a tombstone filed
+    // against the wrong host would hold the wrong lease.
+    this.reportRestartIntentIfPresent(details);
     // `retryable` marks a transient host-side rejection. The stable subscribe-
     // timeout code is checked too because hosts through 1.1.9 emitted it without
     // the additive flag; a new client must still recover when paired with one of
@@ -1827,6 +1944,9 @@ class StreamSession<
       this.dialTimer = null;
     }
     this.clearHealthyDwell();
+    // Before the dialed identity is dropped - the retraction needs the host it
+    // was announced for.
+    this.retractSession();
     this.activeSocket = null;
     this.openFrameToken = null;
     this.openFrameHostId = null;
@@ -1881,6 +2001,10 @@ class StreamSession<
 
   private teardownSocket(code: number, reason: string): void {
     const socket = this.activeSocket;
+    // Same ordering rule as the drop path: retract while the announced host is
+    // still known. `teardownSocket` is the caller-`close()` and fatal-error
+    // leg, so between the two of them no announced session outlives its socket.
+    this.retractSession();
     this.activeSocket = null;
     this.openFrameToken = null;
     this.openFrameHostId = null;
@@ -1946,15 +2070,18 @@ class StreamSession<
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
-    // A delivered APPLICATION frame - not the subscribe-ack, and not a pong
-    // (both intercepted upstream) - is the proof this connection's resolver
-    // initialized and the stream is usable. Here (and in the
-    // sustained-subscription dwell, for event-only streams that deliver
-    // nothing unprompted) the reconnect backoff and the no-progress
-    // UNAUTHORIZED give-up bound reset; a host that acks the subscribe and
-    // then fails initialization keeps escalating instead of looping at the
-    // floor delay (int #4781).
-    this.resetLoopCounters();
+    // Every server frame proves the socket can deliver work, so it resets the
+    // transport backoff. Only a snapshot proves an epic stream completed its
+    // establishing path: `earlyMeta`, permission changes, and incremental
+    // frames can arrive before the host has initialized the cloud-backed
+    // replica. Treating any of those as auth-loop progress lets an `earlyMeta`
+    // → `UNAUTHORIZED` loop evade the give-up bound forever (int #4781 /
+    // traycer#892). The dwell remains the separate health proof for quiet
+    // non-epic streams.
+    this.reconnectAttempt = 0;
+    if (envelope.kind === "snapshot") {
+      this.noProgressUnauthorizedReconnects = 0;
+    }
     const handler = this.serverFrameHandler;
     if (handler === null) {
       return;

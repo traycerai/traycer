@@ -1,7 +1,11 @@
 import { createElement, lazy } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { epicHasUnsyncedEdits } from "@/lib/registries/epic-session-registry";
+import {
+  epicHasUnsyncedEdits,
+  getEpicSessionHandleHostId,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
 import { buildNestedFocusSearchPatch } from "@/lib/epic-nested-focus-route";
 import { epicPathname, epicTabRoute } from "@/lib/routes";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
@@ -19,6 +23,24 @@ const epicSurface = lazy(() =>
     default: module.EpicSurface,
   })),
 );
+
+/**
+ * The host serving this epic right now, read from the live session rather
+ * than stored on the tab.
+ *
+ * The session provider owns the answer (`requestedHostId ?? effectiveHostId`,
+ * stamped onto the handle at acquire); this reads it. `null` when the registry
+ * holds no handle - a background tab evicted past the MRU cap, or any tab
+ * before the provider's first acquisition, including the window between the
+ * registry's own emit for that acquisition and the handle being stamped.
+ * Every one of those degrades a consumer to the app-wide client, which is what
+ * it used before this projection existed - a safe direction, and the reason
+ * this can be a plain read instead of an ordering contract.
+ */
+function epicSessionHostId(epicId: string): string | null {
+  const handle = getOpenEpicRegistry().peek(epicId);
+  return handle === null ? null : getEpicSessionHandleHostId(handle);
+}
 
 /**
  * Module for `kind: "epic"` tabs. Data lives in the epic-canvas
@@ -41,6 +63,7 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       kind: "epic",
       id: source.tabId,
       epicId: source.epicId,
+      hostId: epicSessionHostId(source.epicId),
       route: epicPathname({ tabId: source.tabId, epicId: source.epicId }),
       name: source.name,
       icon: null,

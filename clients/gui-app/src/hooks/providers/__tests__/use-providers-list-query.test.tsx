@@ -92,6 +92,7 @@ const candidateVersionPending: ProviderCliState["candidates"] = [
 
 interface ProvidersFixture {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly spine: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly requestCount: { value: number };
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
@@ -107,9 +108,11 @@ function createProvidersFixture(): ProvidersFixture {
   ];
   let error: Error | null = null;
   let requestSeq = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -125,13 +128,13 @@ function createProvidersFixture(): ProvidersFixture {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "tok-1",
     }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
@@ -139,6 +142,7 @@ function createProvidersFixture(): ProvidersFixture {
   );
   return {
     client,
+    spine,
     queryClient,
     requestCount,
     Wrapper,
@@ -229,13 +233,18 @@ describe("useProvidersListForClient table cadence", () => {
     const fetchTimes: number[] = [];
     vi.setSystemTime(0);
 
-    const originalList = fixture.client.requestWithSignal.bind(fixture.client);
-    vi.spyOn(fixture.client, "requestWithSignal").mockImplementation(
-      async (method, params, signal) => {
+    // Spy on the SPINE's own `requestForWithSignal`, not the pinned
+    // requester's `requestWithSignal`: the requester is a Proxy that
+    // special-cases that property to a fresh closure over the spine's method
+    // on every access, so a spy installed on the requester itself is never
+    // consulted - the spine's method is the one actually invoked underneath.
+    const originalList = fixture.spine.requestForWithSignal.bind(fixture.spine);
+    vi.spyOn(fixture.spine, "requestForWithSignal").mockImplementation(
+      async (entry, method, params, signal) => {
         if (method === "providers.list") {
           fetchTimes.push(Date.now());
         }
-        return originalList(method, params, signal);
+        return originalList(entry, method, params, signal);
       },
     );
 

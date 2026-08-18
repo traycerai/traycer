@@ -50,6 +50,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     status: reachability.value,
     hostLabel: "Work laptop",
   }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock(
@@ -79,10 +81,14 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 
 // The socket is the boundary: the stub stream factory below stands in for the
 // whole transport, so this opener is never reached.
+//
+// Hoisted to ONE instance so it is referentially stable across renders, as the
+// real hook is — see `lib/registries/__tests__/chat-session-registry.test.ts`.
+const refuseDurableTransport = vi.hoisted(() => () => {
+  throw new Error("no durable transport in tests");
+});
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => () => {
-    throw new Error("no durable transport in tests");
-  },
+  useDurableStreamTransportFactory: () => refuseDurableTransport,
 }));
 
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
@@ -863,4 +869,12 @@ describe("managed-command output window", () => {
     fireEvent.scroll(view);
     expect(sentFrames).toHaveLength(1);
   });
+
+  // S5's property - `checking` and `host-starting` render a WORDED,
+  // phase-named, bounded wait rather than a bare endless spinner - is owned
+  // by the availability notice since the #1149 merge, and is pinned above by
+  // "names the host-directory wait by phase" / "names the host-process wait
+  // the same way the chat's own banner does". `TileHostLoadState` covers the
+  // reachable host's LOAD window (the cases earlier in this file), below the
+  // availability gate.
 });

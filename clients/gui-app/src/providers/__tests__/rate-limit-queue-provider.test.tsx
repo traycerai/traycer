@@ -31,11 +31,13 @@ const mocks = vi.hoisted<MockState>(() => ({
   profileSelection: { activeChatSettings: null, lastProfileByHarness: {} },
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mocks.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mocks.hostId,
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.client,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mocks.client,
 }));
 // Normalizes each fixture with the defaults a real `ConfiguredRateLimitProvider`
 // always carries (`profiles`, `fetchEligibility`), so most existing test bodies

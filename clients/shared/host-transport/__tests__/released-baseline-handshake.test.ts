@@ -1,3 +1,4 @@
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -264,6 +265,7 @@ function createReleasedPeerClient(
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
       hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
     }),
   };
 }
@@ -387,6 +389,7 @@ describe.skipIf(baselines.length === 0)(
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
           hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         });
 
         const pending = client.request(
@@ -447,6 +450,7 @@ describe.skipIf(baselines.length === 0)(
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
           hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         });
 
         const pending = client.request(
@@ -517,6 +521,7 @@ describe.skipIf(baselines.length === 0)(
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
           hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         });
 
         const pending = client.request(
@@ -582,6 +587,7 @@ describe.skipIf(baselines.length === 0)(
           bearer: () => ctx.credentials,
           auth: null,
           hostCredentialMint: null,
+          evidence: NO_TRANSPORT_EVIDENCE,
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           openAckTimeoutMs: 1000,

@@ -34,6 +34,15 @@ const messengerRef = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
+  // The SPINE and the app-wide client are separate exports since redesign
+  // P2.1; this stub stands in for both, which is what `useHostClientFor` and
+  // `useHostClientForHostId` each reach for.
+  useHostRuntimeClient: () => {
+    if (globalClientRef.value === null) {
+      throw new Error("test global client not configured");
+    }
+    return globalClientRef.value;
+  },
   useHostClient: () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
@@ -47,8 +56,8 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 // What the app-wide active host resolves to. The tab is bound elsewhere, so
 // anything reading this instead of the tab's binding lands on the wrong host -
 // which is exactly the failure this suite reproduces.
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => DEFAULT_HOST.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => DEFAULT_HOST.hostId,
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ authnBaseUrl: "https://authn.test" }),
@@ -104,7 +113,7 @@ function buildGlobalClient(): HostClient<HostRpcRegistry> {
     },
   });
   messengerRef.value = messenger;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     messenger,
@@ -112,13 +121,12 @@ function buildGlobalClient(): HostClient<HostRpcRegistry> {
       directoryRef.entries.find((entry) => entry.hostId === requestedHostId) ??
       null,
   });
-  // Bound to the DEFAULT host: a create that resolves the app-wide active
-  // host issues its RPC straight off this binding.
-  client.bind(DEFAULT_HOST);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return client;
+  // Pinned to the DEFAULT host: a create that resolves the app-wide active
+  // host issues its RPC straight off this requester.
+  return spine.createRequester(DEFAULT_HOST);
 }
 
 function wrapperFor(queryClient: QueryClient, handle: OpenEpicStoreHandle) {

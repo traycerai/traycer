@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -8,8 +8,11 @@ import type {
   IHostManagement,
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
-import { SurfaceReadinessBoundary } from "@/components/layout/host-readiness-controller";
-import { HostReadinessControllerProvider } from "@/components/layout/host-readiness-controller";
+import {
+  DefaultHostReadyGate,
+  HostReadinessControllerProvider,
+} from "@/components/layout/host-readiness-controller";
+import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import {
   HostCompatibilityProvider,
   hostRpcRegistry,
@@ -17,11 +20,14 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
-import type { HostDirectoryService } from "@/lib/host/host-directory-service";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
-import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return { ...actual, useRouterState: () => "/" };
+});
 
 /**
  * The blocker this file pins: `canProvision` used to be "the target is not
@@ -201,9 +207,9 @@ function mountRealChain(
               onConfigureShell={() => undefined}
               onOpenSettings={() => undefined}
             >
-              <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+              <DefaultHostReadyGate>
                 <main>app</main>
-              </SurfaceReadinessBoundary>
+              </DefaultHostReadyGate>
             </HostReadinessControllerProvider>
           </HostCompatibilityProvider>
         </HostRuntimeProvider>
@@ -211,33 +217,6 @@ function mountRealChain(
     </RunnerHostProvider>,
   );
   return runnerHost;
-}
-
-/** The directory the runtime actually built - the live intent authority. */
-function activeDirectory(): HostDirectoryService {
-  const directory = getHostBindingSnapshot()?.directory ?? null;
-  if (directory === null) throw new Error("expected a started host runtime");
-  return directory;
-}
-
-/**
- * Storage that refuses every write, the way a full or blocked quota does.
- * `persistHostSelection` / `persistLocalHostId` swallow this by design - the
- * point of these tests is that intent survives it anyway.
- */
-function breakStorageWrites(): void {
-  const throwQuota = (): void => {
-    throw new DOMException("QuotaExceededError", "QuotaExceededError");
-  };
-  // Two storage implementations exist across Node versions: real jsdom
-  // Storage (methods live on Storage.prototype), and - when jsdom's
-  // localStorage is unusable at setup, as under Node >= 26.5 - the suite
-  // shim from test-browser-apis.ts, a plain object whose `setItem` is an OWN
-  // property that a prototype spy never sees. Break whichever one is live.
-  vi.spyOn(Storage.prototype, "setItem").mockImplementation(throwQuota);
-  if (Object.prototype.hasOwnProperty.call(window.localStorage, "setItem")) {
-    vi.spyOn(window.localStorage, "setItem").mockImplementation(throwQuota);
-  }
 }
 
 /**
@@ -323,10 +302,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  // BEFORE the store teardown, not after it. Two tests here install
-  // `breakStorageWrites()`, which makes `Storage.prototype.setItem` throw;
-  // `setSignedOut()` persists through that same setter, so restoring last
-  // turned a passing test into a DOMException blamed on teardown.
   vi.restoreAllMocks();
   restoreFetch();
   window.localStorage.clear();
@@ -335,21 +310,90 @@ afterEach(() => {
 
 describe("local-boot intent", () => {
   it("arms nothing local for an unresolved REMOTE selection", async () => {
-    // The durable pick names a remote host; its directory row never arrives.
-    window.localStorage.setItem(lastSelectedHostKey(), REMOTE_HOST_ID);
-    window.localStorage.setItem(lastLocalHostIdKey(), LOCAL_HOST_ID);
+    // The intent is the selection AUTHORITY's derived effective host now
+    // (redesign P1.2), not a persisted key `resolveLocalBootIntent` reads
+    // from storage. `lastSelectedHostKey` had no production reader at all and
+    // is deleted; `lastLocalHostIdKey` is still LIVE - read by
+    // `host-directory-service.ts:22,46` - so this comment used to assert a
+    // deadness that was true of one key and false of the other. Registering the remote host in the
+    // authority's fleet (so derivation can name it effective) while the
+    // DIRECTORY's own remoteFetcher still returns nothing for it reproduces
+    // "the directory row never arrives"; with no local host up and no other
+    // fleet member, the derivation's third arm makes it effective without
+    // an explicit Activate.
     const spy = buildManagementSpy();
-
-    mountRealChain(spy.management, false);
-
-    // The surface settles on the non-local wait…
-    await waitFor(() => {
-      expect(screen.getByText("Connecting to Traycer Host…")).toBeTruthy();
+    const runnerHost = buildRunnerHost(spy.management, false);
+    runnerHost.setHosts([
+      {
+        hostId: REMOTE_HOST_ID,
+        label: "remote",
+        kind: "remote",
+        websocketUrl: "wss://relay.test.invalid/remote",
+        version: "1.2.3",
+        transportDialability: "dialable",
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
     });
+    render(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <QueryClientProvider client={queryClient}>
+          <HostRuntimeProvider
+            registry={hostRpcRegistry}
+            messengerFactory={messengerFactory()}
+            invalidator={null}
+            requestId={null}
+            remoteFetcher={() =>
+              Promise.resolve({ kind: "hosts", entries: [] })
+            }
+            fallback={<div data-testid="runtime-fallback">runtime loading</div>}
+          >
+            <HostCompatibilityProvider>
+              <HostReadinessControllerProvider
+                onConfigureShell={() => undefined}
+                onOpenSettings={() => undefined}
+              >
+                <DefaultHostReadyGate>
+                  <main>app</main>
+                </DefaultHostReadyGate>
+                {/* The gate no longer draws "Connecting to Traycer Host…"
+                    itself for this kind (the window narrator, D10, owns it
+                    now) - see default-host-ready-gate.test.tsx deliverable D.
+                    Mounted here as the settle anchor: the modal appearing
+                    with NO local bootstrap body is the positive proof this
+                    surface reached its settled non-local state, which the
+                    negative assertions below then get to run after. */}
+                <WindowHostModalHost bypassed={false} />
+              </HostReadinessControllerProvider>
+            </HostCompatibilityProvider>
+          </HostRuntimeProvider>
+        </QueryClientProvider>
+      </RunnerHostProvider>,
+    );
+
+    // The surface settles on the non-local wait: the window narrator comes up
+    // with NO local bootstrap body (no spinner, no local-host-loading
+    // content) - the positive proof this reached its non-local settled state.
+    //
+    // EITHER presentation counts as the anchor. This stack mounts the real
+    // gate, so which form the narrator takes depends on whether the gate is
+    // still blocking - a detail this fixture is not about, and pinning one
+    // testid here would turn a settle anchor into an accidental presentation
+    // assertion that goes vacuous when the other form renders.
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("window-host-modal") ??
+          screen.queryByTestId("window-host-startup-card"),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
     // …and it must never claim this machine's host is starting, nor offer any
     // action against it.
-    expect(screen.queryByText("Starting local Traycer Host…")).toBeNull();
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByText("Starting Traycer…")).toBeNull();
     expect(screen.queryByTestId("local-host-retry")).toBeNull();
     // The two calls the blocker was about: both belong to a machine the user
     // is not pointed at, and neither may run.
@@ -357,106 +401,58 @@ describe("local-boot intent", () => {
     expect(spy.removalStateCalls()).toBe(0);
   });
 
-  it("runs the local ensure and draws the install card for a first-ever start", async () => {
-    // Nothing remembered and no local row yet: a genuine cold local start.
-    // This is the arm that must NOT be sacrificed to close the one above -
-    // the rich card is where install progress and the bootstrap.log path live
-    // (traycer#862), and a first install is exactly when they are needed.
+  it("the AUTHORITY's ensure reaches host management - the port is not a stub", async () => {
+    // The counterpart to the negative arm above, and the pin for a fidelity
+    // property that is otherwise invisible. `MockRunnerHost` composes the
+    // authority's `LocalHostEnsurePort`, and an earlier version of it answered
+    // `ok` directly instead of routing to `convergeReady` the way the real
+    // `createDesktopLocalHostEnsurePort` does. That satisfied the engine while
+    // making the provisioning unobservable to anything watching the
+    // controller: an ensure that "succeeded" without the host ever being asked
+    // to converge. Nothing failed, because no test looked.
+    //
+    // Here the local host EXISTS in the fleet and has never been dialed, which
+    // is exactly when D14 wants it, so the authority requests the ensure and
+    // it must arrive at management. The remote-preferred test above is the
+    // negative arm of the same mechanism: derivation that does NOT want local
+    // must leave the controller alone.
+    const spy = buildManagementSpy();
+
+    mountRealChain(spy.management, true);
+
+    await waitFor(() => {
+      expect(spy.convergeReadyCalls()).toBe(1);
+    });
+  });
+
+  it("does NOT provision a first-ever start from the RENDERER - that actor moved to main", async () => {
+    // Nothing preferred and no local row yet: a genuine cold local start.
+    //
+    // THE ACTOR MOVED, and this test moved with it. It used to assert that
+    // the renderer ran the ensure and drew the install card, because
+    // the local-host gate fired a once-per-mount `convergeReady`. P1.3
+    // retired that - two process actors for one host is what made the ∅
+    // definition undecidable - so the renderer must now install NOTHING, and
+    // asserting otherwise would be pinning the defect the retirement removed.
+    //
+    // First install did not disappear with it: it is
+    // `armFirstInstallOnSignIn` in the desktop's launch reconciler
+    // (`electron-main/startup/host-launch-converge.ts`), sign-in gated and
+    // removal-sentinel gated, and it is proven THERE - in the process that
+    // actually performs it - by that module's own suite. This chain does not
+    // mount main, so a renderer test asserting a main-process action could
+    // only ever be theatre. What is genuinely this layer's to promise is that
+    // it does not act, and does not lie about the host while it waits.
     const spy = buildManagementSpy();
 
     mountRealChain(spy.management, false);
 
     await waitFor(() => {
-      expect(spy.convergeReadyCalls()).toBe(1);
-    });
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
-    expect(screen.queryByText("Connecting to Traycer Host…")).toBeNull();
-  });
-
-  it("treats a durable selection naming this machine as a local start", async () => {
-    // A restart/reinstall remembers the local hostId while the host is down.
-    // The row may be missing or non-dialable; the intent is still local.
-    window.localStorage.setItem(lastSelectedHostKey(), LOCAL_HOST_ID);
-    window.localStorage.setItem(lastLocalHostIdKey(), LOCAL_HOST_ID);
-    const spy = buildManagementSpy();
-
-    mountRealChain(spy.management, false);
-
-    await waitFor(() => {
-      expect(spy.convergeReadyCalls()).toBe(1);
-    });
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
-  });
-
-  it("keeps a remote intent when persisting the selection FAILS", async () => {
-    // The residual the first fix left behind. `persistHostSelection` swallows
-    // write failures by design, so on a machine with blocked storage a live
-    // remote pick reads back from storage as "nothing selected" - which is the
-    // FIRST-INSTALL answer. Reading intent from the directory's memory instead
-    // makes the failure inert: the user is still pointed at a remote host, and
-    // the local machine is still left alone.
-    const spy = buildManagementSpy();
-    // The local host is UP at mount, so provisioning is not armed yet and the
-    // counters below start from a clean zero.
-    const runnerHost = mountRealChain(spy.management, true);
-    await waitFor(() => {
-      expect(getHostBindingSnapshot()).not.toBeNull();
-    });
-
-    breakStorageWrites();
-    act(() => {
-      // An explicit pick of a host the directory does not hold: the in-memory
-      // intent records it, the persisted copy cannot.
-      activeDirectory().selectById(REMOTE_HOST_ID);
-    });
-    expect(window.localStorage.getItem(lastSelectedHostKey())).toBeNull();
-
-    act(() => {
-      // …and now the local host goes down, which is what arms provisioning.
-      runnerHost.setLocalHost(null);
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("Connecting to Traycer Host…")).toBeTruthy();
+      expect(screen.queryByTestId("runtime-fallback")).toBeNull();
     });
     expect(spy.convergeReadyCalls()).toBe(0);
-    expect(spy.removalStateCalls()).toBe(0);
-  });
-
-  it("still provisions a remembered-local restart when the local-id write FAILS", async () => {
-    // The inverse failure, and the reason this cannot be fixed by simply
-    // failing closed: with the local-id write broken, storage says "the
-    // selection names some id I know nothing about" and a storage-reading
-    // implementation classifies a legitimate local restart as remote - which
-    // silently blocks the provisioning that would bring the host back.
-    window.localStorage.setItem(lastSelectedHostKey(), LOCAL_HOST_ID);
-    // Broken BEFORE the runtime starts, so the local id this machine
-    // announces is adopted in memory while its persisted copy never lands.
-    breakStorageWrites();
-    const spy = buildManagementSpy();
-    const runnerHost = mountRealChain(spy.management, true);
-    await waitFor(() => {
-      expect(getHostBindingSnapshot()).not.toBeNull();
-    });
-
-    act(() => {
-      activeDirectory().selectById(LOCAL_HOST_ID);
-    });
-    // The id this machine published is held in memory; only its persisted
-    // copy was lost.
-    expect(window.localStorage.getItem(lastLocalHostIdKey())).toBeNull();
-    expect(activeDirectory().readSelectionIntent()).toEqual({
-      selectedHostId: LOCAL_HOST_ID,
-      localHostId: LOCAL_HOST_ID,
-    });
-
-    act(() => {
-      runnerHost.setLocalHost(null);
-    });
-
-    await waitFor(() => {
-      expect(spy.convergeReadyCalls()).toBe(1);
-    });
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    // Still the local surface rather than the remote one - the window knows
+    // this is a local boot, it simply is not the thing booting it.
+    expect(screen.queryByText("Connecting to Traycer Host…")).toBeNull();
   });
 });

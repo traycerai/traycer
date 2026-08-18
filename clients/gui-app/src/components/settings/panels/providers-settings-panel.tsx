@@ -33,7 +33,8 @@ import {
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
-import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import {
@@ -299,19 +300,17 @@ export function ProvidersSettingsPanel() {
     useProvidersFocusStore.getState().clearFocusHostId();
   }, [liveFocusHostId, setHostId]);
 
-  const realBinding = useHostBinding();
   // Scope the whole panel (list + refresh + every provider mutation) to the
-  // selected host by re-providing the runtime client for this subtree; the
-  // provider hooks all read `useHostClient()`, so none need a client prop.
-  // Only a genuinely resolved override re-provides — `connecting`,
-  // `unreachable` and `vanished` all leave `client` null and fall through to
-  // the gate below, which is what stops one host's providers rendering under
-  // another host's name.
-  const scopedBinding = useMemo(() => {
-    if (scope.status !== "ready" || scope.client === null) return null;
-    if (realBinding === null) return null;
-    return { ...realBinding, hostClient: scope.client };
-  }, [scope.status, scope.client, realBinding]);
+  // host this page is showing by re-providing the runtime client for this
+  // subtree; the provider hooks all read `useHostClient()`, so none need a
+  // client prop.
+  //
+  // Through the shared hook, not a copy of it. This panel used to inline the
+  // rule — the same two guards, byte for byte — and that copy is why the
+  // post-P4.2 `following` fix had to be made in two places to be true, which
+  // is exactly how a rule ends up wrong in one of them. The hook states which
+  // statuses re-provide and why.
+  const scopedBinding = useScopedHostBinding(scope);
 
   // The hold that makes the deep link atomic: one frame of placeholder while
   // the effect above moves the scope. Children — including the rail that

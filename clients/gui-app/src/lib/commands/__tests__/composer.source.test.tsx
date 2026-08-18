@@ -58,7 +58,7 @@ const catalogMock = vi.hoisted(() => ({
 }));
 
 /**
- * Minimal shape the mocked `useDefaultHostClient` / `useGuiHarnessCatalogForClient`
+ * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient`
  * need: only object identity matters to the assertions below (which host's
  * catalog the subpages asked for), never any real RPC behavior.
  */
@@ -71,24 +71,25 @@ const focusedComposerCatalogMock = vi.hoisted(() => ({
   clientCalls: [] as Array<{ getActiveHostId: () => string | null } | null>,
 }));
 
-interface CreateChatPayload {
-  readonly epicId: string;
-  readonly parentId: string | null;
-  readonly title: string;
-  readonly chatId: string;
-  readonly worktreeIntent: WorktreeIntent | null;
-}
-
-interface CreateChatOptions {
-  readonly onSuccess: () => void;
-}
-
-const createChatMock = vi.hoisted(() => ({
-  mutate:
-    vi.fn<(payload: CreateChatPayload, options: CreateChatOptions) => void>(),
-}));
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   seed: null as { readonly intent: WorktreeIntent | null } | null,
+}));
+
+// The app-wide client the palette falls back to with no focused composer. It
+// used to come from this file's `use-gui-harness-catalog` mock, as
+// `useDefaultHostClient`; that export was deleted once a binding could name its
+// own host, and the source resolves a client from the BINDING now - so the
+// fixture moves to where the question is actually asked. Spread rather than
+// replaced: `@/lib/host` has many other exports this graph pulls in.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({
+    // A binding that NAMES a host, so `resolveSubtreeHostClient` hands back
+    // this client verbatim instead of rebuilding a requester off it - which a
+    // fake with no `createRequesterForHostId` could not survive.
+    hostClient: focusedComposerCatalogMock.defaultClient,
+    hostId: "default-host",
+  }),
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
@@ -98,8 +99,6 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     harnessesError: null,
     modelsLoading: false,
   }),
-  useDefaultHostClient: (): FakeCatalogHostClient =>
-    focusedComposerCatalogMock.defaultClient,
   // Records the `client` each call was invoked with, so tests can assert the
   // composer subpages resolve the FOCUSED composer's host client (not the
   // default host's) - regardless of which client was passed, this returns
@@ -116,11 +115,6 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   },
 }));
 
-vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({
-    mutate: createChatMock.mutate,
-  }),
-}));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>
     latestConversationWorkspaceSeedMock.seed,
@@ -198,24 +192,25 @@ function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
  * (nothing in this file issues a real RPC through it).
  */
 function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = {
+    hostId,
+    label: hostId,
+    kind: "local" as const,
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `req-${hostId}`,
       handlers: {},
     }),
   });
-  client.bind({
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
-    version: "0.0.0-mock",
-    transportDialability: "dialable",
-  });
-  return client;
+  return spine.createRequester(entry);
 }
 
 // The host client every pre-existing test in this file registers a focused
@@ -240,7 +235,6 @@ function resetCanvasStore(): void {
 
 describe("composerSource", () => {
   beforeEach(() => {
-    createChatMock.mutate.mockReset();
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     resetCanvasStore();
@@ -252,7 +246,6 @@ describe("composerSource", () => {
 
   afterEach(() => {
     cleanup();
-    createChatMock.mutate.mockReset();
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     resetCanvasStore();
@@ -391,7 +384,6 @@ describe("composerSource", () => {
 
     // The command no longer creates directly; it opens the shared modal which
     // owns the compose-then-create flow.
-    expect(createChatMock.mutate).not.toHaveBeenCalled();
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",
@@ -436,7 +428,6 @@ describe("composerSource", () => {
 
     // The command opens the modal (no direct create) and leaves the canvas
     // untouched until submit; placement carries the active group + edge.
-    expect(createChatMock.mutate).not.toHaveBeenCalled();
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",

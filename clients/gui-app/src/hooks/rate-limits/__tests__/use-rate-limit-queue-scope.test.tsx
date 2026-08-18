@@ -19,9 +19,11 @@ const hostState = vi.hoisted<{ hostId: string | null }>(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({ request: mocks.request }),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => ({ request: mocks.request }),
 }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => hostState.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => hostState.hostId,
 }));
 
 import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";

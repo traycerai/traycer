@@ -12,14 +12,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import {
-  mockInProcessHostEntry,
-  mockRemoteHostEntry,
-} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
-import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   TraycerApp,
   hostRpcRegistry,
@@ -484,11 +478,19 @@ describe("<TraycerApp />", () => {
     );
 
     expect(await screen.findByTestId("epics-list-empty")).not.toBeNull();
+    // Bucketed on the canonical `user-1`, not on the address it signed in
+    // with. This fixture is the only one in the suite whose seeded userId and
+    // email DIFFER, so it is the only place an assertion can tell the two
+    // apart - the per-bridge tests all seed `userId: email`, which is how the
+    // email-keyed scoping survived unnoticed in the first place.
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
-        epicCanvasKey("test@example.com"),
+        epicCanvasKey("user-1"),
       );
     });
+    expect(useEpicCanvasStore.persist.getOptions().name).not.toBe(
+      epicCanvasKey("test@example.com"),
+    );
 
     const staleNotification: NotificationEntry = {
       id: "stale-notification",
@@ -531,62 +533,8 @@ describe("<TraycerApp />", () => {
     );
   });
 
-  it(
-    "routes a custom remoteFetcher through the mounted host picker",
-    async () => {
-      const host = buildHost();
-      const entries: readonly HostDirectoryEntry[] = [
-        mockRemoteHostEntry,
-        mockInProcessHostEntry,
-      ];
-      const remoteFetcher: RemoteHostFetcher = () =>
-        Promise.resolve({ kind: "hosts", entries });
-
-      render(
-        <TraycerApp
-          runnerHost={host}
-          registry={hostRpcRegistry}
-          remoteFetcher={remoteFetcher}
-        />,
-      );
-
-      const signInButton = await screen.findByRole("button", {
-        name: "Sign in",
-      });
-      // Start the device-flow attempt, then drive its poll to the authorized
-      // terminal so the app lands signed-in.
-      fireEvent.click(signInButton);
-      await waitFor(() => {
-        expect(host.deviceFlow.lastSession).not.toBeNull();
-      });
-      act(() => {
-        host.deviceFlow.emitResult({
-          kind: "authorized",
-          token: "test-token",
-          refreshToken: "test-token-refresh",
-        });
-      });
-      await screen.findByTestId("user-menu-trigger", undefined, {
-        timeout: TRAYCER_APP_TEST_TIMEOUT_MS,
-      });
-
-      act(() => {
-        host.hostPicker.requestOpen();
-      });
-      await screen.findByTestId("host-picker", undefined, {
-        timeout: TRAYCER_APP_TEST_TIMEOUT_MS,
-      });
-
-      for (const entry of entries) {
-        expect(
-          await screen.findByTestId(
-            `host-picker-option-${entry.hostId}`,
-            undefined,
-            { timeout: TRAYCER_APP_TEST_TIMEOUT_MS },
-          ),
-        ).not.toBeNull();
-      }
-    },
-    TRAYCER_APP_TEST_TIMEOUT_MS,
-  );
+  // "routes a custom remoteFetcher through the mounted host picker" is
+  // deleted: its subject, the header `HostPicker` dialog (`host-picker`
+  // testid, `requestOpen`-driven mount), no longer exists - the header
+  // picker component was removed outright in this redesign phase.
 });

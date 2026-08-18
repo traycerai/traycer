@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,6 +21,7 @@ interface UnsyncedCloseDialogProps {
 }
 
 export function UnsyncedCloseDialog(props: UnsyncedCloseDialogProps) {
+  const keepOpenRef = useRef<HTMLButtonElement | null>(null);
   const { onDiscard, onWait, open, epicId } = props;
 
   useEffect(() => {
@@ -45,7 +46,29 @@ export function UnsyncedCloseDialog(props: UnsyncedCloseDialogProps) {
         if (!next) onWait();
       }}
     >
-      <DialogContent data-testid="epic-tab-unsynced-dialog">
+      <DialogContent
+        data-testid="epic-tab-unsynced-dialog"
+        onOpenAutoFocus={(event) => {
+          // A destructive confirmation must not open focused on its
+          // destructive control. Radix's `FocusScope` focuses the first
+          // tabbable descendant, and this footer's DOM order puts the
+          // destructive "Close anyway" first, which is what puts the safe
+          // action rightmost on `sm:` per the layout convention. Measured in
+          // `scripts/destructive-dialog-focus-browser.mjs`:
+          //
+          //   FOCUS_ON_OPEN = epic-tab-unsynced-discard
+          //   TAB_ORDER     = discard > wait > close-x
+          //
+          // Focus is moved rather than the footer reordered - reordering would
+          // trade a keyboard hazard for a visual-convention break. Fails safe:
+          // with nothing to focus, Radix's own default runs rather than being
+          // prevented and stranding focus outside the trap.
+          const safe = keepOpenRef.current;
+          if (safe === null) return;
+          event.preventDefault();
+          safe.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>You have unsynced changes for this Epic.</DialogTitle>
           <DialogDescription>
@@ -67,6 +90,7 @@ export function UnsyncedCloseDialog(props: UnsyncedCloseDialogProps) {
             variant="default"
             onClick={onWait}
             data-testid="epic-tab-unsynced-wait"
+            ref={keepOpenRef}
           >
             Keep open
           </Button>

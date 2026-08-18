@@ -6,7 +6,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { UsageSummaryPanel } from "@/components/usage-analytics/usage-summary-panel";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
@@ -48,7 +48,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
  * on.
  */
 export function UsageSettingsPanel(): ReactNode {
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const client = useHostClient();
   const scope = useHostScope();
   // Names come from the scope's merged host model - the union of the runtime

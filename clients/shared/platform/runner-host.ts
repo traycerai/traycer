@@ -10,12 +10,14 @@ import type {
 } from "../auth/devices-sessions-fetcher";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { HostListFetchResult } from "../host-client/remote-fetcher";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import type { LiveHostAvailability } from "../host-client/host-directory";
 import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
+import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -45,9 +47,6 @@ export type { StoredCredentials } from "@traycer/protocol/config/credentials";
  *   local host. The handler is invoked synchronously on subscribe with
  *   the current snapshot (or `null` when no host is running), and again
  *   on every subsequent transition. There is no separate `getLocalHost()`.
- * - `hostPicker` lets `gui-app` request shell-owned picker UX
- *   (e.g. a menu-bar popover on desktop, a sheet on mobile) without the
- *   shell leaking implementation details.
  * - `workspaceFolders` lets `gui-app` ask the shell for native folder-picker
  *   UX. Shells without native folder access return an empty selection.
  *
@@ -280,7 +279,6 @@ export interface IRunnerHost {
   readonly secureStorage: ISecureStorage;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState;
-  readonly hostPicker: IHostPicker;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
   /**
@@ -303,8 +301,8 @@ export interface IRunnerHost {
    *
    * `true` on shells that bundle and spawn a local host (desktop). `false`
    * on shells that have no local-host concept at all (mobile, web). The
-   * LocalHostGate keys off this so the signed-in host-wait UX only drives
-   * on shells that actually have a local host to wait for; shells that
+   * local-host lifecycle keys off this so the signed-in host-wait UX only
+   * drives on shells that actually have a local host to wait for; shells that
    * set this to `false` pass through to shell-specific UX
    * (e.g. `<MobileHostGate />`) without seeing the desktop "Retry" card.
    *
@@ -411,6 +409,66 @@ export interface IRunnerHost {
   readonly hostManagement: IHostManagement | null;
 
   /**
+   * The window's client of the per-app selection authority (host-lifecycle
+   * redesign, D16). Every shell has one - the desktop preload binds it over
+   * IPC to the engine in main, and a shell with no main process mounts the
+   * same engine in-window behind the in-process adapter - so this is
+   * non-nullable by design: "which host is effective" must have exactly one
+   * answer per app, and a shell without an authority would have to invent a
+   * second one.
+   *
+   * Consumers do not talk to it directly; they go through the window's
+   * `SelectionEvidenceKernel`, which owns the attach choreography and the
+   * live-session inventory.
+   */
+  readonly selectionAuthority: SelectionAuthorityClient;
+
+  /**
+   * Tells the selection authority that registered-host MEMBERSHIP changed, so
+   * it re-reads the registry (P1.2 cold review F6).
+   *
+   * The authority refreshes its fleet on identity change, local-host change
+   * and startup; it deliberately does NOT poll, because duplicated 60s
+   * registry pollers are one of the things this redesign deletes. That leaves
+   * one gap, and it is a real one: remote membership is mutated from the
+   * RENDERER (a deregistration, a fresh registration), which the authority has
+   * no way to observe. Without this edge, deregistering the preferred remote
+   * left it standing as a live candidate, and Activate refused a host
+   * registered a moment earlier with `unknown-host`.
+   *
+   * Idempotent and unscoped by design: it asserts nothing about membership -
+   * only that the authority's copy is stale - so a duplicate or late call
+   * costs one refetch and can never publish something false. Callers are the
+   * membership mutations themselves, not surfaces reacting to them.
+   */
+  refreshHostFleet(): Promise<void>;
+
+  /**
+   * Subscribes to the shell's own registry reads, when the shell OWNS the
+   * registry cadence (redesign P4.1/F22, connection registry §1b/§6).
+   *
+   * `null` means "this shell does not poll for you" and is the honest answer
+   * for the browser/dev topology, which has no main process to own a cadence -
+   * a consumer that gets `null` keeps its own timer. On desktop the main
+   * process runs ONE `GET /api/v3/hosts` for the whole app and pushes the rows
+   * here, so N windows stop meaning N timers and N requests against one
+   * endpoint.
+   *
+   * A capability, NOT an authority surface. The payload is registry rows for
+   * display; it says nothing about which host is selected and nothing about
+   * whether a host is usable - leases come from transport evidence through the
+   * selection authority and never from these bytes (invariant 5). Consumers
+   * treat a push exactly as they treat their own completed fetch.
+   *
+   * `identityKey` on the payload is the account the rows were FETCHED under;
+   * a consumer showing another account must drop the push rather than commit
+   * it.
+   */
+  onRegisteredHostsChange(
+    handler: (push: RegisteredHostsChange) => void,
+  ): Disposable | null;
+
+  /**
    * Tray-side host command channel forwarded from the shell tray to the
    * renderer. Present on shells that surface a native tray (desktop) and
    * `null` everywhere else. The renderer keeps a subscription mounted so
@@ -418,6 +476,16 @@ export interface IRunnerHost {
    * tray clicks route through the same host-management surface as Settings.
    */
   readonly hostTray: IHostTray | null;
+}
+
+/**
+ * One shell-owned registry read, delivered to a consumer that would otherwise
+ * have fetched it itself. See `IRunnerHost.onRegisteredHostsChange`.
+ */
+export interface RegisteredHostsChange {
+  /** The account these rows were FETCHED under; `null` when signed out. */
+  readonly identityKey: string | null;
+  readonly response: HostListResponse;
 }
 
 /** Outcome of `IRunnerHost.requestMicrophoneAccess()`. */
@@ -1015,18 +1083,6 @@ export interface TrayEpic {
   readonly subtitle: string;
 }
 
-/**
- * Shell-owned host-picker UX controller. `gui-app` asks the shell to open
- * or close the picker and observes the resulting open/closed transitions;
- * the shell owns layout and dismissal affordances.
- */
-export interface IHostPicker {
-  readonly isOpen: boolean;
-  requestOpen(): void;
-  requestClose(): void;
-  onChange(handler: (isOpen: boolean) => void): Disposable;
-}
-
 export interface IWorkspaceFoldersHost {
   /**
    * Whether THIS shell can open a native OS folder dialog (desktop shells).
@@ -1221,6 +1277,20 @@ export interface MutationProgress {
   readonly bytes: number | null;
   readonly totalBytes: number | null;
   readonly message: string | null;
+  /**
+   * Monotonic count of discrete units of work completed within this stage -
+   * the CLI's `ProgressInfo.workUnits`, carried through unchanged.
+   *
+   * ⚠ Producers increment it only when a unit of work has COMPLETED, never on a
+   * timer. The staged wait reads it to tell an advancing stage from a stalled
+   * one, so a timer-driven producer would report a wedged install as healthy.
+   *
+   * `null` from any producer that has no discrete unit to count, and from any
+   * CLI predating the field - the NDJSON parser normalises an absent numeric to
+   * `null`, so an older bundled CLI degrades to the pre-field behaviour rather
+   * than breaking.
+   */
+  readonly workUnits: number | null;
 }
 
 export type MutationKind =

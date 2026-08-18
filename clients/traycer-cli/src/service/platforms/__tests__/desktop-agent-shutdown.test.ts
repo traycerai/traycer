@@ -99,14 +99,21 @@ describe("requestCooperativeShutdown", () => {
       .mockResolvedValueOnce({ granted: { token: "tok-1" } })
       .mockResolvedValueOnce({ committed: true });
 
-    const outcome = await requestCooperativeShutdown("production", "restart");
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "restart",
+      "shutdown",
+    );
 
     expect(outcome).toEqual({ kind: "stopped" });
     expect(MOCKS.callHostRpcAtEndpoint).toHaveBeenCalledTimes(2);
     const [claimMethod, claimParams, claimEndpoint] =
       MOCKS.callHostRpcAtEndpoint.mock.calls[0];
     expect(claimMethod).toBe("lifecycle.claimShutdown");
-    expect(claimParams).toMatchObject({ ttl: expect.any(Number) });
+    expect(claimParams).toMatchObject({
+      ttl: expect.any(Number),
+      intent: "shutdown",
+    });
     // The transition id carries the operation for the host's audit trail.
     expect(claimParams.transitionId).toMatch(/^cli-restart-/);
     expect(claimEndpoint).toEqual({
@@ -121,6 +128,35 @@ describe("requestCooperativeShutdown", () => {
     });
   });
 
+  it("puts the caller's intent verbatim on the lifecycle.claimShutdown params - a 'restart' request must not become a 'shutdown' claim", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    MOCKS.callHostRpcAtEndpoint
+      .mockResolvedValueOnce({ granted: { token: "tok-intent-restart" } })
+      .mockResolvedValueOnce({ committed: true });
+
+    await requestCooperativeShutdown("production", "restart", "restart");
+
+    const [, restartClaimParams] = MOCKS.callHostRpcAtEndpoint.mock.calls[0];
+    expect(restartClaimParams.intent).toBe("restart");
+
+    MOCKS.callHostRpcAtEndpoint.mockReset();
+    MOCKS.isProcessAlive.mockReset();
+    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    MOCKS.callHostRpcAtEndpoint
+      .mockResolvedValueOnce({ granted: { token: "tok-intent-shutdown" } })
+      .mockResolvedValueOnce({ committed: true });
+
+    // Positive control in the same test: a plain stop must still carry
+    // "shutdown" - an implementation that hardcoded "restart" on the params
+    // would pass the assertion above but fail this one.
+    await requestCooperativeShutdown("production", "stop", "shutdown");
+
+    const [, stopClaimParams] = MOCKS.callHostRpcAtEndpoint.mock.calls[0];
+    expect(stopClaimParams.intent).toBe("shutdown");
+    expect(stopClaimParams.intent).not.toBe(restartClaimParams.intent);
+  });
+
   // Unreadable metadata and a proven-dead pid are DIFFERENT machines and must
   // not share an answer. Absence proves only that nothing published an
   // endpoint - a host that is still booting under a loaded agent looks
@@ -129,7 +165,11 @@ describe("requestCooperativeShutdown", () => {
   // serving, and an install swapped bytes underneath it.
   it("reports no-metadata - never the proven-absent answer - when pid metadata cannot be read", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
-    const outcome = await requestCooperativeShutdown("production", "stop");
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "stop",
+      "shutdown",
+    );
     expect(outcome).toEqual({ kind: "no-metadata" });
     expect(outcome).not.toEqual({ kind: "no-host" });
     expect(MOCKS.callHostRpcAtEndpoint).not.toHaveBeenCalled();
@@ -138,7 +178,11 @@ describe("requestCooperativeShutdown", () => {
   it("reports no-host without any RPC when the recorded pid is PROVEN dead", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(false);
-    const outcome = await requestCooperativeShutdown("production", "stop");
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "stop",
+      "shutdown",
+    );
     expect(outcome).toEqual({ kind: "no-host" });
     expect(MOCKS.callHostRpcAtEndpoint).not.toHaveBeenCalled();
   });
@@ -149,7 +193,11 @@ describe("requestCooperativeShutdown", () => {
       websocketUrl: "https://example.com/rpc",
     });
     MOCKS.isProcessAlive.mockReturnValue(true);
-    const outcome = await requestCooperativeShutdown("production", "stop");
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "stop",
+      "shutdown",
+    );
     expect(outcome).toMatchObject({ kind: "unreachable" });
     expect(MOCKS.callHostRpcAtEndpoint).not.toHaveBeenCalled();
   });
@@ -159,7 +207,11 @@ describe("requestCooperativeShutdown", () => {
     MOCKS.isProcessAlive.mockReturnValue(true);
     MOCKS.callHostRpcAtEndpoint.mockResolvedValueOnce({ denied: "busy" });
 
-    const outcome = await requestCooperativeShutdown("production", "stop");
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "stop",
+      "shutdown",
+    );
 
     expect(outcome).toEqual({ kind: "busy" });
     expect(MOCKS.callHostRpcAtEndpoint).toHaveBeenCalledTimes(1);
@@ -172,7 +224,11 @@ describe("requestCooperativeShutdown", () => {
       new Error("dial timeout after 5000ms"),
     );
 
-    const outcome = await requestCooperativeShutdown("production", "restart");
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "restart",
+      "shutdown",
+    );
 
     expect(outcome).toEqual({
       kind: "unreachable",
@@ -188,7 +244,11 @@ describe("requestCooperativeShutdown", () => {
       .mockResolvedValueOnce({ granted: { token: "tok-2" } })
       .mockResolvedValueOnce({ denied: "expired-or-unknown" });
 
-    const outcome = await requestCooperativeShutdown("production", "stop");
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "stop",
+      "shutdown",
+    );
 
     expect(outcome).toEqual({
       kind: "unreachable",
@@ -204,7 +264,11 @@ describe("requestCooperativeShutdown", () => {
       .mockResolvedValueOnce({ granted: { token: "tok-3" } })
       .mockResolvedValueOnce({ committed: true });
 
-    const pending = requestCooperativeShutdown("production", "stop");
+    const pending = requestCooperativeShutdown(
+      "production",
+      "stop",
+      "shutdown",
+    );
     // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus
     // slack for the final poll.
     await vi.advanceTimersByTimeAsync(40_000);

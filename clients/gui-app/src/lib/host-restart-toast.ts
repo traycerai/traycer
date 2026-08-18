@@ -11,3 +11,13 @@ import { toast } from "sonner";
 export function toastHostRestartDeclined(message: string): void {
   toast.info("Host not restarted", { description: message });
 }
+
+// One wording for every surface that requests a restart (tray, menu, doctor
+// card, Overview panel) - the audit found three ("Host restart requested"
+// from the tray/menu, "Restarting <host>" from the two Settings surfaces).
+// The host name doesn't earn its place here: the surface the click came from
+// already names the host being restarted, so this toast only has to confirm
+// the click landed.
+export function toastHostRestartRequested(): void {
+  toast.success("Host restart requested");
+}

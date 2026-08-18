@@ -67,11 +67,11 @@ export function useDurableStreamTransportFactory(): (
         const subscription = liveRef.current.directory.onChange(onChange);
         return () => subscription.dispose();
       },
-      // Recovery evidence targets the BOUND host, not the active one: a
-      // tab's queries are keyed by its own `hostId`, and only this
-      // transport heartbeats that host when it is not the active
-      // selection.
-      notifyAvailabilityRecovered: () =>
+      // Recovery evidence targets THIS tab's host, not the effective one: a
+      // tab's queries are keyed by its own `hostId`, and only this transport
+      // heartbeats that host when it is not the current selection. The
+      // no-argument member is exact here - `hostId` is captured at open time.
+      notifyRecoveredForNamedHost: () =>
         liveRef.current.globalClient.notifyHostAvailabilityRecovered(hostId),
     });
   }, []);

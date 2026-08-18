@@ -99,6 +99,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     hostLabel: "Host 1",
     unavailability: null,
   }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("@/hooks/pr/use-pr-detail-subscription", () => ({

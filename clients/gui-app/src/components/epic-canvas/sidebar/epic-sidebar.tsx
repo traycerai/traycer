@@ -40,9 +40,16 @@ import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-t
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import {
+  useSurfaceHostClient,
+  useSurfaceHostPin,
+  useTabSurfaceKey,
+} from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -225,11 +232,14 @@ interface FileTreeWorkspaceSelection {
 
 function useFileTreeWorkspaceSelection(
   epicId: string,
+  hostId: string | null,
+  queryEnabled: boolean,
 ): FileTreeWorkspaceSelection {
-  const hostId = useReactiveActiveHostId();
-  const workspacesQuery = useWorktreeListBindingsForEpic({
+  const client = useSurfaceHostClient(hostId);
+  const workspacesQuery = useWorktreeListBindingsForEpicForClient({
+    client,
     epicId,
-    enabled: hostId !== null,
+    enabled: queryEnabled,
   });
   const storedWorkspacePath = useSelectedFileTreeWorkspace(epicId, hostId);
   const setSelectedWorkspace = useFileTreeStore((s) => s.setSelectedWorkspace);
@@ -499,7 +509,12 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
-  const hostId = useReactiveActiveHostId();
+  // The SAME host the PR panel records presence under (`pr-panel-body.tsx`
+  // writes `recordPrPresence(useCanvasHostId(), …)`): a producer/consumer
+  // pair keyed by host must read one identity, or the PR icon vanishes for
+  // exactly the window a re-point is in flight - the panel writing under the
+  // session's host A while this rail read under the app-wide B.
+  const hostId = useCanvasHostId();
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
@@ -551,7 +566,10 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  const hostId = useReactiveActiveHostId();
+  // Same key as the live host above. Before the session handle registers this
+  // resolves the effective host (`useCanvasHostId`'s documented fallback),
+  // which is where a fresh open's session is about to be established.
+  const hostId = useCanvasHostId();
   // The persisted PR baseline is readable before the epic's Y.doc resolves, so
   // the loading rail already shows the same set of panels the live one will -
   // no icon appears or disappears as the epic finishes opening.
@@ -1101,7 +1119,25 @@ function FileTreePanelBody(props: LeftPanelBodyProps) {
 }
 
 function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
-  const selection = useFileTreeWorkspaceSelection(props.epicId);
+  const surfaceKey = useTabSurfaceKey("file-tree", props.tabId);
+  const pin = useSurfaceHostPin(surfaceKey);
+  // No dead arm: a pinned host that dies resolves to `effective`, so this
+  // panel always has a host to browse. The workspace selection is stored per
+  // (epic, host) and reset on a host change, so the tree it shows is always
+  // the resolved host's own - never the dead one's paths against a live box.
+  const selection = useFileTreeWorkspaceSelection(
+    props.epicId,
+    pin.resolvedHostId,
+    pin.resolvedHostId !== null,
+  );
+  // This panel's OWN client, for the "open in editor" opener: the button must
+  // dispatch on the host the workspace selection actually names, not the
+  // app-wide effective host.
+  const hostClient = useSurfaceHostClient(pin.resolvedHostId);
+  const handleSelectPath = (workspacePath: string): void => {
+    pin.latchOnFirstUse();
+    selection.setSelectedWorkspacePath(workspacePath);
+  };
   return (
     <div className="flex h-full min-h-0 flex-col">
       {selection.selectedWorkspacePath === null ? (
@@ -1120,7 +1156,8 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
                   epicId={props.epicId}
                   hostId={selection.hostId}
                   selectedPath={selection.selectedWorkspacePath}
-                  onSelectPath={selection.setSelectedWorkspacePath}
+                  onSelectPath={handleSelectPath}
+                  surfaceKey={surfaceKey}
                 />
               }
               openTarget={
@@ -1131,6 +1168,7 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
                     }
                   : null
               }
+              hostClient={hostClient}
             />
           </div>
           <FileTreePanelBodyForWorkspace
@@ -1138,6 +1176,8 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
             epicId={props.epicId}
             tabId={props.tabId}
             workspacePath={selection.selectedWorkspacePath}
+            hostId={pin.resolvedHostId}
+            onLatchHost={pin.latchOnFirstUse}
           />
         </>
       )}
@@ -1567,7 +1607,13 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
   const epicHandle = useOpenEpicHandle();
-  const activeHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The SESSION's host, because this id becomes the created artifact's
+  // `fallbackHostId` and an ordinary artifact carries no intrinsic host - so it
+  // is what binds the opened tile, for life. `useEpicCreateArtifact` sends on
+  // the session client, so reading the ambient host here would have created on
+  // A and opened a B-bound tile for it: the create succeeds and the tile is
+  // wrong, which is the failure mode that looks like nothing went wrong.
+  const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -2270,6 +2316,10 @@ interface CommentSidebarPanelProps {
 function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   const { epicId, activeArtifactId } = props;
   const artifactRecord = useEpicArtifact(activeArtifactId);
+  // The sidebar is a sibling of the canvas, deliberately outside every
+  // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
+  // one, which re-points under it while this Epic keeps rendering (D15).
+  const hostClient = useEpicSessionHostClient();
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
@@ -2286,6 +2336,7 @@ function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   return (
     <CommentSidebar
       epicId={epicId}
+      hostClient={hostClient}
       artifactType={artifactKind}
       artifactId={activeArtifactId}
       anchorPositions={anchorPositions}

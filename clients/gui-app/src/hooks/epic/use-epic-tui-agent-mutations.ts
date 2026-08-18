@@ -1,30 +1,27 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host/runtime";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
- * Mutation hook for `epic.createTerminalAgent`.
+ * Mutation hook for `epic.createTerminalAgent`, host-parametric: persists the
+ * terminal-agent record through an explicit `HostClient` - the composer
+ * placement's frozen submit client, or a sidebar row's OWN host resolved via
+ * `useHostClientFor`. `null` client rejects through the shared
+ * `useHostMutation` preflight.
  *
  * The caller is responsible for first minting an SDK session via
  * `agent.startTerminalSession` and then handing the resulting
  * `harnessId` + `sessionId` + `hostId` + `workspaceFolders` to this
  * mutation so the host can persist a terminal-agent record into the
  * epic's `tuiAgents` Y.Map.
- */
-export function useEpicCreateTuiAgent() {
-  const client = useHostClient();
-  return useEpicCreateTuiAgentForClient(client);
-}
-
-/**
- * Host-parametric variant of {@link useEpicCreateTuiAgent}: persists the
- * terminal-agent record through an explicit `HostClient` (e.g. a sidebar
- * row's OWN host resolved via `useHostClientFor`) instead of the app-wide
- * active host. `null` client rejects through the shared
- * `useHostMutation` preflight.
+ *
+ * There is deliberately no client-less `useEpicCreateTuiAgent()` wrapper any
+ * more: the one that existed resolved the app-wide host and had zero callers,
+ * and a create is PLACEMENT - it must be sent on the client the placement
+ * resolved, never on a host read separately from the chip.
  */
 export function useEpicCreateTuiAgentForClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -56,7 +53,10 @@ export function useEpicCreateTuiAgentForClient(
  * tab-close responsibility, not the host's.
  */
 export function useEpicDeleteTuiAgent() {
-  const client = useHostClient();
+  // The Epic session's client, not the app-wide one: every caller is a
+  // surface inside the Epic canvas (the sidebar tree, the sidebar's batch
+  // action, the canvas rename), acting on a row the SESSION projected.
+  const client = useEpicSessionHostClient();
   return useHostMutation({
     client,
     method: "epic.deleteTuiAgent",
@@ -79,7 +79,8 @@ export function useEpicDeleteTuiAgent() {
  * Input enters pending (read-only) state; success is silent.
  */
 export function useEpicRenameTuiAgent() {
-  const client = useHostClient();
+  // Session client, as above.
+  const client = useEpicSessionHostClient();
   return useHostMutation({
     client,
     method: "epic.renameTuiAgent",

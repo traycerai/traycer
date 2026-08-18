@@ -16,8 +16,10 @@ const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
 }));
 
+// `useHostClientFor` builds a requester for an EXPLICITLY named host, so it
+// reads the spine (redesign P2.1) - never the effective host's own requester.
 vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => {
+  useHostRuntimeClient: () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
     }
@@ -68,17 +70,24 @@ class RetryTestWebSocket {
   }
 }
 
+// The SPINE `useHostRuntimeClient` hands back - never bound to any one host
+// (redesign P4.2 deleted the active slot `.bind()` used to fill), so it must
+// resolve every entry a test builds a transient client for on its own.
+const knownHostEntries = new Map<string, HostDirectoryEntry>([
+  [mockLocalHostEntry.hostId, mockLocalHostEntry],
+]);
+
 function buildGlobalClient(withContext: boolean): HostClient<HostRpcRegistry> {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (hostId) => knownHostEntries.get(hostId) ?? null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {},
     }),
   });
-  client.bind(mockLocalHostEntry);
   if (withContext) {
     client.setRequestContext(
       createRequestContextFixture({
@@ -127,9 +136,10 @@ describe("useHostClientFor", () => {
     // Auth is per-user, not per-host: the transient client reuses the
     // global client's request context verbatim.
     expect(client?.getRequestContext()).toBe(globalClient.getRequestContext());
-    // Building a transient client for host B must not move the global
-    // client off its own active host (no global side effect).
-    expect(globalClient.getActiveHostId()).toBe(mockLocalHostEntry.hostId);
+    // Building a transient client for host B must not give the global
+    // SPINE an active host of its own (no global side effect) - it stays
+    // unbound (redesign P4.2 deleted the active slot `.bind()` used to set).
+    expect(globalClient.getActiveHostId()).toBeNull();
   });
 
   it("memoizes for a stable target and rebuilds for a different host", () => {
@@ -162,15 +172,22 @@ describe("useHostClientFor", () => {
       hostId: "host-b",
       websocketUrl: "ws://host-b/rpc",
     };
+    knownHostEntries.set(hostA.hostId, hostA);
     const globalClient = buildGlobalClient(true);
-    globalClient.bind(hostA);
     const client = buildTransientHostClient(globalClient, hostA);
     expect(client).not.toBeNull();
     if (client === null) {
       throw new Error("Expected a host-pinned transient client");
     }
 
-    globalClient.bind(hostB);
+    // Host A leaves the directory and B takes its place. This used to be
+    // spelled `globalClient.bind(hostB)`, which made A unresolvable only as a
+    // SIDE EFFECT of the slot moving - the staleness under test was always the
+    // directory's answer, not the binding's. P4.2 deleted the slot, so the
+    // fixture states the fact directly: `captureAuthority` re-resolves this
+    // requester's entry and refuses one the directory no longer has.
+    knownHostEntries.delete(hostA.hostId);
+    knownHostEntries.set(hostB.hostId, hostB);
     const request = client.request("terminal.kill", { sessionId: "session-a" });
     await expect(request).rejects.toBeInstanceOf(
       StaleHostBindingAuthorityError,

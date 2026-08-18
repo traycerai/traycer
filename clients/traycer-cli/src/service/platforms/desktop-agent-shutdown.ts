@@ -3,7 +3,10 @@ import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
-import { SHUTDOWN_CLAIM_MAX_TTL_MS } from "@traycer/protocol/host/lifecycle/schemas";
+import {
+  SHUTDOWN_CLAIM_MAX_TTL_MS,
+  type ShutdownClaimIntent,
+} from "@traycer/protocol/host/lifecycle/schemas";
 import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
@@ -61,9 +64,22 @@ const CLAIM_TTL_MS = Math.min(
   SHUTDOWN_CLAIM_MAX_TTL_MS,
 );
 
+/**
+ * `intent` tells the host what happens AFTER it exits, which is the one thing
+ * it cannot see for itself: a cooperative stop and the stop half of a restart
+ * are byte-identical from inside the process. A host told `"restart"`
+ * publishes a restart tombstone to every attached client so a deliberate
+ * bounce does not read as death in every window on every machine (D5/M1);
+ * one told `"shutdown"` behaves exactly as it always has.
+ *
+ * Required rather than derived from `operation`: that string is a free-form
+ * diagnostic label carried in `transitionId`, and making a debugging
+ * affordance load-bearing is how it silently stops being true.
+ */
 export async function requestCooperativeShutdown(
   environment: Environment,
   operation: string,
+  intent: ShutdownClaimIntent,
 ): Promise<CooperativeShutdownOutcome> {
   const logger = createCliLogger(environment);
   const metadata = await readHostPidMetadata(environment);
@@ -121,7 +137,7 @@ export async function requestCooperativeShutdown(
   try {
     const claimed = await callHostRpcAtEndpoint(
       "lifecycle.claimShutdown",
-      { transitionId, ttl: CLAIM_TTL_MS },
+      { transitionId, ttl: CLAIM_TTL_MS, intent },
       endpoint,
     );
     if ("denied" in claimed) {

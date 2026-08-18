@@ -181,7 +181,8 @@ export function parseUnsyncedSnapshot(value: unknown): UnsyncedEditsSnapshot {
       typeof entry.title !== "string" ||
       typeof entry.queueSize !== "number" ||
       Number.isNaN(entry.queueSize) ||
-      typeof entry.isDirty !== "boolean"
+      typeof entry.isDirty !== "boolean" ||
+      typeof entry.unsyncable !== "boolean"
     ) {
       continue;
     }
@@ -190,6 +191,12 @@ export function parseUnsyncedSnapshot(value: unknown): UnsyncedEditsSnapshot {
       title: entry.title,
       queueSize: entry.queueSize,
       isDirty: entry.isDirty,
+      // Carried, not defaulted. A `?? false` here would read as tolerance and
+      // behave as a silent claim that another window's retained buffer is
+      // safe to destroy - the exact direction this field must never fail in.
+      // Renderer, preload and main ship in one binary, so a row without it is
+      // malformed rather than old, and the guard above drops it.
+      unsyncable: entry.unsyncable,
     });
   }
   return out;
@@ -212,15 +219,43 @@ export function parseFreshSnapshotResponse(
   return { requestId: obj.requestId, snapshot };
 }
 
+/**
+ * Every member of {@link QuitDecision}, as a TOTAL record.
+ *
+ * This is the enforcement, not decoration. `parseQuitDecision` used to accept
+ * the members it knew about through an `if` chain and fall back to `proceed` -
+ * i.e. quit - for everything else. Adding a member to the union left that
+ * chain compiling, so a renderer saying "do not quit" would have been parsed
+ * as "quit" and answered by quitting. A record keyed by the union cannot omit
+ * a member without failing the build, so the next member has to be decided
+ * here before it can exist. But the record only makes ADDING a member a
+ * compile error - it says nothing about what an unparseable payload means,
+ * same as `parseUnsyncedSnapshot` above: an unrecognized `decision` is not
+ * evidence the user asked to quit, so the fallback must be the one outcome
+ * that can't destroy anything - `userCancelled`, which keeps the app open.
+ * `stayOpen` exists on both consumers of this result for exactly that reason.
+ */
+const QUIT_DECISION_MEMBERS: Readonly<Record<QuitDecision, true>> = {
+  proceed: true,
+  userConfirmedDiscard: true,
+  userCancelled: true,
+};
+
+function isQuitDecision(value: unknown): value is QuitDecision {
+  return (
+    typeof value === "string" && Object.hasOwn(QUIT_DECISION_MEMBERS, value)
+  );
+}
+
 export function parseQuitDecision(value: unknown): QuitDecision {
-  if (value === "proceed" || value === "userConfirmedDiscard") {
+  if (isQuitDecision(value)) {
     return value;
   }
   log.warn(
-    "[runner-ipc] invalid quit decision from renderer; defaulting to proceed",
+    "[runner-ipc] invalid quit decision from renderer; defaulting to userCancelled",
     { value },
   );
-  return "proceed";
+  return "userCancelled";
 }
 
 export interface ParsedQuitDecisionResponse {

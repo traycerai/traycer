@@ -79,8 +79,8 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   }),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "active-host-1",
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "active-host-1",
 }));
 
 interface OpenA2ASendButtonProps {

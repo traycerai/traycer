@@ -40,7 +40,7 @@ describe("useSettingsStore", () => {
   });
 
   it("persists and rehydrates the chat turn minimap side", async () => {
-    useSettingsStore.getState().setChatTurnMinimapSide("left");
+    useSettingsStore.getState().setMinimapSide("left");
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
     expect(persisted ?? "").toContain('"chatTurnMinimapSide":"left"');
 
@@ -53,7 +53,7 @@ describe("useSettingsStore", () => {
   });
 
   it("persists and rehydrates a hidden chat turn minimap", async () => {
-    useSettingsStore.getState().setChatTurnMinimapSide("hide");
+    useSettingsStore.getState().setMinimapSide("hide");
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
     expect(persisted ?? "").toContain('"chatTurnMinimapSide":"hide"');
 

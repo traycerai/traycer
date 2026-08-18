@@ -10,6 +10,10 @@ import {
   NotificationsStreamClient,
   type NotificationsStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/notifications-stream-client";
+import {
+  acquireHostConnection,
+  type HostConnectionLease,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
@@ -101,7 +105,7 @@ interface FocusedNotificationScope {
  * never whichever host happens to be active in a composer/tab elsewhere in
  * the app. The stream is therefore bound to `useReactiveLocalHostEntry()` (a
  * transient, non-rebinding client via `useHostStreamClientFor`), not
- * `useReactiveActiveHostId()` / the app-wide `useWsStreamClient()`. The cloud
+ * `useAddressableHostId()` / the app-wide `useWsStreamClient()`. The cloud
  * feed rides the same local client: it is reached THROUGH a host, so binding
  * it anywhere else would reintroduce the active-host coupling G8 removed.
  */
@@ -359,8 +363,19 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
   }, []);
 
+  const hostConnectionRef = useRef<HostConnectionLease | null>(null);
+
   const tearDown = useCallback((): void => {
     openedStreamClientRef.current = null;
+    // Release this host's connection lease LAST-ish but unconditionally: the
+    // lease is ref-counted with a keep-warm linger, so dropping it here lets
+    // the registry retire the host's bookkeeping when nothing else holds it,
+    // while a prompt re-open (a mode flip, a re-mount) adopts it warm.
+    if (hostConnectionRef.current !== null) {
+      const lease = hostConnectionRef.current;
+      hostConnectionRef.current = null;
+      lease.release();
+    }
     if (disposerRef.current !== null) {
       const disposer = disposerRef.current;
       disposerRef.current = null;
@@ -539,6 +554,15 @@ export function NotificationsSessionProvider(
     };
     if (localHostId === null) return;
     const streamHostId = localHostId;
+    // ONE reconnect policy for this host, handed to every stream opened below
+    // (redesign P4.1 / connection-registry §6). This is the single wiring
+    // point for all four, which is exactly why the acquisition belongs here:
+    // four stores each constructing their own scheduler was the scattered
+    // ownership the consolidation removes. Each store still opens its OWN
+    // lane off it, so their backoffs stay independent.
+    const hostConnection = acquireHostConnection(streamHostId);
+    hostConnectionRef.current = hostConnection;
+    const reconnect = hostConnection.reconnect;
     openedStreamClientRef.current = localStreamClient;
     const createNotificationsStream = (
       callbacks: NotificationsStreamCallbacks,
@@ -564,6 +588,7 @@ export function NotificationsSessionProvider(
     // read from the LOCAL host's stream, never a remote one.
     if (localStreamClient !== null) {
       activityDisposerRef.current = openAgentActivityStream(
+        reconnect,
         localStreamClient,
         onAuthError,
       );
@@ -575,10 +600,12 @@ export function NotificationsSessionProvider(
       // keep that replica live alongside the relay or sharing notifications
       // disappear after the mode-transition reset below.
       disposerRef.current = openNotificationsStream(
+        reconnect,
         createNotificationsStream,
         onAuthError,
       );
       cloudDisposerRef.current = openCloudNotificationsStream(
+        reconnect,
         localStreamClient,
         onAuthError,
         onEntitlementDenied,
@@ -608,6 +635,7 @@ export function NotificationsSessionProvider(
     // this independently ordered feed as causal evidence over a renderer-local
     // failure.
     disposerRef.current = openNotificationsStream(
+      reconnect,
       createNotificationsStream,
       onAuthError,
     );
@@ -617,6 +645,7 @@ export function NotificationsSessionProvider(
       localStreamClient !== null
     ) {
       hostDisposerRef.current = openHostNotificationsStream(
+        reconnect,
         localStreamClient,
         onAuthError,
         {

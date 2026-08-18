@@ -6,7 +6,7 @@ import type {
   GitChangedFile,
   GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
-import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
+import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 import { useGitRefreshWorktreeStatus } from "@/hooks/git/use-git-refresh-worktree-status";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -16,6 +16,8 @@ import {
 } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
+import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
@@ -54,8 +56,8 @@ import { NoChangesInWorktree } from "@/components/epic-canvas/git-diff/empty-sta
 import { GitErrorBlock } from "@/components/epic-canvas/git-diff/git-error-block";
 import { GitWatcherStatusNotice } from "@/components/epic-canvas/git-diff/git-watcher-status-notice";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { BoundedTileLoad } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEditableGitDiffSurface } from "@/components/epic-canvas/git-diff/git-diff-editing";
 import { GitDiffEditStatusContent } from "@/components/epic-canvas/git-diff/git-diff-edit-status";
@@ -120,7 +122,6 @@ function tileOpenFilePath(diff: GitDiffTileRef["diff"]): string | null {
 
 export function GitDiffTile(props: GitDiffTileProps): ReactNode {
   const tabHostId = useTabHostId();
-  const activeHostId = useReactiveActiveHostId();
   const reachability = useHostReachability(tabHostId);
 
   if (reachability.status === "unreachable") {
@@ -132,23 +133,53 @@ export function GitDiffTile(props: GitDiffTileProps): ReactNode {
       />
     );
   }
-  if (tabHostId !== activeHostId) {
-    return (
-      <GitDiffDeadTileBanner
-        hostLabel={reachability.hostLabel}
-        reason="inactive"
-        testId={`git-diff-tile-${props.node.id}`}
-      />
-    );
-  }
 
   return (
-    <GitDiffTileLive
-      node={props.node}
-      viewTabId={props.viewTabId}
-      tileId={props.tileId}
-      isActive={props.isActive}
-    />
+    <GitDiffTileStreamScope hostId={props.node.hostId}>
+      <GitDiffTileLive
+        node={props.node}
+        viewTabId={props.viewTabId}
+        tileId={props.tileId}
+        isActive={props.isActive}
+      />
+    </GitDiffTileStreamScope>
+  );
+}
+
+/**
+ * Re-provides `StreamRuntimeContext` for the host this TILE is bound to.
+ *
+ * `useGitListChangedFilesSubscription` takes no client - it reads
+ * `useWsStreamClient()` out of context - and `hostId` is only its session and
+ * cache key. So a tile bound to host B while the window's effective host moved
+ * to A subscribed on A for B's repository path, carrying B's id as a param the
+ * whole way: every call site looked correct, and A's status was written into
+ * B-keyed data this tile then displayed.
+ *
+ * This is NOT the pinned sidebar panel's case, which `3b689fe9` fixed the same
+ * way. A tab tile's host is a PERMANENT binding rather than a pin that can be
+ * deposed, so there is no auto-follow here: the tile either talks to its own
+ * host or shows the unreachable banner above.
+ *
+ * Rendered UNCONDITIONALLY (`?? ambient`), mirroring the file tree and the
+ * resource monitor: swapping between a provider and no provider changes the
+ * element type at this position, so React would unmount the tile - discarding
+ * its scroll position, expansion and find state - at the moment the effective
+ * host moves. `null` from the binding means "this IS the ambient host", and
+ * falling back there keeps the tile sharing one subscription with everything
+ * else on that host rather than opening a second.
+ */
+function GitDiffTileStreamScope(props: {
+  readonly hostId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  // The value to PROVIDE: ambient while following, the pin's own binding once
+  // built, null while pending - never the ambient socket for a pinned host.
+  const tileStreamBinding = useSurfaceHostStreamBinding(props.hostId);
+  return (
+    <StreamRuntimeContext.Provider value={tileStreamBinding}>
+      {props.children}
+    </StreamRuntimeContext.Provider>
   );
 }
 
@@ -248,7 +279,9 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const patchDiffViewerPreferences = useSettingsStore(
     (s) => s.patchDiffViewerPreferences,
   );
-  const editorOpen = useEditorOpen("file");
+  // The toolbar's "open file" targets the path the TILE is diffing, which lives
+  // on the tab's host (D15).
+  const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
   const { mutateAsync: refreshWorktreeStatus } = useGitRefreshWorktreeStatus();
   const updateView = useEpicCanvasStore((s) => s.updateGitDiffTileViewInTab);
   const { active: openFileFeedbackActive, trigger: triggerOpenFileFeedback } =
@@ -450,7 +483,7 @@ interface GitFileDiffPanelProps {
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const tabHostClient = useTabHostClient();
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  const editorOpen = useEditorOpen("file");
+  const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
     active: openExternallyFeedbackActive,
     trigger: triggerOpenExternallyFeedback,
@@ -814,6 +847,7 @@ interface GitBundleDiffTileBodyProps {
 }
 
 function GitBundleDiffTileBody(props: GitBundleDiffTileBodyProps): ReactNode {
+  const bundleTabHostId = useTabHostId();
   const diffViewerPreferences = useSettingsStore(
     (s) => s.diffViewerPreferences,
   );
@@ -849,7 +883,20 @@ function GitBundleDiffTileBody(props: GitBundleDiffTileBodyProps): ReactNode {
     return <SubscriptionErrorState event={props.subscription.error} />;
   }
   if (props.subscription.isPending) {
-    return <DiffBundleLoadingSkeleton mode={diffViewerPreferences.mode} />;
+    // Invariant 6. The reachability gate above catches a host the directory
+    // knows is gone; this catches the other half - a host that stays listed
+    // while its subscription never delivers - which had no end at all.
+    return (
+      <BoundedTileLoad
+        hostId={bundleTabHostId}
+        subject="diff"
+        onRetry={null}
+        testId={`git-diff-tile-load-${props.node.id}`}
+        fallback={
+          <DiffBundleLoadingSkeleton mode={diffViewerPreferences.mode} />
+        }
+      />
+    );
   }
   if (data === null) return null;
   if (files.length === 0) {

@@ -28,8 +28,8 @@ vi.mock("@/lib/host/runtime", async () => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-test",
 }));
 
 const {
@@ -71,7 +71,6 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
   }),
 }));
 
-import type { CreateChatRequest } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   CreateChatMutationInput,
   DeleteChatMutationOptions,
@@ -106,7 +105,6 @@ import {
 import {
   useEpicArchiveChat,
   useEpicArchiveChats,
-  useEpicCreateChat,
   useEpicCreateChatForHostClient,
   useEpicRenameChat,
   useEpicDeleteChat,
@@ -161,196 +159,6 @@ beforeEach(() => {
   for (const method of Object.keys(capturedMutations)) {
     delete capturedMutations[method];
   }
-});
-
-describe("useEpicCreateChat", () => {
-  it("passes the caller's named host through when it matches the active host", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-
-    const mutation = getCapturedMutation("epic.createChat");
-    if (mutation.mapVariables === undefined) {
-      throw new Error("expected createChat mutation capture");
-    }
-
-    const mapVariables = mutation.mapVariables as (
-      variables: CreateChatMutationInput,
-    ) => CreateChatRequest;
-    const params = mapVariables({
-      hostId: "host-test",
-      epicId: "e",
-      chatId: "c",
-      parentId: null,
-      title: "t",
-    });
-
-    expect(params).toEqual({
-      hostId: "host-test",
-      epicId: "e",
-      chatId: "c",
-      parentId: null,
-      title: "t",
-    } satisfies CreateChatRequest);
-  });
-
-  it("refuses to create on a host the caller did not name", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-
-    const mutation = getCapturedMutation("epic.createChat");
-    if (mutation.mapVariables === undefined) {
-      throw new Error("expected createChat mutation capture");
-    }
-    const mapVariables = mutation.mapVariables as (
-      variables: CreateChatMutationInput,
-    ) => CreateChatRequest;
-
-    // The active host moved between the caller's decision and this mutate:
-    // the request is for `host-other`, but this hook's client dials
-    // `host-test`. Creating anyway would put the agent on a machine nobody
-    // asked for, so it fails through the mutation error channel instead.
-    expect(() =>
-      mapVariables({
-        hostId: "host-other",
-        epicId: "e",
-        chatId: "c",
-        parentId: null,
-        title: "t",
-      }),
-    ).toThrow(HostRpcError);
-  });
-
-  const nonForkVariables: CreateChatMutationInput = {
-    hostId: "host-test",
-    epicId: "e",
-    chatId: "c",
-    parentId: null,
-    title: "t",
-  };
-
-  it("shows fallback on error", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-    const opts = getCapturedMutation("epic.createChat").options as {
-      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
-    };
-    opts.onError(makeError("RPC_ERROR"), nonForkVariables);
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
-  });
-
-  it("suppresses the fallback toast for a checkpoint-unavailable latest-boundary fork failure", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-    const opts = getCapturedMutation("epic.createChat").options as {
-      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
-    };
-    opts.onError(makeError("E_FORK_CHECKPOINT_UNAVAILABLE"), {
-      ...nonForkVariables,
-      forkSource: {
-        boundary: "latest",
-        sourceChatId: "chat-source",
-        sourceOwnerUserId: null,
-      },
-    });
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it("suppresses the fallback toast for a downgrade-unsupported latest-boundary fork failure", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-    const opts = getCapturedMutation("epic.createChat").options as {
-      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
-    };
-    opts.onError(makeError("DOWNGRADE_UNSUPPORTED"), {
-      ...nonForkVariables,
-      forkSource: {
-        boundary: "latest",
-        sourceChatId: "chat-source",
-        sourceOwnerUserId: null,
-      },
-    });
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it("still shows the fallback toast for a checkpoint-unavailable failure on a precise-boundary fork", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-    const opts = getCapturedMutation("epic.createChat").options as {
-      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
-    };
-    opts.onError(makeError("E_FORK_CHECKPOINT_UNAVAILABLE"), {
-      ...nonForkVariables,
-      forkSource: {
-        boundary: "assistantMessage",
-        sourceChatId: "chat-source",
-        assistantMessageId: "assistant-1",
-        sourceOwnerUserId: null,
-        interviewBlockId: null,
-        carriedInterviews: null,
-      },
-    });
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
-  });
-
-  it("retains the created chat, keyed on the request's facts, on success", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-    const opts = getCapturedMutation("epic.createChat").options as {
-      onSuccess: (
-        data: CreateChatResponse,
-        params: CreateChatMutationInput,
-        ctx: { hostId: string | null; ownerUserId: string | null },
-      ) => void;
-    };
-
-    opts.onSuccess(
-      { chatId: "host-chat" },
-      { ...nonForkVariables, parentId: "parent-1", title: "Draft title" },
-      { hostId: "host-test", ownerUserId: "user-at-submit" },
-    );
-
-    // The id comes from the RESPONSE (client-minted, echoed back); the host,
-    // parent and title come from the REQUEST, not from `ctx` or wherever the
-    // active host happens to be by the time this runs.
-    expect(beginPendingChatCreation).toHaveBeenCalledWith("e", {
-      chatId: "host-chat",
-      hostId: "host-test",
-      parentChatId: "parent-1",
-      title: "Draft title",
-      // From `ctx`, not from the live profile: the owner is captured in
-      // `onMutate` so a profile switch mid-flight cannot refile the row. Asserted
-      // concretely because an omitted key here would match an `undefined` the
-      // hook never forwarded, and the assertion would hold with the wiring gone.
-      ownerUserId: "user-at-submit",
-    });
-  });
-
-  it("releases the pending creation on error", () => {
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-    const opts = getCapturedMutation("epic.createChat").options as {
-      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
-    };
-
-    opts.onError(makeError("RPC_ERROR"), nonForkVariables);
-
-    expect(clearPendingChatCreation).toHaveBeenCalledWith("e", "c");
-  });
-
-  it("releases the pending creation even for a recoverable fork failure that suppresses the toast", () => {
-    // The registry's failure arm has to run for EVERY error, including the
-    // ones this hook deliberately does not toast - a surface that seeded a
-    // row before the answer (a long create) has exactly one way to take it
-    // back down, and a suppressed toast must not also suppress that.
-    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
-    const opts = getCapturedMutation("epic.createChat").options as {
-      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
-    };
-
-    opts.onError(makeError("E_FORK_CHECKPOINT_UNAVAILABLE"), {
-      ...nonForkVariables,
-      forkSource: {
-        boundary: "latest",
-        sourceChatId: "chat-source",
-        sourceOwnerUserId: null,
-      },
-    });
-
-    expect(toast.error).not.toHaveBeenCalled();
-    expect(clearPendingChatCreation).toHaveBeenCalledWith("e", "c");
-  });
 });
 
 describe("useEpicCreateChatForHostClient", () => {
@@ -416,6 +224,22 @@ describe("useEpicRenameChat", () => {
     opts.onError(makeError("RPC_ERROR"));
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename agent.");
   });
+
+  it("addresses the Epic session's host, not the app-wide one", () => {
+    // Both call sites (the sidebar chat tree, the canvas tab rename) live
+    // inside an Epic and outside every tile `TabHostProvider`. The ambient
+    // client this used to read is the EFFECTIVE host, which diverges from the
+    // session host for the whole of a re-point - a window in which the sidebar
+    // stays interactive because only the canvas is made inert.
+    //
+    // Identity, not "a client was passed": `useHostClient()` is mocked to
+    // return a fresh object per call, so a regression fails here on the
+    // object rather than on an absence.
+    renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
+    expect(getCapturedMutation("epic.renameChat").client).toBe(
+      epicSessionHostClient,
+    );
+  });
 });
 
 describe("useEpicDeleteChat", () => {
@@ -475,6 +299,17 @@ describe("useEpicDeleteChat", () => {
     };
     opts.onError(makeError("RPC_ERROR"));
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
+  });
+
+  it("addresses the Epic session's host, not the app-wide one", () => {
+    // The stakes are higher here than on rename: `epic.deleteChat` names no
+    // host on the wire, so it deletes whatever the RECEIVING machine holds
+    // under that chat id. Sent to the effective host during a re-point, it is
+    // a delete aimed at a row the sidebar is projecting from elsewhere.
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    expect(getCapturedMutation("epic.deleteChat").client).toBe(
+      epicSessionHostClient,
+    );
   });
 });
 

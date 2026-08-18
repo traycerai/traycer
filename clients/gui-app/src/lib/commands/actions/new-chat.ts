@@ -117,7 +117,7 @@ export interface OpenNewChatInActiveTileArgs {
   readonly createChat: CreateChatCommand;
   readonly openWhenProjected: OpenWhenProjected;
   /** The create call failed outright (never reached `onSuccess`).
-   *  `useEpicCreateChat`'s own `onError` already toasts regardless of what
+   *  `useEpicCreateChatForHostClient`'s own `onError` already toasts regardless of what
    *  this callback does, so it exists for a caller that needs to REACT to
    *  the failure, not merely report it - the clone flow (ticket 34B1) is the
    *  one caller that does: a checkpoint-unavailable refusal retries
