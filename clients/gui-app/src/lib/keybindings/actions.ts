@@ -50,6 +50,7 @@ export const ACTION_IDS = [
   "nav.forward",
   "app.resources.open",
   "app.rate-limits.open",
+  "app.notifications.open",
   "app.history.open",
   "app.settings.open",
   "app.settings.section.byDigit",
@@ -389,6 +390,17 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "chord",
     defaultChord: "mod+shift+u",
+  },
+  "app.notifications.open": {
+    id: "app.notifications.open",
+    label: "Open notifications",
+    description:
+      "Open the notification center, then use Up/Down to move between notifications. Pressing the chord again closes it.",
+    category: "app",
+    kind: "chord",
+    // ⌘⇧N - N for notifications, in the same ⌘⇧ family as the other global
+    // panel openers (⌘⇧U usage limits). ⌘N is taken by "New task".
+    defaultChord: "mod+shift+n",
   },
   "app.history.open": {
     id: "app.history.open",
