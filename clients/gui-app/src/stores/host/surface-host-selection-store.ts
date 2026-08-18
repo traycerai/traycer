@@ -17,10 +17,15 @@ export type SurfaceHostSelection = string | null;
  * Multi-instance surfaces key by instance; singletons would use a type-level
  * instance id. Sidebar panels (git-diff, file-tree, new-terminal) all use
  * the view tab id — tab ids are uuid-unique app-wide, so a tab that moves
- * windows keeps its pins. `composer` is reserved for P1.2 (window-keyed).
+ * windows keeps its pins. `composer` is the landing composer's placement pin,
+ * keyed per WINDOW (P1.2 §55). `new-conversation` is the in-Epic
+ * new-conversation modal's placement pin, keyed per EPIC: it is that Epic's
+ * "last created chat's host" memory (recorded on every create, and by its
+ * picker), the host analogue of the per-Epic model memory the modal already
+ * keeps - see `useEpicConversationPlacement`.
  */
 export type SurfaceKind =
-  "git-diff" | "file-tree" | "new-terminal" | "composer";
+  "git-diff" | "file-tree" | "new-terminal" | "composer" | "new-conversation";
 
 const SURFACE_KEY_SEP = "\u001f";
 
@@ -49,9 +54,22 @@ export function gitDiffPanelSurfaceKey(tileRef: string): string {
   return tabSurfaceKey("git-diff", tileRef);
 }
 
-/** Reserved for P1.2. Accepts null so the contract matches `resolveSurfaceWindowId`. */
+/** The landing composer's window-keyed placement pin (P1.2 §55). Accepts null so the contract matches `resolveSurfaceWindowId`. */
 export function composerSurfaceKey(windowId: string | null): string {
   return surfaceHostKey("composer", resolveSurfaceWindowId(windowId));
+}
+
+/**
+ * The in-Epic new-conversation modal's placement pin: one per EPIC, on every
+ * device that opens it. Deliberately NOT the window-keyed `composer` pin the
+ * modal used to share with the landing composer: the two never show at once
+ * (the modal always has an Epic behind it, the landing composer never does),
+ * so nothing was kept in agreement by sharing - and the sharing made "where
+ * does a new agent in THIS Epic go" answer with wherever the window's landing
+ * chip last pointed, which is not a fact about the Epic.
+ */
+export function newConversationSurfaceKey(epicId: string): string {
+  return surfaceHostKey("new-conversation", epicId);
 }
 
 /**

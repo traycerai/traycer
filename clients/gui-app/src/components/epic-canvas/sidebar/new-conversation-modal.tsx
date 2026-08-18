@@ -67,7 +67,8 @@ import { useOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-wor
 import { useEpicStore } from "@/hooks/use-epic-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
+import { useEpicConversationPlacement } from "@/hooks/host/use-composer-placement";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import {
@@ -212,8 +213,11 @@ export function NewConversationModalAction(
       tabId,
       placement: ACTIVE_TILE_PLACEMENT,
       parentId,
-      // App-wide trigger: the sidebar sits outside every `TabHostProvider`, so
-      // the conversation belongs on whichever host is active.
+      // Names no host: the modal resolves its own per-EPIC placement (this
+      // Epic's last created chat's host, else the host the Epic is served
+      // from - `useEpicConversationPlacement`), with the picker live. Naming
+      // one here would freeze the picker (§55) for a trigger that has no
+      // machine in mind.
       hostId: null,
     });
   }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
@@ -478,22 +482,37 @@ export function NewConversationModalBody(props: {
   // client, so a pinned request cannot leave some of them on the active host
   // and the rest on the pinned one.
   //
-  // A request that names no host is an APP-WIDE placement composer, exactly
-  // like the landing one, so it shares that composer's window-keyed surface
-  // pin (redesign P1.2, selection model §2): its picker writes the pin and
-  // everything here resolves `pin ?? effective`. Resolving the app-wide
-  // default instead would let this modal's chip name one device while its
-  // create landed on another. A request that DOES name a host keeps it, with
-  // the picker inert (§55).
+  // A request that names no host is a PLACEMENT composer with the same chip
+  // and picker as the landing one, resolved for THIS EPIC (user ruling
+  // 2026-08-18): `pin(epic) ?? the Epic session's host ?? effective`, where
+  // the per-Epic pin is this Epic's "last created chat's host" - written by
+  // the picker and RE-RECORDED on every create below (`recordPlacement`), the
+  // way the model picker's memory is. So a new agent in this Epic opens on
+  // the host the last one was created on, or - before any - on the host the
+  // Epic is served from. Resolving the window's landing pin instead (what
+  // this used to share) answered "where did the landing chip last point",
+  // which is not a fact about this Epic. A request that DOES name a host
+  // keeps it, with the picker inert (§55).
   //
-  // Same placement UNIT as the landing composer, not merely the same key: the
-  // READ client for this body's queries, the host-FROZEN client every create
-  // below is sent on, and the submit-time refusal all come out of one hook.
-  const composerPlacement = useComposerPlacement(hostId);
+  // Same placement UNIT as the landing composer: the READ client for this
+  // body's queries, the host-FROZEN client every create below is sent on, and
+  // the submit-time refusal all come out of one hook.
+  const sessionHostId = useEpicSessionHostId();
+  const composerPlacement = useEpicConversationPlacement({
+    epicId,
+    overrideHostId: hostId,
+    sessionHostId,
+  });
   const resolvedHostId = composerPlacement.target.resolvedHostId;
   const hostClient = composerPlacement.target.client;
   const submitTarget = composerPlacement.submitTarget;
-  const composerIsPinned = composerPlacement.pin.isPinned;
+  const composerFollowsEffective = composerPlacement.followsEffective;
+  // "Last created chat's host": every create in this modal writes the Epic's
+  // placement memory with the host it resolved, at SUBMIT (beside the settings
+  // memory) rather than on the create's success - the model picker's memory
+  // is written the same way. A caller-named host is recorded too: the rule is
+  // the last CREATED chat's host, whoever named it.
+  const recordPlacement = composerPlacement.pin.setSelection;
   const latestWorkspaceSeed = useModalWorkspaceSeed({
     epicId,
     parentId,
@@ -756,18 +775,20 @@ export function NewConversationModalBody(props: {
   const dismissHostNotice = useCallback(() => {
     setHostNotice(null);
   }, []);
-  // G4: this modal FOLLOWS the effective host whenever the request named no
-  // host, so a derivation move re-points it. Its staged worktree/branch intent
-  // names refs on the machine the user picked them on and must not travel; the
-  // §51 folder set stays, per the orchestrator's ruling on the landing row. A
-  // request that names its own host is pinned and ignores this (D6).
+  // G4: this modal FOLLOWS the effective host only when nothing else answered
+  // its placement - no named host, no per-Epic pin in force, no session host
+  // in force - and only then does a derivation move re-point it. Its staged
+  // worktree/branch intent names refs on the machine the user picked them on
+  // and must not travel; the §51 folder set stays, per the orchestrator's
+  // ruling on the landing row. A modal resting on its pin or on the Epic's
+  // host is not moved by the derivation and must not narrate a move (D6).
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
-      if (composerIsPinned) return;
+      if (!composerFollowsEffective) return;
       clearStagedIntent(stagingKey);
       setHostNotice({ kind: "repointed", hostId: nextEffectiveHostId });
     });
-  }, [clearStagedIntent, composerIsPinned, stagingKey]);
+  }, [clearStagedIntent, composerFollowsEffective, stagingKey]);
   const cleanupAfterSubmit = useCallback((): void => {
     clearDraft(epicId);
     clearStagedIntent(stagingKey);
@@ -817,6 +838,7 @@ export function NewConversationModalBody(props: {
     // derive from the SAME captured submitTarget, and the verdict REFUSES
     // rather than migrates when its frozen client no longer addresses it.
     const activeHostId = placementVerdict.hostId;
+    recordPlacement(activeHostId);
     const content = buildSubmittedChatJSONContent(
       editor.getJSON(),
       pickerStore.getState().knownSlashCommands,
@@ -918,6 +940,7 @@ export function NewConversationModalBody(props: {
     epicId,
     parentId,
     placement,
+    recordPlacement,
     rememberEpicIntent,
     setEpicRunSettings,
     setGlobalRunSettings,
@@ -939,6 +962,7 @@ export function NewConversationModalBody(props: {
       // The staged key and this create both derive from the same captured
       // submitTarget (see `handleSubmit`), so no render-vs-live drift check.
       const activeHostId = placementVerdict.hostId;
+      recordPlacement(activeHostId);
       const worktreeIntent = worktreeIntentForSubmit();
       const workspaceMode = deriveWorkspaceMode(
         draftWorkspaceFolderCount,
@@ -977,6 +1001,7 @@ export function NewConversationModalBody(props: {
       epicId,
       parentId,
       placement,
+      recordPlacement,
       rememberEpicIntent,
       tabId,
       terminalAgentCreate,

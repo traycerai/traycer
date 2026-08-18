@@ -210,6 +210,12 @@ function openNewConversationModal(
   placement: ConversationTilePlacement,
 ): void {
   useNewConversationModalStore.getState().setComposerMode(epicId, mode);
+  // `hostId: null` names no host, the same as the Epic sidebar's own `+`: the
+  // modal resolves this Epic's placement memory (its last created chat's
+  // host, else the host the Epic is served from) and keeps the picker live.
+  // These items act on the ACTIVE TILE's pane, but the tile's host is not
+  // passed - a new agent is not required to live on the machine of the tile
+  // it replaces, and naming one would freeze the picker (§55).
   useNewConversationModalOpenStore
     .getState()
     .open({ epicId, tabId, placement, parentId: null, hostId: null });

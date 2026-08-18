@@ -123,9 +123,12 @@ vi.mock("@/hooks/host/use-composer-placement", () => {
     namedHostDead: false,
   };
   return {
-    useComposerPlacement: () => ({
+    // The modal resolves the per-EPIC placement (not the landing composer's
+    // `useComposerPlacement`); same shape, plus `followsEffective`.
+    useEpicConversationPlacement: () => ({
       pin: {
         selection: null,
+        honoredSelection: null,
         setSelection: () => undefined,
         resolvedHostId: "host-1",
         isPinned: false,
@@ -134,9 +137,14 @@ vi.mock("@/hooks/host/use-composer-placement", () => {
       target,
       submitTarget: target,
       hostLabelFor: () => "Local",
+      followsEffective: true,
     }),
   };
 });
+
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "host-1",
+}));
 
 // The body resolves its host through `useHostClientForHostId`, which reads the
 // directory to pin an explicit id. This suite only exercises the unpinned

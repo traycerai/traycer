@@ -4,8 +4,14 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
-import type { SurfaceHostPin } from "@/hooks/host/use-surface-host-pin";
-import { isSurfacePinDeposed } from "@/stores/host/surface-host-selection-store";
+import {
+  useSurfaceHostPinWithDefault,
+  type SurfaceHostPin,
+} from "@/hooks/host/use-surface-host-pin";
+import {
+  isSurfacePinDeposed,
+  newConversationSurfaceKey,
+} from "@/stores/host/surface-host-selection-store";
 import {
   composerHostLabel,
   type LandingPlacementTarget,
@@ -28,6 +34,14 @@ export interface ComposerPlacement {
   readonly submitTarget: LandingPlacementTarget;
   /** Names an arbitrary host for notice copy, resolved late. */
   readonly hostLabelFor: (hostId: string | null) => string;
+  /**
+   * Whether a move of the EFFECTIVE host re-points this composer. True only
+   * when nothing else answered: no override, no pin in force, and (for a
+   * placement that carries a default tier) no default in force. A composer
+   * resting on its pin or its default is not moved by a derivation change and
+   * must not narrate one (the G4 "re-pointed" notice).
+   */
+  readonly followsEffective: boolean;
 }
 
 /**
@@ -37,9 +51,10 @@ export interface ComposerPlacement {
  *
  * `overrideHostId` is a caller-supplied host that outranks the pin: the
  * new-conversation modal's row-scoped request names one, and the picker goes
- * inert for it (§55). `null` means "this surface owns its placement", which is
- * the landing composer and the modal opened from the app-wide sidebar - both
- * resolve `pin ?? effective` and both write the same window-keyed pin.
+ * inert for it (§55). `null` means "this surface owns its placement": the
+ * landing composer resolves its WINDOW-keyed pin ?? effective (this hook);
+ * the in-Epic new-conversation modal resolves its per-EPIC pin ?? the Epic
+ * session's host ?? effective (`useEpicConversationPlacement` below).
  *
  * **Two clients, deliberately.**
  *
@@ -64,6 +79,71 @@ export function useComposerPlacement(
   overrideHostId: string | null,
 ): ComposerPlacement {
   const pin = useComposerSurfaceHostPin();
+  return useComposerPlacementForPin(
+    pin,
+    overrideHostId,
+    pin.honoredSelection === null,
+  );
+}
+
+export interface EpicConversationPlacementInput {
+  readonly epicId: string;
+  /** A caller-NAMED host (the row-scoped request); the picker goes inert. */
+  readonly overrideHostId: string | null;
+  /**
+   * The Epic session's host - the default tier. `null` (no session yet)
+   * drops the tier and the placement resolves as the landing composer does.
+   */
+  readonly sessionHostId: string | null;
+}
+
+/**
+ * The in-Epic new-conversation modal's placement (redesign follow-up to
+ * P1.2 §2, user ruling 2026-08-18): the SAME chip and pin pattern as the
+ * landing composer, resolved per EPIC with a memory tier -
+ *
+ *     override ?? pin(epic) ?? Epic session's host ?? effective
+ *
+ * where `pin(epic)` is that Epic's "last created chat's host": the picker
+ * writes it, and every successful create in the modal RECORDS it
+ * (`recordPlacement`), the way the model picker's last-used memory is
+ * written by use as well as by a pick. So the chip opens on the host the
+ * last agent in this Epic was created on, or - before any - on the host the
+ * Epic is being served from; never on wherever the window's landing chip
+ * last pointed, which is not a fact about this Epic. The pin's death rules
+ * apply to every tier (`useSurfaceHostPinWithDefault`).
+ *
+ * The modal used to share the landing composer's WINDOW-keyed pin, on the
+ * reasoning that the two must agree while both are visible; they never are
+ * (the modal always has an Epic behind it, the landing composer never does),
+ * so nothing was kept in agreement and the in-Epic default was the wrong
+ * question's answer.
+ */
+export function useEpicConversationPlacement(
+  input: EpicConversationPlacementInput,
+): ComposerPlacement {
+  const pin = useSurfaceHostPinWithDefault(
+    newConversationSurfaceKey(input.epicId),
+    input.sessionHostId,
+  );
+  return useComposerPlacementForPin(
+    pin,
+    input.overrideHostId,
+    pin.resolvedFrom === "effective",
+  );
+}
+
+/**
+ * The shared resolution: one pin (however keyed and defaulted), one override,
+ * one read client and one FROZEN submit client, one refusal. `pinFollowsEffective`
+ * is the pin's own account of whether `effective` answered it - the caller
+ * knows the pin's tiers; this function does not re-derive them.
+ */
+function useComposerPlacementForPin(
+  pin: SurfaceHostPin,
+  overrideHostId: string | null,
+  pinFollowsEffective: boolean,
+): ComposerPlacement {
   const resolvedHostId = overrideHostId ?? pin.resolvedHostId;
   // `honoredSelection`, not `selection`: a deposed pin reads through the
   // ambient client (which is the effective host) exactly as a following
@@ -106,5 +186,6 @@ export function useComposerPlacement(
     () => ({ ...target, client: submitClient }),
     [submitClient, target],
   );
-  return { pin, target, submitTarget, hostLabelFor };
+  const followsEffective = overrideHostId === null && pinFollowsEffective;
+  return { pin, target, submitTarget, hostLabelFor, followsEffective };
 }

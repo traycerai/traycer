@@ -46,6 +46,18 @@ export interface SurfaceHostPin {
 }
 
 /**
+ * Which tier answered {@link SurfaceHostPin.resolvedHostId} for a pin that
+ * carries a default (see {@link useSurfaceHostPinWithDefault}): the pin, the
+ * default, or `effective`. A surface reads this to know whether a move of the
+ * effective host re-points it - only the `effective` tier follows one.
+ */
+export type SurfaceHostPinTier = "pin" | "default" | "effective";
+
+export interface SurfaceHostPinWithDefault extends SurfaceHostPin {
+  readonly resolvedFrom: SurfaceHostPinTier;
+}
+
+/**
  * This surface's host pin, resolved.
  *
  * A pinned surface whose host dies AUTO-FOLLOWS to `effective` and returns to
@@ -56,6 +68,42 @@ export interface SurfaceHostPin {
  * is.
  */
 export function useSurfaceHostPin(surfaceKey: string): SurfaceHostPin {
+  return useSurfaceHostPinResolved(surfaceKey, null);
+}
+
+/**
+ * The same pin with a DEFAULT tier between it and `effective`: unpinned, or
+ * pinned to a host that cannot serve, the surface resolves `defaultHostId`
+ * while THAT host can serve, and only then `effective`. Death is judged for
+ * the default exactly as for the pin ({@link isSurfacePinDeposed}), so the
+ * three tiers cannot disagree about what "cannot serve" means, and the
+ * default is never written anywhere - it is a fallback the caller derives
+ * (the in-Epic modal passes the Epic session's host), not a second pin.
+ *
+ * `resolvedFrom` names the tier that answered. Only the `effective` tier
+ * follows a move of the effective host; a surface on its pin or its default
+ * is not re-pointed by one and must not narrate one.
+ */
+export function useSurfaceHostPinWithDefault(
+  surfaceKey: string,
+  defaultHostId: string | null,
+): SurfaceHostPinWithDefault {
+  return useSurfaceHostPinResolved(surfaceKey, defaultHostId);
+}
+
+function resolvedTier(
+  honoredSelection: SurfaceHostSelection,
+  honoredDefaultHostId: string | null,
+): SurfaceHostPinTier {
+  if (honoredSelection !== null) return "pin";
+  if (honoredDefaultHostId !== null) return "default";
+  return "effective";
+}
+
+function useSurfaceHostPinResolved(
+  surfaceKey: string,
+  defaultHostId: string | null,
+): SurfaceHostPinWithDefault {
   const stored = useSurfaceHostSelectionStore(
     (state) => state.selections[surfaceKey],
   );
@@ -80,11 +128,18 @@ export function useSurfaceHostPin(surfaceKey: string): SurfaceHostPin {
     selection !== null && isSurfacePinDeposed(selection, fleet)
       ? null
       : selection;
+  // The default tier is honored on the pin's own rule, so "cannot serve"
+  // means one thing across all three tiers.
+  const honoredDefaultHostId =
+    defaultHostId !== null && !isSurfacePinDeposed(defaultHostId, fleet)
+      ? defaultHostId
+      : null;
   const resolvedHostId = resolvedSurfaceHostId(
     selection,
-    effectiveHostId,
+    honoredDefaultHostId ?? effectiveHostId,
     fleet,
   );
+  const resolvedFrom = resolvedTier(honoredSelection, honoredDefaultHostId);
 
   // Deregistration clears the pin; death never does. Runs as an effect rather
   // than at an app-wide mount so this stays out of the composition root - a
@@ -114,6 +169,7 @@ export function useSurfaceHostPin(surfaceKey: string): SurfaceHostPin {
     resolvedHostId,
     isPinned: selection !== null,
     latchOnFirstUse,
+    resolvedFrom,
   };
 }
 

@@ -23,8 +23,10 @@ import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
 /**
- * F2: the app-wide new-conversation modal shares the composer's window key,
- * and must share its placement SEMANTICS too.
+ * F2: the in-Epic new-conversation modal shares the landing composer's
+ * placement SEMANTICS (one chip, one frozen submit client, one refusal),
+ * resolved for its EPIC (`useEpicConversationPlacement`: per-Epic pin - the
+ * Epic's last created chat's host - ?? the session's host ?? effective).
  *
  * These target the CALLER, not `resolveLandingPlacement` (already unit-tested):
  * the class of bug here is a caller that never asks, which no test of the
@@ -93,6 +95,21 @@ const testState = vi.hoisted(() => ({
   /** Drives what the modal's placement resolves to, per test. */
   placement: placementHolder(),
   pinIsPinned: { current: false },
+  /**
+   * Whether `effective` answered the placement (no override, no pin in force,
+   * no session-host default in force) - the ONLY state a derivation move
+   * re-points (G4). Independent of `pinIsPinned` on purpose: a modal resting
+   * on the Epic's host is unpinned AND not following.
+   */
+  followsEffective: { current: true },
+  /** The Epic's placement memory write - what a create RECORDS. */
+  recordPlacement: vi.fn<(hostId: string | null) => void>(),
+  /** What `useEpicConversationPlacement` was asked to resolve. */
+  placementInputs: [] as Array<{
+    readonly epicId: string;
+    readonly overrideHostId: string | null;
+    readonly sessionHostId: string | null;
+  }>,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -133,20 +150,38 @@ function editorHandle(): ComposerPromptEditorHandle {
 }
 
 // THE seam under test's input. Mocked so each case can present a specific
-// placement (dead pin, moved client) without standing up a real fleet.
+// placement (dead pin, moved client) without standing up a real fleet. The
+// modal resolves the per-EPIC placement, not the landing composer's
+// window-keyed one - a mock of `useComposerPlacement` here would be stranded.
 vi.mock("@/hooks/host/use-composer-placement", () => ({
-  useComposerPlacement: () => ({
-    pin: {
-      selection: null,
-      setSelection: () => undefined,
-      resolvedHostId: testState.placement.current.resolvedHostId,
-      isPinned: testState.pinIsPinned.current,
-      latchOnFirstUse: () => undefined,
-    },
-    target: testState.placement.current,
-    submitTarget: testState.placement.current,
-    hostLabelFor: () => testState.placement.current.hostLabel,
-  }),
+  useEpicConversationPlacement: (input: {
+    readonly epicId: string;
+    readonly overrideHostId: string | null;
+    readonly sessionHostId: string | null;
+  }) => {
+    testState.placementInputs.push(input);
+    return {
+      pin: {
+        selection: null,
+        honoredSelection: null,
+        setSelection: testState.recordPlacement,
+        resolvedHostId: testState.placement.current.resolvedHostId,
+        isPinned: testState.pinIsPinned.current,
+        latchOnFirstUse: () => undefined,
+      },
+      target: testState.placement.current,
+      submitTarget: testState.placement.current,
+      hostLabelFor: () => testState.placement.current.hostLabel,
+      followsEffective: testState.followsEffective.current,
+    };
+  },
+}));
+
+// The Epic session's host, the modal's DEFAULT placement tier - handed to the
+// (mocked) placement above, so this suite pins that the modal asks for the
+// session's host and not the app-wide one.
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "host-session",
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
@@ -347,6 +382,9 @@ beforeEach(() => {
     namedHostDead: false,
   };
   testState.pinIsPinned.current = false;
+  testState.followsEffective.current = true;
+  testState.recordPlacement.mockClear();
+  testState.placementInputs.length = 0;
 });
 
 afterEach(() => {
@@ -483,6 +521,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
 
   it("G4: a PINNED modal keeps its staged intent (D6)", () => {
     testState.pinIsPinned.current = true;
+    testState.followsEffective.current = false;
     testState.placement.current = {
       ...testState.placement.current,
       isPinned: true,
@@ -497,5 +536,76 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
 
     expect(stagedIntent()).toBeDefined();
+  });
+
+  it("G4: a modal resting on the EPIC's host (default tier, unpinned) keeps its staged intent", () => {
+    // The third state the per-Epic placement introduced: no pin, but the
+    // session's host answered rather than `effective`. A gate keyed on
+    // `isPinned` alone would clear this modal's staged intent and announce a
+    // move that did not happen to it.
+    testState.pinIsPinned.current = false;
+    testState.followsEffective.current = false;
+    testState.placement.current = {
+      resolvedHostId: "host-session",
+      client: { getActiveHostId: () => "host-session" },
+      hostLabel: "Studio Mac",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(STAGING_KEY, STAGED_INTENT);
+    renderModal();
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    expect(stagedIntent()).toBeDefined();
+    // And no move narrated: there is no notice at all.
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+
+  it("asks the per-EPIC placement for THIS epic with the session's host as its default", () => {
+    // Codex #1243 T-48: the modal used to resolve the landing composer's
+    // window-keyed pin ?? effective, so a new agent in an Epic served from B
+    // landed on wherever the window's landing chip pointed. The placement now
+    // resolves per Epic with the session's host as the default tier; this
+    // pins the modal hands it exactly that - not the app-wide host, and not
+    // nothing.
+    renderModal();
+    expect(testState.placementInputs.length).toBeGreaterThan(0);
+    for (const input of testState.placementInputs) {
+      expect(input).toEqual({
+        epicId: "epic-1",
+        overrideHostId: null,
+        sessionHostId: "host-session",
+      });
+    }
+  });
+
+  it("records the host it created on as the Epic's placement memory, on submit", () => {
+    // "Last created chat's host": the create WRITES the per-Epic pin with the
+    // host it resolved, at submit (beside the settings memory), so the next
+    // new agent in this Epic opens on it - the model picker's memory shape.
+    renderModal();
+    act(() => {
+      testState.bodySubmit?.();
+    });
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    expect(testState.recordPlacement).toHaveBeenCalledWith("host-a");
+  });
+
+  it("does NOT record a placement on a refused submit - nothing was created", () => {
+    testState.placement.current = {
+      ...testState.placement.current,
+      client: { getActiveHostId: () => "host-moved" },
+    };
+    renderModal();
+    act(() => {
+      testState.bodySubmit?.();
+    });
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.recordPlacement).not.toHaveBeenCalled();
   });
 });

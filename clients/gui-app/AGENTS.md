@@ -119,9 +119,27 @@ pin still names the dead host. There is no dead-state banner: the chip renders
 the RESOLVED host, and the dead host's own picker row says `offline`.
 
 Composers have a **target host** (tab host, fork dialog's fixed host, the
-new-conversation modal's host). `null` means "follow the effective host" —
-the landing composer and the new-conversation modal opened from the app-wide
-sidebar trigger, both of which sit outside every `TabHostProvider`.
+new-conversation modal's host). `null` means "this surface owns its
+placement", and the two surfaces that own one resolve it differently:
+
+- the **landing composer** resolves its WINDOW-keyed pin ?? `effective`
+  (`useComposerPlacement`);
+- the **in-Epic new-conversation modal** resolves its per-**EPIC** pin ?? the
+  Epic session's host ?? `effective` (`useEpicConversationPlacement`). The
+  per-Epic pin is that Epic's _last created chat's host_: the picker writes
+  it, and every create in the modal re-records it — the same memory shape as
+  the model picker's last-used settings. So a new agent in an Epic opens on
+  the host the last one was created on, or before any on the host the Epic is
+  served from — never on wherever the window's landing chip last pointed,
+  which is not a fact about the Epic. Every in-Epic trigger (the sidebar `+`,
+  a row's "new child", the palette's new-agent items) passes `hostId: null`
+  for that reason; only a trigger with a machine genuinely in mind (a terminal
+  quote, whose terminal exists on one host) names one, and naming freezes the
+  picker (§55).
+
+Only a placement that `effective` answered FOLLOWS a derivation move
+(`ComposerPlacement.followsEffective`); one resting on a pin or on the Epic's
+host is not re-pointed by one and does not narrate one.
 
 **The composer is PLACEMENT.** Its resolved host (the pin rule above, keyed per
 WINDOW) decides where a created epic/chat lives for life, so its picker writes
