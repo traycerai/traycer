@@ -31,7 +31,7 @@ function baseProps(
     cause: "no-usable-host",
     variant: { kind: "offline" },
     progress: null,
-    localBootstrapBody: null,
+    bootBody: null,
     onRetry: null,
     retryPending: false,
     onUpdateHost: null,
@@ -209,7 +209,7 @@ describe("<WindowHostModal />", () => {
     expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
   });
 
-  it("renders heading/percent/transfer in window-host-modal-progress when progress is set and localBootstrapBody is null", () => {
+  it("renders heading/percent/transfer in window-host-modal-progress when progress is set and bootBody is null", () => {
     renderModal(
       baseProps({
         variant: { kind: "offline" },
@@ -218,7 +218,7 @@ describe("<WindowHostModal />", () => {
           percent: 42,
           transferLabel: "1.0 MB of 2.0 MB",
         }),
-        localBootstrapBody: null,
+        bootBody: null,
       }),
     );
     const progressBlock = screen.getByTestId("window-host-modal-progress");
@@ -232,7 +232,7 @@ describe("<WindowHostModal />", () => {
       baseProps({
         variant: { kind: "offline" },
         progress: buildProgress({}),
-        localBootstrapBody: <div data-testid="local-bootstrap-body">boot</div>,
+        bootBody: <div data-testid="local-bootstrap-body">boot</div>,
       }),
     );
     expect(screen.getByTestId("local-bootstrap-body")).toBeTruthy();

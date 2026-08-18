@@ -36,7 +36,7 @@ export function HostBootSurface(props: {
   readonly onOpenSettings: () => void;
 }): ReactNode {
   return (
-    <HostBootCard testId={props.testId}>
+    <HostBootCard testId={props.testId} dataset={{}} viewportCapped={false}>
       <HostBootHeadline
         message={props.message}
         spinnerVariant="sparkle"

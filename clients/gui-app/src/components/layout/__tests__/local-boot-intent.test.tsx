@@ -376,8 +376,7 @@ describe("local-boot intent", () => {
     );
 
     // The surface settles on the non-local wait: the window narrator comes up
-    // with NO local bootstrap body (no spinner, no local-host-loading
-    // content) - the positive proof this reached its non-local settled state.
+    // - the positive proof this reached its non-local settled state.
     //
     // EITHER presentation counts as the anchor. This stack mounts the real
     // gate, so which form the narrator takes depends on whether the gate is
@@ -390,11 +389,21 @@ describe("local-boot intent", () => {
           screen.queryByTestId("window-host-startup-card"),
       ).toBeTruthy();
     });
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
-    // …and it must never claim this machine's host is starting, nor offer any
-    // action against it.
-    expect(screen.queryByText("Starting Traycer…")).toBeNull();
-    expect(screen.queryByTestId("local-host-retry")).toBeNull();
+    // WHAT THIS FENCE IS ABOUT, and what it is not. It is about ARMING: the
+    // local lifecycle's two calls below belong to a machine the user is not
+    // pointed at, and neither may run. It is NOT about the card. An earlier
+    // version of this fixture also pinned the card as bodiless for a remote
+    // target - no spinner, no "Starting Traycer…" - and that pin was the
+    // reported launch: the narrator's card rendering as nothing but the
+    // `Open settings` link for exactly this selection, while the two boot
+    // surfaces before it (which cannot know the target) drew the full card.
+    // The card is drawn now, whatever the target: the same idle heading the
+    // surfaces before it use, which names no machine.
+    // What the card must still NOT do is offer a host-management action
+    // against this machine: nothing has failed and nothing is slow, so there
+    // is no Retry of any kind on it.
+    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
+    expect(screen.queryByTestId("local-host-provisioning-retry")).toBeNull();
     // The two calls the blocker was about: both belong to a machine the user
     // is not pointed at, and neither may run.
     expect(spy.convergeReadyCalls()).toBe(0);

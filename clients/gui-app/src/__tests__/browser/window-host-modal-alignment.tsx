@@ -180,7 +180,7 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
             // The REAL body, composed exactly as `buildLocalBootstrapBody`
             // composes it for this arm. A hand-rolled stand-in would be a
             // measurement of the fixture.
-            localBootstrapBody={
+            bootBody={
               <LocalHostLoadingContent
                 progress={progress}
                 onConfigureShell={() => undefined}
