@@ -43,7 +43,14 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => vi.fn(),
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({ status: "reachable", hostLabel: "Host A" }),
+  useHostReachability: () => ({
+    status: "reachable",
+    hostLabel: "Host A",
+    basis: "directory",
+    unavailability: null,
+  }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",

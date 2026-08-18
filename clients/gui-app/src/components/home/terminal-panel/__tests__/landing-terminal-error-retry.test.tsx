@@ -21,6 +21,12 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     hostLabel: "Host A",
     unavailability: null,
   }),
+  // Mirrors the real one-liner exactly. It is restated rather than inherited
+  // because this factory replaces the module wholesale, and spreading
+  // `importOriginal` here would un-stub the hook above too. That makes it a
+  // COPY: change `resolvedHostLabel` and this keeps the old behaviour silently.
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({

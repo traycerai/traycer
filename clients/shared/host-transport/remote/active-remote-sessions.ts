@@ -137,6 +137,74 @@ interface CacheEntry {
    * forward itself, since nothing sweeps again after it is released.
    */
   superseded: boolean;
+  /**
+   * Tears down this entry's readiness wiring (its `onClosed` and
+   * `subscribeAvailabilityRecovered` subscriptions). Held per entry because
+   * an entry can be dropped from four different places.
+   */
+  disposeReadinessWiring: () => void;
+}
+
+/**
+ * PUSH REPLACES POLL (redesign P4.1 / connection-registry §6).
+ *
+ * `hasReadyRemoteSession` used to be read by two 1s `setInterval`s - one
+ * per-host, one fleet-shaped - because this cache is a plain map with no
+ * change events, so a React consumer had no way to learn that a session had
+ * become ready except by asking again. Two app-wide timers, running for the
+ * life of the window, to observe a value that changes a handful of times a
+ * session.
+ *
+ * The cache now says so instead. Every transition that can change any host's
+ * answer notifies: a session reaching a ready boundary (which
+ * `subscribeAvailabilityRecovered` reports for the clean FIRST open too, not
+ * only for recoveries - see `maybeReachReadyBoundary`), a session closing,
+ * an entry being superseded or retired, and the keep-warm linger expiring.
+ *
+ * Delivery is coalesced onto a microtask, and that is load-bearing rather
+ * than tidy: `close()` fires `onClosed` listeners SYNCHRONOUSLY from inside
+ * this module's own mutation paths, so a synchronous notify would re-enter
+ * the cache mid-mutation - the same hazard the insert-before-sweep ordering
+ * in `acquireRemoteSession` exists for. Coalescing also collapses the burst
+ * a single sweep produces (one supersede can close several entries) into one
+ * wake.
+ */
+const readinessListeners = new Set<() => void>();
+let readinessNotifyScheduled = false;
+
+function notifyReadinessChanged(): void {
+  if (readinessNotifyScheduled) {
+    return;
+  }
+  readinessNotifyScheduled = true;
+  queueMicrotask(() => {
+    readinessNotifyScheduled = false;
+    for (const listener of [...readinessListeners]) {
+      listener();
+    }
+  });
+}
+
+/**
+ * Subscribes to "some host's ready-session answer may have changed". Coarse
+ * on purpose: consumers ask about specific hosts through
+ * {@link hasReadyRemoteSession} at read time, and the alternative - per-host
+ * subscriptions into a cache keyed by full session identity, where one host
+ * can hold several entries under different policies - would key the
+ * subscription on something other than what the consumer asks about.
+ */
+export function subscribeRemoteSessionReadiness(
+  listener: () => void,
+): () => void {
+  readinessListeners.add(listener);
+  return () => {
+    readinessListeners.delete(listener);
+  };
+}
+
+/** Test-only: drops every readiness subscriber (suites share the module). */
+export function resetRemoteSessionReadinessListenersForTest(): void {
+  readinessListeners.clear();
 }
 
 // Matches the `TRANSPORT_KEY_SEPARATOR` convention elsewhere in this codebase
@@ -213,17 +281,53 @@ export function acquireRemoteSession<
     if (entry.lingerTimer !== null) {
       clearTimeout(entry.lingerTimer);
     }
+    entry.disposeReadinessWiring();
     entriesByKey.delete(key);
     entry = undefined;
+    notifyReadinessChanged();
   }
   if (entry === undefined) {
-    entry = {
-      session: createSession(),
+    const session = createSession();
+    const created: CacheEntry = {
+      session,
       identity,
       refCount: 0,
       lingerTimer: null,
       superseded: false,
+      disposeReadinessWiring: () => undefined,
     };
+    // This session's two readiness edges, wired ONCE per entry rather than
+    // once per consumer: a ready boundary (which `maybeReachReadyBoundary`
+    // emits for the clean FIRST open, not only for recoveries) and the
+    // terminal close. Wired BEFORE the sweep below, whose `close()` calls
+    // fire listeners synchronously - an entry that could be closed before it
+    // was wired would never report its own death.
+    const offRecovered = session.subscribeAvailabilityRecovered(
+      notifyReadinessChanged,
+    );
+    const offClosed = session.onClosed(notifyReadinessChanged);
+    // The DOWN edge, and the reason this trio is not a pair. Both wirings
+    // above point UP - a session becoming ready, and a session dying - so a
+    // relay `host_detached` or a drop into `reconnecting` flipped
+    // `isReady()` false with nobody told, and every subscriber held its
+    // previous `true` for the whole outage. If the reconnect then succeeded
+    // they never observed the loss at all.
+    //
+    // The general form, because the diff that caused it showed no deletion:
+    // this wiring REPLACED two 1-second polls (see the note above), and a
+    // poll has no direction - it answered "did this stop being ready" by
+    // asking again. A poll-to-event migration has to enumerate transitions in
+    // BOTH directions, and nothing in the diff will tell you which one was
+    // dropped.
+    const offReadinessLost = session.subscribeReadinessLost(
+      notifyReadinessChanged,
+    );
+    created.disposeReadinessWiring = () => {
+      offRecovered();
+      offClosed();
+      offReadinessLost();
+    };
+    entry = created;
     // Insert BEFORE sweeping. The sweep's `close()` calls fire `onClosed`
     // listeners synchronously; a listener that re-entered this function for
     // the same identity must find this entry (a hit) rather than build a
@@ -268,7 +372,9 @@ export function acquireRemoteSession<
       // that removes a held entry). Nothing will ever hand this entry out
       // again and no sweep or timer can see it, so the last holder closes
       // it here. Idempotent when the session was already closed.
+      entry.disposeReadinessWiring();
       entry.session.close();
+      notifyReadinessChanged();
       return;
     }
     if (entry.superseded || entry.session.isClosed()) {
@@ -290,7 +396,9 @@ export function acquireRemoteSession<
       // acquire evicts closed entries anyway, so drop it now. (`close()` on
       // an already-closed session is an idempotent no-op.)
       entriesByKey.delete(key);
+      entry.disposeReadinessWiring();
       entry.session.close();
+      notifyReadinessChanged();
       return;
     }
     // Keep-warm: defer the real teardown by the linger window. The entry
@@ -306,7 +414,9 @@ export function acquireRemoteSession<
         return;
       }
       entriesByKey.delete(key);
+      entry.disposeReadinessWiring();
       entry.session.close();
+      notifyReadinessChanged();
     }, REMOTE_SESSION_LINGER_MS);
   };
 
@@ -315,8 +425,8 @@ export function acquireRemoteSession<
     isClosed: () => session.isClosed(),
     isReady: () => session.isReady(),
     terminalFatal: () => session.terminalFatal(),
-    sendUnary: (method, params, abortSignal) =>
-      session.sendUnary(method, params, abortSignal),
+    sendUnary: (method, params, abortSignal, responseTimeoutMs) =>
+      session.sendUnary(method, params, abortSignal, responseTimeoutMs),
     subscribe: (method, params) => session.subscribe(method, params),
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
@@ -324,6 +434,8 @@ export function acquireRemoteSession<
     onClosed: (listener) => session.onClosed(listener),
     subscribeAvailabilityRecovered: (listener) =>
       session.subscribeAvailabilityRecovered(listener),
+    subscribeReadinessLost: (listener) =>
+      session.subscribeReadinessLost(listener),
     close: release,
   };
 }
@@ -403,7 +515,11 @@ function closeSupersededIdentities(
       // user mismatch still retires the entry.
       continue;
     }
+    // The MARK alone changes this host's answer: a superseded entry stops
+    // counting for `hasReadyRemoteSession` whether or not it can be closed
+    // yet, so the notify belongs here and not only on the close path below.
     entry.superseded = true;
+    notifyReadinessChanged();
     if (entry.refCount > 0) {
       // Still held. `release` closes it the moment its last consumer lets go.
       continue;
@@ -412,6 +528,7 @@ function closeSupersededIdentities(
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = null;
     }
+    entry.disposeReadinessWiring();
     entriesByKey.delete(key);
     entry.session.close();
   }
@@ -435,7 +552,11 @@ function closeSupersededIdentities(
  */
 export function retireAllRemoteSessions(): void {
   for (const [key, entry] of [...entriesByKey]) {
+    // The MARK alone changes this host's answer: a superseded entry stops
+    // counting for `hasReadyRemoteSession` whether or not it can be closed
+    // yet, so the notify belongs here and not only on the close path below.
     entry.superseded = true;
+    notifyReadinessChanged();
     if (entry.refCount > 0) {
       // Still held. `release` closes it the moment its last consumer lets go.
       continue;
@@ -444,6 +565,7 @@ export function retireAllRemoteSessions(): void {
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = null;
     }
+    entry.disposeReadinessWiring();
     entriesByKey.delete(key);
     entry.session.close();
   }

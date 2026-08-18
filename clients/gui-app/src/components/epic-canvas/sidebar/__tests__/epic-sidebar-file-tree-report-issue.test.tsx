@@ -18,6 +18,20 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 // stubbed the same way), plus the file-tree-specific hooks that test file
 // does not need.
 
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every assertion here
+// is about. Which transport the pin resolves to is a different question, and
+// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
+
 vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
   useEpicCanvasDnd: () => ({
     activeSource: null,
@@ -99,8 +113,42 @@ vi.mock("@/components/ui/sidebar", () => ({
   ),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
+}));
+
+// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign
+// P1.2) resolves against this, not the directory's active-host hook.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-1",
+}));
+
+// `usePinnedSurfaceDead`/its dead-state screen are gone (D6: a pinned host
+// that dies auto-follows to `effective` instead). These two mocks are now
+// vestigial for this suite's own render tree, but are left in place as
+// harmless stubs in case a sibling hook in the chain still reaches them.
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({
+    status: "reachable",
+    hostLabel: "host-1",
+    unavailability: null,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [{ hostId: "host-1" }],
+    fetchStatus: "idle",
+  }),
+}));
+
+// `useSurfaceHostClient` (also reached from `FileTreePanelBodyLive`, same
+// P0.2 pin chain) resolves via this hook's real implementation, which needs
+// a full `HostClient` shape (`resolveHostById`, `getActiveHost`) this
+// suite's `@/lib/host/runtime` stub never carried - stub it directly, same
+// pattern the sibling picker suites use.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
 }));
 
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
@@ -116,7 +164,6 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicCreateChatForHostClient: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicDeleteChat: () => ({
     mutate: vi.fn(),
@@ -135,6 +182,8 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
@@ -295,6 +344,18 @@ vi.mock("@/stores/settings/settings-store", () => ({
 // File-tree-panel-specific dependencies.
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => ({
+    data: {
+      rows: [
+        {
+          runningDir: "/work/repo",
+          disabledReason: null,
+        },
+      ],
+    },
+  }),
+  // `useFileTreeWorkspaceSelection` (also reached from the P0.2 pin chain)
+  // calls the host-client-parametric variant, not the app-wide one above.
+  useWorktreeListBindingsForEpicForClient: () => ({
     data: {
       rows: [
         {

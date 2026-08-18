@@ -23,12 +23,15 @@ const terminalSessions = vi.hoisted<{
   value: ReadonlyArray<CanonicalTerminalSessionInfo>;
 }>(() => ({ value: [] }));
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => null,
+// The sidebar is outside every tile `TabHostProvider`, so its client and its
+// ref host both come from the Epic SESSION - not from the app-wide effective
+// host, which this panel deliberately no longer reads.
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => HOST_ID,
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => HOST_ID,
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
@@ -40,12 +43,12 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-kill-mutation", () => ({
-  useTerminalKill: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
+  useTerminalKillFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
-  useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({

@@ -47,13 +47,17 @@ function createFixture() {
       },
     },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) => {
+      if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+      if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
+      return null;
+    },
     messenger,
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
@@ -62,7 +66,8 @@ function createFixture() {
     </QueryClientProvider>
   );
   return {
-    client,
+    spine,
+    client: spine.createRequester(mockLocalHostEntry),
     Wrapper,
     setGate: (next: Promise<void> | null) => {
       gate = next;
@@ -77,10 +82,11 @@ describe("useWorkspaceSearchText", () => {
 
   it("drops placeholder data when the bound host changes", async () => {
     const fixture = createFixture();
+    let client = fixture.client;
     const rendered = renderHook(
       () =>
         useWorkspaceSearchText({
-          client: fixture.client,
+          client,
           epicId: "epic-1",
           reference: { root: "/repo" },
           query: "app",
@@ -106,9 +112,13 @@ describe("useWorkspaceSearchText", () => {
         release = resolve;
       }),
     );
+    // A host switch is now a NEW pinned requester passed on the next render,
+    // not a mutation of the same client's bound identity (redesign P4.2
+    // deleted the active slot `.bind()` used to drive this).
     act(() => {
-      fixture.client.bind(mockRemoteHostEntry);
+      client = fixture.spine.createRequester(mockRemoteHostEntry);
     });
+    rendered.rerender();
 
     await waitFor(() => {
       expect(rendered.result.current.isFetching).toBe(true);

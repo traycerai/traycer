@@ -108,6 +108,14 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
  * published arm does not. Stubbing it keeps the REAL dispatcher in the test
  * while removing a dependency the assertion does not concern.
  */
+// The transcript renders inside a chat TILE, so its file-change rows resolve
+// the snapshot store on the TAB's host (D15). The query itself is mocked just
+// below, so `null` is enough here - what matters is that the seam exists and is
+// this one, not the app-wide read it replaced.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
 vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
   useSnapshotDiffQuery: () => ({ data: undefined, isLoading: false }),
 }));

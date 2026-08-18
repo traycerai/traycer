@@ -142,6 +142,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           percent: null,
           bytes: null,
           totalBytes: null,
+          workUnits: null,
         });
         const versions = await fetchCliVersions();
         const targetVersion = args.targetVersion ?? versions.latest;
@@ -219,6 +220,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           percent: 0,
           bytes: 0,
           totalBytes: asset.sizeBytes,
+          workUnits: null,
         });
         try {
           await downloadToFile({
@@ -236,6 +238,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
                     : null,
                 bytes: downloadedBytes,
                 totalBytes,
+                workUnits: null,
               }),
             onHeartbeat: (heartbeat) =>
               ctx.progress({
@@ -251,6 +254,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
                 // renderer holds the last real download values.
                 bytes: null,
                 totalBytes: null,
+                workUnits: null,
               }),
             signal: null,
           });
@@ -295,6 +299,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           percent: null,
           bytes: null,
           totalBytes: null,
+          workUnits: null,
         });
         const swap = await tryReplaceLiveBinary({
           environment: ctx.runtime.environment,
@@ -435,7 +440,7 @@ async function tryReplaceLiveBinary(opts: {
         // cross-volume copy would otherwise install corrupt bytes - the
         // rename path is byte-for-byte safe but copyFile is not.
         if (opts.expectedSha256 !== null) {
-          const actual = await hashFileSha256(opts.livePath);
+          const actual = await hashFileSha256(opts.livePath, null);
           if (actual !== opts.expectedSha256) {
             opts.logger.error(
               "CLI upgrade post-copy hash mismatch",

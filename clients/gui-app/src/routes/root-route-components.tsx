@@ -3,6 +3,7 @@ import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
+import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { AppShell } from "@/components/layout/app-shell";
 import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
@@ -13,6 +14,7 @@ import { PreventSleepController } from "@/components/layout/bridges/prevent-slee
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
@@ -28,6 +30,15 @@ export function RootComponent() {
   );
   const isOnboardingRoute = useRouterState({
     select: (state) => state.location.pathname === "/onboarding",
+  });
+  // The ONE routing-aware computation the window narrator consumes, so the
+  // modal itself stays router-free (and mountable in host-lifecycle trees that
+  // have no router). Same prefix the readiness gate bypasses on: `/settings`
+  // works without a running host, and the narrator's own "Open settings"
+  // action is what sends people there.
+  const isHostIndependentRoute = useRouterState({
+    select: (state) =>
+      state.location.pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   });
   // A signed-in user who hasn't finished onboarding sees the tour on any route.
   const showOnboarding =
@@ -60,6 +71,14 @@ export function RootComponent() {
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller. */}
       {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
+      {/* The window narrator (D10). It MUST be outside HostReadyGate: the gate
+          replaces its children during cold start, so a modal mounted inside it
+          could never narrate the cold start it exists for. Signed-in only -
+          which is also what resets its "this window has been served" latch,
+          since signing out unmounts it. */}
+      {authStatus === "signed-in" ? (
+        <WindowHostModalHost bypassed={isHostIndependentRoute} />
+      ) : null}
       <ChatSessionWakeRetryController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -

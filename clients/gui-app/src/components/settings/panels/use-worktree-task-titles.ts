@@ -3,6 +3,7 @@ import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import {
   GET_TASK_CONTEXTS_MAX_IDS,
+  isFoundTaskContext,
   type GetTaskContextsResponse,
   type ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -128,15 +129,16 @@ function titlesFromTaskContextsResponse(
   response: GetTaskContextsResponse,
 ): ReadonlyArray<{ readonly id: string; readonly title: string }> {
   return Object.values(response.tasks).flatMap((task) => {
-    const extracted = titleFromListTaskLight(task);
+    const extracted = isFoundTaskContext(task)
+      ? titleFromListTaskLight(task.task)
+      : null;
     return extracted === null ? [] : [extracted];
   });
 }
 
 function titleFromListTaskLight(
-  task: ListTaskLight | null,
+  task: ListTaskLight,
 ): { readonly id: string; readonly title: string } | null {
-  if (task === null) return null;
   const light = task.epic?.light;
   if (light === null || light === undefined) return null;
   const title = light.title.trim();

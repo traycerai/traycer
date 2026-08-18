@@ -30,6 +30,7 @@ import { resolveEndpoint } from "../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 import { writeStderr } from "../runner/std-write";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 // Stream timing knobs, mirroring `traycer monitor`. A worktree delete is a
 // one-shot: it runs a teardown script (which can be slow) then removes the
@@ -147,6 +148,9 @@ async function runWorktreeDelete(
       bearer: () => readLeaseBearer(lease),
       diag: (message) => relayStatus(ctx, message),
     }),
+    // The CLI has no selection authority to feed: it holds no lease
+    // state and never fails a window over.
+    evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
@@ -391,6 +395,7 @@ function relayStatus(ctx: CommandContext, message: string): void {
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     return;
   }
@@ -414,6 +419,7 @@ function relayOutput(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     return;
   }

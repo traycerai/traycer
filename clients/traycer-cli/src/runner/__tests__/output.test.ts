@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOutput, type ProgressInfo } from "../output";
+import {
+  createOutput,
+  type Output,
+  type ProgressEvent,
+  type ProgressInfo,
+} from "../output";
 import type { RuntimeContext } from "../runtime";
 import { noopLogger } from "../../logger";
 
@@ -32,7 +37,14 @@ function downloadTick(
   bytes: number,
   totalBytes: number,
 ): ProgressInfo {
-  return { stage: "download", message, percent, bytes, totalBytes };
+  return {
+    stage: "download",
+    message,
+    percent,
+    bytes,
+    totalBytes,
+    workUnits: null,
+  };
 }
 
 // Mirrors `emitRegistryHeartbeat` in ../../registry/client.ts: stage
@@ -48,6 +60,7 @@ function archiveHeartbeatTick(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   };
 }
 
@@ -161,6 +174,7 @@ describe("createOutput human-mode TTY progress bar", () => {
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
 
     const writes = capture.writes();
@@ -181,6 +195,7 @@ describe("createOutput human-mode TTY progress bar", () => {
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     output.progress(
       archiveHeartbeatTick("attempt", "fetching host archive (attempt 1)"),
@@ -210,5 +225,75 @@ describe("createOutput human-mode non-TTY progress", () => {
       "fetching host archive (attempt 1)\n",
       "downloading host 1.5.0 61%\n",
     ]);
+  });
+});
+
+// JSON mode is the DESKTOP path - `traycer-cli.ts` spawns with `--json` and
+// parses one NDJSON event per line - so anything this serializer drops is
+// invisible to the host controller no matter what the producer emits.
+//
+// The regression pinned here: `workUnits` was hardcoded `null` on this branch
+// while `extract-heartbeat.ts` was emitting a rising archive-entry count. That
+// count is the ONLY moving field an extract has (no percent, no byte
+// position), so nulling it made every heartbeat of a multi-minute extract
+// serialize identically, the controller's progress-advance key never changed,
+// and a healthy first install was promoted to the Retry surface.
+describe("createOutput JSON-mode progress", () => {
+  function jsonRuntime(): RuntimeContext {
+    return { ...makeRuntime(), json: true };
+  }
+
+  function extractHeartbeat(workUnits: number | null): ProgressInfo {
+    return {
+      stage: "extract",
+      message: "extracting host 1.5.0",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits,
+    };
+  }
+
+  function captureEvents(run: (output: Output) => void): ProgressEvent[] {
+    const spy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      run(createOutput(jsonRuntime()));
+      return spy.mock.calls.map(
+        (call) => JSON.parse(String(call[0])) as ProgressEvent,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("carries the producer's rising work-unit count onto the wire", () => {
+    const events = captureEvents((output) => {
+      output.progress(extractHeartbeat(1));
+      output.progress(extractHeartbeat(47));
+    });
+
+    expect(events.map((event) => event.workUnits)).toEqual([1, 47]);
+    // The point of the field, asserted as the EFFECT rather than as one
+    // value: every other field a consumer can key on is byte-identical
+    // between these two heartbeats, so `workUnits` is the only thing that can
+    // tell them apart. Re-null it and this arm reddens on the equality below
+    // as well as on the values above.
+    expect(events[0].stage).toEqual(events[1].stage);
+    expect(events[0].percent).toEqual(events[1].percent);
+    expect(events[0].bytes).toEqual(events[1].bytes);
+    expect(events[0].workUnits).not.toEqual(events[1].workUnits);
+  });
+
+  it("still reports null for a stage with no discrete unit to count", () => {
+    const events = captureEvents((output) => {
+      output.progress(downloadTick("downloading host 1.5.0", 61, 610, 1000));
+    });
+
+    // The control. Forwarding must not become inventing: a producer that
+    // counts nothing keeps saying so, or the advance key would go moving for
+    // every stage and stop meaning "this one is advancing".
+    expect(events[0].workUnits).toBeNull();
   });
 });

@@ -11,7 +11,8 @@ import {
   cloudEpicTasksQueryKey,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
-import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
+import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
+import { useHostClient } from "@/lib/host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface TaskWorkspaceInput {
@@ -136,7 +137,7 @@ function repoFacetLabels(
   );
 }
 
-describe("useEpicCreate", () => {
+describe("useEpicCreateForClient", () => {
   beforeEach(() => {
     testState.activeHostId = "host-1";
     testState.requestContextUserId = "user-1";
@@ -193,7 +194,9 @@ describe("useEpicCreate", () => {
       );
     }
 
-    renderHook(() => useEpicCreate(), { wrapper: makeWrapper(queryClient) });
+    renderHook(() => useEpicCreateForClient(useHostClient()), {
+      wrapper: makeWrapper(queryClient),
+    });
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
@@ -278,7 +281,9 @@ describe("useEpicCreate", () => {
       tasks: [pinnedTask],
       hasMore: false,
     });
-    renderHook(() => useEpicCreate(), { wrapper: makeWrapper(queryClient) });
+    renderHook(() => useEpicCreateForClient(useHostClient()), {
+      wrapper: makeWrapper(queryClient),
+    });
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
@@ -349,7 +354,9 @@ describe("useEpicCreate", () => {
       { tasks: [oldTask], hasMore: false, facets: initialFacets },
     );
 
-    renderHook(() => useEpicCreate(), { wrapper: makeWrapper(queryClient) });
+    renderHook(() => useEpicCreateForClient(useHostClient()), {
+      wrapper: makeWrapper(queryClient),
+    });
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
@@ -427,7 +434,9 @@ describe("useEpicCreate", () => {
       hasMore: false,
     });
 
-    renderHook(() => useEpicCreate(), { wrapper: makeWrapper(queryClient) });
+    renderHook(() => useEpicCreateForClient(useHostClient()), {
+      wrapper: makeWrapper(queryClient),
+    });
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 

@@ -10,6 +10,7 @@ import {
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
+  rateLimitUsageRequestSchemaV40,
   rateLimitUsageResponseSchema,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
@@ -21,7 +22,19 @@ import {
   mapHuggingFaceAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
   type ProviderRateLimits,
+  type RateLimitUsageRequestV12,
+  type RateLimitUsageRequestV40,
 } from "@traycer/protocol/host/rate-limit/schemas";
+
+// Drops the v4.0-only `force` opt-out when a request travels down to a released
+// major. Those lines never carried the key, and their hosts always force, so
+// there is nothing to express there - stripping it keeps the wire payload
+// exactly the shape the released peer's own schema describes rather than
+// relying on its parse to discard an unrecognized key.
+function dropForce(request: RateLimitUsageRequestV40): RateLimitUsageRequestV12 {
+  const { force, ...released } = request;
+  return released;
+}
 
 // The v2-only `usage_fetch_failed` reason maps to `rate_limits_not_available`
 // so a v1.2 client's frozen 8-value reason enum keeps parsing. Every other
@@ -267,16 +280,23 @@ export const hostGetRateLimitUsageDowngradeV3ToV1 = defineDowngradePath<
 // baseline (`host-v1.1.11`, commit c785d864) tops out at `host.getRateLimitUsage`
 // major `3`, so no peer in the field has ever negotiated `4`, and a second
 // major bought nothing but an extra hop in every downgrade fan below.
+//
+// The request shape is NO LONGER `rateLimitUsageRequestSchemaV12`: this line
+// carries the optional `force` opt-out (see `rateLimitUsageRequestSchemaV40`).
+// It rides major 4 for the same "nobody has negotiated it" reason the response
+// arms do - every released version keeps the v1.2 request byte-for-byte.
 export const hostGetRateLimitUsageV40 = defineRpcContract({
   method: "host.getRateLimitUsage",
   schemaVersion: { major: 4, minor: 0 } as const,
-  requestSchema: rateLimitUsageRequestSchemaV12,
+  requestSchema: rateLimitUsageRequestSchemaV40,
   responseSchema: rateLimitUsageResponseSchemaV40,
 });
 
-// A v3.0 request and a v4.0 request are identical shapes, and every frozen v3.0
-// arm is a valid v4.0 arm (the v4.0 union is a strict superset), so both
-// upgrades are the identity.
+// A v3.0 request upgrades unchanged: `force` is optional on the v4.0 line and
+// its ABSENCE means force, which is exactly what a v3.0 caller gets from a
+// host that has always passed `force: true`. Every frozen v3.0 response arm is
+// a valid v4.0 arm (the v4.0 union is a strict superset), so that upgrade is
+// the identity too.
 export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
   typeof hostGetRateLimitUsageV30,
   typeof hostGetRateLimitUsageV40
@@ -287,8 +307,9 @@ export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Downgrade bridge 4.0 -> 3.0: request is identity. The Hugging-Face-,
-// OpenCode- and Cursor-available snapshots each degrade to the unavailable
+// Downgrade bridge 4.0 -> 3.0: the request drops `force` (see `dropForce`), so
+// a v3.0 host keeps its always-fresh read. The Hugging-Face-, OpenCode- and
+// Cursor-available snapshots each degrade to the unavailable
 // `unsupported_provider` shape - none has an arm in the frozen v3.0 union, and
 // all three ride 4.0 (the release collapsed Hugging Face and OpenCode onto one
 // major, and 4.0 is still unreleased, so Cursor joins them rather than opening
@@ -300,7 +321,7 @@ export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
 >({
   from: hostGetRateLimitUsageV40.schemaVersion,
   to: hostGetRateLimitUsageV30.schemaVersion,
-  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
   downgradeResponse: (response) => ({
     ok: true,
     value: rateLimitUsageResponseSchemaV30.parse({
@@ -314,16 +335,17 @@ export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
   }),
 });
 
-// Downgrade bridge 4.0 -> 2.1: composes all four available-arm maps before the
-// v2.1 re-parse, because the frozen v2.1 union has none of the grok, Hugging
-// Face, OpenCode, or Cursor arms.
+// Downgrade bridge 4.0 -> 2.1: the request drops `force` (see `dropForce`).
+// The response composes all four available-arm maps before the v2.1 re-parse,
+// because the frozen v2.1 union has none of the grok, Hugging Face, OpenCode,
+// or Cursor arms.
 export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
   typeof hostGetRateLimitUsageV40,
   typeof hostGetRateLimitUsageV21
 >({
   from: hostGetRateLimitUsageV40.schemaVersion,
   to: hostGetRateLimitUsageV21.schemaVersion,
-  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
   downgradeResponse: (response) => ({
     ok: true,
     value: rateLimitUsageResponseSchemaV21.parse({
@@ -339,10 +361,11 @@ export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
   }),
 });
 
-// Downgrade bridge 4.0 -> 1.2: composes all five frozen-line maps. The four
-// available-arm degrades run before the reason degrade, so a genuinely
-// Hugging-Face-, OpenCode-, Cursor- or grok-available snapshot never lands on
-// the usage-fetch-failed branch. The v1.2 parse also strips v2.1 reset-credit
+// Downgrade bridge 4.0 -> 1.2: the request drops `force` (see `dropForce`).
+// The response composes all five frozen-line maps. The four available-arm
+// degrades run before the reason degrade, so a genuinely Hugging-Face-,
+// OpenCode-, Cursor- or grok-available snapshot never lands on the
+// usage-fetch-failed branch. The v1.2 parse also strips v2.1 reset-credit
 // detail.
 export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
   typeof hostGetRateLimitUsageV40,
@@ -350,7 +373,7 @@ export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
 >({
   from: hostGetRateLimitUsageV40.schemaVersion,
   to: hostGetRateLimitUsageV12.schemaVersion,
-  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
   downgradeResponse: (response) => ({
     ok: true,
     value: rateLimitUsageResponseSchemaV12.parse({

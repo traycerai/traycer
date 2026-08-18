@@ -281,11 +281,11 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 
 // The capability gate resolves the "Create new profile" row's target host
-// via `useReactiveActiveHostId()` / `useHostDirectoryList()` - stub both to a
+// via `useAddressableHostId()` / `useHostDirectoryList()` - stub both to a
 // single local host so the row is enabled by default (mirrors
 // `providers-settings-panel.test.tsx`'s equivalent stubs).
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -426,7 +426,6 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // `<HostRuntimeProvider>`, so a real call would just resolve to `null`
   // anyway (`useHostBinding` tolerates a missing provider) - stub it
   // directly rather than exercising that context machinery.
-  useDefaultHostClient: () => null,
   // The picker asks this at every intent edge before it refetches. This suite
   // mocks the hook module wholesale, so its query stubs carry no
   // `dataUpdatedAt` to judge freshness from - answer "due" so the edges under

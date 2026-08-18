@@ -22,8 +22,8 @@ export const Route = createFileRoute("/epics/")({
   },
   loader: ({ context, deps }) => {
     const historyNowMs = Date.now();
-    const hostId = context.getActiveHostId();
     const client = context.getHostClient();
+    const hostId = client?.getActiveHostId() ?? null;
     const auth = context.getAuthSnapshot();
     if (hostId === null || client === null) return { historyNowMs };
     if (auth.status !== "signed-in") return { historyNowMs };

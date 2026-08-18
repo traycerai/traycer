@@ -17,12 +17,17 @@ import {
   TopLevelTabHost,
 } from "@/components/layout/top-level-tab-host";
 import {
+  HostReadinessControllerContext,
+  type HostReadinessController,
+} from "@/components/layout/host-readiness-controller-context";
+import {
   TopLevelSurfaceActivationContext,
   type TopLevelSurfaceActivator,
 } from "@/components/layout/top-level-surface-activation-context";
 import { activateHostedTopLevelSurface } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
@@ -44,6 +49,12 @@ import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/s
 import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
 
 const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return { ...actual, useRouterState: () => "/" };
+});
 
 vi.mock(
   "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch",
@@ -147,6 +158,36 @@ const DRAFT_A: TabRef = { kind: "draft", id: "draft-a" };
 const DRAFT_B: TabRef = { kind: "draft", id: "draft-b" };
 const HISTORY: TabRef = { kind: "history", id: "history" };
 const SETTINGS: TabRef = { kind: "settings", id: "settings" };
+
+const UNAVAILABLE_DEFAULT_HOST_CONTROLLER: HostReadinessController = {
+  readinessFor: () => ({ kind: "restoring-request-context" }),
+  hasBeenDefaultHostReady: false,
+  defaultHostPresentation: {
+    targetKind: "local",
+    localBootIntent: true,
+    localHostState: "unknown",
+    stage: "loading",
+    progress: null,
+    lastProgress: null,
+    provisioningError: null,
+    provisioning: false,
+    removed: false,
+    hostBusy: false,
+    canManageHost: false,
+    retryProvisioning: () => undefined,
+    forceProvisioning: () => undefined,
+    reinstall: () => undefined,
+    configureShell: () => undefined,
+    refreshDirectory: () => undefined,
+    openSettings: () => undefined,
+    compatibility: {
+      status: "compatible",
+      degraded: false,
+      unreachable: false,
+      hostStatus: null,
+    },
+  },
+};
 
 function surfaceRef(key: TabRef): HTMLElement {
   return screen.getByTestId(`top-level-surface-${key.kind}-${key.id}`);
@@ -265,6 +306,7 @@ describe("<TopLevelTabHost />", () => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
   });
 
   afterEach(() => {
@@ -272,6 +314,7 @@ describe("<TopLevelTabHost />", () => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
   });
 
   it.each([
@@ -296,6 +339,22 @@ describe("<TopLevelTabHost />", () => {
     expect(surfaceRef(left).className).toContain("flex-col");
     expect(surfaceRef(right).dataset.visible).toBe("true");
     expect(surfaceRef(right).dataset.focused).toBe("false");
+  });
+
+  it("keeps tab content mounted while window default-host readiness is unavailable", () => {
+    seedSources([EPIC_A]);
+    setSingle(EPIC_A, [EPIC_A]);
+    useAuthStore.setState({ status: "signed-in" });
+
+    render(
+      <HostReadinessControllerContext.Provider
+        value={UNAVAILABLE_DEFAULT_HOST_CONTROLLER}
+      >
+        <TopLevelTabHost />
+      </HostReadinessControllerContext.Provider>,
+    );
+
+    expect(screen.getByTestId("epic-surface-content-epic-a")).toBeTruthy();
   });
 
   it("keeps split partner keys mounted while swapping their slots", () => {
@@ -559,6 +618,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
+      hostId: null,
       route: "/epic/epic-a",
       name: "Epic A",
       icon: null,
@@ -596,6 +656,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
+      hostId: null,
       route: "/epic/epic-a",
       name: "Epic A",
       icon: null,
@@ -628,6 +689,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       kind: "epic",
       id: "epic-a",
       epicId: "epic-a",
+      hostId: null,
       route: "/epic/epic-a",
       name: "Epic A",
       icon: null,

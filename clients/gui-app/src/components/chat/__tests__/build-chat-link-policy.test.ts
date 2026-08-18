@@ -145,20 +145,21 @@ const previewTileInTab = vi.fn();
 const onAsyncFailure = vi.fn();
 
 function createHostClient(requestId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => requestId,
       handlers: {},
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
-  return client;
+  return spine.createRequester(mockLocalHostEntry);
 }
 
 // Distinct client identities so a test

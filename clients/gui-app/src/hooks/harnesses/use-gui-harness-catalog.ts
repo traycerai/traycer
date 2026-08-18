@@ -3,7 +3,9 @@ import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
-import { useHostClient } from "@/lib/host";
+import { useHostBinding, useHostClient } from "@/lib/host";
+import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import type {
   GuiHarnessOption,
   GuiHarnessId,
@@ -12,7 +14,6 @@ import type {
   ListGuiHarnessesResponse,
 } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostBinding } from "@/lib/host/runtime";
 import {
   useHostQuery,
   type UseHostQueryOptions,
@@ -184,27 +185,50 @@ const EMPTY_GUI_MODEL_REQUESTS: ReadonlyArray<{
 }> = [];
 
 /**
- * The app-wide default host's client (`null` while unbound), factored out so
- * the `?.`/`??` fallback lives in one place instead of being repeated at
- * every call site below - and so callers outside this module can resolve the
- * same default-host scope without duplicating it inline.
+ * WHICH SURFACES MAY USE THE DEFAULT-HOST WRAPPERS BELOW.
  *
- * App-wide surfaces (the app-load prefetcher, Settings, and the command
- * palette WHEN NO COMPOSER IS FOCUSED) read the catalog through the
- * default-host wrappers below. A COMPOSER never does: every composer surface
- * has a target host - the tab's bound host, a fork dialog's fixed host, or
- * the app-wide default followed through `null` (the landing page, whose
- * picker rebinds that default, and the new-conversation modal opened from the
- * sidebar's app-wide trigger) - and reads its catalog through the
- * `...ForClient` variants with that host's client, so the harnesses, models
- * and commands it offers are the ones the run will actually see. With a
- * composer focused the palette follows it, reading through
- * `FocusedComposerEntry.hostClient` - otherwise its Pick provider / Pick
- * model subpages would list one host's catalog and dispatch into another
+ * This rule used to live on a `useDefaultHostClient()` hook here. That hook was
+ * deleted: once `HostRuntimeBinding` carries its own `hostId`, it resolved
+ * exactly what `useDefaultHostClient()` resolves, and a wrapper that adds nothing
+ * is one more place for this to drift. The rule is not about the hook, so it
+ * outlives it.
+ *
+ * App-wide surfaces (the app-load prefetcher, Settings, and the command palette
+ * WHEN NO COMPOSER IS FOCUSED) read the catalog through the wrappers below. A
+ * COMPOSER never does: every composer surface has a target host - the tab's
+ * bound host, a fork dialog's fixed host, or the app-wide default followed
+ * through `null` (the landing page, whose picker rebinds that default, and the
+ * new-conversation modal opened from the sidebar's app-wide trigger) - and
+ * reads its catalog through the `...ForClient` variants with that host's
+ * client, so the harnesses, models and commands it offers are the ones the run
+ * will actually see. With a composer focused the palette follows it, reading
+ * through `FocusedComposerEntry.hostClient` - otherwise its Pick provider /
+ * Pick model subpages would list one host's catalog and dispatch into another
  * host's composer store.
+ *
+ * "Default host" now means THE SURFACE'S host, which inside Settings is the
+ * SCOPED one - and that is a fix, not a widening. `TerminalAgentArgsSection`
+ * renders inside the Providers panel's re-provided binding and gates its whole
+ * control on `harnesses.some(...)` from this query, while the write it guards
+ * (`providers.setTerminalAgentArgs`) was already scoped. So the panel scoped to
+ * host B asked host A whether to show the field, then wrote the answer to B.
  */
-export function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
-  return useHostBinding()?.hostClient ?? null;
+function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
+  // MODULE-PRIVATE, and no longer exported. It used to be, and as an export it
+  // was a second name for `useHostClient()` that could drift from it - which is
+  // what the deleted version had done. What survives is the null-tolerance the
+  // three wrappers below need (`null` DISABLES their query) and the rule above.
+  //
+  // The binding is read HERE rather than inside a shared hook. Roughly forty
+  // suites inject a binding by overriding `useHostBinding` on `@/lib/host`, and
+  // a hook that read the binding through its own module import would bypass
+  // every one of them silently. See `lib/host/binding-host-client.ts`.
+  const binding = useHostBinding();
+  const effectiveHostId = useEffectiveHostId();
+  return useMemo(
+    () => resolveSubtreeHostClient(binding, effectiveHostId),
+    [binding, effectiveHostId],
+  );
 }
 
 export function useGuiHarnessesQuery(

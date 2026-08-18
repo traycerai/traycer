@@ -68,7 +68,7 @@ import {
   ImagePreview,
 } from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
-import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
+import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
@@ -228,7 +228,9 @@ function WorkspaceImageFileTile(props: {
   // failure - no local decode-failed flag to track or reset.
   const handleDecodeError = assetState.reportDecodeFailure;
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  const editorOpen = useEditorOpen("file");
+  // The file this tile shows lives on the TAB's host; opening it app-wide would
+  // ask whichever machine the app is pointed at for a path it may not have.
+  const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
   const {
     active: openExternallyFeedbackActive,
     trigger: triggerOpenExternallyFeedback,

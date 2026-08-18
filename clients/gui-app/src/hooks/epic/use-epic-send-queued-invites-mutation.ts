@@ -13,7 +13,8 @@ import {
   inviteKey,
   type QueuedInvite,
 } from "@/lib/epic-invites";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { appLogger } from "@/lib/logger";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -60,7 +61,11 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
 > {
   const batchUpdateRoles = useEpicBatchUpdateRoles();
   const grantAccess = useEpicGrantAccess();
-  const client = useHostClient();
+  // The Epic session's client, like the two mutations above it composes: the
+  // hostId captured here keys the collaborators cache the Sharing panel reads
+  // on that same client. `null` outside a session; the composed mutations
+  // then refuse at their own preflight and the ctx hostId is honestly null.
+  const client = useEpicSessionHostClient();
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -70,7 +75,7 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
     SendQueuedInvitesContext
   >({
     mutationKey: epicMutationKeys.sendQueuedInvites(),
-    onMutate: () => ({ hostId: client.getActiveHostId() }),
+    onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
     mutationFn: async ({ epicId, queuedInvites, existingByInviteKey }) => {
       const inviteBatches = buildQueuedInviteBatches({
         queuedInvites,

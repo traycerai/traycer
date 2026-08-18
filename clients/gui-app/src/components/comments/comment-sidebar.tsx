@@ -5,7 +5,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useEpicCommentThreads } from "@/hooks/comments/use-epic-comment-threads";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import {
   useActiveThreadId,
   useCommentThreadsStore,
@@ -21,6 +23,12 @@ import { CommentThreadCard } from "./comment-thread-card";
 
 export interface CommentSidebarProps {
   readonly epicId: string;
+  /** The EPIC SESSION's client. The sidebar is a sibling of the canvas, so it
+   *  is outside every per-tile provider and must not read the app-wide host:
+   *  during a re-point that host already answers B while this Epic still
+   *  renders A's threads. Passed rather than read here so the same surface
+   *  stays mountable from a tile (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   /** Threads-anchored-in-document positions, derived from the active tile's
@@ -47,6 +55,7 @@ export interface CommentSidebarProps {
 export function CommentSidebar(props: CommentSidebarProps) {
   const {
     epicId,
+    hostClient,
     artifactType,
     artifactId,
     anchorPositions,
@@ -60,8 +69,12 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
 
-  const query = useEpicCommentThreads(epicId, artifactType, artifactId, {
-    enabled: true,
+  const query = useEpicCommentThreadsForClient({
+    client: hostClient,
+    epicId,
+    artifactType: artifactType,
+    artifactId: artifactId,
+    options: { enabled: true },
   });
 
   const sorted = useMemo(() => {
@@ -124,6 +137,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
           sorted={sorted}
           filter={filter}
           epicId={epicId}
+          hostClient={hostClient}
           artifactType={artifactType}
           artifactId={artifactId}
           activeThreadId={activeThreadId}
@@ -147,6 +161,7 @@ interface SidebarBodyProps {
   readonly sorted: ReadonlyArray<SortedThread>;
   readonly filter: CommentThreadStatusFilter;
   readonly epicId: string;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   readonly activeThreadId: string | null;
@@ -188,6 +203,7 @@ function SidebarBody(props: SidebarBodyProps) {
         <li key={thread.threadId}>
           <CommentThreadCard
             epicId={props.epicId}
+            hostClient={props.hostClient}
             artifactType={props.artifactType}
             artifactId={props.artifactId}
             thread={thread}

@@ -16,6 +16,7 @@ const EPIC_TAB: HeaderTab = {
   kind: "epic",
   id: "tab-1",
   epicId: "epic-1",
+  hostId: null,
   name: "Alpha",
   route: "/epics/epic-1/tab-1",
   icon: null,

@@ -134,9 +134,11 @@ describe("useHostNotificationIndicators recovery", () => {
       epics: {},
       chats: {},
     };
-    hostClient = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => `request-${requestCount.value}`,
@@ -159,13 +161,13 @@ describe("useHostNotificationIndicators recovery", () => {
         },
       }),
     });
-    hostClient.bind(mockLocalHostEntry);
-    hostClient.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "token",
       }),
     );
+    hostClient = spine.createRequester(mockLocalHostEntry);
     useAuthStore.setState({
       contextMetadata: { userId: "user-a", username: "user-a" },
     });

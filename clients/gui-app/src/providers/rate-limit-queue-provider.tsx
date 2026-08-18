@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useConfiguredRateLimitProviders } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
@@ -53,7 +53,7 @@ export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
  * into table-owned polling and never enter this queue.
  */
 export function RateLimitQueueProvider(): null {
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const client = useHostClient();
   const queryClient = useQueryClient();
   const configuredProviders = useConfiguredRateLimitProviders();
@@ -70,6 +70,14 @@ export function RateLimitQueueProvider(): null {
   // enqueue) so a queued fetch can't be reassigned to a different host
   // mid-flight. `useHostClient()` is non-null once the runtime is mounted, so
   // only host presence needs gating here.
+  //
+  // A queued item can outlive a host switch, so the client it captures must
+  // stay aimed where it was enqueued - otherwise an item enqueued for host A
+  // fetches B and writes the answer under A's cache key, showing one machine's
+  // usage on another's row. That guarantee is `useHostClient()`'s own: it
+  // resolves a requester PINNED to the host it named (redesign D17 / P2.1), so
+  // a call already in flight completes against the outgoing host and this
+  // effect simply re-binds with a fresh client when the effective host moves.
   useEffect(() => {
     if (hostId === null) {
       configureRateLimitQueue(null);
@@ -78,7 +86,11 @@ export function RateLimitQueueProvider(): null {
     configureRateLimitQueue({
       hostId,
       queryClient,
-      request: (_hostId, method, params) => client.request(method, params),
+      // `responseTimeoutMs` is the queue's own budget, not the client's default
+      // frame timeout: an `ephemeralProcess` read spawns a provider CLI and
+      // legitimately outruns that default.
+      request: (_hostId, method, params, responseTimeoutMs) =>
+        client.requestWithResponseTimeout(method, params, responseTimeoutMs),
     });
     return () => {
       configureRateLimitQueue(null);

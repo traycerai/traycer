@@ -136,19 +136,55 @@ describe("streamTraycerCliJson idle budget against a real subprocess", () => {
       trailingSilenceMs: 0,
       exitAfterSilence: false,
     });
+    const idleBudgetMs = 700;
+    // `armIdleTimer()` runs immediately BEFORE `onEvent` (see `traycer-cli.ts`),
+    // so this stamp is a hair LATER than the arming point the timer actually
+    // counts from. The tolerance covers that ordering and clock granularity -
+    // sub-millisecond in practice - and nothing else. It is not slack for a
+    // slow machine: the measurement below is deliberately independent of how
+    // fast the machine is.
+    const armStampToleranceMs = 50;
+    let lastEventAt: number | null = null;
     const started = Date.now();
     await expect(
       streamTraycerCliJson<unknown>({
         args: ["host", "download", "--automatic"],
-        onEvent: () => undefined,
+        onEvent: () => {
+          lastEventAt = Date.now();
+        },
         env: null,
-        idleTimeoutMs: 700,
+        idleTimeoutMs: idleBudgetMs,
         signal: null,
       }),
-    ).rejects.toThrow("produced no output for 700ms");
-    const elapsed = Date.now() - started;
+    ).rejects.toThrow(`produced no output for ${idleBudgetMs}ms`);
+    const killedAt = Date.now();
 
-    // Killed only after the last event plus the budget, never before.
-    expect(elapsed).toBeGreaterThanOrEqual(900);
+    // Killed only after the last SIGNAL plus the budget, never before - which
+    // is what the budget being an INACTIVITY budget actually means.
+    //
+    // Measured from the last observed event rather than from spawn, and that
+    // is the whole point of this shape. The previous form asserted
+    // `Date.now() - started >= 900`, which silently presumed the three 100ms
+    // ticks had landed before the budget could expire - i.e. it presumed the
+    // child had STARTED promptly. On a loaded machine where node takes longer
+    // than the budget to produce its first byte, the kill is correct, the
+    // rejection is correct, and only the presumption fails: measured 712ms and
+    // 704ms against a floor of 900 in a deterministic slow-spawn probe. Timing
+    // out a process is exactly what should happen there, so the test must not
+    // read it as a regression.
+    //
+    // The spawn-relative floor is gone rather than widened, because widening it
+    // would keep the same presumption and merely make it rarer.
+    //
+    // NOT asserted here, deliberately: that any event was observed at all.
+    // "Events refresh the budget" is the property of the sibling case above,
+    // which drives 15 of them under a budget a third of its runtime. Asserting
+    // it here as well would re-introduce the presumption this shape exists to
+    // remove. When nothing was observed, the budget legitimately runs from
+    // spawn, and `started` is the correct reference point.
+    const lastSignalAt = lastEventAt ?? started;
+    expect(killedAt - lastSignalAt).toBeGreaterThanOrEqual(
+      idleBudgetMs - armStampToleranceMs,
+    );
   }, 20_000);
 });

@@ -24,10 +24,12 @@ import {
   type ModelOption,
 } from "@/components/home/data/landing-options";
 import {
-  useDefaultHostClient,
   useGuiHarnessCatalogForClient,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useHostBinding } from "@/lib/host";
+import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useFocusedComposerEntry } from "@/hooks/command-palette/use-focused-composer-entry";
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
 import {
@@ -208,6 +210,12 @@ function openNewConversationModal(
   placement: ConversationTilePlacement,
 ): void {
   useNewConversationModalStore.getState().setComposerMode(epicId, mode);
+  // `hostId: null` names no host, the same as the Epic sidebar's own `+`: the
+  // modal resolves this Epic's placement memory (its last created chat's
+  // host, else the host the Epic is served from) and keeps the picker live.
+  // These items act on the ACTIVE TILE's pane, but the tile's host is not
+  // passed - a new agent is not required to live on the machine of the tile
+  // it replaces, and naming one would freeze the picker (§55).
   useNewConversationModalOpenStore
     .getState()
     .open({ epicId, tabId, placement, parentId: null, hostId: null });
@@ -317,7 +325,12 @@ const MODEL_SUBPAGE: CommandSubpage = {
  */
 function useFocusedComposerCatalog(): GuiHarnessCatalog {
   const entry = useFocusedComposerEntry();
-  const defaultClient = useDefaultHostClient();
+  const defaultBinding = useHostBinding();
+  const defaultEffectiveHostId = useEffectiveHostId();
+  const defaultClient = useMemo(
+    () => resolveSubtreeHostClient(defaultBinding, defaultEffectiveHostId),
+    [defaultBinding, defaultEffectiveHostId],
+  );
   // `"cached-only"`: opening a palette subpage must not cold-start every
   // provider on the focused composer's host. The subpages list what the host's
   // cache already holds - on the default host that is the prefetcher's full

@@ -80,9 +80,11 @@ function createHarness(
     },
     mutations: { retry: false },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "request-1",
@@ -94,14 +96,13 @@ function createHarness(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
   useAuthStore.setState({
     contextMetadata: { userId: VIEWER, username: VIEWER },
   });
-  return { queryClient, client };
+  return { queryClient, client: spine.createRequester(mockLocalHostEntry) };
 }
 
 function wrapperFor(queryClient: QueryClient) {

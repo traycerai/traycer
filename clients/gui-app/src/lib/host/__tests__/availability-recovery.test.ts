@@ -12,7 +12,7 @@ function harness(nowValue: { value: number }) {
         return dispose;
       },
     },
-    target: { notifyAvailabilityRecovered: notify },
+    target: { notifyRecoveredForNamedHost: notify },
     cooldownMs: 10_000,
     now: () => nowValue.value,
   });

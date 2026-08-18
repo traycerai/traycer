@@ -27,6 +27,8 @@ vi.mock("@/lib/host", async () => {
   return {
     ...actual,
     useHostClient: () => mockClientHolder.client,
+    // The SPINE, a separate export since redesign P2.1.
+    useHostRuntimeClient: () => mockClientHolder.client,
   };
 });
 
@@ -72,9 +74,11 @@ function createFixture(handlers: {
     | Promise<ResponseOfMethod<HostRpcRegistry, "providers.nativeMutate">>;
 }) {
   const queryClient = createAppQueryClient();
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -84,10 +88,10 @@ function createFixture(handlers: {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   mockClientHolder.client = client;
 
   function Wrapper(props: { readonly children: ReactNode }): ReactNode {

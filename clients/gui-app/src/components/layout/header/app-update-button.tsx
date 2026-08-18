@@ -10,6 +10,7 @@ import type {
   DesktopAppUpdatesBridge,
 } from "@/lib/windows/types";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { requestAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
 import {
   trackUpdateDownloadStarted,
   trackUpdateRestartRequested,
@@ -177,7 +178,7 @@ function AppUpdateReadyButton(props: {
               return;
             }
             trackUpdateRestartRequested("direct_ui");
-            void props.bridge.installUpdate();
+            void requestAppUpdateInstall(props.bridge);
           }}
         >
           <AppUpdateReadyIcon

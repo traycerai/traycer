@@ -22,8 +22,10 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { appHostCredentialMintFlow } from "@/lib/auth/host-credential-provisioning";
-import { useHostClient } from "@/lib/host/runtime";
-import { createStreamRebuildBackoff } from "@/lib/host/stream-rebuild-backoff";
+import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
+import { useHostBinding } from "@/lib/host/runtime";
+import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -79,20 +81,25 @@ export interface HostStreamClientBinding {
    */
   readonly transportKey: string;
   /**
-   * Opt-in transport lease (Codex re-review, image-preview coalescing):
-   * `client` is otherwise TRANSIENT, scoped to the calling hook instance -
-   * its cleanup closes it unconditionally on that instance's OWN unmount,
-   * with no visibility into whether something built on top of `client`
-   * (e.g. a stream a DIFFERENT, sibling hook instance is also reading from)
-   * still needs it. A caller that hands `client` to such a cross-hook-
-   * lifetime consumer must `pin()` it first and `unpin()` exactly when that
-   * consumer's OWN need for it ends - **a pinned transport must outlive
-   * every shared subscription opened through it; the underlying close
-   * defers until the pin count reaches zero**, whether that happens before
-   * or after this hook instance's own unmount. Every OTHER caller that
-   * never pins is completely unaffected: the pin count starts at 0, so the
-   * unmount-time close still fires immediately, exactly as before this
-   * existed.
+   * Opt-in transport lease (Codex re-review, image-preview coalescing).
+   *
+   * A caller that hands `client` to a consumer outliving this hook instance -
+   * a stream a sibling instance also reads from - must `pin()` it first and
+   * `unpin()` exactly when that consumer's OWN need for it ends. **A pinned
+   * transport must outlive every shared subscription opened through it; the
+   * underlying close defers until the reference count reaches zero**, whether
+   * that happens before or after this hook instance's own unmount.
+   *
+   * These are `retain`/`release` on the shared cache entry backing `client`
+   * (`host-stream-client-cache.ts`), NOT a private count beside it, so the
+   * sentence above holds ACROSS surfaces rather than within one instance.
+   * `client` is no longer transient-per-instance either: a second surface
+   * naming the same host holds this same object.
+   *
+   * A caller that never pins is unaffected. This hook holds exactly one
+   * reference of its own, so its unmount still closes the client immediately -
+   * unless another surface on the same host is holding it, which is the case
+   * that used to open a duplicate transport instead.
    */
   readonly pin: () => void;
   readonly unpin: () => void;
@@ -240,6 +247,7 @@ export function buildHostStreamClient(params: {
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: uuidv4,
+      evidence: transportEvidenceRelay,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -258,6 +266,11 @@ export function buildHostStreamClient(params: {
     // that from becoming several OTP dialogs. It resolves `declined` until the
     // provisioning provider is mounted, so dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
+    // The LOCAL host's long-lived connection, so this is the leg that hears a
+    // restart tombstone from a local host restarted by somebody other than
+    // this app - a `traycer host restart` on the box, an update install. The
+    // remote branch above reports through the same relay via its mux session.
+    evidence: transportEvidenceRelay,
     webSocketFactory: browserStreamWebSocketFactory,
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
@@ -283,8 +296,17 @@ export function buildHostStreamClient(params: {
  * auth rejection is the desired outcome. Callers must pass a referentially
  * stable `auth` (the hook returns one) so it does not churn the client memo.
  *
- * The bearer reads live from the global client's `RequestContext` (auth is
+ * The bearer reads live from the binding's client's `RequestContext` (auth is
  * per-user, valid across hosts) so a credential-lease rotation is reflected.
+ * The BINDING's client, not `useHostClient()`, deliberately: everything this
+ * hook needs is the transport identity (request context, user id, bearer
+ * rotation), which every requester binds to the same underlying client - and
+ * `useHostClient()` returns a requester re-minted whenever the effective host
+ * moves. With that object in the build effect's dependencies, each Activate or
+ * failover tore down and re-dialed every stream client this hook owns,
+ * including ones bound to hosts the move never touched; the notifications
+ * provider read the local host's fresh instance as a respawn and wiped its
+ * replica. Same source the app-wide `HostStreamProvider` uses for its bearer.
  * Returns `null` when there is no target, no authenticated request context, or
  * no bound user - including transiently on first mount and right after a
  * dependency change, until the acquire effect below commits (see that
@@ -298,7 +320,13 @@ export function useHostStreamClientBindingFor(
   target: HostDirectoryEntry | null,
   auth: StreamAuthRevalidator | null,
 ): HostStreamClientBinding | null {
-  const globalClient = useHostClient();
+  const runtimeBinding = useHostBinding();
+  if (runtimeBinding === null) {
+    throw new Error(
+      "useHostStreamClientBindingFor requires a HostRuntimeProvider",
+    );
+  }
+  const globalClient = runtimeBinding.hostClient;
   const authnBaseUrl = useRunnerHost().authnBaseUrl;
   // `null` when signed out or the credential lease was released - the
   // "no bound user" / "no auth" gate.
@@ -324,7 +352,13 @@ export function useHostStreamClientBindingFor(
   // an incompatible protocol or a plan restriction closes every fresh dial the
   // same way, and without backoff that is a mint/dial/handshake loop running
   // for as long as the selection stands, with nothing on screen to explain it.
-  const [rebuildBackoff] = useState(createStreamRebuildBackoff);
+  // Same engine, same reason as the app-wide provider: the policy is the
+  // registry's, the pacer is this hook instance's (its client retargets
+  // whenever its caller names another host, and `markBuilt` clears the streak
+  // on that identity change).
+  const [rebuildBackoff] = useState(() =>
+    processReconnectEngine().createRebuildPacer(),
+  );
 
   // Builds AND owns the client's lifecycle inside this ONE effect, rather
   // than a `useMemo` (as this hook did before S1's session cache) - see
@@ -390,38 +424,44 @@ export function useHostStreamClientBindingFor(
             transportDialability: "dialable",
           } satisfies HostDirectoryEntry);
 
-    const client = buildHostStreamClient({
-      target: memoizedTarget,
-      endpoint: () => endpoint,
-      bearer: () => globalClient.getRequestContext()?.credentials ?? null,
-      authnBaseUrl,
-      auth,
-      userId,
-      // Never eager-start: this acquire is guaranteed exactly one matching
-      // release (unlike the old memo-based build), but the connect-on-first-
-      // subscribe laziness is an independent, unchanged behavior. `start()`
-      // is idempotent and `subscribe()` lazily starts.
-      autoStart: false,
-    });
-    if (client === null) {
+    // ONE reference on the SHARED client for this hook instance, taken here
+    // and returned in the cleanup below. `buildHostStreamClient` runs only on
+    // a cache miss: a second surface naming the same host adopts this exact
+    // object, and that shared object identity is what makes the two share a
+    // `git.subscribeStatus` instead of opening one each (the subscription
+    // registries key on `client.instanceId`). See `host-stream-client-cache.ts`
+    // for the identity, the eviction policy and how `pin`/`unpin` compose with
+    // the reference count.
+    const lease = acquireHostStreamClient(
+      {
+        kind: endpointKind,
+        hostId: endpointHostId,
+        userId,
+        websocketUrl: endpointWebsocketUrl,
+        publicKey: endpointPublicKey ?? "",
+        authnBaseUrl,
+        authRecovery: auth === null ? "terminal" : "revalidate",
+      },
+      () =>
+        buildHostStreamClient({
+          target: memoizedTarget,
+          endpoint: () => endpoint,
+          bearer: () => globalClient.getRequestContext()?.credentials ?? null,
+          authnBaseUrl,
+          auth,
+          userId,
+          // Never eager-start: this acquire is guaranteed exactly one matching
+          // release (unlike the old memo-based build), but the connect-on-first-
+          // subscribe laziness is an independent, unchanged behavior. `start()`
+          // is idempotent and `subscribe()` lazily starts.
+          autoStart: false,
+        }),
+    );
+    if (lease === null) {
       setBinding(null);
       return;
     }
-    // Plain closure state, not React state - `pin`/`unpin` must keep working
-    // correctly from a caller that outlives THIS hook instance's own
-    // unmount (see `HostStreamClientBinding.pin`'s doc comment), so they
-    // cannot depend on a re-render to take effect.
-    let pinCount = 0;
-    let unmountedWhilePinned = false;
-    const pin = (): void => {
-      pinCount += 1;
-    };
-    const unpin = (): void => {
-      pinCount = Math.max(0, pinCount - 1);
-      if (pinCount === 0 && unmountedWhilePinned) {
-        client.close("transient-host-client-teardown");
-      }
-    };
+    const client = lease.client;
     // The SAME identity the binding is filed under, so the streak follows the
     // transport rather than this hook instance: a caller that retargets is
     // dialing a different machine, and the previous one's failures are not
@@ -431,22 +471,22 @@ export function useHostStreamClientBindingFor(
     setBinding({
       transportKey: builtTransportKey,
       client,
-      pin,
-      unpin,
+      // `pin`/`unpin` ARE this lease's retain/release. Deliberately not a
+      // second count beside the cache's: two lifecycles over one object is
+      // how the same code yields premature disposal in one race and a leak in
+      // another.
+      pin: lease.retain,
+      unpin: lease.release,
     });
 
     return () => {
       teardownInProgressRef.current = true;
-      if (pinCount === 0) {
-        client.close("transient-host-client-teardown");
-      } else {
-        // A pinned transport must outlive every shared subscription opened
-        // through it - defer the actual close to whichever `unpin()` call
-        // brings the count back to zero, instead of tearing down a
-        // transport a sibling hook instance is still reading a stream
-        // through.
-        unmountedWhilePinned = true;
-      }
+      // Returns THIS hook instance's own reference. The client is closed here
+      // only if nothing else still holds one - neither a sibling surface on
+      // the same host nor an outstanding `pin()`. A pinned transport
+      // therefore still outlives this unmount and closes at the `unpin()`
+      // that brings the count to zero, exactly as before.
+      lease.release();
       teardownInProgressRef.current = false;
     };
   }, [

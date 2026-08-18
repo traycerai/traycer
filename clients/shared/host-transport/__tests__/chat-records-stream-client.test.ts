@@ -26,6 +26,7 @@ import {
   type ChatRecordDelta,
 } from "../chat-records-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
@@ -71,6 +72,7 @@ function makeWsStreamClient(
     bearer: () => null,
     auth: null,
     hostCredentialMint: null,
+    evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: {
       create: () => {
         throw new Error("unexpected WebSocket creation");

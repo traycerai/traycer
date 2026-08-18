@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
   preparedWorkspaceFolderToWorkspaceFolderInfo,
@@ -88,7 +88,7 @@ export function useProviderNativeScope(
   // that host while the selection would have been filed under the active
   // one's key, so a stored path could never validate against the list it was
   // picked from.
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   // Prefer the runtime binding when present; null is valid (tests / host-less
   // shells) and falls through to local-only resolution.
   const binding = useHostBinding();

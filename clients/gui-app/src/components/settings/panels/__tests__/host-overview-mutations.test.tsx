@@ -379,7 +379,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });
@@ -411,7 +411,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
         "Host not restarted",
         expect.objectContaining({
           description:
-            "2 sessions are still working on this host. Nothing was interrupted; try again when they finish.",
+            "2 sessions are still keeping this host busy. Nothing was interrupted; try again when the work finishes.",
         }),
       );
     });
@@ -489,7 +489,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
           transitionIds.push(req.transitionId);
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           });
         },
       },
@@ -554,7 +554,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });
@@ -612,7 +612,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3 },
+            verdict: { busySessionCount: 3, blockers: null },
           }),
       },
     });
@@ -660,7 +660,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });
@@ -704,7 +704,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     // The count the force is sized from is stated where the decision is made,
     // in the same words the Help-menu flow uses for the same verdict.
     expect(busyDialog.textContent).toContain(
-      "2 sessions are still working on this host. Nothing was interrupted; try again when they finish. Force restart ends them immediately.",
+      "2 sessions are still keeping this host busy. Nothing was interrupted; try again when the work finishes. Force restart ends it immediately.",
     );
     // Nothing has been killed yet: reaching the dialog is not consenting to it.
     expect(restartHost).not.toHaveBeenCalled();
@@ -717,7 +717,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    expect(toast.success).toHaveBeenCalledWith("Restarting host-local");
+    // Wording unified across every restart surface (`host-restart-toast.ts`,
+    // already-landed audit F15-F17/F19/F20/F25, unrelated to this ticket) -
+    // the host name doesn't earn its place here since the surface the click
+    // came from already names it.
+    expect(toast.success).toHaveBeenCalledWith("Host restart requested");
     expect(toast.error).not.toHaveBeenCalled();
   });
 
@@ -740,7 +744,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3 },
+            verdict: { busySessionCount: 3, blockers: null },
           }),
       },
     });
@@ -806,7 +810,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           }),
       },
     });
@@ -866,7 +870,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
           attempt += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: attempt },
+            verdict: { busySessionCount: attempt, blockers: null },
           });
         },
       },
@@ -915,7 +919,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       await screen.findByRole("button", { name: "Restart host" }),
     );
     const reopened = await screen.findByTestId("host-busy-force-defer-dialog");
-    expect(reopened.textContent).toContain("2 sessions are still working");
+    expect(reopened.textContent).toContain(
+      "2 sessions are still keeping this host busy",
+    );
     expect(restartHost).not.toHaveBeenCalled();
   });
 
@@ -927,7 +933,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 4 },
+            verdict: { busySessionCount: 4, blockers: null },
           }),
       },
     });
@@ -986,15 +992,21 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
   });
 
-  it("a scope move mid-flight toasts under the INITIATING host's name, not the one the page moved to", async () => {
+  it("a scope move mid-flight still reports the restart, surviving the closure remount", async () => {
     // Mirrors the `host.restart` arm-time-capture test above, for the
     // page-remount half of the force-restart scoping fix: `HostSettingsPanel`
     // keys `HostSettingsPanelInner` by `scopeId`, so a host swap unmounts the
     // whole subtree the armed `forceRestart` mutation lives in. Its `onSuccess`
-    // closure — and the `variables.hostName` it toasts with — is frozen at the
-    // OLD render, so this proves the toast survives that remount naming the
-    // host that was actually being restarted, not whichever host the page
-    // shows once it resolves.
+    // closure is frozen at the OLD render, so this proves the toast still
+    // fires after that remount rather than the closure silently losing its
+    // callback. `variables.hostId` (captured per the host-swap rule in
+    // `host-overview-panel.tsx`) still gates `setRestartBusyCount` correctly
+    // - the sibling "Force restart armed on host A..." test below covers
+    // that half - but the toast copy itself no longer carries a host name to
+    // assert against (unified across every restart surface by
+    // `host-restart-toast.ts`, an already-landed, unrelated audit fix), so
+    // this can no longer verify attribution BY NAME, only that the report
+    // survives.
     let releaseForceRestart: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
       releaseForceRestart = resolve;
@@ -1014,7 +1026,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           }),
       },
     });
@@ -1069,11 +1081,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Restarting Host A Display");
+      expect(toast.success).toHaveBeenCalledWith("Host restart requested");
     });
-    expect(toast.success).not.toHaveBeenCalledWith(
-      expect.stringContaining("Host B Display"),
-    );
+    expect(toast.success).toHaveBeenCalledTimes(1);
     expect(restartHost).toHaveBeenCalledTimes(1);
   });
 
@@ -1109,7 +1119,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           }),
       },
     });
@@ -1197,7 +1207,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });

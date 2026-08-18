@@ -353,18 +353,28 @@ export function routeNotification(
   payload: NotificationPayload,
   receivedAt: number,
 ): void {
+  // Host-agnostic legacy entry: no origin to honour, so the hostless fallback
+  // is the correct destination and the origin-bound answer is not consulted.
   routeNotificationForHost(navigate, payload, receivedAt, null);
 }
 
 /** Cloud approvals/interviews must only reuse a tile bound to their origin.
  * The regular entry point deliberately keeps its legacy host-agnostic route
  * behavior for v1 notifications. */
+/**
+ * Routes a notification, and answers whether it reached a target BOUND to
+ * `originHostId`.
+ *
+ * `false` means the route fell through to a hostless intent, which resolves
+ * through the ambient effective host - fine for an epic or a plain chat, wrong
+ * for an approval or interview that only its origin host can serve.
+ */
 export function routeNotificationForHost(
   navigate: NotificationNavigate,
   payload: NotificationPayload,
   receivedAt: number,
   originHostId: string | null,
-): void {
+): boolean {
   switch (payload.kind) {
     case "epic":
       navigateToTabIntent(
@@ -380,18 +390,22 @@ export function routeNotificationForHost(
         }),
         undefined,
       );
-      return;
+      return true;
     case "chat":
-      routeEpicChatNotification(navigate, payload, receivedAt, originHostId);
-      return;
+      return routeEpicChatNotification(
+        navigate,
+        payload,
+        receivedAt,
+        originHostId,
+      );
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
-      return;
+      return true;
     case "approval":
       if (payload.epicId === undefined || payload.chatId === undefined) {
-        return;
+        return false;
       }
-      routeEpicChatNotification(
+      return routeEpicChatNotification(
         navigate,
         {
           kind: "chat",
@@ -401,9 +415,8 @@ export function routeNotificationForHost(
         receivedAt,
         originHostId,
       );
-      return;
     case "interview":
-      routeEpicChatNotification(
+      return routeEpicChatNotification(
         navigate,
         {
           kind: "chat",
@@ -413,10 +426,9 @@ export function routeNotificationForHost(
         receivedAt,
         originHostId,
       );
-      return;
     case "artifact": {
       if (payload.epicId === undefined) {
-        return;
+        return false;
       }
       navigateToTabIntent(
         navigate,
@@ -431,13 +443,13 @@ export function routeNotificationForHost(
         }),
         undefined,
       );
-      return;
+      return true;
     }
     case "hostSurface":
       routeHostSurfaceNotification(navigate, payload);
-      return;
+      return true;
     case "session":
-      return;
+      return false;
   }
 }
 
@@ -541,13 +553,20 @@ function routeEpicChatNotification(
   payload: ChatNotificationPayload,
   receivedAt: number,
   originHostId: string | null,
-): void {
+): boolean {
   if (
     routeLegacyTerminalNotification(navigate, payload, receivedAt, originHostId)
   )
-    return;
+    return true;
   if (routeOpenChatNotification(navigate, payload, receivedAt, originHostId))
-    return;
+    return true;
+  // Everything above matched a target BOUND to `originHostId`. The fallback
+  // below does not: `openOrFocusEpicIntent` is hostless by construction, so it
+  // resolves through whichever host is effective. Reported as `false` so an
+  // ORIGIN-REQUIRED activation can decline to ACKNOWLEDGE a prompt it did not
+  // open on its own host - see `useNotificationActivationWithNavigate`. The
+  // navigation still happens: opening the epic is useful either way, and
+  // suppressing it would strand every row whose origin cannot be established.
   navigateToTabIntent(
     navigate,
     openOrFocusEpicIntent({
@@ -561,6 +580,7 @@ function routeEpicChatNotification(
     }),
     undefined,
   );
+  return false;
 }
 
 function isChatArtifactTileType(type: string | undefined): boolean {

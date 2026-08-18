@@ -257,6 +257,7 @@ function buildComposition(): Composition {
     runnerHost,
     remoteFetcher: null,
     localHostIdSeeder: () => Promise.resolve(null),
+    onRegistryPollTick: null,
   });
   let requestSeq = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
@@ -277,6 +278,7 @@ function buildComposition(): Composition {
     schedulingPolicy: hostRpcSchedulingPolicy,
     authorityRegistry: null,
     requestCoordinator: null,
+    connectionRegistry: null,
   });
   const composition = { auth, directory, runtime, runnerHost };
   built.push(composition);
@@ -495,7 +497,14 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     ]);
   });
 
-  it("retains the directory and the bound remote selection when the registry 401s a STILL-CURRENT bearer", async () => {
+  it("retains the directory when the registry 401s a STILL-CURRENT bearer", async () => {
+    // This used to also assert the bound remote SELECTION survived the 401
+    // (`directory.selectById` / `.getSelected()`). P4.2 deleted selection
+    // from `HostDirectoryService` entirely - it now lives in the selection
+    // authority store, a subsystem this composition test doesn't construct -
+    // so that half of the claim has no post-slot equivalent to migrate to
+    // and is dropped. What survives is the directory's own retention
+    // contract, already covered below by the `directoryHostIds` assertions.
     const endpoint = hostsEndpoint();
     restoreFetch = installFetch(endpoint.handler);
     const composition = buildComposition();
@@ -505,8 +514,6 @@ describe("auth-era composition — the credential a refresh actually uses", () =
         "account-a-host",
       ]);
     });
-    composition.directory.selectById("account-a-host");
-    expect(composition.directory.getSelected()?.hostId).toBe("account-a-host");
 
     // Drain startup before marking: a refresh still in flight would be
     // JOINED rather than re-issued (that coalescing is deliberate), and this
@@ -520,20 +527,19 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     // 401. `AuthService.fetchRegisteredHosts` deliberately does not sign out
     // on it (a background list poll must never force a sign-out), and the
     // directory must be no more destructive than the auth layer: retain the
-    // last-known entries and the bound selection, recover on the next poll.
-    // Mapping it to `signed-out` cleared every remote entry and unbound the
-    // active remote host mid-session on a transient credential blip.
+    // last-known entries, recover on the next poll. Mapping it to
+    // `signed-out` cleared every remote entry mid-session on a transient
+    // credential blip.
     endpoint.deny(TOKEN_A);
     await composition.directory.refresh();
 
     // The refusal really went out (and went out under the current bearer) -
     // without this, a refresh that silently joined an older in-flight read
-    // would make the retention assertions below pass vacuously.
+    // would make the retention assertion below pass vacuously.
     expect(bearersSince(endpoint, mark)).toEqual([TOKEN_A]);
     expect(await directoryHostIds(composition.directory)).toEqual([
       "account-a-host",
     ]);
-    expect(composition.directory.getSelected()?.hostId).toBe("account-a-host");
   });
 });
 

@@ -18,6 +18,7 @@ import type { Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CreateCommentThreadResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
 import {
   usePaneFocused,
@@ -27,11 +28,17 @@ import {
   useCommentThreadsStore,
   useDraftRange,
 } from "@/stores/comments/comment-threads-store";
-import { useCreateCommentThread } from "@/hooks/comments/use-comment-thread-mutations";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useCreateCommentThreadForClient } from "@/hooks/comments/use-comment-thread-mutations";
 import { CommentComposer } from "./comment-composer";
 
 export interface FloatingDraftPopoverProps {
   readonly epicId: string;
+  /** The host serving the TILE this draft was opened over - passed down by
+   *  `collab-tile-body.tsx` from `useTabHostClient()`. The thread must be
+   *  created on the host that serves the artifact being annotated, not on
+   *  whichever one the app is currently pointed at (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   readonly tileId: string;
@@ -59,7 +66,15 @@ export interface FloatingDraftPopoverProps {
  * if the composer has content).
  */
 export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
-  const { epicId, artifactType, artifactId, tileId, editor, onCreated } = props;
+  const {
+    epicId,
+    hostClient,
+    artifactType,
+    artifactId,
+    tileId,
+    editor,
+    onCreated,
+  } = props;
 
   const draft = useDraftRange(epicId);
   const ownedDraft =
@@ -67,7 +82,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
       ? draft
       : null;
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
-  const createThread = useCreateCommentThread();
+  const createThread = useCreateCommentThreadForClient(hostClient);
   const floatingRef = useRef<HTMLDialogElement | null>(null);
   const isDirtyRef = useRef(false);
   // Render into the pane's portal host so this kept-mounted composer (its typed
@@ -223,6 +238,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     >
       <CommentComposer
         epicId={epicId}
+        hostClient={hostClient}
         initialContent={null}
         placeholder="Start a thread…"
         focusOnMount

@@ -84,8 +84,8 @@ export interface IHostStreamClient<
    * Positive host-recovery evidence: fires when a session (re)opens after a
    * drop or a stall-length silent gap - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
-   * points. Consumers drive `HostClient.notifyAvailabilityRecovered()` off it
-   * so stranded unary queries refetch. `RemoteStreamClient` delegates to
+   * points. Consumers drive `HostClient.notifyHostAvailabilityRecovered(hostId)`
+   * off it so stranded unary queries refetch. `RemoteStreamClient` delegates to
    * `RemoteSession.subscribeAvailabilityRecovered`, which fires at EVERY
    * ready boundary - including the clean first open, because a remote
    * session's first dial races (and strands) the very queries that created

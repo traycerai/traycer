@@ -20,8 +20,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
 import type { WorkspaceSearchSource } from "@traycer/protocol/host/workspace/unary-schemas";
 import { getBasename } from "@/lib/path/cross-platform-path";
-import { useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import {
@@ -29,12 +28,15 @@ import {
   useWorkspaceSearchPathsForSource,
   type WorkspaceSearchPathsView,
 } from "@/hooks/workspace/use-workspace-search-paths-query";
-import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { usePaletteLiveQuery } from "@/lib/commands/palette-query-context";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
-import { useActiveEpicProjection } from "@/lib/commands/sources/open/use-active-epic-projection";
+import {
+  useActiveEpicHostId,
+  useActiveEpicProjection,
+} from "@/lib/commands/sources/open/use-active-epic-projection";
 import {
   buildArtifactDisplayPathIndex,
   normalizeArtifactLogicalPath,
@@ -151,7 +153,9 @@ function useCodeRootStepItems(
   ctx: CommandContext,
   row: WorktreeBindingSelectorRow,
 ): ReadonlyArray<CommandItem> {
-  const client = useHostClient();
+  // The row names the host that owns this workspace root; the file search
+  // runs there, on the same host the leaves below bind their tiles to.
+  const client = useHostClientForHostId(row.hostId);
   const query = usePaletteLiveQuery();
   const debouncedQuery = useDebouncedValue(query, FILES_SEARCH_DEBOUNCE_MS);
   const epicId = ctx.activeEpicId ?? "";
@@ -261,8 +265,11 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
 function useArtifactsStepItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const client = useHostClient();
-  const defaultHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The epic's artifacts live on (and their tiles bind to) the host serving
+  // the epic's projection - see `useActiveEpicHostId`.
+  const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const client = useHostClientForHostId(activeEpicHostId);
+  const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const query = usePaletteLiveQuery();
   const debouncedQuery = useDebouncedValue(query, FILES_SEARCH_DEBOUNCE_MS);
   const epicId = ctx.activeEpicId ?? "";
@@ -305,7 +312,11 @@ const ARTIFACTS_STEP_SUBPAGE: CommandSubpage = {
 export function useFilesOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const bindingsQuery = useWorktreeListBindingsForEpic({
+  // The epic's worktree bindings are host-local records of the host serving
+  // the epic - read them there, not from whichever host the app points at.
+  const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const bindingsQuery = useWorktreeListBindingsForEpicForClient({
+    client: useHostClientForHostId(activeEpicHostId),
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
   });

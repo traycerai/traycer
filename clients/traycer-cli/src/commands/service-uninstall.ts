@@ -31,6 +31,7 @@ export const serviceUninstallCommand: CommandFn = async (
         percent: null,
         bytes: null,
         totalBytes: null,
+        workUnits: null,
       });
       await createServiceController().uninstall({ label });
       ctx.runtime.logger.info("Service uninstall command completed", {

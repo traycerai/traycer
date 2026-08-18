@@ -108,7 +108,14 @@ function progressStage(
   stage: string,
   message: string,
 ): void {
-  onProgress({ stage, message, percent: null, bytes: null, totalBytes: null });
+  onProgress({
+    stage,
+    message,
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+    workUnits: null,
+  });
 }
 
 // Yank-heal: a staged version that is no longer a valid, non-yanked
@@ -339,6 +346,7 @@ export async function downloadAndStageHost(
       percent,
       bytes: progress.downloadedBytes,
       totalBytes: progress.totalBytes,
+      workUnits: null,
     });
   });
 

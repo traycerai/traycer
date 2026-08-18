@@ -1,7 +1,33 @@
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host/runtime";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+/**
+ * EVERY MUTATION HERE ADDRESSES THE EPIC SESSION'S HOST, never the app-wide
+ * one, because an artifact is a row IN an Epic and the Epic is projected from
+ * exactly one machine.
+ *
+ * These used to resolve `useHostClient()`. That is the ambient effective host,
+ * and it and the session host disagree for a bounded but entirely reachable
+ * window: `EpicSessionProvider` keeps the previous handle registered and
+ * RENDERED while its replacement establishes, and after a re-point that
+ * failed. Only the canvas is made inert for that window (`epic-shell.tsx`
+ * passes `readOnly` to the tile subtree alone) - the sidebar is hoisted beside
+ * it and stays fully interactive. So a Delete clicked on a row projected from
+ * host A was sent to host B: at best a not-found failure, at worst a delete
+ * applied to whatever B has under that id.
+ *
+ * Every call site of these four hooks is inside the Epic shell (sidebar tree,
+ * artifact tiles, the canvas tab rename), so there is no consumer for which
+ * "the surrounding session" is the wrong question - checked rather than
+ * assumed.
+ *
+ * A null client (no surrounding session) is REFUSED by `useHostMutation`
+ * rather than silently redirected, which is the difference that matters here:
+ * `useHostClientForHostId(null)` would have followed the effective host and
+ * reproduced the defect on the exact render where the session is absent.
+ */
 
 /**
  * Mutation hook for epic.createArtifact.
@@ -9,7 +35,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  * stream delivers the new row); failure shows a toast.
  */
 export function useEpicCreateArtifact() {
-  const client = useHostClient();
+  const client = useEpicSessionHostClient();
   return useHostMutation({
     client,
     method: "epic.createArtifact",
@@ -33,7 +59,7 @@ export function useEpicCreateArtifact() {
  * pending state; success is silent.
  */
 export function useEpicDeleteArtifact() {
-  const client = useHostClient();
+  const client = useEpicSessionHostClient();
   return useHostMutation({
     client,
     method: "epic.deleteArtifact",
@@ -55,7 +81,7 @@ export function useEpicDeleteArtifact() {
  * Pill enters pending state; success is silent.
  */
 export function useEpicUpdateArtifactStatus() {
-  const client = useHostClient();
+  const client = useEpicSessionHostClient();
   return useHostMutation({
     client,
     method: "epic.updateArtifactStatus",
@@ -85,7 +111,7 @@ function analyticsTicketStatus(status: number): 0 | 1 | 2 {
  * Input/title enters pending (read-only) state; success is silent.
  */
 export function useEpicRenameArtifact(trackUserIntent: boolean) {
-  const client = useHostClient();
+  const client = useEpicSessionHostClient();
   return useHostMutation({
     client,
     method: "epic.renameArtifact",

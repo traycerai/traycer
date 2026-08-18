@@ -3,7 +3,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host/runtime";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
@@ -44,11 +44,15 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
  * is the only one, and it is precisely what stopped carrying them.
  */
 export function useEpicSyncChatRecords(epicId: string): void {
-  // The app-wide active host, matching the epic session itself: the session is
-  // acquired for `useReactiveActiveHostId()` and rebuilt when it changes, so
-  // asking any other host for this epic's records would answer about a registry
-  // the session is not projecting.
-  const client = useHostClient();
+  // The EPIC SESSION's host - the one `handle` was acquired against - never the
+  // app-wide one. The two used to be read as the same thing ("the session is
+  // acquired for the addressable host and rebuilt when it changes"), but the
+  // provider keeps the previous session rendered through an A→B re-point while
+  // the app-wide client already answers B: this hook then applied B's record
+  // list into A's store, and the record gate judged A-bound tiles against it.
+  // Asking any host but the session's answers about a registry the session is
+  // not projecting.
+  const client = useEpicSessionHostClient();
   const handle = useMaybeOpenEpicHandle();
   const params = useMemo(() => ({ epicId }), [epicId]);
   // Viewer-scoped, exactly like the cloud-chat reads: the response is one

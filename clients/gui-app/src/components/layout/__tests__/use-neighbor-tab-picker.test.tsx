@@ -50,6 +50,7 @@ function epicHeaderTab(tabId: string, epicId: string, name: string): HeaderTab {
     kind: "epic",
     id: tabId,
     epicId,
+    hostId: null,
     name,
     route: `/epics/${epicId}/${tabId}`,
     icon: null,

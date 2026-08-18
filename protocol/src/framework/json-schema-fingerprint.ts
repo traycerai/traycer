@@ -1,4 +1,8 @@
 import { z } from "zod";
+import type {
+  $ZodDiscriminatedUnionDef,
+  ToJSONSchemaContext,
+} from "zod/v4/core";
 
 /**
  * Normalized JSON-Schema fingerprint shared by the versioned-record
@@ -39,6 +43,19 @@ export type EnumJsonSchema = {
 export type AnyOfJsonSchema = {
   readonly type: "anyOf";
   readonly variants: readonly JsonSchemaFingerprint[];
+  /**
+   * The field `z.discriminatedUnion(...)` was DECLARED on, or `null` for a
+   * plain `z.union(...)`.
+   *
+   * Carried because arm identity cannot be inferred once more than one field
+   * qualifies as a tag: `{kind:"a",outcome:"x",value}` -> `{kind:"a",outcome:"z"}`
+   * (an EDIT that drops `value`) and `{kind:"a",outcome:"x",value}` ->
+   * `{kind:"b",outcome:"x"}` (a REPLACEMENT) are structurally identical - one
+   * qualifying field agrees, one differs, in both. Only the declaration says
+   * which field is the identity, and JSON Schema does not carry it, so
+   * `toJsonSchemaFingerprint` stamps it during conversion.
+   */
+  readonly discriminator: string | null;
 };
 
 /**
@@ -77,9 +94,73 @@ export function toJsonSchemaFingerprint(
   context: string,
 ): JsonSchemaFingerprint {
   return convertJsonSchemaShape(
-    z.toJSONSchema(schema, { unrepresentable: "any" }),
+    z.toJSONSchema(schema, {
+      unrepresentable: "any",
+      // The ONE thing JSON Schema drops that arm identity needs. `oneOf`
+      // tells us the union was declared discriminated; it does not say on
+      // WHICH field, and no amount of comparing the arms can recover it (see
+      // `AnyOfJsonSchema.discriminator`). Stamped under an `x-` key so a
+      // renderer that round-trips this schema stays valid, and read back by
+      // `declaredDiscriminator` during conversion.
+      override: stampDeclaredDiscriminator,
+    }),
     context,
   );
+}
+
+/** The key `toJsonSchemaFingerprint` stamps the declared discriminator under. */
+const DECLARED_DISCRIMINATOR_KEY = "x-traycer-discriminator";
+
+/**
+ * The exact object zod hands the `override` hook, taken from zod's own
+ * context type instead of restated here. A hand-written mirror of it would go
+ * on compiling after an upgrade changed the real one, which is the failure
+ * mode this whole stamp exists to avoid.
+ */
+type SchemaOverrideContext = Parameters<ToJSONSchemaContext["override"]>[0];
+
+/**
+ * Narrows zod's base def to a discriminated union's, against zod's OWN
+ * exported def type rather than a local restatement of its shape.
+ *
+ * The runtime string check is load-bearing, not belt-and-braces. `_zod.def`
+ * is internal and the public surface exposes no accessor for it, so an
+ * upgrade that renames or retypes `discriminator` must leave the node
+ * UNSTAMPED - identity then falls back to the inferred tuple, the behaviour
+ * before this existed - rather than stamp `undefined` as though some field
+ * had been declared. Structural, so it is a narrowing and not a cast.
+ */
+function isDiscriminatedUnionDef(
+  def: object,
+): def is $ZodDiscriminatedUnionDef {
+  return (
+    "discriminator" in def &&
+    typeof def.discriminator === "string" &&
+    def.discriminator.length > 0
+  );
+}
+
+/**
+ * Writes `z.discriminatedUnion`'s declared field onto the emitted union node.
+ *
+ * A plain `z.union` has no `discriminator` in its def and is left alone, which
+ * is the honest answer: nothing was declared, so identity stays the inferred
+ * tuple. `json-schema-fingerprint.test.ts` pins the stamp as a positive
+ * control, so a zod upgrade that silently stops producing it fails loudly
+ * there instead of quietly restoring the defect this closes.
+ */
+function stampDeclaredDiscriminator(context: SchemaOverrideContext): void {
+  const def = context.zodSchema._zod.def;
+  if (!isDiscriminatedUnionDef(def)) return;
+  context.jsonSchema[DECLARED_DISCRIMINATOR_KEY] = def.discriminator;
+}
+
+/** The stamped discriminator on a RAW JSON Schema union node, if any. */
+function declaredDiscriminator(node: {
+  readonly [DECLARED_DISCRIMINATOR_KEY]?: unknown;
+}): string | null {
+  const declared = node[DECLARED_DISCRIMINATOR_KEY];
+  return typeof declared === "string" && declared.length > 0 ? declared : null;
 }
 
 /**
@@ -305,6 +386,7 @@ function unknownKeyPolicyRelaxation(
     "no-value-growth",
     previous.schema,
     next.schema,
+    false,
   );
   return catchallMismatch === null
     ? null
@@ -329,6 +411,7 @@ function convertJsonSchemaShape(
     anyOf?: readonly unknown[];
     oneOf?: readonly unknown[];
     items?: unknown;
+    [DECLARED_DISCRIMINATOR_KEY]?: unknown;
   };
 
   if (node.type === "object" && node.properties !== undefined) {
@@ -358,6 +441,7 @@ function convertJsonSchemaShape(
       variants: node.anyOf.map((variant, index) =>
         convertJsonSchemaShape(variant, `${context}.anyOf[${index}]`),
       ),
+      discriminator: declaredDiscriminator(node),
     };
   }
 
@@ -377,6 +461,7 @@ function convertJsonSchemaShape(
       variants: node.oneOf.map((variant, index) =>
         convertJsonSchemaShape(variant, `${context}.oneOf[${index}]`),
       ),
+      discriminator: declaredDiscriminator(node),
     };
   }
 
@@ -569,6 +654,34 @@ export function findAdditivityViolation(
     mode,
     previousInput,
     nextInput,
+    false,
+  );
+}
+
+/**
+ * First non-additive change while treating removed union arms as compatible.
+ *
+ * Versioned RPC uses this only after a minor's reviewed
+ * `responseGrowthProjectionGated` declaration has made a version-specific
+ * projection responsible for the old arm. The recursive walk still visits
+ * every sibling and reports every other reduction; it does not turn the
+ * response lane generally lenient.
+ */
+export function findAdditivityViolationAllowingUnionArmReplacement(
+  previous: JsonSchemaFingerprint,
+  next: JsonSchemaFingerprint,
+  mode: AdditivityMode,
+  previousInput: unknown,
+  nextInput: unknown,
+): AdditivityViolation | null {
+  return findNodeAdditivityViolation(
+    previous,
+    next,
+    [],
+    mode,
+    previousInput,
+    nextInput,
+    true,
   );
 }
 
@@ -606,7 +719,12 @@ type ClassifiedSchemaNode =
       readonly representation: EnumJsonSchema["representation"];
       readonly values: readonly (string | number | boolean)[];
     }
-  | { readonly kind: "anyOf"; readonly variants: readonly unknown[] }
+  | {
+      readonly kind: "anyOf";
+      readonly variants: readonly unknown[];
+      /** See {@link AnyOfJsonSchema.discriminator}; `null` for a plain union. */
+      readonly discriminator: string | null;
+    }
   | { readonly kind: "array"; readonly items: unknown }
   | { readonly kind: "opaque"; readonly node: unknown };
 
@@ -628,6 +746,11 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
     anyOf?: readonly unknown[];
     oneOf?: readonly unknown[];
     items?: unknown;
+    // Two carriers, because this classifier sees BOTH forms: a normalized
+    // fingerprint node (`type:"anyOf"`, discriminator already converted) and
+    // a raw JSON Schema node nested below one (still carrying the stamp).
+    discriminator?: unknown;
+    [DECLARED_DISCRIMINATOR_KEY]?: unknown;
   };
   const requiredFields = Array.isArray(shape.required)
     ? shape.required.filter(
@@ -650,7 +773,15 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
     };
   }
   if (shape.type === "anyOf" && Array.isArray(shape.variants)) {
-    return { kind: "anyOf", variants: shape.variants };
+    return {
+      kind: "anyOf",
+      variants: shape.variants,
+      discriminator:
+        typeof shape.discriminator === "string" &&
+        shape.discriminator.length > 0
+          ? shape.discriminator
+          : null,
+    };
   }
 
   // Raw JSON Schema forms, mirroring `convertJsonSchemaShape`'s branch
@@ -702,7 +833,11 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
         values: literalEnum.values,
       };
     }
-    return { kind: "anyOf", variants: unionVariants };
+    return {
+      kind: "anyOf",
+      variants: unionVariants,
+      discriminator: declaredDiscriminator(shape),
+    };
   }
   if (
     "const" in shape &&
@@ -732,6 +867,331 @@ function snippet(node: unknown): string {
   return JSON.stringify(node)?.slice(0, 80) ?? String(node);
 }
 
+function unionArmReplacementViolation(
+  detail: string,
+  allowUnionArmReplacement: boolean,
+): AdditivityViolation | null {
+  return allowUnionArmReplacement ? null : { kind: "union-variant", detail };
+}
+
+/**
+ * The single literal value a property pins, or `null` when it pins none.
+ *
+ * A discriminated union's tag is exactly this: `z.literal("ok")` renders as a
+ * one-value enum. Two or more values is a choice rather than a tag, and
+ * anything else - an object, an array, an open scalar - cannot identify an arm.
+ */
+function discriminantValue(
+  property: unknown,
+): string | number | boolean | null {
+  const classified = classifySchemaNode(property);
+  if (classified.kind !== "enum" || classified.values.length !== 1) {
+    return null;
+  }
+  return classified.values[0];
+}
+
+/**
+ * Every literal value a property pins, or `null` when it pins none.
+ *
+ * {@link discriminantValue}'s multi-value sibling, and used ONLY for a
+ * DECLARED discriminator. Inference must keep rejecting a multi-value column
+ * (nothing tells it apart from an ordinary enum field that happens to differ
+ * per arm), but a declared tag is not inferred - the union named it - so a
+ * grouped arm like `kind: z.enum(["subagent", "monitor"])` is a perfectly
+ * good identity.
+ */
+function discriminantValues(
+  property: unknown,
+): ReadonlySet<string | number | boolean> | null {
+  const classified = classifySchemaNode(property);
+  if (classified.kind !== "enum" || classified.values.length === 0) return null;
+  return new Set(classified.values);
+}
+
+/**
+ * Whether two declared tag value sets name the SAME arm - i.e. share at least
+ * one value.
+ *
+ * OVERLAP, not equality. A grouped tag may gain or lose a value while remaining
+ * the same arm, and under equality such an arm read as REPLACED - handing every
+ * reduction inside it straight back to the exemption this whole mechanism
+ * exists to close. A value the old arm carried and the new side still routes is
+ * the honest identity: responses pinned to it projected through the old arm and
+ * now project through the new one. Matching on the survivors does not lose the
+ * dropped values - the arms' own enum comparison still reports those.
+ */
+function sharesValue(
+  a: ReadonlySet<string | number | boolean>,
+  b: ReadonlySet<string | number | boolean>,
+): boolean {
+  for (const value of a) {
+    if (b.has(value)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether `declared` actually tells THIS side's arms apart: pinned to at least
+ * one literal on every object arm, with no value shared between two of them.
+ *
+ * The same qualification {@link discriminatorFields} applies, minus the
+ * one-value-per-arm restriction. When it fails, the declaration has stopped
+ * answering the identity question on this side and the inferred tuple is the
+ * honest fallback.
+ */
+function declaredTagIdentifies(
+  variants: readonly unknown[],
+  declared: string,
+): boolean {
+  const seen = new Set<string | number | boolean>();
+  let objectArms = 0;
+  for (const variant of variants) {
+    const classified = classifySchemaNode(variant);
+    if (classified.kind !== "object") continue;
+    objectArms += 1;
+    const values = discriminantValues(classified.properties[declared]);
+    if (values === null) return false;
+    for (const value of values) {
+      if (seen.has(value)) return false;
+      seen.add(value);
+    }
+  }
+  return objectArms > 0;
+}
+
+/**
+ * One next variant that IS this previous variant - the same arm, edited -
+ * paired with the previous arm as it should be COMPARED against that variant.
+ */
+interface DiscriminatedSuccessor {
+  readonly index: number;
+  readonly previous: unknown;
+}
+
+/**
+ * The previous arm rewritten so its declared tag column reads as the
+ * successor's - used ONLY when every value the arm carried is still handled
+ * somewhere in the new union.
+ *
+ * WHY. A grouped arm may SPLIT, and each half then pins a narrower slice of the
+ * old tag set. Compared as-is, the half reads as "drops enum value 'monitor'"
+ * even though the sibling arm took that value and the union's accepted set is
+ * unchanged - so a perfectly benign split would fail the gate. Alignment
+ * removes exactly that false witness: every OTHER property still compares
+ * as-is, so a reduction hiding in either half is reported as before.
+ *
+ * Only when FULLY covered. A value no next arm took really is gone, and leaving
+ * the arm's own column in place is what still reports it.
+ */
+function alignDeclaredColumn(
+  previousVariant: unknown,
+  nextVariant: unknown,
+  declared: string,
+): unknown {
+  if (typeof previousVariant !== "object" || previousVariant === null)
+    return previousVariant;
+  const next = classifySchemaNode(nextVariant);
+  if (next.kind !== "object") return previousVariant;
+  const previousRecord = previousVariant as Record<string, unknown>;
+  const previousProperties = previousRecord["properties"];
+  if (typeof previousProperties !== "object" || previousProperties === null)
+    return previousVariant;
+  return {
+    ...previousRecord,
+    properties: {
+      ...(previousProperties as Record<string, unknown>),
+      [declared]: next.properties[declared],
+    },
+  };
+}
+
+/**
+ * Every next variant that IS this previous variant - the same arm, edited -
+ * or an empty list when the arm genuinely has no successor.
+ *
+ * WHY THIS EXISTS. The survival loop above can only answer "is any next
+ * variant compatible with this previous one", and every NO used to fall into
+ * the same bucket: {@link unionArmReplacementViolation}, exempt whenever the
+ * minor declared `responseGrowthProjectionGated`. So under that declaration a
+ * REDUCTION inside an arm - dropping a required field from it, narrowing a
+ * leaf, removing an enum value it carries - was reported by the recursive
+ * comparison and then converted into an allowed "arm replacement" and dropped
+ * on the floor. That contradicts the exemption's own documented promise (see
+ * `findAdditivityViolationAllowingUnionArmReplacement`), which says the walk
+ * still reports every other reduction; the gate was quietly accepting breaking
+ * changes as long as they were made INSIDE a union.
+ *
+ * Arm identity is the discriminator, because that is what identity means for
+ * the unions the protocol actually registers: matching on shape cannot
+ * distinguish "this arm was edited" from "this arm was swapped for a similar
+ * one", while a shared tag says the newer schema still calls it the same
+ * thing. An arm with no discriminator - a bare `z.string() | z.number()` - has
+ * no identity to match on, so it keeps the old blanket treatment rather than
+ * being force-matched by position, which would report edits to unrelated arms
+ * as if they were the same one.
+ *
+ * The discriminator is INFERRED FROM THE WHOLE UNION, not read off the one
+ * arm. An earlier version took every one-value literal on the previous arm as
+ * a tag and matched a successor on ANY of them, which let an incidental
+ * literal impersonate identity: with `{kind:"success", outcome:"done", value}`
+ * replaced by `{kind:"failure", outcome:"done"}`, the shared `outcome` made
+ * the new arm read as the old one EDITED, so its changed `kind` and dropped
+ * `value` were reported and a replacement the exemption permits was rejected.
+ * A property is a discriminator only if EVERY object arm pins it to a single
+ * literal and no two arms pin the same value - what `z.discriminatedUnion`
+ * guarantees of the field it names - and it must be one ON BOTH SIDES: a
+ * property inferred from the previous union alone would let a minor that
+ * drops a secondary literal from every arm make every arm unmatchable, and
+ * the arm's other reductions would then pass as permitted replacements. Where
+ * more than one property qualifies, identity is the whole tuple: an arm whose
+ * tuple changed is not the same arm.
+ */
+function findDiscriminatedSuccessors(
+  previousVariant: unknown,
+  previousVariants: readonly unknown[],
+  nextVariants: readonly unknown[],
+  declared: string | null,
+): readonly DiscriminatedSuccessor[] {
+  const previous = classifySchemaNode(previousVariant);
+  if (previous.kind !== "object") return [];
+  // The DECLARED field wins outright when the union names one and that field
+  // still tells the arms apart on both sides. Identity is then that field
+  // ALONE: a secondary literal moving on an arm whose declared tag is
+  // unchanged is an EDIT to that arm, and folding it into a tuple made the
+  // arm unmatchable - which handed its dropped fields to the replacement
+  // exemption.
+  //
+  // Matched as a VALUE SET, not a single literal. A declared tag may
+  // legitimately group several values in ONE arm - this repo does it with
+  // `kind: z.enum(["subagent", "monitor"])` in `agent/gui/subscribe.ts` - and
+  // `discriminatorFields` cannot see such a column, because INFERENCE has to
+  // reject it (nothing says the grouping is deliberate). A declared tag needs
+  // no inference: the union already named the column. Requiring it to survive
+  // inference therefore silently dropped every multi-value union straight back
+  // onto the incidental-tuple fallback, i.e. back into this exact defect.
+  //
+  // Matched by SHARED value, and to EVERY next arm that shares one. A grouped
+  // arm moves in ways a single literal cannot, and each is a way for a
+  // reduction to escape if identity is one index matched on the whole set:
+  //
+  //   grown   ["a","b"] -> ["a","b","c"]   same arm, one more value
+  //   shrunk  ["a","b"] -> ["a"]           same arm; the dropped value is
+  //                                        reported by the arms' enum compare
+  //   merged  ["a"] + ["b"] -> ["a","b"]   both old arms project onto it
+  //   split   ["a","b"] -> ["a"] + ["b"]   BOTH halves still carry old traffic
+  //
+  // Only the split needs the LIST. `declaredTagIdentifies` forbids a value
+  // shared by two arms on one side, so any single value lands in at most one
+  // next arm - but a previous arm holding several values can have them land in
+  // several, and a reduction in the second is invisible to a first-match index.
+  if (
+    declared !== null &&
+    declaredTagIdentifies(previousVariants, declared) &&
+    declaredTagIdentifies(nextVariants, declared)
+  ) {
+    const previousValues = discriminantValues(previous.properties[declared]);
+    if (previousValues === null) return [];
+    // Coverage is asked of the WHOLE next union, not of the matched arm: after
+    // a split it is the siblings that hold the rest of the old tag set, and a
+    // value none of them holds is the one real drop.
+    const covered = new Set<string | number | boolean>();
+    for (const nextVariant of nextVariants) {
+      const next = classifySchemaNode(nextVariant);
+      if (next.kind !== "object") continue;
+      const nextValues = discriminantValues(next.properties[declared]);
+      if (nextValues === null) continue;
+      for (const value of nextValues) covered.add(value);
+    }
+    const fullyCovered = [...previousValues].every((value) =>
+      covered.has(value),
+    );
+    const successors: DiscriminatedSuccessor[] = [];
+    for (const [index, nextVariant] of nextVariants.entries()) {
+      const next = classifySchemaNode(nextVariant);
+      if (next.kind !== "object") continue;
+      const nextValues = discriminantValues(next.properties[declared]);
+      if (nextValues === null) continue;
+      if (!sharesValue(previousValues, nextValues)) continue;
+      successors.push({
+        index,
+        previous: fullyCovered
+          ? alignDeclaredColumn(previousVariant, nextVariant, declared)
+          : previousVariant,
+      });
+    }
+    return successors;
+  }
+  const nextFields = new Set(discriminatorFields(nextVariants));
+  const inferred = discriminatorFields(previousVariants).filter((field) =>
+    nextFields.has(field),
+  );
+  // The tuple is the fallback: a plain `z.union(...)` declares nothing, and a
+  // union whose declared column stopped telling the arms apart is no longer
+  // answering the identity question either.
+  const fields = inferred;
+  if (fields.length === 0) return [];
+  const identity = fields.map(
+    (field) => [field, discriminantValue(previous.properties[field])] as const,
+  );
+  // At most one match, so no list to build: every field here is a SINGLE-value
+  // column that `discriminatorFields` already proved unique across the arms, so
+  // the tuple names one arm or none. No alignment either - a single-value tag
+  // cannot be split across arms, so the arm's own column is never a false
+  // witness.
+  const index = nextVariants.findIndex((nextVariant) => {
+    const next = classifySchemaNode(nextVariant);
+    if (next.kind !== "object") return false;
+    return identity.every(
+      ([field, value]) => discriminantValue(next.properties[field]) === value,
+    );
+  });
+  return index === -1 ? [] : [{ index, previous: previousVariant }];
+}
+
+/**
+ * The properties that tell this union's arms apart: pinned to one literal in
+ * every OBJECT arm, with no value shared between two of them. Empty when the
+ * union has no object arm or no such property - including the case where one
+ * object arm pins the field and another leaves it open, which is exactly the
+ * case where a literal on one arm says nothing about identity.
+ *
+ * Non-object arms (a primitive or array beside the objects) are NOT voters
+ * and do NOT veto: they carry no properties to discriminate on, and refusing
+ * to infer for the whole union because of them would leave a lone object arm
+ * with no successor - so an EDIT to it (a dropped field) would read as a
+ * permitted replacement under `responseGrowthProjectionGated`. With a single
+ * object arm every pinned literal qualifies, and that is safe because
+ * `findDiscriminatedSuccessor` matches on the WHOLE tuple of fields pinned
+ * on BOTH sides: an arm whose `kind` changed is a different arm however many
+ * incidental literals it shares. `versioned-rpc-json-schema.test.ts` pins
+ * both halves ("MIXED union" / "lone object arm").
+ */
+function discriminatorFields(variants: readonly unknown[]): readonly string[] {
+  const arms: Array<Readonly<Record<string, unknown>>> = [];
+  for (const variant of variants) {
+    const classified = classifySchemaNode(variant);
+    if (classified.kind === "object") arms.push(classified.properties);
+  }
+  const first = arms[0];
+  if (first === undefined) return [];
+  const fields: string[] = [];
+  for (const field of Object.keys(first)) {
+    const seen = new Set<string | number | boolean>();
+    let qualifies = true;
+    for (const arm of arms) {
+      const value = discriminantValue(arm[field]);
+      if (value === null || seen.has(value)) {
+        qualifies = false;
+        break;
+      }
+      seen.add(value);
+    }
+    if (qualifies) fields.push(field);
+  }
+  return fields;
+}
+
 /**
  * JSON Schema keywords that annotate a leaf without constraining the values
  * it accepts. Two leaves differing only in these describe the same accepted
@@ -748,6 +1208,12 @@ const NON_CONSTRAINING_SCHEMA_KEYS = new Set([
   "readOnly",
   "writeOnly",
   "$comment",
+  // OUR OWN metadata, not the peer's contract. It records which column a
+  // union was DECLARED on so arm identity can be resolved; it constrains no
+  // value, and two schemas differing only in it accept and emit byte-identical
+  // JSON. Left in, a union that merely moves its declaration from one valid
+  // tag column to another reads as a changed schema.
+  DECLARED_DISCRIMINATOR_KEY,
 ]);
 
 /**
@@ -829,6 +1295,28 @@ function constrainingRecord(node: unknown): Record<string, unknown> | null {
   return out;
 }
 
+/**
+ * The node with ONLY this file's own discriminator stamp removed, everything
+ * else - key order included - left exactly as `z.toJSONSchema` emitted it.
+ *
+ * For callers asking "was this schema CHANGED at all", where the answer must
+ * not turn on metadata we wrote ourselves, but must still turn on every
+ * keyword the peer's contract actually carries. {@link constrainingShape} is
+ * the wrong tool for that: it also drops `default` and friends, which are
+ * non-constraining for a LEAF's accepted values yet decide whether a payload
+ * parses at all.
+ */
+function withoutDeclaredDiscriminator(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(withoutDeclaredDiscriminator);
+  if (typeof node !== "object" || node === null) return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === DECLARED_DISCRIMINATOR_KEY) continue;
+    out[key] = withoutDeclaredDiscriminator(value);
+  }
+  return out;
+}
+
 function constrainingShape(node: unknown): string {
   if (typeof node !== "object" || node === null)
     return JSON.stringify(node) ?? String(node);
@@ -851,6 +1339,7 @@ function findNodeAdditivityViolation(
   mode: AdditivityMode,
   previousInput: unknown,
   nextInput: unknown,
+  allowUnionArmReplacement: boolean,
 ): AdditivityViolation | null {
   const previousNode = classifySchemaNode(previous);
   const nextNode = classifySchemaNode(next);
@@ -876,29 +1365,84 @@ function findNodeAdditivityViolation(
             mode,
             previousInput,
             nextWideningArms[variantIndex] ?? null,
+            allowUnionArmReplacement,
           ) === null,
       );
-      return oldFormRetained
-        ? null
-        : { kind: "union-variant", detail: snippet(previous) };
+      if (oldFormRetained) return null;
+      // Same distinction as the union loops: an arm of the new union that IS
+      // the old form by discriminator was the old form EDITED, so its
+      // reduction is what gets reported - only an old form with no successor
+      // is the replacement the exemption covers.
+      const successors = allowUnionArmReplacement
+        ? findDiscriminatedSuccessors(
+            previous,
+            [previous],
+            nextNode.variants,
+            // The previous node is not a union here (a single form GREW into
+            // one), so only the new union declares anything. Taking its
+            // declaration is what keeps identity from being every literal the
+            // old single form happened to pin.
+            nextNode.discriminator,
+          )
+        : [];
+      if (successors.length > 0) {
+        // EVERY successor, not the first: a grouped tag can split the old form
+        // across several new arms, and a reduction in any of them breaks the
+        // traffic that arm still carries.
+        for (const successor of successors) {
+          const edited = findNodeAdditivityViolation(
+            successor.previous,
+            nextNode.variants[successor.index],
+            path,
+            mode,
+            previousInput,
+            nextWideningArms[successor.index] ?? null,
+            allowUnionArmReplacement,
+          );
+          if (edited !== null) return edited;
+        }
+        return null;
+      }
+      return unionArmReplacementViolation(
+        snippet(previous),
+        allowUnionArmReplacement,
+      );
     }
     // Union collapse: only additive when every previous variant's payloads
     // still project onto the replacement schema.
     if (previousNode.kind === "anyOf") {
       const previousInputArms = inputVariants(previousInput);
       for (const [index, variant] of previousNode.variants.entries()) {
+        const violation = findNodeAdditivityViolation(
+          variant,
+          next,
+          path,
+          mode,
+          previousInputArms[index] ?? null,
+          nextInput,
+          allowUnionArmReplacement,
+        );
+        if (violation === null) continue;
+        // The same edited-vs-replaced distinction the anyOf/anyOf loop
+        // draws: if the ONE surviving form is this arm's discriminated
+        // successor, the arm was edited and its reduction is reported; only
+        // an arm with no successor is a replacement the exemption covers.
         if (
-          findNodeAdditivityViolation(
+          allowUnionArmReplacement &&
+          findDiscriminatedSuccessors(
             variant,
-            next,
-            path,
-            mode,
-            previousInputArms[index] ?? null,
-            nextInput,
-          ) !== null
+            previousNode.variants,
+            [next],
+            previousNode.discriminator,
+          ).length > 0
         ) {
-          return { kind: "union-variant", detail: snippet(variant) };
+          return violation;
         }
+        const replaced = unionArmReplacementViolation(
+          snippet(variant),
+          allowUnionArmReplacement,
+        );
+        if (replaced !== null) return replaced;
       }
       return null;
     }
@@ -933,6 +1477,7 @@ function findNodeAdditivityViolation(
         mode,
         inputProperty(previousInput, field),
         inputProperty(nextInput, field),
+        allowUnionArmReplacement,
       );
       if (nested !== null) return nested;
     }
@@ -969,6 +1514,7 @@ function findNodeAdditivityViolation(
           "no-value-growth",
           policy.schema,
           inputProperty(nextInput, field),
+          false,
         );
         if (mismatch !== null) {
           return {
@@ -1063,6 +1609,7 @@ function findNodeAdditivityViolation(
             mode,
             previousArmInput,
             nextInputArms[nextIndex] ?? null,
+            allowUnionArmReplacement,
           ) === null,
       );
       if (survives) continue;
@@ -1076,6 +1623,7 @@ function findNodeAdditivityViolation(
               "lenient",
               previousArmInput,
               nextInputArms[nextIndex] ?? null,
+              allowUnionArmReplacement,
             ) === null,
         );
         if (lenientIndex !== -1) {
@@ -1086,10 +1634,66 @@ function findNodeAdditivityViolation(
             mode,
             previousArmInput,
             nextInputArms[lenientIndex] ?? null,
+            allowUnionArmReplacement,
           );
         }
       }
-      return { kind: "union-variant", detail: snippet(previousVariant) };
+      // An arm that still has a successor was EDITED, not replaced, so the
+      // exemption does not reach it: report what the edit actually broke.
+      // Probed only when the exemption is live - without it the blanket
+      // `union-variant` violation below is already the honest answer, and
+      // swapping it for a nested detail would change the error every
+      // non-gated minor reports.
+      const successors = allowUnionArmReplacement
+        ? findDiscriminatedSuccessors(
+            previousVariant,
+            previousNode.variants,
+            nextNode.variants,
+            // Both sides must call identity the same thing. A minor that
+            // re-declares the union on a DIFFERENT field has not edited its
+            // arms, it has redefined what an arm is, and the inferred tuple
+            // is the honest answer there.
+            previousNode.discriminator === nextNode.discriminator
+              ? previousNode.discriminator
+              : null,
+          )
+        : [];
+      if (successors.length > 0) {
+        // EVERY successor, not the first. A grouped declared tag can SPLIT one
+        // old arm across several new ones, and each of them still carries the
+        // traffic pinned to the values it took, so a reduction in the second
+        // half breaks old clients exactly as the first half would.
+        for (const successor of successors) {
+          const edited = findNodeAdditivityViolation(
+            successor.previous,
+            nextNode.variants[successor.index],
+            path,
+            mode,
+            previousArmInput,
+            nextInputArms[successor.index] ?? null,
+            // Passed through, NOT forced off: a union nested inside this arm
+            // may still have had one of ITS arms genuinely replaced under the
+            // same declaration, and that is what the exemption is for. What
+            // must not survive is this arm's own reduction, and that returns a
+            // `required-field` / `enum-value` / `schema-kind` violation, none
+            // of which consult the flag.
+            allowUnionArmReplacement,
+          );
+          if (edited !== null) return edited;
+        }
+        continue;
+      }
+      const replaced = unionArmReplacementViolation(
+        snippet(previousVariant),
+        allowUnionArmReplacement,
+      );
+      if (replaced !== null) return replaced;
+      // EXEMPT means "this arm's removal is not a violation", not "stop
+      // looking". Returning `null` here ended the whole walk at the first
+      // replaced arm, so a reduction in any LATER sibling was never visited
+      // and the verdict on one semantic change flipped with arm order - the
+      // exact leniency the exemption's own doc says it does not grant.
+      continue;
     }
     if (mode === "no-value-growth") {
       for (const [nextIndex, nextVariant] of nextNode.variants.entries()) {
@@ -1107,6 +1711,7 @@ function findNodeAdditivityViolation(
               mode,
               previousInputArms[index] ?? null,
               nextInputArms[nextIndex] ?? null,
+              allowUnionArmReplacement,
             ) === null,
         );
         if (!hasPredecessor) {
@@ -1131,6 +1736,7 @@ function findNodeAdditivityViolation(
       mode,
       inputItems(previousInput),
       inputItems(nextInput),
+      allowUnionArmReplacement,
     );
     if (itemsViolation !== null) {
       return {
@@ -1154,6 +1760,7 @@ function findNodeAdditivityViolation(
       mode,
       inputRecordKeys(previousInput),
       inputRecordKeys(nextInput),
+      allowUnionArmReplacement,
     );
     if (keysViolation !== null) return keysViolation;
     return findNodeAdditivityViolation(
@@ -1163,6 +1770,7 @@ function findNodeAdditivityViolation(
       mode,
       inputRecordValues(previousInput),
       inputRecordValues(nextInput),
+      allowUnionArmReplacement,
     );
   }
 
@@ -1297,9 +1905,24 @@ export function findBreakingChange(
       };
     }
     for (const field of Object.keys(previous.properties)) {
+      // Raw `JSON.stringify` MINUS our own stamp - not `constrainingShape`.
+      // This decides whether a MAJOR is justified, and the stamp must never
+      // justify one: a nested union that moves its declaration between two
+      // equally valid tag columns emits identical JSON, and comparing raw
+      // called that `schema-changed` on metadata this file wrote itself.
+      //
+      // But `constrainingShape` was the wrong instrument for stripping it. It
+      // drops all of `NON_CONSTRAINING_SCHEMA_KEYS`, a set that answers a
+      // DIFFERENT question - "does this keyword constrain the values a LEAF
+      // accepts" in the additivity walk - and some of those keywords do justify
+      // a major here. `.catch([])` renders as `default`, so dropping the catch
+      // makes a payload that used to parse fail outright; strip `default` and
+      // that major reads as "could have shipped as a minor".
       if (
-        JSON.stringify(previous.properties[field]) !==
-        JSON.stringify(next.properties[field])
+        JSON.stringify(
+          withoutDeclaredDiscriminator(previous.properties[field]),
+        ) !==
+        JSON.stringify(withoutDeclaredDiscriminator(next.properties[field]))
       ) {
         return { kind: "field", detail: field, reason: "schema-changed" };
       }

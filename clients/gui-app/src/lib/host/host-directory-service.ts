@@ -7,29 +7,19 @@ import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/
 import {
   fetchRemoteHosts,
   hostUnavailability,
-  isConfirmedHostDeath,
   isRelayFuseRecoveryCandidate,
   isRemoteHostDirectoryEntry,
   type RemoteHostFetchOutcome,
   type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type {
   IRunnerHost,
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { appLogger, describeLogError } from "@/lib/logger";
-import {
-  Analytics,
-  AnalyticsEvent,
-  type AnalyticsSource,
-} from "@/lib/analytics";
-import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
-import {
-  hostSwitchLabel,
-  toastHostSwitched,
-} from "@/lib/host/host-switch-toast";
+import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
+import { lastLocalHostIdKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 /**
@@ -53,30 +43,7 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
  * because this one predates TanStack and lives outside its cache.
  */
 const HOST_DIRECTORY_REFRESH_POLL_MS = 60_000;
-const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
 const LAST_LOCAL_HOST_ID_STORAGE_KEY = lastLocalHostIdKey();
-
-/**
- * How many CONSECUTIVE genuine directory reads must agree about a host's
- * dialability before the app moves the app-wide binding, in EITHER direction
- * (D7).
- *
- * Two, not one. A presence lease lapses on its own schedule and the registry
- * is polled every ~60s; one read that arrives inside a lease gap - or a single
- * slow relay round-trip - is a blip, and re-homing the window on it would move
- * the user off a host that was never actually gone. Two reads at that cadence
- * is up to ~2 minutes of confirmation, which is the price of not moving someone
- * off a working machine.
- *
- * ONE constant on purpose: an undamped recovery is the same defect as an
- * undamped death, just pointed the other way. A host that flaps
- * dialable/non-dialable would oscillate the binding at poll cadence - a toast
- * and a full app-wide query-scope invalidation every ~60s - if coming back
- * were cheaper to believe than going away. Both streaks are advanced only by
- * GENUINE fetcher outcomes: a `failed` refresh returns before either is
- * touched, so it neither advances nor resets them.
- */
-const CONSECUTIVE_DIALABILITY_READS = 2;
 
 export interface HostDirectoryServiceOptions {
   readonly runnerHost: IRunnerHost;
@@ -87,6 +54,18 @@ export interface HostDirectoryServiceOptions {
    * assert merged directory behavior.
    */
   readonly remoteFetcher: RemoteHostFetcher | null;
+  /**
+   * Fired on each poll tick so the app's other registry readers can refresh
+   * off this ONE timer (redesign P4.1 / F22). `null` for shells and tests
+   * with no query cache to invalidate.
+   *
+   * Required rather than optional for the same reason `connectionRegistry`
+   * is on `HostRuntimeOptions`: a construction site that forgets it produces
+   * a window whose Settings liveness silently stops refreshing, which is not
+   * a failure anything reports. A required field makes forgetting a compile
+   * error.
+   */
+  readonly onRegistryPollTick: (() => void) | null;
   /**
    * Identity of the auth context a refresh is being made ON BEHALF OF, read at
    * the moment it is needed. `null` disables identity scoping — correct only
@@ -123,25 +102,6 @@ export interface HostDirectoryServiceOptions {
   readonly localHostIdSeeder: (() => Promise<string | null>) | null;
 }
 
-/**
- * The user's live host-selection intent, in ids. See
- * `HostDirectoryService.readSelectionIntent`.
- */
-export interface HostSelectionIntent {
-  /**
-   * The host id the current selection names, or `null` when the user has not
-   * picked one (first run, or an explicit clear). NOT resolved against the
-   * directory - that is the point.
-   */
-  readonly selectedHostId: string | null;
-  /**
-   * This machine's own local host id as the directory knows it: seeded from
-   * the shell's durable pid metadata, then adopted from every local snapshot.
-   * `null` only on a machine whose local host has never announced itself.
-   */
-  readonly localHostId: string | null;
-}
-
 export type HostDirectoryListener = (
   entries: readonly HostDirectoryEntry[],
   localEntry: HostDirectoryEntry | null,
@@ -153,15 +113,22 @@ export type HostDirectoryListener = (
  *
  * Composes the event-only `IRunnerHost.onLocalHostChange(...)` stream with
  * the shared stubbed `fetchRemoteHosts` so the merged directory has a
- * stable shape regardless of remote discovery progress (D3). Selection state
- * is owned here - `HostRuntime.start()` reads `getSelected()` and listens
- * to `onSelectionChange(...)` to rebind `HostClient`. `refresh()` only ever
- * replaces `remoteEntries` on a genuine `hosts` or `signed-out` fetcher
- * outcome; a `failed` outcome retains the last-known entries instead of
- * unbinding an active remote selection (T20 / audit P4). That same refresh
- * path owns the D7 auto-failover (`reconcileSelectionDialability`): a
- * selection the registry still lists but nothing can dial is re-homed to the
- * next available host, transiently, and handed back when it returns.
+ * stable shape regardless of remote discovery progress (D3).
+ *
+ * Selection is not decided here, and since redesign P4.2 it is not HELD here
+ * either. The per-app selection authority owns `preferredHostId` and derives
+ * `effectiveHostId`; the renderer bridge parks that verdict in the authority
+ * store, and every consumer resolves it into a client through a pinned
+ * requester at read time. This class used to mirror that verdict - a bound
+ * row, a pointer to re-resolve it from, and a listener fan-out into
+ * `HostClient.bind()` - and all three died with the active slot. What it owns
+ * is RESOLUTION and nothing else: which directory row an id currently names. There is no default promotion, no
+ * persisted restore, and no auto-failover here any more - the fields and
+ * machinery for all three are deleted, not shadowed.
+ *
+ * `refresh()` only ever replaces `remoteEntries` on a genuine `hosts` or
+ * `signed-out` fetcher outcome; a `failed` outcome retains the last-known
+ * entries instead of unbinding an active remote selection (T20 / audit P4).
  *
  * The service never calls any `getLocalHost()` accessor; the current
  * snapshot is the most recent value delivered through the subscription.
@@ -171,6 +138,7 @@ export type HostDirectoryListener = (
 export class HostDirectoryService implements IHostDirectoryService {
   private readonly runnerHost: IRunnerHost;
   private readonly remoteFetcher: RemoteHostFetcher;
+  private readonly onRegistryPollTick: (() => void) | null;
   private readonly authContextId: () => string | null;
   private readonly credentialGeneration: () => number;
   private readonly localHostIdSeeder: () => Promise<string | null>;
@@ -188,11 +156,10 @@ export class HostDirectoryService implements IHostDirectoryService {
    *
    * `snapshot()` therefore rewrites that twin into a NON-DIALABLE LOCAL entry
    * rather than dropping it. Dropping it looked simpler but silently broke
-   * selection: the remembered id then resolved to nothing at startup, so a
-   * registry holding exactly one other machine had that remote auto-promoted,
-   * and `reconcileSelection()` kept the still-valid remote even after the
-   * local host came back. Keeping the id present preserves the user's intent
-   * while still refusing the relay.
+   * selection: the id then resolved to nothing, so the authority's verdict
+   * for this machine bound nothing while the local host was booting - the
+   * window sat unbound with a row for it sitting right there. Keeping the id
+   * resolvable preserves the binding while still refusing the relay.
    *
    * Seeded widest-first: the persisted value, the shell's durable pid metadata
    * (which still answers while the host is DOWN - the case the persisted value
@@ -209,110 +176,17 @@ export class HostDirectoryService implements IHostDirectoryService {
    * only before the first emit.
    */
   private lastEmittedSnapshot: readonly HostDirectoryEntry[] | null = null;
-  private selected: HostDirectoryEntry | null = null;
-  /**
-   * Tracks the user's explicit selection gesture via `selectById(...)`
-   * (including explicit clear with `selectById(null)`).
-   *
-   * Startup path: when no explicit selection has been made yet, directory
-   * refreshes / local-host arrivals that newly resolve a `getDefaultEntry()`
-   * are promoted into the effective selection so downstream
-   * `onSelectionChange(...)` subscribers (e.g. `HostRuntime`) rebind without
-   * requiring a remount or picker gesture.
-   *
-   * Once the user has explicitly selected a host id, that host is restored
-   * if it briefly leaves and re-enters the directory. Explicit clear suppresses
-   * auto-promotion until the user chooses again.
-   */
-  private explicitSelection: ExplicitHostSelection | null = null;
-  /**
-   * Non-null only during `start()`: suppresses default-promotion until the
-   * initial remote refresh has had a chance to resolve the persisted host.
-   */
-  private startupRestoreHostId: string | null = null;
-  /**
-   * One post-startup retry for web/mobile shells that remained fully unbound
-   * after the startup restore attempt. Consumed by the next refresh that
-   * actually delivers at least one remote entry.
-   */
-  private unboundFollowUpRestoreHostId: string | null = null;
-  /**
-   * True once any refresh has delivered a genuine fetcher outcome (`hosts`
-   * or `signed-out`). Until then the remote side of the directory is simply
-   * UNKNOWN - a `failed` fetch proves nothing about a remembered host's
-   * registration - which is what lets the startup restore distinguish "the
-   * registry omitted the host" (deregistered) from "the registry was never
-   * reached" (transient blip).
-   */
-  private hasGenuineRemoteOutcome = false;
-  /**
-   * One-shot startup-restore retry armed when the persisted host could not
-   * be resolved because the initial refresh FAILED (never delivered a
-   * genuine outcome). The default host is still promoted for usability, but
-   * the user's remembered selection is settled by the FIRST refresh that
-   * genuinely resolves: restored when present (overriding only the
-   * auto-promoted default - "we do not silently move them" cuts both ways),
-   * or retired when a genuine result omits it, exactly as a genuine first
-   * refresh would have fallen to the default. Retired by an explicit
-   * `selectById(...)` gesture.
-   */
-  private restoreAfterFailedRefreshHostId: string | null = null;
-  /**
-   * Consecutive genuine directory reads that found the current selection
-   * LISTED but not dialable, and the host they were counted for.
-   *
-   * Counted on the refresh path only (`performRefresh`), never on the
-   * local-snapshot path: a local snapshot re-reads the SAME registry rows, so
-   * counting it would let two local events inside one poll window satisfy a
-   * debounce whose whole point is two independent reads of the registry.
-   * Reset the moment the selection is dialable again, moves, or leaves.
-   */
-  private nonDialableSelectionStreak: DialabilityStreak | null = null;
-  /**
-   * The mirror of `nonDialableSelectionStreak` for the way back: consecutive
-   * genuine reads that found the FAILOVER ORIGIN dialable again. Recovery is
-   * damped exactly as hard as death (see `CONSECUTIVE_DIALABILITY_READS`);
-   * a host that answers once and lapses again restarts this from zero, so a
-   * flapping origin never re-homes the window.
-   */
-  private dialableOriginStreak: DialabilityStreak | null = null;
-  /**
-   * The host an auto-failover moved the app OFF, so the window can move back
-   * when it returns (D7.3).
-   *
-   * Armed for EVERY failover origin (F7): the hand-back covers
-   * auto/default/transient selections as well as an explicit pick, because a
-   * transient false-`offline` - a lease lapse the relay fuse is still holding -
-   * must not permanently move the app-wide selection off a host that is still
-   * working. The failover stays transient (`explicitSelection` is never
-   * rewritten). Two rails keep the claim honest: an explicit pick ALWAYS
-   * reclaims this marker for itself, and a non-explicit origin is recorded only
-   * when nothing already holds it, so the user's own choice still outranks an
-   * auto one across a second outage (explicit A dies -> B, then B dies: the
-   * marker stays A).
-   */
-  private failoverOriginHostId: string | null = null;
-  /**
-   * WHERE the failover machinery parked the app - the failover target, kept in
-   * step with `failoverOriginHostId` (cold review P2). The hand-back promise
-   * is "undo the move the failover made", so it is only redeemable while the
-   * app is still parked where that move left it. Every move the failover
-   * machinery itself makes (the initial failover, a chained second failover,
-   * the both-ends-vanished continuation) updates this; any OTHER route the
-   * selection travels - an explicit pick, a notification's transient
-   * activation - retires the whole marker instead, because handing back over
-   * a newer intent would steal the selection from a host the user just chose
-   * to look at.
-   */
-  private failoverTargetHostId: string | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
-  private readonly selectionListeners = new Set<
-    (entry: HostDirectoryEntry | null) => void
-  >();
   private localSubscription: Disposable | null = null;
   private started = false;
   private refreshIntervalId: number | null = null;
   private visibilityDocument: Document | null = null;
+  /**
+   * The shell's own registry cadence, when it has one (desktop's main process
+   * — redesign P4.1/F22). Non-null means this window arms NO interval of its
+   * own: the push IS the tick.
+   */
+  private registrySubscription: Disposable | null = null;
   /**
    * Coalesces concurrent `refresh()` callers onto a single in-flight fetch
    * (T20 / audit P4) - a foundation for T21's interval + open-time triggers,
@@ -359,8 +233,22 @@ export class HostDirectoryService implements IHostDirectoryService {
     void this.refresh();
   };
 
+  /**
+   * The push-riding twin of {@link handleVisibilityChange}: no poll clock to
+   * rearm, so a resume acts only on a push that arrived while hidden.
+   */
+  private readonly handleVisibilityChangeWhileRidingPushes = (): void => {
+    if (this.isDocumentHidden() || !this.pushMissedWhileHidden) {
+      return;
+    }
+    this.pushMissedWhileHidden = false;
+    this.applyRegistryPush();
+  };
+  private pushMissedWhileHidden = false;
+
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
+    this.onRegistryPollTick = options.onRegistryPollTick;
     this.remoteFetcher =
       options.remoteFetcher === null ? fetchRemoteHosts : options.remoteFetcher;
     this.localHostIdSeeder =
@@ -385,7 +273,6 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.started = true;
-    this.preparePersistedSelectionRestore();
     // BEFORE the first refresh: the very first launch after the upgrade that
     // introduced the persisted key has nothing stored, and that launch is
     // exactly the reinstall this guard exists for - the host is down, so no
@@ -414,7 +301,6 @@ export class HostDirectoryService implements IHostDirectoryService {
         status: snapshot === null ? "missing" : "available",
         version: snapshot?.version ?? null,
       });
-      this.reconcileSelection();
       this.emit();
     });
     await this.refresh();
@@ -425,7 +311,6 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (!this.isStarted()) {
       return;
     }
-    this.resolveStartupRestore();
     this.startRefreshPolling();
   }
 
@@ -438,50 +323,18 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * The live selection INTENT, as ids - what the user is pointed at, whether
-   * or not the directory can currently resolve it to an entry.
+   * This machine's own local host id as the directory knows it: seeded from
+   * the shell's durable pid metadata, then adopted from every local snapshot.
+   * `null` only on a machine whose local host has never announced itself.
    *
-   * `getSelected()` cannot answer this: it returns `null` both for "nothing
-   * selected" and for "the selected host has no row right now" (an explicit
-   * pick of an id the directory does not hold goes through `setSelected(null)`),
-   * and callers deciding whether to run LOCAL host management must tell those
-   * apart - one is a cold local start, the other is a remote host the user is
-   * waiting on.
-   *
-   * Read-only and in-memory ON PURPOSE. The persisted keys are this service's
-   * startup SEED, not the authority: `persistHostSelection` /
-   * `persistLocalHostId` swallow write failures by design (a blocked quota
-   * must never break selection), so a consumer that re-read storage would see
-   * "nothing selected" for a user who is very much pointed at a remote host,
-   * and would then provision the local machine underneath them. These fields
-   * are correct even when every write failed.
-   *
-   * Precedence mirrors `getSelected()`, minus its `getDefaultEntry()` tail: a
-   * default-promoted entry is not an intent, and its absence is exactly the
-   * "no pick yet" answer callers need.
+   * In-memory ON PURPOSE. `persistLocalHostId` swallows write failures by
+   * design (a blocked quota must never break selection), so a consumer that
+   * re-read storage would see `null` on a machine that is very much running a
+   * host - and the local-boot gate that reads this would then decide the
+   * wrong thing about provisioning it.
    */
-  readSelectionIntent(): HostSelectionIntent {
-    return {
-      selectedHostId: this.selectionIntentHostId(),
-      localHostId: this.lastKnownLocalHostId,
-    };
-  }
-
-  private selectionIntentHostId(): string | null {
-    if (this.selected !== null) {
-      return this.selected.hostId;
-    }
-    // An explicit clear (`{hostId: null}`) STOPS here rather than falling
-    // through to a restore id: the user erased the intent, and a remembered
-    // one must not resurrect it.
-    if (this.explicitSelection !== null) {
-      return this.explicitSelection.hostId;
-    }
-    return (
-      this.startupRestoreHostId ??
-      this.restoreAfterFailedRefreshHostId ??
-      this.unboundFollowUpRestoreHostId
-    );
+  getLocalHostId(): string | null {
+    return this.lastKnownLocalHostId;
   }
 
   /**
@@ -579,113 +432,6 @@ export class HostDirectoryService implements IHostDirectoryService {
     return null;
   }
 
-  getSelected(): HostDirectoryEntry | null {
-    if (this.selected !== null) {
-      return this.selected;
-    }
-    if (this.explicitSelection !== null) {
-      if (this.explicitSelection.hostId === null) {
-        return null;
-      }
-      return this.findById(this.explicitSelection.hostId);
-    }
-    if (this.startupRestoreHostId !== null) {
-      return this.findById(this.startupRestoreHostId);
-    }
-    return this.getDefaultEntry();
-  }
-
-  selectById(hostId: string | null): void {
-    appLogger.debug("[host-directory] explicit host selection requested", {
-      hostId,
-      clearingSelection: hostId === null,
-    });
-    this.startupRestoreHostId = null;
-    this.unboundFollowUpRestoreHostId = null;
-    this.restoreAfterFailedRefreshHostId = null;
-    // The user answered "which host do you work on" themselves, so the whole
-    // failover memory is retired: both dialability streaks belong to a
-    // selection that no longer exists, and the origin marker exists only to
-    // hand the app back to the pick this gesture just replaced.
-    this.nonDialableSelectionStreak = null;
-    this.dialableOriginStreak = null;
-    this.failoverOriginHostId = null;
-    this.failoverTargetHostId = null;
-    this.explicitSelection = { hostId };
-    if (hostId === null) {
-      // An explicit clear erases the remembered host entirely rather than
-      // persisting a "cleared" marker - otherwise every future launch would
-      // restore that marker and stay unbound forever instead of falling back
-      // to today's getDefaultEntry() behavior.
-      removePersistedHostSelection();
-      this.setSelected(null);
-      return;
-    }
-    persistHostSelection(hostId);
-    const entry = this.findById(hostId);
-    if (entry !== null) {
-      Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
-        source: "direct_ui",
-        host_kind: entry.kind === "remote" ? "remote" : "local",
-      });
-    }
-    this.setSelected(entry);
-  }
-
-  /**
-   * Binds a host for the CURRENT app context without recording it as the
-   * user's chosen host.
-   *
-   * Same single binding authority as `selectById` - it goes through
-   * `setSelected`, so `HostRuntime` still performs exactly one synchronous
-   * `hostClient.bind(entry)` and the directory and client cannot disagree.
-   * What it deliberately does NOT write is `explicitSelection`: activating a
-   * host to show a notification's destination moves the app, it does not
-   * answer "which host do you work on". Leaving that intent unset is what
-   * lets `reconcileSelection` promote `getDefaultEntry()` again if the
-   * activated host later leaves the directory - a durable pin would strand
-   * the session unbound on a host that no longer exists.
-   *
-   * `source` is the caller's analytics attribution: this seam is about
-   * selection LIFETIME, not about who triggered it, so the entry point names
-   * itself rather than being assumed here.
-   *
-   * An id the directory does not currently hold is a no-op, never a clear: a
-   * transient activation must not be able to unbind the app.
-   */
-  selectTransientById(hostId: string, source: AnalyticsSource): void {
-    const entry = this.findById(hostId);
-    appLogger.debug("[host-directory] transient host activation requested", {
-      hostId,
-      resolved: entry !== null,
-      source,
-    });
-    if (entry === null) {
-      return;
-    }
-    if (source !== "host_failover") {
-      // A transient activation from anywhere OUTSIDE the failover machinery
-      // (today: a notification's destination) is newer intent about where the
-      // app should be. The hand-back marker's promise is "undo the failover's
-      // own move"; once the selection travels by another route that promise
-      // is stale, and redeeming it later would yank the user off the host
-      // they just navigated to (cold review P2: A dies -> failover B ->
-      // notification C -> A recovers must stay on C). The streaks retire with
-      // it - their evidence was counted for a parking spot that no longer
-      // exists. The failover's own moves pass `host_failover` and keep the
-      // marker, which is what lets a chained failover still hand back.
-      this.nonDialableSelectionStreak = null;
-      this.dialableOriginStreak = null;
-      this.failoverOriginHostId = null;
-      this.failoverTargetHostId = null;
-    }
-    Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
-      source,
-      host_kind: entry.kind === "remote" ? "remote" : "local",
-    });
-    this.setSelected(entry);
-  }
-
   getLocalEntry(): HostDirectoryEntry | null {
     return this.localEntry;
   }
@@ -703,12 +449,13 @@ export class HostDirectoryService implements IHostDirectoryService {
    *     explicit user gesture before binding.
    *
    * The `null` for a many-entry directory is a RULE, not a gap: falling
-   * through to the first remote silently bound a host on mobile and bypassed
-   * the mounted `<HostPicker />` (Flow 6). D7's "next available" rule
-   * therefore lives in `nextAvailableEntry`, which answers a different
-   * question - where an ALREADY-BOUND window goes when its host dies, a move
-   * the user is told about and which is undone when their host returns -
-   * rather than choosing a host for a user who has never picked one.
+   * through to the first remote silently bound a host the user never picked.
+   *
+   * NOTHING in this class consumes this any more (redesign P1.2): "which
+   * host should this app be on" is the authority's derivation, and "where
+   * does an already-bound window go when its host dies" is the failover
+   * engine's (P1.3). It survives as a directory READ - the shape of the
+   * merged directory, answered in one place - for the surfaces that ask it.
    */
   getDefaultEntry(): HostDirectoryEntry | null {
     if (this.localEntry !== null) {
@@ -749,17 +496,6 @@ export class HostDirectoryService implements IHostDirectoryService {
     };
   }
 
-  onSelectionChange(
-    handler: (entry: HostDirectoryEntry | null) => void,
-  ): Disposable {
-    this.selectionListeners.add(handler);
-    return {
-      dispose: () => {
-        this.selectionListeners.delete(handler);
-      },
-    };
-  }
-
   dispose(): void {
     if (this.localSubscription !== null) {
       this.localSubscription.dispose();
@@ -767,7 +503,6 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     this.stopRefreshPolling();
     this.listeners.clear();
-    this.selectionListeners.clear();
     this.started = false;
   }
 
@@ -778,12 +513,95 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (typeof window === "undefined") {
       return;
     }
+    // WHO OWNS THE CADENCE (redesign P4.1/F22, connection registry §1b).
+    //
+    // When the shell polls the registry for the whole app - desktop's main
+    // process does, so N windows make ONE `GET /api/v3/hosts` instead of N -
+    // this window arms no timer at all and rides the push instead. When it
+    // does not (browser/dev, the single-window topology D16 names, and every
+    // test shell), the interval below is still THE app's one liveness timer,
+    // exactly as before.
+    //
+    // Deliberately not "both": arming the interval as a safety net alongside
+    // the push would recreate the twin timer F22 exists to collapse, and it
+    // would do it invisibly, because two sources of the same refresh look
+    // identical from every consumer downstream.
+    if (this.subscribeToShellRegistryPushes()) {
+      return;
+    }
     this.visibilityDocument = typeof document === "undefined" ? null : document;
     this.armPollInterval();
     this.visibilityDocument?.addEventListener(
       "visibilitychange",
       this.handleVisibilityChange,
     );
+  }
+
+  /**
+   * Rides the shell's registry cadence when it has one. Returns whether it
+   * took ownership, so the caller knows not to arm a second source.
+   *
+   * A push drives the SAME two things the interval drives, through the same
+   * paths: `refresh()`, whose projection and emit gate are untouched by this
+   * change, and `onRegistryPollTick()`, which INVALIDATES the registry query
+   * rather than seeding it. Seeding is what the pushed rows might seem to
+   * enable, and it stays wrong for a reason this move strengthens rather than
+   * weakens: that query reaches the registry through
+   * `AuthService.fetchRegisteredHosts(era)`, whose issue-time credential fence
+   * exists to refuse a fetch whose bearer belongs to a different era - and
+   * these rows were fetched with the SHELL's bearer, one process over.
+   * Invalidating lets it refetch through its own fence, and costs nothing when
+   * nothing is observing.
+   *
+   * The account fence: a push carries the identity it was FETCHED under, and a
+   * window showing another account drops it. Same key on both sides - a user
+   * id - because a main-process generation counter means nothing here.
+   */
+  private subscribeToShellRegistryPushes(): boolean {
+    const subscription = this.runnerHost.onRegisteredHostsChange((push) => {
+      const currentContext = this.authContextId();
+      if (push.identityKey !== currentContext) {
+        appLogger.debug("[host-directory] dropped a push for another account", {
+          pushed: push.identityKey,
+          current: currentContext,
+        });
+        return;
+      }
+      // HIDDEN WINDOWS DO NOT REFETCH ON A PUSH, the same rule the timer path
+      // applies to its own tick. Riding pushes returned from `start()` before
+      // `visibilityDocument` was ever assigned, so `isDocumentHidden()` was
+      // permanently false on desktop and every background window issued its
+      // own `GET /api/v3/hosts` on each of main's 60 s ticks - the very fetch
+      // the removed per-window timer used to skip. The push is remembered and
+      // acted on when the window next becomes visible.
+      if (this.isDocumentHidden()) {
+        this.pushMissedWhileHidden = true;
+        return;
+      }
+      this.applyRegistryPush();
+    });
+    if (subscription === null) {
+      return false;
+    }
+    this.registrySubscription = subscription;
+    this.visibilityDocument = typeof document === "undefined" ? null : document;
+    this.visibilityDocument?.addEventListener(
+      "visibilitychange",
+      this.handleVisibilityChangeWhileRidingPushes,
+    );
+    return true;
+  }
+
+  /**
+   * What one shell push drives: the SAME two things the interval tick drives,
+   * through the same paths (see the doc above for why the pushed rows are not
+   * seeded directly).
+   */
+  private applyRegistryPush(): void {
+    void this.refresh();
+    if (this.onRegistryPollTick !== null) {
+      this.onRegistryPollTick();
+    }
   }
 
   /**
@@ -805,10 +623,32 @@ export class HostDirectoryService implements IHostDirectoryService {
         return;
       }
       void this.refresh();
+      // THE APP'S ONE LIVENESS TIMER (redesign P4.1 / F22). This tick used to
+      // have a twin: a second 60s `refetchInterval` on the registered-hosts
+      // query, against the same `GET /api/v3/hosts`, which this file's own
+      // comment already called out as not the goal. The twin is gone and the
+      // TanStack observers ride this tick instead.
+      //
+      // INVALIDATE rather than seed, and the distinction is load-bearing.
+      // This poll's fetcher returns already-projected `HostDirectoryEntry`
+      // rows, not the raw `HostListResponse` the Settings surfaces read their
+      // registry metadata from - and that query reaches the registry through
+      // `AuthService.fetchRegisteredHosts(era)`, whose issue-time credential
+      // fence exists precisely to refuse a fetch whose bearer belongs to a
+      // different era. Handing it data fetched on this path would route
+      // around that fence. Invalidating instead lets it refetch through its
+      // own, still fenced, and costs nothing when no such surface is mounted:
+      // an invalidation with no ACTIVE observer marks stale and issues no
+      // request.
+      if (this.onRegistryPollTick !== null) {
+        this.onRegistryPollTick();
+      }
     }, HOST_DIRECTORY_REFRESH_POLL_MS);
   }
 
   private stopRefreshPolling(): void {
+    this.registrySubscription?.dispose();
+    this.registrySubscription = null;
     if (this.refreshIntervalId !== null && typeof window !== "undefined") {
       window.clearInterval(this.refreshIntervalId);
     }
@@ -817,7 +657,12 @@ export class HostDirectoryService implements IHostDirectoryService {
       "visibilitychange",
       this.handleVisibilityChange,
     );
+    this.visibilityDocument?.removeEventListener(
+      "visibilitychange",
+      this.handleVisibilityChangeWhileRidingPushes,
+    );
     this.visibilityDocument = null;
+    this.pushMissedWhileHidden = false;
   }
 
   private isDocumentHidden(): boolean {
@@ -825,8 +670,8 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * On `failed`, retains the last-known `remoteEntries` and skips
-   * `reconcileSelection()` - a transient blip must never unbind an active
+   * On `failed`, retains the last-known `remoteEntries` and does not
+   * re-resolve the bound row - a transient blip must never unbind an active
    * remote selection (T20 / audit P4). `signed-out` clears remotes exactly
    * as a successful empty `hosts` result would.
    */
@@ -896,8 +741,6 @@ export class HostDirectoryService implements IHostDirectoryService {
         );
         this.remoteEntries = [];
         this.lastCommitIdentity = null;
-        this.retireFailoverStateOnAuthoritativeClear(outcome.kind);
-        this.reconcileSelection();
         this.emitIfSnapshotChanged();
         return this.snapshot();
       }
@@ -928,19 +771,36 @@ export class HostDirectoryService implements IHostDirectoryService {
     }
     this.lastCommitCredentialGeneration = era.credentialGeneration;
     this.lastCommitIdentity = era.identity;
+    // Captured BEFORE the overwrite: this is the only place that holds both
+    // sides of a membership transition (F6b).
+    const previousRemoteIds = new Set(
+      this.remoteEntries.map((entry) => entry.hostId),
+    );
     this.remoteEntries = outcome.kind === "hosts" ? outcome.entries : [];
-    this.hasGenuineRemoteOutcome = true;
-    this.retireFailoverStateOnAuthoritativeClear(outcome.kind);
-    await this.reseedLocalHostIdIfUnknown();
-    this.consumeRestoreAfterFailedRefresh();
-    if (outcome.kind === "hosts") {
-      this.consumeUnboundFollowUpRestore(outcome.entries);
+    // A host registered late - from the CLI, or from another machine - reaches
+    // this directory through its own poll, while the selection authority's
+    // fleet (desktop main) stays stale. Activate on it then refuses
+    // `unknown-host`: the user is told a machine they just registered is "no
+    // longer registered to this account".
+    //
+    // ADDED ids only. A REMOVED id is the deregister mutation's own
+    // announcement and must not be made twice; a first fetch that finds hosts
+    // fires once, which is correct rather than noise - main's fleet can be
+    // exactly as stale at cold start as at any other moment, and the cost is
+    // one refetch.
+    //
+    // The `hosts` check is DOCUMENTARY, not load-bearing, and a mutation probe
+    // proved it: `failed` returns above this line, and `signed-out` commits an
+    // empty set, so neither can ever satisfy the added-ids predicate. It stays
+    // because it states the rule a future edit has to keep - but no test pins
+    // it, because no mutation of it can go red.
+    if (
+      outcome.kind === "hosts" &&
+      outcome.entries.some((entry) => !previousRemoteIds.has(entry.hostId))
+    ) {
+      requestFleetRefresh(this.runnerHost);
     }
-    this.reconcileSelection();
-    // AFTER `reconcileSelection`, which has already refreshed the selection to
-    // this read's row - so the dialability test below runs on what the
-    // registry just said, not on the object bound one poll ago.
-    this.reconcileSelectionDialability();
+    await this.reseedLocalHostIdIfUnknown();
     // Emit only when the merged snapshot actually changed. The 60s registry
     // poll lands here on every tick; an unconditional emit made every
     // `onChange` consumer (17 query call sites) re-render/refetch app-wide
@@ -1057,19 +917,26 @@ export class HostDirectoryService implements IHostDirectoryService {
    * A re-enrollment does not just change which row `snapshot()` neutralises;
    * every other holder of the OLD id is now pointing at an obsolete twin that
    * the registry may keep listing as a remote-kind, relay-dialable row.
-   * Updating only the field left the persisted `last-selected-host` (and the
-   * in-flight restore intents already loaded from it - `start()` loads them
-   * BEFORE the seed runs) restoring that obsolete row as a valid remote
-   * selection, which `reconcileSelection()` then preserves: the app strands
-   * on a dead relay target with the local Retry path disabled - the exact
-   * lockout the id tracking exists to prevent. So the selection INTENT
-   * migrates with the id: "this machine" follows the machine.
+   * Updating only the field left every OTHER holder of the old id pointing at
+   * that obsolete row: the app strands on a dead relay target with the local
+   * Retry path disabled - the exact lockout the id tracking exists to
+   * prevent. So the holders migrate with the id: "this machine" follows the
+   * machine.
    *
-   * Enumerated holders, migrated here: the persisted selection, the three
-   * one-shot restore intents, and a live `explicitSelection`. Deliberately
-   * NOT migrated: tab bindings (bound to a hostId for life by design -
-   * cross-host is clone-not-migrate) and notification origin ids (ephemeral,
-   * scoped to a delivered notification).
+   * Enumerated holders, migrated here: the Settings viewing scope. There
+   * used to be two more - the live selection and the pointer the authority's
+   * verdict was resolved through - and both died with the active slot
+   * (redesign P4.2). This directory no longer holds a selection to migrate;
+   * the app-wide host is the authority's `effectiveHostId`, resolved through
+   * a pinned requester at each read, so a re-enrollment is picked up by the
+   * next resolution rather than by rewriting a stored row. Deliberately NOT
+   * migrated: tab bindings (bound to a
+   * hostId for life by design - cross-host is clone-not-migrate) and
+   * notification origin ids (ephemeral, scoped to a delivered notification).
+   * The durable INTENT is no longer one of them - it is the authority's
+   * `preferredHostId`, which is fleet-validated at its own layer (F14): a
+   * preferred id this machine has re-enrolled away from is simply not in the
+   * fleet any more, and derivation falls back rather than stranding.
    *
    * Migration only fires when the PREVIOUS id is known and matches: with no
    * previous id there is no evidence the remembered selection meant "this
@@ -1082,21 +949,6 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (previous === null || previous === next) {
       return;
     }
-    if (this.startupRestoreHostId === previous) {
-      this.startupRestoreHostId = next;
-    }
-    if (this.restoreAfterFailedRefreshHostId === previous) {
-      this.restoreAfterFailedRefreshHostId = next;
-    }
-    if (this.unboundFollowUpRestoreHostId === previous) {
-      this.unboundFollowUpRestoreHostId = next;
-    }
-    if (
-      this.explicitSelection !== null &&
-      this.explicitSelection.hostId === previous
-    ) {
-      this.explicitSelection = { hostId: next };
-    }
     // The Settings viewing scope is a holder too. A pin of this machine's
     // OLD id would keep Settings administering the dead registry twin (and
     // read `vanished` once the twin deregisters). A genuine remote pin never
@@ -1104,18 +956,6 @@ export class HostDirectoryService implements IHostDirectoryService {
     const settingsScope = useSettingsHostScopeStore.getState();
     if (settingsScope.scopedHostId === previous) {
       settingsScope.setScopedHostId(next);
-    }
-    if (loadPersistedHostSelection() === previous) {
-      persistHostSelection(next);
-    }
-    // The LIVE selection is a holder too, and intent alone cannot move it:
-    // `reconcileSelection()` keeps any selected id it can still find, and the
-    // obsolete twin usually remains listed until deregistration propagates.
-    // At seed time nothing is selected yet, so this only acts on the live
-    // re-enrollment path - where the caller just installed the new local
-    // entry, making it resolvable here.
-    if (this.selected !== null && this.selected.hostId === previous) {
-      this.setSelected(this.findById(next));
     }
     appLogger.debug("[host-directory] local host id re-enrolled", {
       previous,
@@ -1150,527 +990,6 @@ export class HostDirectoryService implements IHostDirectoryService {
     return entries;
   }
 
-  private setSelected(entry: HostDirectoryEntry | null): void {
-    if (this.selected === entry) {
-      return;
-    }
-    this.selected = entry;
-    appLogger.debug("[host-directory] effective host selection changed", {
-      hostId: entry?.hostId ?? null,
-      kind: entry?.kind ?? null,
-      hasWebsocketUrl: entry !== null && entry.websocketUrl !== null,
-    });
-    for (const handler of this.selectionListeners) {
-      handler(entry);
-    }
-  }
-
-  private preparePersistedSelectionRestore(): void {
-    this.startupRestoreHostId = null;
-    this.unboundFollowUpRestoreHostId = null;
-    this.restoreAfterFailedRefreshHostId = null;
-    this.hasGenuineRemoteOutcome = false;
-    if (this.explicitSelection !== null) {
-      return;
-    }
-    this.startupRestoreHostId = loadPersistedHostSelection();
-  }
-
-  private resolveStartupRestore(): void {
-    const hostId = this.startupRestoreHostId;
-    if (hostId === null) {
-      return;
-    }
-    this.startupRestoreHostId = null;
-    if (this.restorePersistedHostById(hostId)) {
-      return;
-    }
-    if (!this.hasGenuineRemoteOutcome) {
-      // The initial refresh FAILED, so the remembered host's absence proves
-      // nothing about deregistration - a transient network blip at launch
-      // must not consume the user's persisted selection ("we do not silently
-      // move them"). Promote the default below for usability, but keep a
-      // one-shot retry armed so the first refresh that genuinely resolves can
-      // still restore the remembered host.
-      this.restoreAfterFailedRefreshHostId = hostId;
-    }
-    this.reconcileSelection();
-    if (
-      this.selected === null &&
-      this.explicitSelection === null &&
-      this.localEntry === null &&
-      this.getDefaultEntry() === null
-    ) {
-      this.unboundFollowUpRestoreHostId = hostId;
-    }
-  }
-
-  /**
-   * Settles the failed-initial-refresh restore retry on the FIRST genuine
-   * fetcher outcome: restore the remembered host if the registry still knows
-   * it (overriding only an auto-promoted default - an explicit pick made in
-   * the meantime wins and already retired this one-shot), or retire the
-   * intent when the genuine result omits it, exactly as a genuine FIRST
-   * refresh would have fallen to the default (the deregistered case).
-   */
-  private consumeRestoreAfterFailedRefresh(): void {
-    const hostId = this.restoreAfterFailedRefreshHostId;
-    if (hostId === null) {
-      return;
-    }
-    this.restoreAfterFailedRefreshHostId = null;
-    if (this.explicitSelection !== null) {
-      return;
-    }
-    this.restorePersistedHostById(hostId);
-  }
-
-  private consumeUnboundFollowUpRestore(
-    remoteEntries: readonly HostDirectoryEntry[],
-  ): void {
-    const hostId = this.unboundFollowUpRestoreHostId;
-    if (hostId === null) {
-      return;
-    }
-    if (remoteEntries.length === 0) {
-      return;
-    }
-    if (this.selected !== null || this.explicitSelection !== null) {
-      // Something else already resolved a selection while this was pending
-      // (e.g. a manual pick) - the "still fully unbound" precondition no
-      // longer holds, so retire the one-shot rather than keep chasing it.
-      this.unboundFollowUpRestoreHostId = null;
-      return;
-    }
-    // Only consumed on an actual match - `restorePersistedHostById` clears
-    // it itself on success. A batch that doesn't contain the remembered host
-    // must not burn the one shot; leave it armed for the next delivery.
-    this.restorePersistedHostById(hostId);
-  }
-
-  private restorePersistedHostById(hostId: string): boolean {
-    const entry = this.findById(hostId);
-    if (entry === null) {
-      return false;
-    }
-    this.explicitSelection = { hostId };
-    this.unboundFollowUpRestoreHostId = null;
-    appLogger.debug("[host-directory] persisted host selection restored", {
-      hostId,
-    });
-    this.setSelected(entry);
-    return true;
-  }
-
-  private reconcileSelection(): void {
-    if (this.selected !== null) {
-      const fresh = this.findById(this.selected.hostId);
-      if (fresh !== null) {
-        // Value equality, not identity: a remote-registry refresh rebuilds
-        // every entry object each poll, so an identity compare would re-fire
-        // the selection listeners every ~60s with an unchanged host.
-        if (!hostDirectoryEntriesEqual(fresh, this.selected)) {
-          this.selected = fresh;
-          appLogger.debug(
-            "[host-directory] effective host selection refreshed",
-            {
-              hostId: fresh.hostId,
-              kind: fresh.kind,
-              hasWebsocketUrl: fresh.websocketUrl !== null,
-            },
-          );
-          for (const handler of this.selectionListeners) {
-            handler(fresh);
-          }
-        }
-        return;
-      }
-      // The selected host left the directory. Fall through to resolve the
-      // next selection from INTENT rather than clearing and waiting for a
-      // later pass: a selection with no durable intent behind it (a transient
-      // notification activation) hands straight back to the default host in
-      // one transition, instead of leaving the app unbound until the next
-      // refresh happens to arrive. An explicit pick still resolves to the
-      // same `null` it always did - the user chose that host, so we do not
-      // silently move them somewhere else.
-    }
-    if (this.startupRestoreHostId !== null) {
-      // A startup restore is still pending (Remote Host Support): resolving
-      // from intent now would auto-promote the default host before the
-      // remembered host's first directory batch has had a chance to arrive.
-      return;
-    }
-    const next = this.selectionFromIntent();
-    if (next !== null && this.explicitSelection === null) {
-      // The default host was promoted while fully unbound - the one-shot
-      // unbound follow-up restore no longer applies; retire it.
-      this.unboundFollowUpRestoreHostId = null;
-    }
-    if (next === null && this.failoverOriginHostId !== null) {
-      // BOTH ends of an in-progress failover are gone: the target this app was
-      // moved to has left the directory, and so has the origin the intent
-      // still names. Unbinding here stranded the window with a dialable host
-      // sitting right there - `failOverFromDeadSelection` returns immediately
-      // on a null selection, so nothing downstream picks it up.
-      //
-      // The "an explicit pick resolves to null, because the user chose that
-      // host" rule above is not being broken. It has already been spent: a
-      // failover moved this window off that pick once, which is exactly what
-      // `failoverOriginHostId` records. Continuing that move is the same
-      // decision, not a new one.
-      //
-      // Acting at once, with no dialability damping, matches how a VANISHED
-      // host is handled everywhere here - the damping exists for a host that
-      // is listed but will not dial, which is a different signal.
-      const continuation = this.nextAvailableEntry(null);
-      if (continuation !== null) {
-        appLogger.debug(
-          "[host-directory] failover target and origin both vanished, continuing",
-          {
-            failoverOriginHostId: this.failoverOriginHostId,
-            continuationHostId: continuation.hostId,
-          },
-        );
-        // The continuation is the failover machinery's own move, so the
-        // hand-back marker stays redeemable: the target follows the app to
-        // its new parking spot (cold review P2 - only a NON-failover route
-        // moving the selection retires the marker).
-        this.failoverTargetHostId = continuation.hostId;
-        this.setSelected(continuation);
-        return;
-      }
-    }
-    this.setSelected(next);
-  }
-
-  /**
-   * D7 auto-failover: keeps the app-wide selection pointed at a host it can
-   * actually DIAL, not merely at one the registry still lists.
-   *
-   * `reconcileSelection` deliberately treats "still listed" as "still fine" -
-   * that is what keeps a selection stable through registry churn - so a remote
-   * host whose presence lease lapsed stayed bound indefinitely and the app
-   * stranded on the actionless full-screen card. This is the one place that
-   * reads dialability, and it runs on the refresh path only, so "consecutive"
-   * means consecutive genuine reads of the registry.
-   *
-   * Two moves, in priority order:
-   *
-   *  1. Re-adopt the host a previous failover moved off, once it has been
-   *     dialable for {@link CONSECUTIVE_DIALABILITY_READS} consecutive reads.
-   *     The failover never rewrote `explicitSelection`, so this restores the
-   *     remembered origin - an explicit pick, or (since F7) an auto/default/
-   *     transient selection - rather than making a new decision for them.
-   *  2. Fail over off a listed-but-non-dialable selection, after the same
-   *     {@link CONSECUTIVE_DIALABILITY_READS} consecutive reads say so.
-   *
-   * Both moves go through `selectTransientById`, so the durable intent is
-   * untouched in either direction and one selection change produces exactly
-   * one `hostClient.bind` (`HostRuntime`), which is also what raises the
-   * status strip's "Switching to …".
-   *
-   * Guard rails (D7.5), and where each one lives:
-   *  - never off THIS machine's own host - a local row that cannot be dialed
-   *    is a host booting or restarting, and its provisioning lifecycle owns
-   *    that recovery (the 2026-07-14 mass-false-positive incident is what an
-   *    availability read taken inside that window looks like when it is
-   *    treated as death);
-   *  - never TO a non-dialable entry, and never to the dead host itself
-   *    (`nextAvailableEntry`), which is also what makes "the dead host is the
-   *    only host" a no-op;
-   *  - an empty directory cannot reach the failover branch at all: with no
-   *    rows the selection does not resolve, so `reconcileSelection` has
-   *    already taken the vanished-selection path above.
-   */
-  private reconcileSelectionDialability(): void {
-    if (this.readoptFailoverOrigin()) {
-      return;
-    }
-    this.failOverFromDeadSelection();
-  }
-
-  /**
-   * Drops the failover's whole memory - the origin marker and both dialability
-   * streaks - when a genuine outcome says the REGISTRY this state describes no
-   * longer holds anything.
-   *
-   * The trigger is the remote registry coming back EMPTY, which both genuine
-   * clearing outcomes produce (`signed-out` empties `remoteEntries`, and so
-   * does a `hosts` result with no entries). Keyed on the remote side, not on
-   * the merged snapshot, because everything this retires is about a remote
-   * host: the marker can only ever name one (`failOverFromDeadSelection` arms
-   * it from a remote row), so an empty registry means the marked host is not
-   * merely unreachable - the account does not list it at all. Testing the
-   * merged snapshot instead made the desktop case - where the local row keeps
-   * that snapshot non-empty - silently skip the retirement, which is the shape
-   * a user actually hits: parked on their local host after a failover, with
-   * the registry since emptied.
-   *
-   * Without this the marker outlives its world. Sign out and back in and the
-   * first refresh that re-lists the old host would re-adopt it - moving the
-   * app-wide binding, with a toast, on the strength of a pick made in a
-   * session this one is not. The streaks are retired for the same reason:
-   * evidence counted against a registry that has since been cleared is not
-   * evidence about this one.
-   *
-   * Deliberately NOT triggered by the marked host merely going missing from a
-   * still-populated list. That is the outage this feature exists for - one
-   * host deregistered or unreachable while others remain - and the whole
-   * promise is that the user's pick survives it.
-   */
-  private retireFailoverStateOnAuthoritativeClear(
-    outcomeKind: RemoteHostFetchOutcome["kind"],
-  ): void {
-    if (this.remoteEntries.length > 0) {
-      return;
-    }
-    if (
-      this.failoverOriginHostId === null &&
-      this.nonDialableSelectionStreak === null &&
-      this.dialableOriginStreak === null
-    ) {
-      return;
-    }
-    appLogger.debug("[host-directory] retiring failover state", {
-      reason: outcomeKind === "signed-out" ? "signed-out" : "empty-registry",
-      originHostId: this.failoverOriginHostId,
-    });
-    this.failoverOriginHostId = null;
-    this.failoverTargetHostId = null;
-    this.nonDialableSelectionStreak = null;
-    this.dialableOriginStreak = null;
-  }
-
-  private readoptFailoverOrigin(): boolean {
-    const hostId = this.failoverOriginHostId;
-    if (hostId === null) {
-      return false;
-    }
-    if (this.selected !== null && this.selected.hostId === hostId) {
-      // Already back on it by some other route (a restore, a re-enrollment
-      // migration): the marker has nothing left to do.
-      this.failoverOriginHostId = null;
-      this.failoverTargetHostId = null;
-      this.dialableOriginStreak = null;
-      return false;
-    }
-    if (
-      this.selected === null ||
-      this.failoverTargetHostId === null ||
-      this.selected.hostId !== this.failoverTargetHostId
-    ) {
-      // The app is no longer parked where the failover left it: some route
-      // that does not manage this marker moved (or cleared) the selection.
-      // The hand-back promise - "undo the failover's own move" - has nothing
-      // left to undo, and redeeming it anyway is exactly the P2 selection
-      // steal (it would override whatever moved the app since). Defensive
-      // belt to `selectTransientById`'s retirement: any route we did not
-      // foresee still cannot redeem a stale marker.
-      appLogger.debug(
-        "[host-directory] failover marker stale - selection moved off the failover target",
-        {
-          originHostId: hostId,
-          failoverTargetHostId: this.failoverTargetHostId,
-          selectedHostId: this.selected === null ? null : this.selected.hostId,
-        },
-      );
-      this.failoverOriginHostId = null;
-      this.failoverTargetHostId = null;
-      this.dialableOriginStreak = null;
-      return false;
-    }
-    const entry = this.findById(hostId);
-    if (entry === null || !isEntryDialable(entry)) {
-      // Absent or still not dialable. A host that answered ONE read and
-      // lapsed again was flapping, not recovering, so the count restarts from
-      // zero rather than accumulating across the gap - the same evidence bar
-      // the death streak sets.
-      this.dialableOriginStreak = null;
-      return false;
-    }
-    const count = nextStreakCount(this.dialableOriginStreak, hostId);
-    this.dialableOriginStreak = { hostId, count };
-    if (count < CONSECUTIVE_DIALABILITY_READS) {
-      appLogger.debug(
-        "[host-directory] failover origin answered once, waiting for a second read",
-        { hostId, reads: count },
-      );
-      return false;
-    }
-    this.failoverOriginHostId = null;
-    this.failoverTargetHostId = null;
-    this.dialableOriginStreak = null;
-    this.nonDialableSelectionStreak = null;
-    appLogger.debug("[host-directory] failover origin is dialable again", {
-      hostId,
-      reads: count,
-    });
-    this.selectTransientById(hostId, "host_failover");
-    toastHostSwitched(entry, `${hostSwitchLabel(entry)} is available again.`);
-    return true;
-  }
-
-  private failOverFromDeadSelection(): void {
-    const selected = this.selected;
-    if (selected === null) {
-      this.nonDialableSelectionStreak = null;
-      return;
-    }
-    const fresh = this.findById(selected.hostId);
-    // A row that VANISHED is `reconcileSelection`'s business - it resolves the
-    // next selection from intent. This path is only about a row that is still
-    // listed and no longer usable.
-    if (fresh === null || isEntryDialable(fresh)) {
-      this.nonDialableSelectionStreak = null;
-      return;
-    }
-    // Re-homing the app-wide selection is the most disruptive thing in this
-    // file: it moves every new piece of work to a different MACHINE. So it
-    // demands positive evidence the host is dead, not merely the absence of
-    // evidence that it is alive.
-    //
-    // `isConfirmedHostDeath` withholds exactly the two cases that are not
-    // evidence — a failed liveness read (`indeterminate`) and a plan-gated
-    // host that never attaches by design — and honours a live E2E session as
-    // firsthand proof. Without it, one degraded Redis read on the cloud side
-    // moved the user's window off a host they were actively working on, and
-    // the debounce below did not help: the poll re-reads the same degraded
-    // answer, so two consecutive reads agree and the streak completes.
-    if (!isConfirmedHostDeath(fresh, hasReadyRemoteSession(fresh.hostId))) {
-      this.nonDialableSelectionStreak = null;
-      return;
-    }
-    if (isThisMachineKind(fresh)) {
-      // THIS machine's own host, down: it is booting or restarting and the
-      // local provisioning lifecycle owns that recovery. See the guard-rail
-      // note above - re-homing the window onto a different MACHINE here is
-      // the 2026-07-14 false-positive shape.
-      this.nonDialableSelectionStreak = null;
-      return;
-    }
-    // Clamped, because the streak is a STATE MARKER ("confirmed dead") and not
-    // a census. Left uncapped it gained one per 60s poll for as long as a host
-    // stayed dead with nothing to fail over to, so the `reads:` value below
-    // grew into the thousands and stopped meaning "reads before we act" -
-    // which is the only thing anyone reading that line wants from it.
-    const count = Math.min(
-      nextStreakCount(this.nonDialableSelectionStreak, fresh.hostId),
-      CONSECUTIVE_DIALABILITY_READS,
-    );
-    this.nonDialableSelectionStreak = { hostId: fresh.hostId, count };
-    if (count < CONSECUTIVE_DIALABILITY_READS) {
-      appLogger.debug(
-        "[host-directory] selected host is not dialable, waiting for a second read",
-        { hostId: fresh.hostId, reads: count },
-      );
-      return;
-    }
-    const next = this.nextAvailableEntry(fresh.hostId);
-    if (next === null) {
-      // Nothing to fail over TO. Stay put and let the readiness surface report
-      // it: moving to a second host we cannot dial would re-home the window on
-      // every poll and still leave the user on a dead host.
-      //
-      // The streak is deliberately left ARMED. The debounce guards against a
-      // single stale read, not against acting once death is confirmed - two
-      // reads already confirmed it - so the first poll that finally produces a
-      // dialable candidate fails over immediately instead of re-serving a wait
-      // the user has already sat through.
-      appLogger.debug("[host-directory] no dialable host to fail over to", {
-        hostId: fresh.hostId,
-        totalCount: this.snapshot().length,
-      });
-      return;
-    }
-    // Armed BEFORE the bind: `selectTransientById` fans out to the selection
-    // listeners synchronously, and the marker is what those listeners' world
-    // needs to be able to hand the app back later.
-    //
-    // F7: every failover origin is remembered so the hand-back covers
-    // auto/default/transient selections too, not only an explicit pick - a
-    // transient false-`offline` must not permanently move the app-wide
-    // selection off a host that is still working. Two guard rails keep that
-    // safe:
-    //   - the user's explicit pick ALWAYS (re)claims the marker for itself, so
-    //     it outranks any auto/transient origin;
-    //   - otherwise the marker is armed only when nothing already holds it, so
-    //     a non-explicit failover never overwrites an existing claim. That is
-    //     the second-outage case - explicit A dies, we move to B, B dies too -
-    //     where clobbering with B would quietly retire the user's claim on A
-    //     while A is still the host they chose.
-    if (
-      (this.explicitSelection !== null &&
-        this.explicitSelection.hostId === fresh.hostId) ||
-      this.failoverOriginHostId === null
-    ) {
-      this.failoverOriginHostId = fresh.hostId;
-    }
-    // The target ALWAYS tracks the newest failover move, even when the origin
-    // marker above kept an older claim (explicit A dies -> B, B dies -> C:
-    // origin stays A, target becomes C). The hand-back is redeemable only
-    // while the selection still sits on this target (cold review P2).
-    this.failoverTargetHostId = next.hostId;
-    this.nonDialableSelectionStreak = null;
-    appLogger.debug("[host-directory] failing over from a dead host", {
-      from: fresh.hostId,
-      to: next.hostId,
-      // Always restorable since F7 (every failover arms or keeps an origin
-      // claim, and the target above tracks this newest move), so the useful
-      // datum is WHICH origin the hand-back would restore.
-      originHostId: this.failoverOriginHostId,
-    });
-    this.selectTransientById(next.hostId, "host_failover");
-    toastHostSwitched(next, `${hostSwitchLabel(fresh)} stopped responding.`);
-  }
-
-  /**
-   * D7's next-available rule: this machine's own host when it is dialable,
-   * else the first dialable entry, and never the host we are failing away
-   * from.
-   *
-   * Deliberately NOT folded into `getDefaultEntry()`, which the sub-plan
-   * proposed. That function answers "what should auto-bind for a user who has
-   * never picked a host", and its `null` for a many-entry directory is the
-   * Flow 6 rule - falling through to the first remote silently bound a host on
-   * mobile and bypassed the mounted picker. This one answers "where does an
-   * already-bound window go when its host dies", which is a different promise:
-   * the user already has a host, the move is announced, and it is handed back
-   * when their own host returns.
-   *
-   * Never returns a non-dialable candidate, and never the corpse: either would
-   * just re-arm the whole failover path on the next poll.
-   */
-  private nextAvailableEntry(
-    // `null` excludes nothing - used when the host being moved off has already
-    // left the directory, so there is no id left to exclude.
-    excludedHostId: string | null,
-  ): HostDirectoryEntry | null {
-    const candidates = this.snapshot().filter(
-      (entry) => entry.hostId !== excludedHostId && isEntryDialable(entry),
-    );
-    const localCandidate = candidates.find(isThisMachineKind);
-    if (localCandidate !== undefined) {
-      return localCandidate;
-    }
-    return candidates.length === 0 ? null : candidates[0];
-  }
-
-  /**
-   * The selection implied by durable intent alone, ignoring whatever is
-   * currently selected: the user's explicit pick while the directory can
-   * still resolve it, their explicit clear when they made one, and otherwise
-   * the auto-promoted default host.
-   */
-  private selectionFromIntent(): HostDirectoryEntry | null {
-    if (this.explicitSelection !== null) {
-      if (this.explicitSelection.hostId === null) {
-        return null;
-      }
-      return this.findById(this.explicitSelection.hostId);
-    }
-    return this.getDefaultEntry();
-  }
-
   private emit(): void {
     const snapshot = this.snapshot();
     this.lastEmittedSnapshot = snapshot;
@@ -1693,97 +1012,6 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.emit();
-  }
-}
-
-interface ExplicitHostSelection {
-  readonly hostId: string | null;
-}
-
-interface DialabilityStreak {
-  readonly hostId: string;
-  readonly count: number;
-}
-
-/**
- * The streak count this read produces: one more than the last read when it was
- * about the SAME host, otherwise a fresh 1. Keying on the host id is what
- * keeps two different hosts' evidence from being added together - the marker
- * can move between hosts across a second outage.
- */
-function nextStreakCount(
-  streak: DialabilityStreak | null,
-  hostId: string,
-): number {
-  if (streak === null || streak.hostId !== hostId) {
-    return 1;
-  }
-  return streak.count + 1;
-}
-
-/**
- * Whether the directory POSITIVELY says this entry can be dialed right now: a
- * websocket URL plus the projection's `dialable` bit (for a remote row that is
- * `connectivity === "connectable"` - the relay holds a live attachment; for a
- * local row, the shell publishing a live snapshot).
- *
- * Deliberately NOT `dialableHostEndpoint(entry) !== null` any more (cold
- * review P1). That helper answers dial PERMISSION - "may a socket be
- * attempted" - which correctly stays open for `indeterminate` and for a
- * fuse-window `offline` (the recovery-dial affordance,
- * `isRelayFuseRecoveryCandidate`). The failover machinery here asks three
- * POSITIVE questions with it - is the selection still usable, is a candidate
- * worth failing over TO, has the origin actually returned - and answering
- * those from the permission gate let the fuse window's recency suppress
- * failover through a second door (and would let a mere dial-permitted corpse
- * be adopted as a failover target or trigger the hand-back). Death itself is
- * still judged by `isConfirmedHostDeath` below, so a degraded `unknown` read
- * remains non-evidence exactly as before.
- *
- * A READY remote session is the OTHER positive answer, and it is stronger
- * than the projection: a client holding an open E2E session has firsthand
- * proof the host is up (the same evidence that outranks the cloud in
- * `isConfirmedTransportRefusal` and `isConfirmedHostDeath`). Tabs stay bound
- * to their origin host across an app-wide failover, so exactly this arises: a
- * bound tab's fuse-recovery dial succeeds while the registry still says
- * `offline` - the origin is proven live and must be eligible for the
- * hand-back (and a proven-live candidate selectable) without waiting for the
- * cloud verdict to catch up. This is evidence, not permission: a fuse-window
- * `offline` with NO session still answers `false` here.
- */
-function isEntryDialable(entry: HostDirectoryEntry): boolean {
-  if (entry.websocketUrl === null) {
-    return false;
-  }
-  if (entry.transportDialability === "dialable") {
-    return true;
-  }
-  return hasReadyRemoteSession(entry.hostId);
-}
-
-/**
- * Whether the entry is THIS machine's own host - the live local snapshot or
- * the non-dialable booting twin `snapshot()` rewrites for it. `mock` counts as
- * local for the same reason every other host-kind test in the app treats it
- * that way: it is a locally-run host, not a machine reached through the relay.
- */
-function isThisMachineKind(entry: HostDirectoryEntry): boolean {
-  return entry.kind !== "remote";
-}
-
-function loadPersistedHostSelection(): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    const raw = window.localStorage.getItem(LAST_SELECTED_HOST_STORAGE_KEY);
-    return raw !== null && raw.length > 0 ? raw : null;
-  } catch (error) {
-    appLogger.warn("[host-directory] persisted host selection load failed", {
-      storageKey: LAST_SELECTED_HOST_STORAGE_KEY,
-      error: describeLogError(error),
-    });
-    return null;
   }
 }
 
@@ -1815,32 +1043,6 @@ function persistLocalHostId(hostId: string): void {
       hostId,
       error: describeLogError(error),
     });
-  }
-}
-
-function persistHostSelection(hostId: string): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.setItem(LAST_SELECTED_HOST_STORAGE_KEY, hostId);
-  } catch (error) {
-    appLogger.warn("[host-directory] persisted host selection write failed", {
-      storageKey: LAST_SELECTED_HOST_STORAGE_KEY,
-      hostId,
-      error: describeLogError(error),
-    });
-  }
-}
-
-function removePersistedHostSelection(): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.removeItem(LAST_SELECTED_HOST_STORAGE_KEY);
-  } catch {
-    // Best-effort cleanup; the load failure path already logged context.
   }
 }
 

@@ -5,7 +5,7 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { queryClient } from "@/lib/query-client";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { getAppHostClientSnapshot } from "@/lib/host/runtime";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { RoutePendingScreen } from "@/components/loading/route-pending-screen";
 import { RouteErrorComponent } from "@/components/errors/route-error-component";
@@ -19,7 +19,13 @@ import type { HostRpcRegistry } from "@/lib/host";
 export interface AppRouterContext {
   queryClient: QueryClient;
   getAuthSnapshot: () => AuthState;
-  getActiveHostId: () => string | null;
+  /**
+   * The app-wide host client, already pinned to the effective host. A loader
+   * that needs the host ID reads it off this client rather than from a second
+   * accessor: the pair used to be two independent reads of the active slot,
+   * which could disagree across a move mid-loader, and the ID half was the
+   * privileged identity P4.2 deleted.
+   */
   getHostClient: () => HostClient<HostRpcRegistry> | null;
 }
 
@@ -48,9 +54,7 @@ export function createAppRouter(
     context: {
       queryClient,
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () =>
-        getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
-      getHostClient: () => getHostBindingSnapshot()?.hostClient ?? null,
+      getHostClient: () => getAppHostClientSnapshot(),
     },
     ...(history === undefined ? {} : { history }),
   });

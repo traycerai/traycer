@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { buildSnapshotUnifiedPatchBundle } from "@/lib/diff/snapshot-diff-patch";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
@@ -48,6 +49,7 @@ import {
   type DiffTabToolbarViewPatch,
 } from "@/components/epic-canvas/git-diff/diff-tab-toolbar";
 import { SnapshotDiffSourceUnavailableBanner } from "./dead-tile-banner";
+import { BoundedTileLoad } from "./tile-host-load-state";
 
 const SNAPSHOT_DIFF_LOADING_FIND_MESSAGE =
   "Snapshot diff content is still loading.";
@@ -82,7 +84,21 @@ export function SnapshotDiffTileBody(
             coverageMessage: SNAPSHOT_DIFF_LOADING_FIND_MESSAGE,
           })}
         />
-        <SnapshotDiffLoading node={node} />
+        {/*
+          Invariant 6. The sibling `segmentPending` gate below already refuses
+          to spin on a DISABLED query (see its comment - `isLoading`, not
+          `isPending`, because a content-less edit disables the query and
+          leaves `isPending` true forever). That fix was right and stayed
+          local; this is the same shape one level up, where the chat session
+          handle never resolves because the tab's host never answered.
+        */}
+        <BoundedTileLoad
+          hostId={hostId}
+          subject="diff"
+          onRetry={null}
+          testId={`snapshot-diff-tile-load-${node.id}`}
+          fallback={<SnapshotDiffLoading node={node} />}
+        />
       </SnapshotDiffTileShell>
     );
   }
@@ -212,6 +228,9 @@ function SnapshotDiffTileResolved(props: {
     [accumulatedFileChanges, liveAssistantBlocks, messages, node.diff],
   );
   const segmentQuery = useSnapshotDiffQuery({
+    // The snapshot blobs were written by the host this TILE is bound to - the
+    // same host its `useChatSessionHandle` above is keyed by (D15).
+    client: useTabHostClient(),
     beforeHash: segmentHashes?.beforeHash ?? null,
     afterHash: segmentHashes?.afterHash ?? null,
     enabled: segmentHashes !== null,

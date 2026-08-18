@@ -7,8 +7,10 @@ import {
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
-import { useHostClient } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
@@ -94,10 +96,17 @@ const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
  * busy-check on `worktree.deleteByPath` remains the authoritative backstop
  * either way.
  */
-export function useEpicSweepWorktreeCandidates(
+/**
+ * Sweep-candidate rows against a caller-resolved client. The proof (and the
+ * sweep it authorises, whose host id is frozen from it) is per HOST: the
+ * Epics list passes the app-wide client; the Epic panel's sweep action
+ * passes the Epic session's, so an Epic projected from host A is never
+ * offered - or swept of - host B's worktrees.
+ */
+export function useEpicSweepWorktreeCandidatesForClient(
+  client: HostClient<HostRpcRegistry> | null,
   epicIds: ReadonlyArray<string> | null,
 ): EpicSweepWorktreeCandidatesResult {
-  const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
   // Sorted + de-duplicated so the cache identity does not depend on selection
   // ORDER, and so re-selecting the same tasks reuses the same query slot.
@@ -109,6 +118,11 @@ export function useEpicSweepWorktreeCandidates(
     selectedEpicIds === null ? "" : selectedEpicIds.join(",");
   const fetchFreshTaskWorktrees =
     async (): Promise<WorktreeListAllForHostResponseV14> => {
+      // `enabled` already requires readiness (false for a null client); this
+      // is the typed guard the closure needs to call `request` at all.
+      if (client === null) {
+        throw hostClientUnavailableError("worktree.listAllForHost");
+      }
       // Cheap disk-truth walk (no git/gh probes, host cache is fine): only
       // used to discover WHICH paths this Task owns.
       const base: WorktreeListAllForHostResponseV14 = await client.request(

@@ -55,9 +55,11 @@ function createIndicatorClient(
   queryClient: QueryClient,
   requests: Array<Deferred<HostNotificationsIndicatorStateResponse>>,
 ): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "request-1",
@@ -71,11 +73,10 @@ function createIndicatorClient(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
-  return client;
+  return spine.createRequester(mockLocalHostEntry);
 }
 
 describe("notification indicator cache invalidation", () => {

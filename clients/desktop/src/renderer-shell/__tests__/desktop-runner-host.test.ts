@@ -4,10 +4,12 @@ import type {
   HostRegistryUpdateState,
   ITokenStore,
   LocalHostSnapshot,
+  RegisteredHostsChange,
   StoredCredentials,
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
+import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import {
   DesktopRunnerHost,
   type DesktopPreloadBridge,
@@ -59,6 +61,9 @@ function buildFakeBridge(
   let lastEmitted: LocalHostSnapshot | null = initialSnapshot;
   let firstSubscriberServed = false;
   const handlers = new Set<(snapshot: LocalHostSnapshot | null) => void>();
+  const registeredHostsHandlers = new Set<
+    (push: RegisteredHostsChange) => void
+  >();
   const systemResumedHandlers = new Set<() => void>();
 
   const tokenSlot = { value: null as string | null };
@@ -145,6 +150,20 @@ function buildFakeBridge(
         },
       };
     },
+    // Matches `onLocalHostChange` above structurally (a `Set` of handlers
+    // plus a dispose closure), but WITHOUT the replay: production has no
+    // cache to replay from either (`host-bridge.ts` - "nothing for a cache
+    // or a first-subscribe pull to repair").
+    onRegisteredHostsChange: (
+      handler: (push: RegisteredHostsChange) => void,
+    ) => {
+      registeredHostsHandlers.add(handler);
+      return {
+        dispose: () => {
+          registeredHostsHandlers.delete(handler);
+        },
+      };
+    },
     onSystemResumed: (handler: () => void) => {
       systemResumedHandlers.add(handler);
       return {
@@ -162,13 +181,6 @@ function buildFakeBridge(
       setEpics: async (_epics: readonly TrayEpic[]) => undefined,
       setIndicator: async (_state: TrayIndicatorState) => undefined,
       onEpicSelected: (_handler: (epicId: string) => void) => ({
-        dispose: () => undefined,
-      }),
-    },
-    hostPicker: {
-      requestOpen: async () => undefined,
-      requestClose: async () => undefined,
-      onChange: (_handler: (isOpen: boolean) => void) => ({
         dispose: () => undefined,
       }),
     },
@@ -557,6 +569,8 @@ function buildFakeBridge(
     hostControllerStatus: {
       onChange: () => ({ dispose: () => undefined }),
     },
+    selectionAuthority: createInertSelectionAuthorityClient(),
+    refreshSelectionFleet: () => Promise.resolve(),
   };
 
   return {

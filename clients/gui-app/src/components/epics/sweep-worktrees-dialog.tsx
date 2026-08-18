@@ -1,5 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { AlertTriangle, Paintbrush } from "lucide-react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   describeReviewReasons,
   WORKTREE_TIER_LABEL,
@@ -25,7 +27,7 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
 import {
-  useEpicSweepWorktreeCandidates,
+  useEpicSweepWorktreeCandidatesForClient,
   type EpicSweepWorktreeRow,
 } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
 import {
@@ -47,6 +49,14 @@ interface SweepWorktreesDialogProps {
    * two selected Tasks stops counting as "shared".
    */
   readonly epicIds: ReadonlyArray<string> | null;
+  /**
+   * The host whose worktrees are proven and swept. Worktrees are per HOST, and
+   * the sweep's host id is frozen from this client's proof: the Epics list
+   * (app chrome) passes the app-wide client; a caller INSIDE an Epic session
+   * passes the session's client, so an Epic projected from host A is never
+   * offered - or swept of - host B's worktrees during a re-point.
+   */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   /** Title for a single-Task sweep; `null` for bulk or unknown. */
   readonly taskTitle: string | null;
   readonly onOpenChange: (open: boolean) => void;
@@ -98,7 +108,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     checkedAt,
     canRefresh,
     refresh: refreshCandidates,
-  } = useEpicSweepWorktreeCandidates(epicIds);
+  } = useEpicSweepWorktreeCandidatesForClient(props.hostClient, epicIds);
   const taskCount = epicIds?.length ?? 0;
   const sweepMutation = useEpicSweepWorktrees();
   const refresh = useRefreshSpinner({

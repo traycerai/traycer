@@ -75,15 +75,16 @@ export function openDurableStreamTransport(params: {
   readonly subscribeEndpointChange: (onChange: () => void) => () => void;
   /**
    * Called (cooldown-coalesced by this module) when this transport's own
-   * heartbeat evidences the BOUND host recovering - a session re-open after a
-   * drop, or a pong after a stall-length gap. The factory routes it to
-   * `HostClient.notifyHostAvailabilityRecovered(hostId)` so the bound host's
+   * heartbeat evidences ITS host recovering - a session re-open after a drop,
+   * or a pong after a stall-length gap. The factory routes it to
+   * `HostClient.notifyHostAvailabilityRecovered(hostId)` so that host's
    * stranded unary queries refetch. This must live here, not on the app-wide
    * stream: tabs bind a `hostId` for life, so a tab can heartbeat a host that
-   * is NOT the active one, and only its own transport ever observes that
-   * host's recovery.
+   * is not the effective one, and only its own transport ever observes that
+   * host's recovery. No argument, because the host is fixed at open time -
+   * see {@link NamedHostRecoveryTarget}.
    */
-  readonly notifyAvailabilityRecovered: () => void;
+  readonly notifyRecoveredForNamedHost: () => void;
 }): DurableStreamTransport {
   const wsStreamClient = buildHostStreamClient({
     target: params.target,
@@ -127,7 +128,7 @@ export function openDurableStreamTransport(params: {
       wireAvailabilityRecovery({
         wsStreamClient,
         target: {
-          notifyAvailabilityRecovered: params.notifyAvailabilityRecovered,
+          notifyRecoveredForNamedHost: params.notifyRecoveredForNamedHost,
         },
         cooldownMs: AVAILABILITY_RECOVERY_COOLDOWN_MS,
         now: () => Date.now(),

@@ -31,7 +31,6 @@ const mocks = vi.hoisted(() => {
   };
   return {
     tabClient: { request: vi.fn() },
-    defaultClient: { request: vi.fn() },
     worktreeQuery,
     listBindingsForClient: vi.fn(() => worktreeQuery),
     runPolicy,
@@ -89,14 +88,8 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.tabClient,
 }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "default-host",
-}));
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpicForClient: mocks.listBindingsForClient,
-}));
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => mocks.defaultClient,
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   useArtifactFolderChain: (artifactId: string) => mocks.folderChain(artifactId),
@@ -241,10 +234,10 @@ describe("useArtifactLinkOpener", () => {
     });
     expect(mocks.buildPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
-        client: mocks.defaultClient,
+        client: mocks.tabClient,
         workspaceClient: mocks.tabClient,
         hostId: "tab-host",
-        activeHostId: "default-host",
+        activeHostId: "tab-host",
         workspaceRoots: ["/tab/repo"],
       }),
     );
@@ -569,7 +562,7 @@ describe("useArtifactLinkOpener", () => {
 
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
-        hostId: "default-host",
+        hostId: "tab-host",
         epicId: "epic-1",
         filePath:
           "epics/epic-1/artifacts/ticket-breakdown/01-something/01-sub-ticket/index.md",
@@ -581,7 +574,7 @@ describe("useArtifactLinkOpener", () => {
       expect.objectContaining({
         tabId: "tab-1",
         nodeId: "artifact-sub",
-        fallbackHostId: "default-host",
+        fallbackHostId: "tab-host",
       }),
     );
     expect(mocks.previewTileInTab).not.toHaveBeenCalled();

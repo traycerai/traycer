@@ -63,8 +63,13 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+// The sidebar reads the Epic SESSION's host (it sits outside every tile's
+// `<TabHostProvider>`); no `EpicSessionContext` is mounted here, so pin it to
+// the fixture's host explicitly. This used to mock the app-wide reader the
+// component no longer imports - a `vi.mock` on an unresolved specifier is
+// silent, and the row was rendering under `UNKNOWN_HOST_PLACEHOLDER`.
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => HOST_ID,
 }));
 
 // Reproduces a capable host whose unary list is still cached empty while the
@@ -80,12 +85,12 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-kill-mutation", () => ({
-  useTerminalKill: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
+  useTerminalKillFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
-  useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({

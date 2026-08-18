@@ -72,25 +72,16 @@ import type {
 } from "@/lib/windows/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
-// `readCurrentLandingDraftWorkspaceSnapshot` resolves the active host
-// imperatively via `getHostBindingSnapshot()?.hostClient.getActiveHostId()`
-// (see landing-draft-store.ts). No `<TabHostProvider>`/`<HostRuntimeProvider>`
-// is mounted in this suite, so left unmocked it always resolves `null` - only
-// `getHostBindingSnapshot` is overridden; every other export (the real
-// providers/hooks) is preserved via the `importOriginal` spread. The literal
-// below must stay a literal (not a reference to `HOST_A`, declared below) -
-// `vi.mock` factories are hoisted above every top-level variable, so a
-// closed-over outer const throws at runtime.
-vi.mock("@/lib/host/runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return {
-    ...actual,
-    getHostBindingSnapshot: () => ({
-      hostClient: { getActiveHostId: () => "host-a" },
-    }),
-  };
-});
+// `readCurrentLandingDraftWorkspaceSnapshot` resolves the app-wide host
+// imperatively via `activeHostIdOrNull()` (see landing-draft-store.ts), which
+// reads the selection authority's projection. No provider is mounted in this
+// suite, so the store is SEEDED below rather than the reader stubbed: the
+// spine accessor this used to mock now answers `null` for every host by
+// design (P4.2/D17 deleted the active slot), so a stub of it would have gone
+// on passing while the production read resolved nothing. Seeding what the
+// reader actually asks about keeps this suite able to catch that.
 
 const HOST_A = "host-a";
 
@@ -269,6 +260,12 @@ describe("useLandingDraftStore", () => {
   beforeEach(() => {
     window.localStorage.clear();
     resetStore();
+    // The app-wide host every draft snapshot buckets against (see the note at
+    // the top of this file).
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: HOST_A,
+    });
   });
 
   afterEach(() => {

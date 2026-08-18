@@ -25,6 +25,7 @@ import {
   WsStreamClient,
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 export class MockStreamSession<
   TFrame extends StreamFrameEnvelope,
@@ -98,6 +99,7 @@ export class MockWsStreamClient<
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");

@@ -449,10 +449,7 @@ function CooperativeFirstRestartFlow(
               hostId,
               // Always `true` on this arm: the offer IS the dialog this sets,
               // and its Force button is the control the sentence promises.
-              message: busyRestartMessage(
-                response.verdict.busySessionCount,
-                true,
-              ),
+              message: busyRestartMessage(response.verdict, true),
             });
             return;
           }

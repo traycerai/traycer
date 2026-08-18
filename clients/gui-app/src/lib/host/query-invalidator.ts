@@ -49,12 +49,22 @@ const ACTIVE_REFETCH_EXEMPT_METHODS: ReadonlySet<string> = new Set([
  * manual-refresh-only (`staleTime: Infinity`) and holds optimistically
  * inserted local-first epics that a cloud `listTasks` response does not carry
  * yet, so force-refetching it DROPS epics the user just created
- * (`cloud-query-keys.ts`). Until now the invariant was enforced at exactly
- * one call site (`use-workspace-folder-actions`), while the broadest sweep of
- * all - `HostClient.bind()`, which force-refetches the entire new host scope
- * on every host switch - ignored it. Applying it here covers both broad
- * `refetchActive` sweeps (bind and availability recovery); the list still
- * refreshes through its own lifecycle and its own manual refresh.
+ * (`cloud-query-keys.ts`). The invariant was once enforced at exactly one call
+ * site (`use-workspace-folder-actions`), while the broadest sweep of all -
+ * `HostClient.bind()`, which force-refetched the entire new host scope on
+ * every host switch - ignored it. That sweep is gone: P4.2 deleted the slot.
+ * TWO broad `refetchActive` sweeps reach this port now - availability
+ * recovery, and the R-1 key-rotation sweep that replaced `bind()`'s
+ * rebuilt-host guarantee - and enforcing the invariant here covers both,
+ * which is more than the sweep it replaced ever did.
+ *
+ * A host becoming EFFECTIVE still sweeps nothing through this port, and the
+ * exception is worth naming so a reader does not go looking for it: the
+ * re-point re-probe (`useHostStatusReprobeOnRepoint`) invalidates ONE exact
+ * key straight against the query client. It never enters this port, so it
+ * cannot reach the carve-outs - and has no need to, being a single entry
+ * rather than a scope. The list still refreshes through its own lifecycle and
+ * its own manual refresh.
  */
 function isActiveRefetchExempt(query: Query): boolean {
   if (isCloudEpicTasksQueryKey(query.queryKey)) return true;
@@ -70,14 +80,18 @@ function isActiveRefetchExempt(query: Query): boolean {
  * Host-scoped queries use the key layout `["host", hostId, method, params]`,
  * so invalidating at `["host", hostId]` covers every cached entry tied to
  * that host. Passing `null` targets the `["host"]` root which drops all
- * host-scoped entries - used when no host is currently bound.
+ * host-scoped entries - used for an auth identity transition, which
+ * invalidates work on every host this client serves rather than on a
+ * privileged one.
  *
- * `HostClient` calls this on auth change, host bind/unbind, and
- * availability recovery. Auth changes mark stale without refetching because
- * the request context may already be gone; host bind and availability
- * recovery can refetch active observers - except the two carve-outs in
- * `isActiveRefetchExempt` (harness catalogs, cloud epic-tasks history), which
- * are skipped entirely.
+ * `HostClient` calls this on an auth identity transition, on availability
+ * recovery, and on an unannounced host-scope sweep (today: the R-1
+ * key-rotation sweep). Bind/unbind is not in that list any more - it went with
+ * the active slot (P4.2). An identity transition marks stale WITHOUT
+ * refetching, because the request context may already be gone; the two
+ * host-named sweeps can refetch active observers - except the two carve-outs
+ * in `isActiveRefetchExempt` (harness catalogs, cloud epic-tasks history),
+ * which are skipped entirely.
  */
 export function createHostQueryInvalidator(
   client: QueryClient,

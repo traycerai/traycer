@@ -35,14 +35,15 @@ describe("useHostNegotiatedMethodVersion", () => {
       requestId: () => "req-1",
       handlers: {},
     });
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => {} },
       messenger,
       findHostById: (hostId) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     });
-    client.bind(mockLocalHostEntry);
+    // `bind()` died with the active slot (D17): address via a requester.
+    const client = spine.createRequester(mockLocalHostEntry);
     client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",

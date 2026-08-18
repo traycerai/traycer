@@ -26,15 +26,23 @@ const BOB_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
+const ALICE_EMAIL = "alice@example.com";
+const BOB_EMAIL = "bob@example.com";
+const ALICE_ID = `user:${ALICE_EMAIL}`;
+const BOB_ID = `user:${BOB_EMAIL}`;
+
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
   email: string | null,
 ): void {
   if (status === "signed-in" && email !== null) {
+    // userId and email deliberately DIFFER: a fixture that equates them
+    // cannot detect email-keyed scoping.
+    const userId = `user:${email}`;
     useAuthStore.setState({
       status,
-      profile: { userId: email, userName: email, email },
-      contextMetadata: { userId: email, username: email },
+      profile: { userId, userName: email, email },
+      contextMetadata: { userId, username: email },
     });
     return;
   }
@@ -49,11 +57,11 @@ function resetComposerRunSettingsStore(): void {
 }
 
 function persistSnapshot(
-  email: string | null,
+  bucketIdentity: string | null,
   settings: ChatRunSettings,
 ): void {
   window.localStorage.setItem(
-    composerRunSettingsKey(email),
+    composerRunSettingsKey(bucketIdentity),
     JSON.stringify({
       state: {
         globalLastRunSettings: settings,
@@ -74,12 +82,12 @@ const EPIC_ID = "epic-1";
  * settings today, not just the frozen v1 ones.
  */
 function persistHostBucketSnapshot(
-  email: string,
+  bucketIdentity: string,
   hostId: string,
   settings: ChatRunSettings,
 ): void {
   window.localStorage.setItem(
-    composerRunSettingsKey(email),
+    composerRunSettingsKey(bucketIdentity),
     JSON.stringify({
       state: {
         globalLastRunSettingsByHostId: { [hostId]: settings },
@@ -108,9 +116,12 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     resetComposerRunSettingsStore();
   });
 
-  it("retargets to the signed-in user's composer bucket", async () => {
-    persistSnapshot("alice@example.com", ALICE_SETTINGS);
-    resetAuth("signed-in", "alice@example.com");
+  it("adopts the legacy email-keyed bucket into the signed-in user's canonical bucket, once", async () => {
+    // Seeds ONLY the legacy (email-keyed) bucket - nothing exists yet under
+    // the canonical userId key - so a successful load here can only be
+    // explained by the one-shot adoption path, not by scoping on the email.
+    persistSnapshot(ALICE_EMAIL, ALICE_SETTINGS);
+    resetAuth("signed-in", ALICE_EMAIL);
 
     render(
       <ComposerRunSettingsPersistLifecycleBridge>
@@ -120,7 +131,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
 
     await waitFor(() => {
       expect(useComposerRunSettingsStore.persist.getOptions().name).toBe(
-        composerRunSettingsKey("alice@example.com"),
+        composerRunSettingsKey(ALICE_ID),
       );
       expect(
         useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
@@ -129,8 +140,8 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
   });
 
   it("loads the second user's bucket without leaking first user state", async () => {
-    persistSnapshot("alice@example.com", ALICE_SETTINGS);
-    persistSnapshot("bob@example.com", BOB_SETTINGS);
+    persistSnapshot(ALICE_ID, ALICE_SETTINGS);
+    persistSnapshot(BOB_ID, BOB_SETTINGS);
 
     render(
       <ComposerRunSettingsPersistLifecycleBridge>
@@ -139,7 +150,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
@@ -149,12 +160,12 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     });
 
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", BOB_EMAIL);
     });
 
     await waitFor(() => {
       expect(useComposerRunSettingsStore.persist.getOptions().name).toBe(
-        composerRunSettingsKey("bob@example.com"),
+        composerRunSettingsKey(BOB_ID),
       );
       expect(
         useComposerRunSettingsStore.getState().legacyGlobalLastRunSettings,
@@ -166,7 +177,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     // Only Alice has a stored blob. Both accounts sign in on the SAME machine,
     // so `HOST_ID` is a key Bob's session would happily read - the account
     // scoping, not the host scoping, is what has to keep them apart.
-    persistHostBucketSnapshot("alice@example.com", HOST_ID, ALICE_SETTINGS);
+    persistHostBucketSnapshot(ALICE_ID, HOST_ID, ALICE_SETTINGS);
 
     render(
       <ComposerRunSettingsPersistLifecycleBridge>
@@ -175,7 +186,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
@@ -189,12 +200,12 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     });
 
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", BOB_EMAIL);
     });
 
     await waitFor(() => {
       expect(useComposerRunSettingsStore.persist.getOptions().name).toBe(
-        composerRunSettingsKey("bob@example.com"),
+        composerRunSettingsKey(BOB_ID),
       );
       const state = useComposerRunSettingsStore.getState();
       expect(state.globalLastRunSettingsByHostId).toEqual({});
@@ -205,7 +216,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
   });
 
   it("signed-out clears the current bucket and resets to anonymous", async () => {
-    persistSnapshot("alice@example.com", ALICE_SETTINGS);
+    persistSnapshot(ALICE_ID, ALICE_SETTINGS);
     const clearStorageSpy = vi.spyOn(
       useComposerRunSettingsStore.persist,
       "clearStorage",
@@ -218,12 +229,12 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
       expect(useComposerRunSettingsStore.persist.getOptions().name).toBe(
-        composerRunSettingsKey("alice@example.com"),
+        composerRunSettingsKey(ALICE_ID),
       );
     });
 
@@ -236,9 +247,7 @@ describe("<ComposerRunSettingsPersistLifecycleBridge />", () => {
     await waitFor(() => {
       expect(clearStorageSpy).toHaveBeenCalledTimes(1);
       expect(
-        window.localStorage.getItem(
-          composerRunSettingsKey("alice@example.com"),
-        ),
+        window.localStorage.getItem(composerRunSettingsKey(ALICE_ID)),
       ).toBeNull();
       expect(useComposerRunSettingsStore.persist.getOptions().name).toBe(
         composerRunSettingsKey(null),

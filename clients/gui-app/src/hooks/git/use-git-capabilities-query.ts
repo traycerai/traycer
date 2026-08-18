@@ -3,7 +3,8 @@ import type {
   HostRpcError,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /**
@@ -19,7 +20,14 @@ export function useGitCapabilitiesQuery(args: {
   ResponseOfMethod<HostRpcRegistry, "git.getCapabilities">,
   HostRpcError
 > {
-  const client = useHostClient();
+  // Resolved FROM `args.hostId`, never from the app-wide host. Both callers
+  // are host-pinned surfaces (the git panel and its capability gate) and pass
+  // their surface's resolved host, and `hostId` in the params below does NOT
+  // route the call - `HostClient.request()` sends through the client's own
+  // bound messenger, so an ambient client asked host A whether host B has git
+  // and cached the answer under B. The `...WithSubmodules` hook beside this one
+  // already resolved its client this way; this is that pattern, not a new one.
+  const client = useHostClientForHostId(args.hostId);
   return useHostQuery<HostRpcRegistry, "git.getCapabilities">({
     cacheKeyIdentity: undefined,
     client,

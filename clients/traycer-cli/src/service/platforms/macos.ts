@@ -137,9 +137,12 @@ async function takeoverDesktopRegistration(
   }
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
   if (desktopAgent === null) return { kind: "not-applicable" };
+  // The CLI is taking this label over; Desktop's registration is retired, not
+  // relaunched. Nothing is coming back under this identity.
   const outcome = await requestCooperativeShutdown(
     label.environment,
     "takeover",
+    "shutdown",
   );
   if (outcome.kind === "busy") {
     throw cliError({
@@ -872,7 +875,11 @@ async function stopDesktopManagedHost(
     await forceStopDesktopManagedHost(label, agent);
     return;
   }
-  const outcome = await requestCooperativeShutdown(label.environment, "stop");
+  const outcome = await requestCooperativeShutdown(
+    label.environment,
+    "stop",
+    "shutdown",
+  );
   switch (outcome.kind) {
     case "stopped":
     case "no-host":
@@ -1010,8 +1017,12 @@ async function standDownDesktopManagedHost(
     await forceStopHostProcess(label.environment, "restart");
     return { forcedRecycle: true };
   }
+  // The stop half of a restart: this caller relaunches the job immediately
+  // afterwards, so the host may publish its restart tombstone and spare every
+  // attached client the death-then-recovery bounce.
   const outcome = await requestCooperativeShutdown(
     label.environment,
+    "restart",
     "restart",
   );
   if (outcome.kind === "busy") {

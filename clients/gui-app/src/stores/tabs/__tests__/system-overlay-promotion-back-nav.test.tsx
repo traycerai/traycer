@@ -1,13 +1,15 @@
 // Regression test for: back button dead after promoting a system overlay to
 // a tab. Replays: real back history -> open settings overlay -> click-out
 // close -> forward -> promote to tab -> back click, against a `GateLike`
-// component that mirrors `LocalHostGate`'s PRE-FIX structural swap
+// component doing the structural swap that caused the original bug
 // (`<>{children}</>` on bypass vs `<Wrapper>{children}</Wrapper>` when
 // ready), so React remounts the gated subtree on every `/settings` boundary
-// crossing exactly like the real pre-fix bug.
+// crossing exactly like the real pre-fix bug. The ancestor that once did this
+// for real was the local-host gate, deleted in P3.4; `GateLike` is a
+// self-contained stand-in and never depended on it.
 //
 // `GateLike` is kept REMOUNTING on purpose - it is not the thing layers 2+3
-// fix (that's layer 1, in `local-host-gate.tsx`). It stands in for ANY
+// fix. It stands in for ANY
 // future ancestor that remounts this subtree, and this test proves the
 // module-scoped cold-load latch (layer 2) plus `replace` semantics on the
 // focus-tab-first redirect (layer 3) defeat the back-button trap even under
@@ -62,9 +64,9 @@ function CompatGateLike(props: { readonly children: ReactNode }) {
   return <>{props.children}</>;
 }
 
-// Mirrors `LocalHostGate` PRE-FIX: bypass -> bare children; ready -> children
-// under a wrapper component. Different root element types => React remounts
-// the subtree when `bypass` flips at the /settings boundary.
+// The pre-fix shape: bypass -> bare children; ready -> children under a
+// wrapper component. Different root element types => React remounts the
+// subtree when `bypass` flips at the /settings boundary.
 function GateLike(props: { readonly children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const bypass = pathname.startsWith("/settings");
@@ -233,8 +235,12 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     // `lastPathnameRef` is reborn already-equal to the post-navigation
     // pathname on this exact click and can't detect the change; the stray
     // `settingsOverlay` search flag on this entry survives one extra click
-    // as a result. That collapse-in-one-click only happens once layer 1
-    // stops the remounts (proven separately in `local-host-gate.test.tsx`).
+    // as a result. That collapse-in-one-click only happens once an ancestor
+    // stops the remounts. There is no longer a test proving that half: it was
+    // the local-host gate's structural-stability suite, and both the gate and
+    // its suite were deleted in P3.4 (no production ancestor swaps element
+    // types across the bypass boundary any more). Stated rather than re-aimed
+    // at this file's own stand-in, which cannot prove it.
     // What matters here is what layers 2+3 alone guarantee: back never
     // bounces to /settings/general again, and repeated presses make
     // monotonic progress back to the original entry instead of looping.

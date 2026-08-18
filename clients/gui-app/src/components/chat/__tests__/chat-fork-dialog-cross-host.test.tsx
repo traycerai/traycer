@@ -394,7 +394,8 @@ import {
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = directoryEntry(hostId, hostId);
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -402,16 +403,10 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
       requestId: () => `req-${hostId}`,
       handlers: {},
     }),
+    findHostById: (id) => (id === hostId ? entry : null),
   });
-  client.bind({
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
-    version: "0.0.0-mock",
-    transportDialability: "dialable",
-  });
-  return client;
+  // `bind()` died with the active slot (D17): address via a requester.
+  return spine.createRequester(entry);
 }
 
 function directoryEntry(hostId: string, label: string): HostDirectoryEntry {

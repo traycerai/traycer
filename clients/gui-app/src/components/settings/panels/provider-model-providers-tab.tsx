@@ -16,7 +16,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProvidersModelProvidersList } from "@/hooks/providers/use-providers-model-providers-list-query";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useHostBinding } from "@/lib/host/runtime";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
   modelProviderAuthErrorMessage,
   modelProviderListErrorMessage,
@@ -496,7 +496,7 @@ export function ProviderModelProvidersTab(props: {
   // `useProviderNativeScope` follows, and for the same reason: an attempt filed
   // under the wrong host id can never be resumed against the list it started
   // from.
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const binding = useHostBinding();
   const hostId = binding?.hostClient.getActiveHostId() ?? activeHostId;
 

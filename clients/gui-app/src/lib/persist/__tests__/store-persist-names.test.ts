@@ -26,6 +26,7 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
 import { useSetupTerminalsStore } from "@/stores/worktree/setup-terminals";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 
 // Call-site regression guard for the full persist-name chain:
 //   catalog leaf (keys.ts) → STORE_KEYS[camelName] → the store's persist call.
@@ -162,6 +163,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useAppLocalNotificationsStore",
     useAppLocalNotificationsStore,
     "traycer-gui-app:app-local-notifications:anon",
+  ],
+  [
+    "useSurfaceHostSelectionStore",
+    useSurfaceHostSelectionStore,
+    "traycer-gui-app:surface-host-selection:anon",
   ],
 ];
 

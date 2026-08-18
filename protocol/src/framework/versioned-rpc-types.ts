@@ -270,9 +270,10 @@ export type VersionEntry<
    * pattern). Without this, the registry validator rejects response-side
    * value growth on a minor - an old peer's schema REFUSES such values,
    * and for state-controlled response data that refusal poisons every
-   * old peer with no opt-out. Declaring it is a reviewed claim about the
-   * EMITTER, which the validator cannot check; structural additivity is
-   * still enforced regardless.
+   * old peer with no opt-out. It also permits replacing a dropped union arm
+   * when that same projection supplies the older arm to older callers.
+   * Declaring it is a reviewed claim about the EMITTER, which the validator
+   * cannot check; other structural reductions remain forbidden.
    */
   readonly responseGrowthProjectionGated?: true;
 };

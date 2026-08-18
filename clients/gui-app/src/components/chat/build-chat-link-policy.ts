@@ -40,26 +40,22 @@ export interface ChatLinkPolicyDeps {
   readonly hostId: string | null;
   /** The chat's working directories, used to resolve a link path to a file. */
   readonly workspaceRoots: ReadonlyArray<string>;
-  /** Active/default host the artifact RPC + tile open are stamped with. */
+  /** Host the artifact RPC + tile open are stamped with. */
   readonly activeHostId: string | null;
   /** The currently-open epic id; same-epic links preview, others navigate. */
   readonly openEpicId: string;
   readonly epicHandle: OpenEpicStoreHandle;
   readonly queryClient: QueryClient;
   /**
-   * Client for the ARTIFACT-resolve RPC, bound to `activeHostId` (the
-   * app-wide default host - epics are listed from it and the resolved
-   * artifact tab is stamped with it, matching sidebar artifact opens).
+   * Client for the ARTIFACT-resolve RPC, bound to `activeHostId` and used to
+   * stamp the resolved artifact tile with that same host.
    */
   readonly client: HostClient<HostRpcRegistry>;
   /**
    * Client for a RELATIVE plain-file link's existence probes, bound to
-   * `hostId` (the chat tab's OWN host) - NOT `client`. `hostId` only scopes
-   * the query KEY; `client.request(...)` always sends over whatever
-   * connection the client itself is bound to. A tab pinned to a different
-   * host than the app's active one must probe ITS OWN filesystem through a
-   * client actually connected to that host, or the probe silently checks the
-   * wrong machine while the opened ref is stamped with the tab's `hostId`.
+   * `hostId` (the chat tab's OWN host). `hostId` only scopes the query KEY;
+   * `client.request(...)` always sends over whatever connection the client
+   * itself is bound to, so the tab must pass a client for its own host.
    * `null` while the tab-scoped client hasn't resolved yet - a relative-link
    * click fails fast (the existing failure toast) rather than falling back to
    * `client`.

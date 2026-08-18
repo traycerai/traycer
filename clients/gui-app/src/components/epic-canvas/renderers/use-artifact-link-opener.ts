@@ -15,12 +15,10 @@ import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/un
 import type { OpenableArtifactLink } from "@/editor-core";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useArtifactFolderChain } from "@/lib/epic-selectors";
-import { useHostClient } from "@/lib/host";
 import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path";
 import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
@@ -171,7 +169,7 @@ export function useArtifactLinkOpener(args: {
   const tabHostId = useTabHostId();
   const selfFolderChain = useArtifactFolderChain(args.artifactId);
   const tabHostClient = useTabHostClient();
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = tabHostId;
   const worktrees = useWorktreeListBindingsForEpicForClient({
     client: tabHostClient,
     epicId: args.epicId,
@@ -194,7 +192,6 @@ export function useArtifactLinkOpener(args: {
     [tileNavigation],
   );
   const queryClient = useQueryClient();
-  const client = useHostClient();
   const navigate = useNavigate();
   const epicHandle = useOpenEpicHandle();
   const { mutate: openExternalLink, isPending: isExternalPending } =
@@ -222,7 +219,7 @@ export function useArtifactLinkOpener(args: {
   }, []);
 
   const chatDeps = useMemo<ChatLinkPolicyDeps | null>(() => {
-    if (workspaceRoots === null) return null;
+    if (workspaceRoots === null || tabHostClient === null) return null;
     return {
       tabId: args.viewTabId,
       hostId: tabHostId,
@@ -231,7 +228,7 @@ export function useArtifactLinkOpener(args: {
       openEpicId: args.epicId,
       epicHandle,
       queryClient,
-      client,
+      client: tabHostClient,
       workspaceClient: tabHostClient,
       navigate,
       previewTileInTab,
@@ -240,7 +237,6 @@ export function useArtifactLinkOpener(args: {
     activeHostId,
     args.epicId,
     args.viewTabId,
-    client,
     epicHandle,
     navigate,
     previewTileInTab,

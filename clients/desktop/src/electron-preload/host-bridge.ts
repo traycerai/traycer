@@ -3,7 +3,10 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
-import type { DesktopPublishedHostSnapshot } from "../ipc-contracts/host-types";
+import type {
+  DesktopPublishedHostSnapshot,
+  RegisteredHostsPush,
+} from "../ipc-contracts/host-types";
 import type { HostRestartRequestResult } from "../ipc-contracts/host-management-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -100,19 +103,28 @@ export interface HostBridgeSurface {
   onLocalHostChange(
     handler: Listener<DesktopPublishedHostSnapshot | null>,
   ): Disposable;
+  onRegisteredHostsChange(handler: Listener<RegisteredHostsPush>): Disposable;
   onSystemResumed(handler: () => void): Disposable;
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
-  hostPicker: {
-    requestOpen(): Promise<void>;
-    requestClose(): Promise<void>;
-    onChange(handler: Listener<boolean>): Disposable;
-  };
 }
 
 export function buildHostBridge(): HostBridgeSurface {
   return {
     onLocalHostChange: (handler) => subscribeLocalHost(handler),
+
+    // Main's one registry read, pushed to every window (P4.1/F22). Routed
+    // through the generic per-event subscription rather than the cached shape
+    // above, and the difference is deliberate: an absent local-host snapshot
+    // LIES (`null` means "this machine has no host", not "unknown"), whereas a
+    // window that has not heard a registry tick yet has simply not heard one -
+    // it has already done its own initial read and the next tick is 60s away.
+    // There is nothing for a cache or a first-subscribe pull to repair.
+    onRegisteredHostsChange: (handler) =>
+      subscribe<RegisteredHostsPush>(
+        RunnerHostEvent.registeredHostsChange,
+        handler,
+      ),
 
     // A transient "machine woke" pulse - no snapshot to cache, so it routes
     // through the generic per-event subscription (unlike the cached
@@ -129,14 +141,5 @@ export function buildHostBridge(): HostBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.lastKnownLocalHostId) as Promise<
         string | null
       >,
-
-    hostPicker: {
-      requestOpen: () =>
-        ipcRenderer.invoke(RunnerHostInvoke.hostPickerRequestOpen),
-      requestClose: () =>
-        ipcRenderer.invoke(RunnerHostInvoke.hostPickerRequestClose),
-      onChange: (handler) =>
-        subscribe<boolean>(RunnerHostEvent.hostPickerChange, handler),
-    },
   };
 }

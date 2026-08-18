@@ -16,8 +16,8 @@ import {
  * the suite keeps testing the notice against a fixed scope, matching the
  * convention in provider-plugins-tab-scope.test.tsx.
  */
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 vi.mock("@/lib/host", () => ({
