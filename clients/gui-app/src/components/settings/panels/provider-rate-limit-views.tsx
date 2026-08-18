@@ -1383,16 +1383,16 @@ export function GrokRateLimitView({
  * render, keeping the card meaningful rather than blank - the same fallback
  * grok uses.
  *
- * Overview is bars-only. The money deliberately does NOT ride along: each
- * bucket bar is measured against its own (unpublished) limit, while
- * `remainingUsd`/`includedLimitUsd` describe Cursor's BLENDED $400 pool - a
- * third denominator. Live comparison showed "$76.69 left of $400" (~81%
- * consumed) rendered directly under bars reading 6% / 40%, which reads as a
- * broken calculation even though every number is Cursor's own. Cursor's
- * dashboard never juxtaposes the dollars with the bucket bars either. The
- * detail surfaces keep the money, anchored by `displayMessage` - Cursor's own
- * sentence about that pool ("You've used 81% of your included usage") - so
- * the dollars arrive with the denominator that explains them.
+ * The dollars ride their OWN meter, not the bucket bars. Each bucket bar is
+ * measured against its own (unpublished, bonus-inflated) limit, while
+ * `usedUsd`/`includedLimitUsd`/`remainingUsd` describe Cursor's BLENDED $400
+ * purchased pool - a third denominator, ~81% consumed on the same live
+ * payload that read 6% / 40% on the buckets. A bare "$76.69 left of $400"
+ * row under those bars therefore presented as a broken calculation even
+ * though every number is Cursor's own (server-computed `remaining`). Pairing
+ * the dollars with a credit meter that shows THEIR percentage - the exact
+ * pattern the Hugging Face card uses - keeps the money visible on every
+ * surface while making its denominator visible with it.
  */
 export function CursorRateLimitView({
   data,
@@ -1425,6 +1425,15 @@ export function CursorRateLimitView({
           ) : null}
         </>
       )}
+      <CursorIncludedUsageBar
+        includedLimitUsd={data.includedLimitUsd}
+        usedUsd={data.usedUsd}
+      />
+      <ProviderNumberRow
+        label="Included usage left"
+        value={data.remainingUsd}
+        format={formatProviderCurrency}
+      />
       {!overview ? (
         <>
           {data.displayMessage !== null ? (
@@ -1432,16 +1441,6 @@ export function CursorRateLimitView({
               {data.displayMessage}
             </p>
           ) : null}
-          <ProviderNumberRow
-            label="Included usage left"
-            value={data.remainingUsd}
-            format={formatProviderCurrency}
-          />
-          <ProviderNumberRow
-            label="Included usage"
-            value={data.includedLimitUsd}
-            format={formatProviderCurrency}
-          />
           <ProviderNumberRow
             label="On-demand limit"
             value={data.onDemandLimitUsd}
@@ -1455,6 +1454,34 @@ export function CursorRateLimitView({
         </>
       ) : null}
     </div>
+  );
+}
+
+// Cursor's blended purchased pool as a credit meter, mirroring
+// `HuggingFaceCreditBar`: the fill percentage and the dollar detail share one
+// denominator by construction, so the money can sit under the bucket bars
+// without reading as a wrong computation of them. `usedUsd` can exceed the
+// purchased limit once bonus usage kicks in, so the fill is clamped rather
+// than allowed to overflow the meter.
+function CursorIncludedUsageBar({
+  includedLimitUsd,
+  usedUsd,
+}: {
+  readonly includedLimitUsd: number | null;
+  readonly usedUsd: number | null;
+}): ReactNode {
+  if (includedLimitUsd === null || includedLimitUsd <= 0 || usedUsd === null) {
+    return null;
+  }
+  const consumed = Math.min(Math.max(0, usedUsd), includedLimitUsd);
+  const usedPercent = (consumed / includedLimitUsd) * 100;
+  return (
+    <MeterRow
+      label="Included usage"
+      usedPercent={usedPercent}
+      severity={creditUsageSeverity(usedPercent)}
+      detail={`${formatProviderCurrency(consumed)} / ${formatProviderCurrency(includedLimitUsd)}`}
+    />
   );
 }
 
