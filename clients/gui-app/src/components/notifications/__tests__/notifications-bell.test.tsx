@@ -17,6 +17,7 @@ import {
   dispatchAction,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
+import { isMac } from "@/lib/keybindings/platform";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -244,13 +245,16 @@ const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
   canGoForward: () => false,
 };
 
-/** The default `app.notifications.open` chord as a keyboard event. `metaKey`
- * matches the platform-primary modifier on macOS and off it alike. */
+/** The default `app.notifications.open` chord as a keyboard event, pressed the
+ * way a user on THIS platform presses it. `hasPlatformModKey` accepts
+ * `metaKey || ctrlKey` off macOS, so a Command press would match there too -
+ * and would leave the Ctrl half, the one every Windows/Linux user actually
+ * hits, untested. */
 function pressNotificationsChord(): void {
   fireEvent.keyDown(window, {
     key: "N",
     code: "KeyN",
-    metaKey: true,
+    ...(isMac() ? { metaKey: true } : { ctrlKey: true }),
     shiftKey: true,
   });
 }
