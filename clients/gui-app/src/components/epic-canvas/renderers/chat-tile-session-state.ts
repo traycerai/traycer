@@ -350,7 +350,7 @@ export function canModifyChatMessages(input: {
   // The narrowed signal still covers the windows `activeTurn` misses: the
   // pre-turn `turnActivating` phase (provider/worktree setup) and
   // stop-during-activation both keep the host's `turnInProgress` true until
-  // the run truly unwinds. Queued sends are handled by the queue check below.
+  // the run truly unwinds.
   if (
     resolvedTurnStatus(
       input.state,
@@ -360,7 +360,11 @@ export function canModifyChatMessages(input: {
     return false;
   }
   if (input.state.activeTurn !== null) return false;
-  if (input.state.queue.items.length > 0) return false;
+  // Queued items do NOT gate history mutation: they carry only
+  // content/sender/settings, survive the rewrite untouched, and later send
+  // against the new head (the host dropped its QUEUE_NOT_EMPTY guard for the
+  // same reason). In-flight sends below still gate - those are actions whose
+  // target head is already on the wire.
   if (input.state.pendingUserMessages.length > 0) return false;
   return !Object.values(input.state.pendingActions).some(
     isPendingSendOrHistoryMutation,
