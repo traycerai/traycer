@@ -15,9 +15,8 @@ type ConfiguredFixture = {
 };
 
 type MockState = {
-  pinnedClientUnresolved: boolean;
   hostId: string | null;
-  client: { request: () => Promise<unknown> } | null;
+  client: { requestWithResponseTimeout: () => Promise<unknown> } | null;
   configured: ReadonlyArray<ConfiguredFixture>;
   profileSelection: {
     activeChatSettings: null;
@@ -26,27 +25,19 @@ type MockState = {
 };
 
 const mocks = vi.hoisted<MockState>(() => ({
-  pinnedClientUnresolved: false,
   hostId: "host-a",
-  client: { request: () => Promise.resolve({}) },
+  client: { requestWithResponseTimeout: () => Promise.resolve({}) },
   configured: [],
   profileSelection: { activeChatSettings: null, lastProfileByHarness: {} },
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mocks.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mocks.hostId,
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.client,
-}));
-// The provider resolves its requester through the PINNED hook, not the mutable
-// app-wide client. Stubbed here so this file stays about queue binding and the
-// polling scheduler; the pinning semantics themselves are covered against a
-// real `HostClient` in `use-rate-limit-queue-scope.test.tsx`, where stubbing
-// this hook would have made the assertion vacuous.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) =>
-    hostId === null || mocks.pinnedClientUnresolved ? null : mocks.client,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mocks.client,
 }));
 // Normalizes each fixture with the defaults a real `ConfiguredRateLimitProvider`
 // always carries (`profiles`, `fetchEligibility`), so most existing test bodies
@@ -163,9 +154,10 @@ function calledTargets(): ReadonlyArray<{
 describe("<RateLimitQueueProvider />", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    mocks.pinnedClientUnresolved = false;
     mocks.hostId = "host-a";
-    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
+    mocks.client = {
+      requestWithResponseTimeout: vi.fn(() => Promise.resolve({})),
+    };
     mocks.configured = [];
     mocks.profileSelection = {
       activeChatSettings: null,
@@ -201,30 +193,6 @@ describe("<RateLimitQueueProvider />", () => {
       rerender(tree());
     });
     expect(configureSpy).toHaveBeenLastCalledWith(null);
-  });
-
-  it("re-runs the immediate sweep when the pinned client resolves, not just when the host appears", () => {
-    // `useHostClientForHostId` can be null while the selected host has no
-    // resolved entry, and the configure effect unbinds the queue in that
-    // window - so a sweep fired then no-ops on every enqueue. The provider list
-    // is deliberately left structurally unchanged across the recovery, so only
-    // a `client` dependency can retrigger it; otherwise usage stays stale until
-    // the next 15-minute tick.
-    mocks.pinnedClientUnresolved = true;
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
-    const { rerender } = render(tree());
-    expect(enqueueSpy).not.toHaveBeenCalled();
-
-    act(() => {
-      mocks.pinnedClientUnresolved = false;
-      rerender(tree());
-    });
-
-    expect(enqueueSpy).toHaveBeenCalledWith(
-      "codex",
-      DEFAULT_ACCOUNT_CONTEXT,
-      expect.objectContaining({ force: false }),
-    );
   });
 
   it("enqueues only ephemeralProcess providers immediately when they are configured", () => {
@@ -359,9 +327,10 @@ describe("<RateLimitQueueProvider />", () => {
 describe("<RateLimitQueueProvider /> background profile polling", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    mocks.pinnedClientUnresolved = false;
     mocks.hostId = "host-a";
-    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
+    mocks.client = {
+      requestWithResponseTimeout: vi.fn(() => Promise.resolve({})),
+    };
     mocks.configured = [];
     mocks.profileSelection = {
       activeChatSettings: null,

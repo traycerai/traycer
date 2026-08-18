@@ -33,8 +33,13 @@ import { SegmentCopyButton } from "@/components/chat/segments/segment-copy-butto
 import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
+import {
+  useHostReachability,
+  resolvedHostLabel,
+} from "@/hooks/agent/use-host-reachability";
+import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { TileHostLoadState } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import { ShellOutputAvailabilityNotice } from "@/components/managed-commands/shell-output-availability-notice";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
@@ -147,6 +152,15 @@ export interface ManagedCommandOutputTileProps {
 export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
   const { epicId, node } = props;
   const reachability = useHostReachability(node.hostId);
+  // Same bounded, worded wait the terminal tiles get (audit S5): a bare
+  // spinner said nothing about which host it was waiting on and had no end.
+  const hostLoad = useBoundedHostLoad({
+    hostId: node.hostId,
+    hostLabel: resolvedHostLabel(reachability),
+    pending:
+      reachability.status === "checking" ||
+      reachability.status === "host-starting",
+  });
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,
@@ -162,6 +176,20 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
         onReopen={null}
         className={undefined}
         testId={AVAILABILITY_NOTICE_TEST_ID}
+      />
+    );
+  }
+  // Below the availability gate, not instead of it: the gate answers for
+  // the HOST (unreachable / starting, in the shared shell vocabulary); this
+  // bounds the remaining load window so a reachable host's slow read can
+  // never hold the tile on a bare skeleton (the F4 class).
+  if (hostLoad.kind !== "ready") {
+    return (
+      <TileHostLoadState
+        load={hostLoad}
+        subject="shell-output"
+        onRetry={null}
+        testId="managed-command-output-load"
       />
     );
   }

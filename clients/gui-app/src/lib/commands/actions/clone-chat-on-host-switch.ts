@@ -123,16 +123,6 @@ export interface CloneChatOnHostSwitchArgs {
 export function cloneChatOnHostSwitch(
   args: CloneChatOnHostSwitchArgs,
 ): CancelFn {
-  args.directory.selectById(args.targetHostId);
-  // Whatever the line above actually selected (the target normally; unchanged
-  // when the target has vanished from the directory - that arm deliberately
-  // still proceeds, into ambient fallback). Captured so the dispatch below
-  // can tell "the user moved the active host while we were resolving" apart
-  // from "nothing changed": the create mutation stamps the ACTIVE host at
-  // mutate time, so dispatching after an uncancelled move would create the
-  // chat on a host the open intent does not name.
-  const selectedHostIdAtStart = args.directory.getSelected()?.hostId ?? null;
-
   let cancelled = false;
   let innerCancel: CancelFn | null = null;
 
@@ -141,18 +131,12 @@ export function cloneChatOnHostSwitch(
     forkSource: CreateChatMutationInput["forkSource"] | null,
   ): void => {
     if (cancelled) return;
-    // The user can move the active host while settings resolution (or the
-    // settings-only retry) is in flight, from a surface that never cancels
-    // this flow - and the create mutation stamps the ACTIVE host at mutate
-    // time. A selection that moved since this flow started would land the
-    // clone on a host the open intent does not name, so the flow ends as a
-    // failure instead of creating on the wrong machine.
-    if (
-      (args.directory.getSelected()?.hostId ?? null) !== selectedHostIdAtStart
-    ) {
-      args.onCloneFailed();
-      return;
-    }
+    // No app-wide-selection guard any more (redesign P1.2, D6): the clone
+    // does not move the app, and `createChat` is the TARGET host's mutation,
+    // which validates the client it is about to send on against the
+    // `hostId` this request names. A failover mid-resolution can no longer
+    // land the clone on the wrong machine, because nothing about where it
+    // lands is read from the app-wide selection.
     innerCancel = openNewChatInActiveTile({
       epicId: args.epicId,
       tabId: args.tabId,

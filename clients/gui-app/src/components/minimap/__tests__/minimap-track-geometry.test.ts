@@ -1,18 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  MINIMAP_TRACK_END_HIT_PADDING,
+  MINIMAP_TRACK_ITEM_SPACING,
   resolveMinimapTrackHeightStyle,
-  resolveMinimapTrackIndexFromPointer,
   resolveMinimapTrackTopPercent,
   resolveMinimapTrackTopStyle,
+  resolveMinimapVisibleItemCapacity,
+  resolveMinimapWindow,
 } from "@/components/minimap/minimap-track-geometry";
 import {
-  CHAT_TURN_MINIMAP_END_HIT_PADDING,
-  CHAT_TURN_MINIMAP_ITEM_SPACING,
-  CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS,
   CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS,
   resolveChatTurnMinimapHeightStyle,
-  resolveChatTurnMinimapIndexFromPointer,
-  resolveChatTurnMinimapTopPercent,
   resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
 
@@ -48,6 +46,24 @@ describe("resolveMinimapTrackHeightStyle", () => {
         [],
       ),
     ).toBe("min(20px)");
+  });
+});
+
+describe("dynamic visible window", () => {
+  it("uses at most half of the available height", () => {
+    expect(resolveMinimapVisibleItemCapacity(400)).toBe(23);
+    expect(resolveMinimapVisibleItemCapacity(600)).toBe(35);
+  });
+
+  it("centers the visible items around the current item", () => {
+    expect(
+      resolveMinimapWindow({ currentIndex: 25, itemCount: 50, maxItems: 35 }),
+    ).toEqual({
+      startIndex: 8,
+      endIndex: 43,
+      hasBefore: true,
+      hasAfter: true,
+    });
   });
 });
 
@@ -89,72 +105,6 @@ describe("resolveMinimapTrackTopStyle", () => {
   });
 });
 
-describe("resolveMinimapTrackIndexFromPointer", () => {
-  const base = {
-    itemCount: 5,
-    endHitPadding: 12,
-    railTop: 100,
-    railHeight: 200,
-  };
-
-  it("returns null for a non-positive item count or rail height", () => {
-    expect(
-      resolveMinimapTrackIndexFromPointer({
-        ...base,
-        itemCount: 0,
-        pointerY: 150,
-      }),
-    ).toBeNull();
-    expect(
-      resolveMinimapTrackIndexFromPointer({
-        ...base,
-        railHeight: 0,
-        pointerY: 150,
-      }),
-    ).toBeNull();
-  });
-
-  it("returns 0 for a single item regardless of pointer position", () => {
-    expect(
-      resolveMinimapTrackIndexFromPointer({
-        ...base,
-        itemCount: 1,
-        pointerY: 999,
-      }),
-    ).toBe(0);
-  });
-
-  it("clamps a pointer above or below the rail to the first/last index", () => {
-    expect(resolveMinimapTrackIndexFromPointer({ ...base, pointerY: 0 })).toBe(
-      0,
-    );
-    expect(
-      resolveMinimapTrackIndexFromPointer({ ...base, pointerY: 1000 }),
-    ).toBe(4);
-  });
-
-  it("maps a mid-rail pointer to the nearest item, accounting for end padding", () => {
-    // track spans [112, 288); midpoint 200 -> progress 0.5 -> index 2 of 5
-    expect(
-      resolveMinimapTrackIndexFromPointer({ ...base, pointerY: 200 }),
-    ).toBe(2);
-  });
-
-  it("shrinks end padding rather than collapsing the track when the rail is too short", () => {
-    // railHeight 10 -> clamped endPadding = max(0, (10-1)/2) = 4.5, trackHeight = 1
-    const result = resolveMinimapTrackIndexFromPointer({
-      itemCount: 3,
-      endHitPadding: 12,
-      railTop: 0,
-      railHeight: 10,
-      pointerY: 5,
-    });
-    expect(result).not.toBeNull();
-    expect(result).toBeGreaterThanOrEqual(0);
-    expect(result).toBeLessThanOrEqual(2);
-  });
-});
-
 describe("equivalence with the chat rail's wrappers", () => {
   it("resolveMinimapTrackHeightStyle matches resolveChatTurnMinimapHeightStyle for chat's own constants", () => {
     for (const itemCount of [0, 1, 2, 7]) {
@@ -162,28 +112,12 @@ describe("equivalence with the chat rail's wrappers", () => {
         resolveMinimapTrackHeightStyle(
           {
             itemCount,
-            itemSpacing: CHAT_TURN_MINIMAP_ITEM_SPACING,
-            endHitPadding: CHAT_TURN_MINIMAP_END_HIT_PADDING,
+            itemSpacing: MINIMAP_TRACK_ITEM_SPACING,
+            endHitPadding: MINIMAP_TRACK_END_HIT_PADDING,
           },
-          [
-            CHAT_TURN_MINIMAP_MAX_HEIGHT_CSS,
-            CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS,
-          ],
+          [CHAT_TURN_MINIMAP_PANE_MAX_HEIGHT_CSS],
         ),
       ).toBe(resolveChatTurnMinimapHeightStyle(itemCount));
-    }
-  });
-
-  it("resolveMinimapTrackTopPercent matches resolveChatTurnMinimapTopPercent", () => {
-    for (const [index, itemCount] of [
-      [0, 0],
-      [0, 1],
-      [2, 5],
-      [4, 5],
-    ] as const) {
-      expect(resolveMinimapTrackTopPercent(index, itemCount)).toBe(
-        resolveChatTurnMinimapTopPercent(index, itemCount),
-      );
     }
   });
 
@@ -197,19 +131,9 @@ describe("equivalence with the chat rail's wrappers", () => {
         resolveMinimapTrackTopStyle(
           index,
           itemCount,
-          CHAT_TURN_MINIMAP_END_HIT_PADDING,
+          MINIMAP_TRACK_END_HIT_PADDING,
         ),
       ).toBe(resolveChatTurnMinimapTopStyle(index, itemCount));
     }
-  });
-
-  it("resolveMinimapTrackIndexFromPointer matches resolveChatTurnMinimapIndexFromPointer", () => {
-    const input = { itemCount: 6, railTop: 20, railHeight: 300, pointerY: 150 };
-    expect(
-      resolveMinimapTrackIndexFromPointer({
-        ...input,
-        endHitPadding: CHAT_TURN_MINIMAP_END_HIT_PADDING,
-      }),
-    ).toBe(resolveChatTurnMinimapIndexFromPointer(input));
   });
 });

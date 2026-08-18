@@ -97,6 +97,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
         bytes: null,
         totalBytes: null,
         message: null,
+        workUnits: null,
       };
       for (const listener of progressListeners) listener(progress);
     },

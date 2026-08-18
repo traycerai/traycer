@@ -59,17 +59,21 @@ const EPIC_ID = "epic-records";
 const VIEWER_ID = "viewer-1";
 const HOST_ID = mockLocalHostEntry.hostId;
 
-// `useEpicSyncChatRecords` and the rename/delete hooks read the APP-WIDE
-// client; the create-for-client hook takes one as an argument. Both must land
-// on the same host for the invalidation key to match the query key at all,
-// which is the mismatch class this suite exists to catch - so the mock hands
-// back the one fixture client and the assertions do the rest.
+// `useEpicSyncChatRecords` and the rename/delete hooks read the EPIC SESSION's
+// client (`EpicSessionHostClientContext`, provided by the wrapper below); the
+// create-for-client hook takes one as an argument; the app-wide runtime mock
+// serves whatever still resolves through it. All must land on the same host
+// for the invalidation key to match the query key at all, which is the
+// mismatch class this suite exists to catch - so every seam hands back the one
+// fixture client and the assertions do the rest.
 const runtime: { client: HostClient<HostRpcRegistry> | null } = vi.hoisted(
   () => ({ client: null }),
 );
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => runtime.client,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => runtime.client,
 }));
 
 interface Fixture {
@@ -169,9 +173,11 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
       mutations: { retry: false },
     },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -240,13 +246,13 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     // Any authenticated context will do: the client's request-context user id
     // only gates `useHostQuery`'s readiness. The VIEWER identity that scopes
     // the cache key is the auth store's, seeded in `beforeEach`.
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   runtime.client = client;
   const handle = newSession();
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>

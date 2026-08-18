@@ -44,8 +44,20 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 // resolve null; mocking a fixed active host keeps the global-workspace
 // fallback (workspace-folders-store, bucketed by host) reachable exactly as
 // it was before that store was host-scoped.
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "active-host",
+const composerPinMock = vi.hoisted(() => ({
+  selection: null as string | null,
+  honoredSelection: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({
+    selection: composerPinMock.selection,
+    honoredSelection: composerPinMock.honoredSelection,
+    setSelection: () => undefined,
+    resolvedHostId: "active-host",
+    isPinned: composerPinMock.selection !== null,
+    latchOnFirstUse: () => undefined,
+  }),
 }));
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
@@ -129,6 +141,8 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     mocks.onAddTerminalAgent.mockReset();
     hostClientForHostIdMock.calls.length = 0;
     harnessModelPickerMock.calls.length = 0;
+    composerPinMock.selection = null;
+    composerPinMock.honoredSelection = null;
     useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
@@ -315,9 +329,58 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     await screen.findByRole("button", { name: "Start" });
 
     expect(hostClientForHostIdMock.calls.at(-1)).toBeNull();
+    // The follow arm resolves the composer surface pin ("active-host" via the
+    // mock above): the picker keys on the RESOLVED host while the client stays
+    // the app-wide one (selection null = follow).
     expect(harnessModelPickerMock.calls.at(-1)).toEqual({
-      createProfileHostId: null,
-      runTargetHostId: null,
+      createProfileHostId: "active-host",
+      runTargetHostId: "active-host",
+    });
+  });
+
+  it("resolves the launch client through the FOLLOW arm when the composer pin is deposed - never the dead machine", async () => {
+    // A pin whose host has died: `selection` still names it, `honoredSelection`
+    // is null, and `resolvedHostId` has re-resolved to the live host. The
+    // launcher read `selection` (the raw pin) for its client once, so the
+    // catalog, the profile list and the picker were aimed at the dead host
+    // while every id beside them named the live one - the catalog never
+    // populated and the launch stayed disabled under a chip that was fine.
+    // Same rule as the composer: `honoredSelection`, never `selection`.
+    composerPinMock.selection = "host-dead";
+    composerPinMock.honoredSelection = null;
+    render(
+      <AddNodeDropdown
+        open
+        onOpenChange={() => undefined}
+        menuPlacement="row"
+        menuTestId="add-node-menu"
+        itemTestId={(type) => `add-${type}`}
+        onAdd={() => undefined}
+        epicId="epic-test"
+        onAddTerminalAgent={mocks.onAddTerminalAgent}
+        terminalAgentWorkspaceSeed={null}
+        terminalAgentHostScope={undefined}
+        terminalAgentStagingKey={undefined}
+        tuiAgentPending={false}
+        disabled={false}
+        disabledTooltip={null}
+        disabledTypes={undefined}
+        excludeTypes={undefined}
+      >
+        <button type="button">Add node</button>
+      </AddNodeDropdown>,
+    );
+    const trigger = await screen.findByTestId("add-node-menu-terminal-agent");
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowRight" });
+    await screen.findByRole("button", { name: "Start" });
+
+    // Follow arm (null) - and NOT the raw pin.
+    expect(hostClientForHostIdMock.calls.at(-1)).toBeNull();
+    expect(hostClientForHostIdMock.calls).not.toContain("host-dead");
+    expect(harnessModelPickerMock.calls.at(-1)).toEqual({
+      createProfileHostId: "active-host",
+      runTargetHostId: "active-host",
     });
   });
 });

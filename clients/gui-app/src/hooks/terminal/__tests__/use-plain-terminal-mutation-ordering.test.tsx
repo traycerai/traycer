@@ -110,15 +110,20 @@ function setup(
     requestId: () => "request-ordering",
     handlers,
   });
-  const client = new HostClient<HostRpcRegistry>({
+  // `bind()` was removed with the runtime slot (redesign P4.2); a requester
+  // for a named host is now built from a spine with `findHostById` plus
+  // `createRequesterForHostId`, so the context is set on the spine first.
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     messenger,
+    findHostById: (hostId) =>
+      hostId === HOST_ID ? { ...mockLocalHostEntry, hostId: HOST_ID } : null,
   });
-  client.bind({ ...mockLocalHostEntry, hostId: HOST_ID });
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
+  const client = spine.createRequesterForHostId(HOST_ID);
   const collection = freshCollection();
   queryClient.setQueryData(
     hostQueryKeys.plainTerminals(HOST_ID, SCOPE),

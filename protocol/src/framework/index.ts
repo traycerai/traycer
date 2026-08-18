@@ -145,9 +145,11 @@ export type {
   IncompatibleMethodBlocking,
   IncompatibleMethodDetails,
   FatalErrorDetails,
+  HostRestartIntent,
 } from "./ws-protocol";
 
 export {
+  HOST_RESTARTING_FATAL_CODE,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
   clientFrameSchema,
   clientOpenFrameSchema,
@@ -163,6 +165,7 @@ export {
   incompatibleMethodDetailsSchema,
   schemaVersionSchema,
   fatalErrorDetailsSchema,
+  hostRestartIntentSchema,
 } from "./ws-protocol";
 
 export type {

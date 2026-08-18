@@ -113,7 +113,6 @@ interface FakeDesktopWindows {
 
 interface FakeRunnerHost extends IRunnerHost {
   readonly windows: FakeDesktopWindows;
-  readonly hostPickerRequestOpen: Mock<() => void>;
 }
 
 function makeQueryClient(): QueryClient {
@@ -148,19 +147,10 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       Promise.resolve(),
     ),
   };
-  const hostPickerRequestOpen: Mock<() => void> = vi.fn();
   return Object.assign(
     // Shared `IRunnerHost` stub base so this test never re-declares the whole
     // surface; only the facets it drives are overridden.
     createFakeRunnerHost({
-      hostPicker: {
-        get isOpen() {
-          return false;
-        },
-        requestOpen: hostPickerRequestOpen,
-        requestClose: vi.fn(),
-        onChange: () => ({ dispose: () => undefined }),
-      },
       requestHostRespawn: vi.fn(() =>
         Promise.resolve({ kind: "restarted" as const }),
       ),
@@ -168,7 +158,6 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
     {
       menu,
       windows,
-      hostPickerRequestOpen,
     },
   );
 }
@@ -236,6 +225,7 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
     awareness: {} as never,
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => false,
     hotArtifactRoomIdsForTests: () => [],
@@ -361,7 +351,11 @@ describe("<MenuCommandListener />", () => {
       "open-epic-in-new-window",
     );
     expect(runnerHost.windows.requestNew).toHaveBeenCalledWith(null);
-    expect(runnerHost.hostPickerRequestOpen).not.toHaveBeenCalled();
+    // The "no menu command opens a host picker" half of this pin used to be an
+    // assertion on the shell-owned picker port. P1.2 deleted the port's last
+    // caller and P3.4 deleted the port itself, so the property is now
+    // structural - there is no picker for a command to open, and a revival
+    // would have to re-add the capability to `IRunnerHost` first.
   });
 
   it("gates the native report command on current support capability", () => {

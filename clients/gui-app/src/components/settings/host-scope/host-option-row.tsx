@@ -45,6 +45,10 @@ export function HostOptionRow(props: {
   readonly surfaceState: HostRowSurfaceState;
 }): ReactNode {
   const { host } = props;
+  // Includes "setting up" (M5): host-scope narration for a local host being
+  // installed. When another host can serve the window that setup is NOT a
+  // window-wide event — the global modal deliberately stays away, and this row
+  // plus Settings' progress banner are where it shows instead.
   const statusWord = hostOptionStatusWord(host, props.surfaceState);
   // The ACTIVE tag exists to separate two marks that can disagree: what you are
   // VIEWING versus what this window runs on. Under `bind` they are the same

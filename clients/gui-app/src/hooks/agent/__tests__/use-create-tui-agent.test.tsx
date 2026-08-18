@@ -16,19 +16,47 @@ const hookMocks = vi.hoisted(() => ({
   ),
 }));
 
-const fakeHostClient = {
+interface FakeHostClient {
+  readonly request: typeof hookMocks.request;
+  readonly getActiveHostId: () => string;
+  readonly onChange: (cb: () => void) => () => void;
+  /**
+   * Production resolves the app-wide host through the spine's id-pinned
+   * requester (redesign P4.2), and this fixture reaches that path
+   * transitively - `useAddressableHostId` calls it on whatever client the
+   * binding hands over. A stub missing it takes the subject down at first
+   * render rather than failing an assertion. One host here means the
+   * requester IS the client.
+   */
+  readonly createRequesterForHostId: (hostId: string | null) => FakeHostClient;
+  /**
+   * Read alongside the host id by `useReactiveHostReadiness`, which is what
+   * `useAddressableHostId` projects through since P4.2. Adding only the
+   * requester exposed this one: the two symbols are one shape, and a stub of
+   * a typed surface has to carry the whole shape production calls.
+   */
+  readonly getRequestContextUserId: () => string | null;
+}
+
+const fakeHostClient: FakeHostClient = {
   request: hookMocks.request,
   getActiveHostId: () => "host-test",
   onChange: (_cb: () => void) => () => undefined,
+  createRequesterForHostId: () => fakeHostClient,
+  getRequestContextUserId: () => "user-test",
 };
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => fakeHostClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => fakeHostClient,
   useHostBinding: () => ({ hostClient: fakeHostClient }),
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => fakeHostClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => fakeHostClient,
   useHostBinding: () => ({ hostClient: fakeHostClient }),
 }));
 

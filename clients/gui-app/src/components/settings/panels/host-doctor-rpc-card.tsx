@@ -35,6 +35,7 @@ import { useHostDoctorRun } from "@/components/settings/panels/host-overview-rpc
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastHostRestartRequested } from "@/lib/host-restart-toast";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { cn } from "@/lib/utils";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -240,7 +241,7 @@ export function HostDoctorRpcCard(props: {
                     );
                     return;
                   }
-                  toast.success(`Restarting ${hostName}`);
+                  toastHostRestartRequested();
                 },
                 onError: (error) =>
                   toastFromHostError(error, "Couldn't restart this host."),

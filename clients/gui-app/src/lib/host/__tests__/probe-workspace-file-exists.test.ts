@@ -26,9 +26,11 @@ function makeArgs(
   queryClient: QueryClient,
   request: Mock<ReadFileRequest>,
 ): FetchWorkspaceFileExistsArgs {
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "workspace-read-file",
@@ -37,13 +39,12 @@ function makeArgs(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
   return {
     queryClient,
-    client,
+    client: spine.createRequester(mockLocalHostEntry),
     hostId: HOST_ID,
     workspacePath: "/repo",
     filePath: "src/app.ts",

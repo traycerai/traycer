@@ -1,10 +1,10 @@
 import { useCallback, type ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { Button } from "@/components/ui/button";
 import { PrSourceNoticeHint } from "@/components/epic-canvas/pr/pr-source-notice";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import { newestObservedAt } from "@/lib/pr/pr-list-projection";
@@ -19,9 +19,9 @@ const PR_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
  * Header actions for the Pull Requests panel: epic-wide staleness + Refresh.
- * Host switcher is intentionally omitted in T5 — the list follows the app's
- * active (default) host via `useReactiveActiveHostId`, matching the Git Diff
- * panel's default-host stream client; a dedicated switcher affordance can
+ * Host switcher is intentionally omitted in T5 — the list follows the
+ * canvas-serving host via `useCanvasHostId`, matching the Git Diff panel's
+ * default-host stream client; a dedicated switcher affordance can
  * land with workspace-picker parity later if needed.
  *
  * Note: Actions stay mounted when the section collapses (only Body unmounts)
@@ -40,7 +40,7 @@ function PrPanelActionsLive(props: {
   readonly epicId: string;
   readonly tabId: string;
 }): ReactNode {
-  const hostId = useReactiveActiveHostId();
+  const hostId = useCanvasHostId();
   const mainCollapsed = useMainPanelCollapsed(props.tabId);
   const sectionCollapsed = useLeftPanelSectionCollapsed("pull-requests");
   const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");

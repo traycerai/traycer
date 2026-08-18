@@ -117,8 +117,15 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => HOST_ID,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => HOST_ID,
+}));
+
+// The Epic session resolves its host through the selection authority's derived
+// pointer (selection model §1), not the active-host projection above - seed the
+// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => HOST_ID,
 }));
 
 function CoordinatorOnly(props: {
@@ -461,6 +468,49 @@ describe("initial chat handoff route coordinator", () => {
     expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
       1,
     );
+
+    queryClient.clear();
+  });
+
+  it("stamps the seeded chat's tile with the host the handoff RECORD names, not the window's host", async () => {
+    // Codex #1243 T-46: the handoff's lookup key already ignores the host
+    // (`initialChatHandoffKey`), but the tile it opens is stamped with a
+    // separately-read host id and carries that binding for life. Read
+    // app-wide it stamped a chat created on the landing composer's PLACEMENT
+    // host (B, pinned) with whichever host the window had moved to (A). The
+    // record's `hostId` is where `epic.create` actually ran, so it wins.
+    //
+    // Discriminating fixture: every app-wide/effective read in this suite
+    // answers HOST_ID; only the record says "host-placement". A hook that
+    // stamps from any of those reads turns this red at the hostId assertion.
+    useInitialChatHandoffStore.getState().register({
+      ...HANDOFF_SCOPE,
+      hostId: "host-placement",
+      chatId: CHAT_ID,
+      content: HANDOFF_CONTENT,
+      settings: HANDOFF_SETTINGS,
+      worktreeIntent: null,
+      placement: { kind: "active-tile" },
+      messageId: "msg-test",
+      clientActionId: "cai-test",
+      createdAt: Date.now(),
+    });
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+        1,
+      );
+    });
+    const opened = canvasChatTabs().find((tab) => tab.id === CHAT_ID);
+    expect(opened?.hostId).toBe("host-placement");
+    expect(opened?.hostId).not.toBe(HOST_ID);
 
     queryClient.clear();
   });

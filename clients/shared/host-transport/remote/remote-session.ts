@@ -22,6 +22,7 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import type {
   IStreamSession,
@@ -143,6 +144,57 @@ function qosForStreamMethod(method: string): QosClassValue {
  * full attach.
  */
 
+/**
+ * Whether a connection loss is evidence ABOUT THE HOST, or only about us.
+ *
+ * The one funnel (`handleConnectionLost`) is shared by both, deliberately -
+ * backoff, stream re-subscribe and pending-unary rejection belong in one
+ * place. What is NOT shared is the verdict that leaves it:
+ *
+ *  - `host-transport-plane` - the relay socket closed, a Noise/handshake step
+ *    was rejected, the peer went away, a phase deadline elapsed with the host
+ *    silent. The host's own transport plane answered (or failed to), so this
+ *    is `confirmed-refusal` evidence.
+ *  - `not-host-evidence` - we tore the connection down ourselves (a caller's
+ *    reconnect nudge) or could not present a credential (no bearer). The host
+ *    refused nothing; it may be perfectly healthy. Reported `indeterminate`.
+ *
+ * This is the durable classification rule applied one layer down from where
+ * it was written: `confirmed-refusal` requires evidence from the HOST's
+ * transport plane, and a client's own teardown request is self-evidence.
+ */
+type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
+
+/**
+ * Whether a host-sent session FATAL is evidence about the HOST's transport
+ * plane, or about the credential plane standing between us and it.
+ *
+ * The durable classification rule decides this, not the frame's severity or
+ * its `retryable` flag: `confirmed-refusal` requires evidence from the HOST's
+ * transport plane, and an authn/credential rejection says nothing about
+ * whether the host is alive - it is alive enough to have rejected us.
+ *
+ * `UNAUTHORIZED` is the credential plane's code on this wire, and it is
+ * checked by CODE rather than by any recovery flag because the two are
+ * orthogonal: the same code arrives both retryable (the host's JWKS lookup
+ * timed out) and terminal (our bearer is genuinely bad), and neither is host
+ * evidence.
+ *
+ * Deliberately narrow rather than a guessed "credential family": every other
+ * fatal on this path - a relay policy close, a malformed frame, a phase
+ * deadline, and `HOST_RESTARTING` - IS the host's own plane answering, and
+ * widening this predicate on suspicion would silently stop counting real
+ * deaths. A new credential-plane code gets added here explicitly, with the
+ * same reasoning written down.
+ */
+function sessionFatalProvenance(
+  details: FatalErrorDetails,
+): ConnectionLossProvenance {
+  return details.code === "UNAUTHORIZED"
+    ? "not-host-evidence"
+    : "host-transport-plane";
+}
+
 export interface RemoteSessionOptions<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
@@ -172,6 +224,15 @@ export interface RemoteSessionOptions<
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly requestId: () => string;
+  /**
+   * Where this session's dial outcomes and liveness go (redesign P1.3). The
+   * selection authority's confirmed-death counter is fed from HERE and from
+   * the local WS transport - never from the directory's cloud DTO, and never
+   * from `isConfirmedTransportRefusal`, which is a pre-dial gate that folds
+   * DTO verdicts in (invariant 5). Shells with no authority to feed pass
+   * `NO_TRANSPORT_EVIDENCE`.
+   */
+  readonly evidence: TransportEvidenceReporter;
 }
 
 /**
@@ -253,6 +314,23 @@ export interface IRemoteSession<
    * emission is at most one host-scope invalidation per session build.
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void;
+  /**
+   * The DOWN edge: this session was ready and no longer is.
+   *
+   * The counterpart to `subscribeAvailabilityRecovered`, and it exists because
+   * `hasReadyRemoteSession` used to be read by two 1-second polls. A poll has
+   * no direction - it answered "did this stop being ready" by simply asking
+   * again. Replacing it with change events kept only the transitions someone
+   * enumerated, and both of those point UP (`subscribeAvailabilityRecovered`,
+   * `onClosed`), so a relay `host_detached` or a drop into `reconnecting` left
+   * every subscriber holding a stale `true` for the whole outage - and if the
+   * reconnect succeeded they never observed the loss at all.
+   *
+   * Fires on the transition only, never on a re-assertion of the same state,
+   * and never for a terminal close (`onClosed` owns that edge - a session that
+   * died is not a session that became unready).
+   */
+  subscribeReadinessLost(listener: () => void): () => void;
   close(): void;
 }
 
@@ -295,6 +373,12 @@ interface ActiveConnection {
   hostAttached: boolean;
 }
 
+/**
+ * Instance counter behind {@link RemoteSession.evidenceScope}. Process-local
+ * and never persisted or sent anywhere - it only has to be distinct.
+ */
+let nextRemoteEvidenceScope = 0;
+
 export class RemoteSession<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
@@ -310,6 +394,30 @@ export class RemoteSession<
   private connectGeneration = 0;
   private reconnectAttempt = 0;
   private connection: ActiveConnection | null = null;
+
+  /**
+   * This session instance's namespace for the selection authority's evidence
+   * ids (redesign P1.3).
+   *
+   * `connectGeneration` alone is NOT a usable attemptId: the authority
+   * deduplicates attempts by (incarnation, attemptId) with no host in the key,
+   * so two sessions for two different hosts would both report generation 1 and
+   * the second host's first dial would be silently swallowed as a duplicate.
+   * The same applies to session ids, which are unique only WITHIN a reporting
+   * incarnation. Prefixing with a per-instance label makes both unique across
+   * the window without depending on host ids being delimiter-free.
+   */
+  private readonly evidenceScope = `remote-${(nextRemoteEvidenceScope += 1)}`;
+  /**
+   * The session id currently announced to the authority as live, or null.
+   * Minted at the ready boundary (the ONLY minting site) and retracted at the
+   * teardown funnel, so the reporter can never emit `lost` for an id it never
+   * announced - nor leave one announced, which would suppress death evidence
+   * for this host forever.
+   */
+  private announcedSessionId: string | null = null;
+  /** Distinguishes a mid-session re-auth verdict from its generation's dial. */
+  private reauthEvidenceSeq = 0;
 
   private readonly subscriptions = new Map<number, LogicalStream>();
   private readonly pendingUnary = new Map<number, PendingUnary>();
@@ -329,6 +437,19 @@ export class RemoteSession<
   private readonly terminalStreamIds = new Set<number>();
   private readonly closedListeners = new Set<() => void>();
   private readonly availabilityRecoveredListeners = new Set<() => void>();
+  private readonly readinessLostListeners = new Set<() => void>();
+  /**
+   * Last readiness this session PUBLISHED, not last readiness it had.
+   *
+   * The edge detector for {@link subscribeReadinessLost}. Kept as a latch
+   * rather than deriving the edge at each call site because readiness is a
+   * conjunction of four terms (phase, generation, connection, host attach) and
+   * enumerating every mutation that can flip it is precisely the mistake this
+   * event exists to correct. Comparing against `isReady()` makes the emitter
+   * self-correcting: a transition through a path nobody listed is still
+   * reported the next time any site syncs.
+   */
+  private lastPublishedReadiness = false;
   /**
    * Callers parked inside `sendUnary` waiting for this session to become
    * usable. Settled from exactly three places, which together are every exit
@@ -872,6 +993,17 @@ export class RemoteSession<
     };
   }
 
+  /** See {@link IRemoteSession.subscribeReadinessLost}. */
+  subscribeReadinessLost(listener: () => void): () => void {
+    if (this.phase === "closed") {
+      return () => undefined;
+    }
+    this.readinessLostListeners.add(listener);
+    return () => {
+      this.readinessLostListeners.delete(listener);
+    };
+  }
+
   /** Tears the session down permanently: closes the socket, fails everything. */
   close(): void {
     if (this.phase === "closed") {
@@ -958,17 +1090,27 @@ export class RemoteSession<
 
   /**
    * `LogicalStreamPort.requestSessionReconnect`. Routes a caller-requested
-   * reconnect (a post-sleep/wake liveness nudge) through the SAME
-   * `handleConnectionLost` path a real transport drop takes, so the backoff
-   * state machine, stream re-subscribe, and pending-unary rejection stay in
-   * one place. No-op when idle or closed - there is no socket to replace, and
-   * the existing `beginConnect`/backoff already owns getting one.
+   * reconnect (a post-sleep/wake liveness nudge, a store discarding a socket
+   * whose frames it could not parse) through the SAME `handleConnectionLost`
+   * path a real transport drop takes, so the backoff state machine, stream
+   * re-subscribe, and pending-unary rejection stay in one place. No-op when
+   * idle or closed - there is no socket to replace, and the existing
+   * `beginConnect`/backoff already owns getting one.
+   *
+   * `not-host-evidence`: WE asked for this teardown. The host refused
+   * nothing - it may be answering perfectly, which is exactly the case a
+   * caller nudging for liveness is in. Sharing the funnel is right; sharing
+   * its VERDICT is not.
    */
   requestSessionReconnect(reason: string): void {
     if (this.phase === "closed" || this.phase === "idle") {
       return;
     }
-    this.handleConnectionLost(this.connectGeneration, reason);
+    this.handleConnectionLost(
+      this.connectGeneration,
+      reason,
+      "not-host-evidence",
+    );
   }
 
   closeStream(streamId: number, reason: string): void {
@@ -1017,6 +1159,18 @@ export class RemoteSession<
       // an upgrade) builds a fresh session; the closed one is evicted from
       // the session cache on the next acquire.
       this.goTerminalFatal(planRestrictedFatalDetails());
+      // The SOLE provenance of `dead("plan-restricted")` (grant-client's
+      // `plan-restricted` arm). Reported AFTER the terminal teardown so the
+      // funnel has already retracted any announced session — a live session
+      // would otherwise suppress this refusal and the lease would settle
+      // `offline`, routing the ∅ modal to "retry" for a user whose only fix
+      // is an upgrade. Unlike every other mint failure this is a stable
+      // per-host entitlement verdict, not a fleet-correlated outage, which is
+      // why it counts as host evidence at all.
+      this.reportEvidenceOutcome(
+        this.dialAttemptId(generation),
+        "plan-restricted",
+      );
       return;
     }
     if (provision.kind === "unavailable") {
@@ -1025,6 +1179,19 @@ export class RemoteSession<
       // callers settle here rather than riding an unbounded number of further
       // mint attempts inside one call.
       this.settleReadyWaiters(false);
+      // INDETERMINATE, never a refusal. Every arm folded into `unavailable` -
+      // signed out, a rejected bearer, a revoked host, an authn 5xx, a
+      // malformed body - is a CREDENTIAL/AUTHN-plane failure: the host was
+      // never dialed, so nothing here is evidence about whether it is alive.
+      // Counting it would let one authn outage reach the confirmed-death
+      // streak on every remote host simultaneously and fail the whole fleet
+      // over to local, which is the false-Offline class invariant 5 exists to
+      // prevent. A host that really is down still produces its refusal at the
+      // `handleConnectionLost` funnel, which observes the host's own plane.
+      this.reportEvidenceOutcome(
+        this.dialAttemptId(generation),
+        "indeterminate",
+      );
       const retryInMs = this.scheduleReconnect();
       this.dialFailures.recordFailure({
         cause: `could not mint an attach grant: ${provision.detail}`,
@@ -1043,7 +1210,12 @@ export class RemoteSession<
 
     const scheduler = new PriorityScheduler({
       write: (frame) => this.writeFrame(generation, frame),
-      onWriteError: () => this.handleConnectionLost(generation, "write-failed"),
+      onWriteError: () =>
+        this.handleConnectionLost(
+          generation,
+          "write-failed",
+          "host-transport-plane",
+        ),
       initialBulkCredits: INITIAL_BULK_SEND_CREDITS,
       now: undefined,
     });
@@ -1068,6 +1240,7 @@ export class RemoteSession<
           this.handleConnectionLost(
             generation,
             describeSocketClose(this.phase, info),
+            "host-transport-plane",
           ),
       },
     });
@@ -1107,7 +1280,11 @@ export class RemoteSession<
         return;
       }
       if (!connection.relaySocket.sendData(msg0)) {
-        this.handleConnectionLost(generation, "handshake-send-failed");
+        this.handleConnectionLost(
+          generation,
+          "handshake-send-failed",
+          "host-transport-plane",
+        );
       }
     })();
   }
@@ -1129,7 +1306,11 @@ export class RemoteSession<
         }
         this.sendOpenFrame(generation, connection);
       })().catch(() =>
-        this.handleConnectionLost(generation, "handshake-read-failed"),
+        this.handleConnectionLost(
+          generation,
+          "handshake-read-failed",
+          "host-transport-plane",
+        ),
       );
       return;
     }
@@ -1189,7 +1370,11 @@ export class RemoteSession<
       }
       this.dispatchInbound(generation, connection, message);
     })().catch(() =>
-      this.handleConnectionLost(generation, "inbound-decode-failed"),
+      this.handleConnectionLost(
+        generation,
+        "inbound-decode-failed",
+        "host-transport-plane",
+      ),
     );
   }
 
@@ -1285,8 +1470,17 @@ export class RemoteSession<
   ): void {
     const bearer = this.readBearerOrNull();
     if (bearer === null) {
-      // No bearer to present → cannot authenticate the session; stay in backoff.
-      this.handleConnectionLost(generation, "missing-bearer");
+      // No bearer to present → cannot authenticate the session; stay in
+      // backoff. `not-host-evidence` for the same reason a failed grant mint
+      // is indeterminate: this is the CREDENTIAL plane refusing us, one step
+      // before the host was ever asked anything. Counting it would let a
+      // signed-out moment march every remote host toward confirmed death at
+      // once.
+      this.handleConnectionLost(
+        generation,
+        "missing-bearer",
+        "not-host-evidence",
+      );
       return;
     }
     this.phase = "opening";
@@ -1349,7 +1543,11 @@ export class RemoteSession<
         if (parsed.success) {
           this.handleSessionFatal(generation, parsed.data.details);
         } else {
-          this.handleConnectionLost(generation, "malformed-session-fatal");
+          this.handleConnectionLost(
+            generation,
+            "malformed-session-fatal",
+            "host-transport-plane",
+          );
         }
         return;
       }
@@ -1493,7 +1691,11 @@ export class RemoteSession<
     }
     const parsed = sessionOpenAckPayloadSchema.safeParse(json);
     if (!parsed.success) {
-      this.handleConnectionLost(generation, "malformed-openAck");
+      this.handleConnectionLost(
+        generation,
+        "malformed-openAck",
+        "host-transport-plane",
+      );
       return;
     }
     const hostRpcMerged = mergeConnectionManifests(
@@ -1636,6 +1838,32 @@ export class RemoteSession<
 
   // ---- Host blip / peer death / drop ------------------------------------- //
 
+  /**
+   * A relay `host_detached`: the host leg went away, the client leg did not.
+   *
+   * Two different things are announced from this connection, and they part
+   * ways here:
+   *
+   *  - The SOCKET stays. `host_detached` is transient; `onHostAttached` gates
+   *    on `!connection.hostAttached` precisely to restore through it, and
+   *    tearing the connection down would turn a recoverable blip into a full
+   *    redial. `isReady()` includes `hostAttached`, so `hasReadyRemoteSession`
+   *    stops counting this host the moment the flag clears; the
+   *    `syncReadinessLatch()` at the end is what tells its subscribers.
+   *  - The AUTHORITY SESSION goes. `announceSession` at the ready boundary told
+   *    the selection authority this host has a live session, and an announced
+   *    session suppresses ALL death evidence for its host and pins its lease
+   *    `ready` (see `teardownConnection`). A previous version of this method
+   *    kept it announced through the detach, reasoning from `isReady()` - a
+   *    different consumer. The result was the silent outage: a remote host
+   *    whose box lost power read `ready` in every window, refusals against it
+   *    were dropped, no corpse ceiling was armed (that arms on `sessionLost`),
+   *    and failover was impossible until the 15-minute standing bound - which
+   *    is re-armed on every attach, so it measured from the LAST attach, not
+   *    from the detach. Retracting here is what lets the authority see the
+   *    host as it is; the next ready boundary re-announces under the new
+   *    connect generation, exactly as it does after any redial.
+   */
   private onHostDetached(generation: number): void {
     if (!this.isCurrent(generation)) {
       return;
@@ -1647,6 +1875,10 @@ export class RemoteSession<
     connection.hostAttached = false;
     connection.scheduler.pause();
     this.markStreamsReconnecting();
+    this.retractSession();
+    // `isReady()` includes `hostAttached`, so it is already false here - this
+    // is what tells anyone.
+    this.syncReadinessLatch();
   }
 
   private onHostAttached(generation: number): void {
@@ -1673,7 +1905,11 @@ export class RemoteSession<
       // fresh `NoiseChannel` + relay dial + `open{bearer}` - rather than a
       // second state machine or a new wire frame (`session_reset{sid}`
       // stays deferred/telemetry-gated; see the S2 ticket).
-      this.handleConnectionLost(generation, "host-attached-stale-noise");
+      this.handleConnectionLost(
+        generation,
+        "host-attached-stale-noise",
+        "host-transport-plane",
+      );
     }
   }
 
@@ -1693,17 +1929,62 @@ export class RemoteSession<
       });
       return;
     }
-    this.handleConnectionLost(generation, `peer-gone:${reason}`);
+    this.handleConnectionLost(
+      generation,
+      `peer-gone:${reason}`,
+      "host-transport-plane",
+    );
   }
 
-  /** Any transport loss → drop the connection and full-resume from backoff. */
-  private handleConnectionLost(generation: number, cause: string): void {
+  /**
+   * Any transport loss → drop the connection and full-resume from backoff.
+   *
+   * `provenance` is REQUIRED, and is the whole reason this parameter exists:
+   * the funnel is shared by losses that are host evidence and losses that are
+   * not, and before it was threaded here every caller was laundered into a
+   * confirmed refusal on the way past. A required argument makes the census
+   * mechanical - a new caller cannot reach this funnel without stating which
+   * kind of loss it is.
+   */
+  private handleConnectionLost(
+    generation: number,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+  ): void {
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
     this.dropConnection(cause);
+    this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnect();
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
+    // THE host-plane funnel: every relay-socket close, Noise/handshake
+    // rejection, `peer_gone`, and phase timeout arrives here. This is the one
+    // site in the remote loop that observes the HOST rather than the cloud, so
+    // it is the one that produces confirmed refusals. `dropConnection` above
+    // has already retracted the announced session, so the refusal is not
+    // suppressed by liveness that no longer exists.
+    //
+    // ...but only for losses that ARE host evidence. A caller-requested
+    // reconnect and a missing local bearer both arrive here too, and neither
+    // is a statement about the host: the durable rule is that
+    // `confirmed-refusal` requires evidence from the HOST's transport plane,
+    // and a client's own teardown request is self-evidence. Reporting those as
+    // refusals let three app-driven reconnects reach the confirmed-death
+    // streak on a host that never stopped answering - the false-Offline class
+    // invariant 5 exists to prevent, reintroduced from inside the client.
+    //
+    // Its own attempt id, NOT the generation's: a generation that reached
+    // ready already reported success under `#<generation>`, and the authority
+    // deduplicates by attempt id - so reusing it would swallow the very first
+    // refusal after a live session died, the most common death there is. This
+    // funnel runs at most once per generation (`isCurrent` fails the moment
+    // `dropConnection` nulls the connection), so the suffixed id stays a
+    // faithful one-attempt-one-outcome report.
+    this.reportEvidenceOutcome(
+      `${this.evidenceScope}#${generation}-lost`,
+      provenance === "host-transport-plane" ? "refusal" : "indeterminate",
+    );
   }
 
   /**
@@ -1733,6 +2014,14 @@ export class RemoteSession<
     // ride an unbounded number of further attempts inside one call.
     this.settleReadyWaiters(false);
     this.markStreamsReconnecting();
+    // The DOWN edge, from the funnel every drop passes through. `isReady()`
+    // is false the moment `connection` is nulled above; publishing that here
+    // means no caller can forget. `handleUnauthorizedSessionFatal` had - the
+    // one drop from a READY session that ran without this - so
+    // `subscribeReadinessLost` never fired and `hasReadyRemoteSession` held a
+    // stale `true` for the whole revalidate-and-backoff window: exactly the
+    // stale-true class that subscription was added to close.
+    this.syncReadinessLatch();
   }
 
   /**
@@ -1754,11 +2043,39 @@ export class RemoteSession<
     generation: number,
     details: FatalErrorDetails,
   ): void {
+    // The restart tombstone (P1.4 / D5 / M1), reported BEFORE the teardown it
+    // announces. This is the ingress by which a restart issued from ANY
+    // client - a GUI on the user's other machine, a CLI on the box, an update
+    // install - reaches this window's selection authority, which otherwise
+    // sees only a socket dying and cannot tell deliberate from dead.
+    //
+    // It does not replace the loss report below, and must not: the session
+    // really is going away, and the authority's derivation order is what puts
+    // the expected-outage HOLD above the death streak the loss feeds. Two
+    // honest reports beat one that tries to mean both.
+    this.reportRestartIntentIfPresent(details);
+    // Classified BEFORE the retryable arm, and that order is the whole point.
+    // `retryable` says how to RECOVER; it says nothing about what the failure
+    // is evidence OF, and the two are independent. A host whose own JWKS fetch
+    // times out while verifying our bearer answers `UNAUTHORIZED` WITH
+    // `retryable: true` - it is alive and talking, and the failure is on the
+    // credential plane. Reading the retryable flag first and calling every
+    // such drop host evidence let a healthy host bank a confirmed refusal per
+    // reconnect attempt, and three of them reach the death streak and fail the
+    // window away from a host that never stopped answering. That is the
+    // false-Offline class invariant 5 exists to prevent, reintroduced through
+    // the very arm whose own comment says "a prior genuine UNAUTHORIZED
+    // episode" flows through here.
+    const provenance = sessionFatalProvenance(details);
     if (details.retryable === true) {
       // A transient host blip must not count toward the credential give-up
       // bound - clear any streak left by a prior genuine UNAUTHORIZED episode.
       this.noProgressUnauthorizedReconnects = 0;
-      this.handleConnectionLost(generation, "session-fatal-retryable");
+      this.handleConnectionLost(
+        generation,
+        "session-fatal-retryable",
+        provenance,
+      );
       return;
     }
     const auth = this.revalidator();
@@ -1838,6 +2155,10 @@ export class RemoteSession<
         context: "",
         retryInMs,
       });
+      // Credential-plane, so INDETERMINATE: the host is answering (it rejected
+      // a bearer, which a dead host cannot do) and what failed is our own
+      // revalidation. Neither half is evidence that the host is gone.
+      this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
       return;
     }
     // outcome === "rotated": authn accepts the credential. If the bearer the
@@ -1864,6 +2185,9 @@ export class RemoteSession<
       context: "",
       retryInMs,
     });
+    // Same reasoning as the network-error arm: an UNAUTHORIZED redial is a
+    // credential rotation, not a statement about host liveness.
+    this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
   }
 
   /**
@@ -2013,6 +2337,12 @@ export class RemoteSession<
         context: "",
         retryInMs,
       });
+      // Threw BEFORE dialing (a key decode, a factory, an await that rejected)
+      // - our own connect path failed, so the host was never asked anything.
+      this.reportEvidenceOutcome(
+        this.dialAttemptId(generation),
+        "indeterminate",
+      );
     });
   }
 
@@ -2044,6 +2374,14 @@ export class RemoteSession<
       // Mid-session downgrade: end the session now rather than letting the
       // relay's client-leg deadline kill it opaquely later.
       this.goTerminalFatal(planRestrictedFatalDetails());
+      // The second provenance of `dead("plan-restricted")`, for a host that
+      // was already CONNECTED when the plan changed. Without it the lease
+      // settles `connecting` and the ∅ modal offers "retry" to a user whose
+      // only fix is an upgrade. Reported after the terminal teardown, which
+      // has already retracted this session's announcement - otherwise its own
+      // liveness would suppress the verdict. Its own attempt id: this
+      // generation's dial already reported success.
+      this.reportEvidenceOutcome(this.reauthAttemptId(), "plan-restricted");
       return;
     }
     if (provision.kind === "ok") {
@@ -2067,7 +2405,11 @@ export class RemoteSession<
     const generation = this.connectGeneration;
     this.standingTimer = setTimeout(() => {
       this.standingTimer = null;
-      this.handleConnectionLost(generation, "host-standing-lapsed");
+      this.handleConnectionLost(
+        generation,
+        "host-standing-lapsed",
+        "host-transport-plane",
+      );
     }, HOST_STANDING_BOUND_MS);
   }
 
@@ -2243,6 +2585,15 @@ export class RemoteSession<
     this.readyBoundaryGeneration = this.connectGeneration;
     this.reconnectAttempt = 0;
     this.dialFailures.recordSuccess();
+    // The ready boundary is the ONLY site that mints a session id, and it runs
+    // once per connect generation (the guard above). Order matters: the dial
+    // success clears the host's death streak, and the announcement then makes
+    // every later failure for this host inert until the session is retracted.
+    this.reportEvidenceOutcome(
+      this.dialAttemptId(this.connectGeneration),
+      "success",
+    );
+    this.announceSession(`${this.evidenceScope}:s${this.connectGeneration}`);
     // EVERY ready boundary is availability evidence, the clean first open
     // included: queries that raced this session's first dial have already
     // errored pre-send and exhausted their retry, and this emission is the
@@ -2264,6 +2615,103 @@ export class RemoteSession<
     }
   }
 
+  // ---- Selection-authority evidence (redesign P1.3) ---------------------- //
+
+  /** One dial attempt per connect generation (the contract's attempt identity). */
+  private dialAttemptId(generation: number): string {
+    return `${this.evidenceScope}#${generation}`;
+  }
+
+  /**
+   * A credential-plane event, which is never tied to a dial: revalidation can
+   * run several times inside one generation, and each needs its own id or the
+   * authority's dedup would keep only the first.
+   */
+  private credentialAttemptId(): string {
+    this.reauthEvidenceSeq += 1;
+    return `${this.evidenceScope}#auth-${this.reauthEvidenceSeq}`;
+  }
+
+  /** A mid-session re-auth verdict, distinct from its generation's dial. */
+  private reauthAttemptId(): string {
+    this.reauthEvidenceSeq += 1;
+    return `${this.evidenceScope}#reauth-${this.reauthEvidenceSeq}`;
+  }
+
+  /**
+   * The ONE place a dial outcome leaves this session. Written as a closed set
+   * of outcomes rather than an error-classifying helper: the classification
+   * decision belongs at the call site, where the attempt's own error is in
+   * hand, and there is deliberately no path here that could consult a
+   * directory verdict (invariant 5).
+   */
+  /**
+   * Forwards a host-published restart tombstone to the selection authority.
+   *
+   * Every observation is forwarded, including duplicates across reconnects:
+   * the authority keys episodes by (hostId, tombstoneId) and a repeat receipt
+   * is inert by contract, so suppressing here would only add a second,
+   * weaker copy of a rule that already exists in the one place that can
+   * enforce it across every window in the app.
+   */
+  private reportRestartIntentIfPresent(details: FatalErrorDetails): void {
+    const restartIntent = details.restartIntent;
+    if (restartIntent === undefined) {
+      return;
+    }
+    this.options.evidence.reportRestartIntent(
+      this.options.hostId,
+      restartIntent.tombstoneId,
+      restartIntent.expiresAt,
+    );
+  }
+
+  private reportEvidenceOutcome(
+    attemptId: string,
+    outcome: "success" | "refusal" | "plan-restricted" | "indeterminate",
+  ): void {
+    const hostId = this.options.hostId;
+    const evidence = this.options.evidence;
+    if (outcome === "success") {
+      evidence.reportDialSuccess(hostId, attemptId, "remote-relay");
+      return;
+    }
+    if (outcome === "indeterminate") {
+      evidence.reportDialIndeterminate(hostId, attemptId, "remote-relay");
+      return;
+    }
+    evidence.reportDialRefusal(
+      hostId,
+      attemptId,
+      "remote-relay",
+      outcome === "plan-restricted" ? "plan-restricted" : null,
+    );
+  }
+
+  private announceSession(sessionId: string): void {
+    // A generation cannot reach its ready boundary twice, so an announcement
+    // while one is outstanding would mean the retraction funnel was bypassed.
+    // Retract first rather than leaking the previous id.
+    this.retractSession();
+    this.announcedSessionId = sessionId;
+    this.options.evidence.sessionEstablished(
+      this.options.hostId,
+      sessionId,
+      "remote-relay",
+    );
+  }
+
+  private retractSession(): void {
+    const sessionId = this.announcedSessionId;
+    if (sessionId === null) return;
+    this.announcedSessionId = null;
+    this.options.evidence.sessionLost(
+      this.options.hostId,
+      sessionId,
+      "remote-relay",
+    );
+  }
+
   private isCurrent(generation: number): boolean {
     return (
       generation === this.connectGeneration &&
@@ -2277,6 +2725,7 @@ export class RemoteSession<
     const listeners = Array.from(this.closedListeners);
     this.closedListeners.clear();
     this.availabilityRecoveredListeners.clear();
+    this.readinessLostListeners.clear();
     for (const listener of listeners) {
       try {
         listener();
@@ -2286,7 +2735,40 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Reconciles the published-readiness latch with reality and emits the DOWN
+   * edge if one just happened. Safe to call from any state mutation; calling
+   * it too often costs a boolean compare, calling it too rarely is the bug.
+   */
+  private syncReadinessLatch(): void {
+    const ready = this.isReady();
+    if (ready === this.lastPublishedReadiness) {
+      return;
+    }
+    this.lastPublishedReadiness = ready;
+    if (ready) {
+      // The UP edge belongs to `subscribeAvailabilityRecovered`, which fires
+      // at the ready boundary with more precise timing than this latch has.
+      // Recording it here only keeps the next DOWN edge detectable.
+      return;
+    }
+    // Guarded per listener, same reason as the recovered emitter: this runs
+    // inside inbound frame dispatch and a throwing consumer must not break
+    // message processing or the other listeners.
+    for (const listener of Array.from(this.readinessLostListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[remote-session] readiness-lost listener threw", error);
+      }
+    }
+  }
+
   private emitAvailabilityRecovered(): void {
+    // Keep the loss latch in step on the way up, or the next DOWN edge is
+    // invisible: an un-synced latch still reads `false` and the transition
+    // compares equal.
+    this.syncReadinessLatch();
     // Guarded per listener: the emission happens inside inbound frame
     // dispatch, so a throwing consumer must not break the session's message
     // processing or the other listeners (parity with `WsStreamClient`).
@@ -2303,6 +2785,18 @@ export class RemoteSession<
   }
 
   private teardownConnection(reason: string): void {
+    // THE retraction funnel. All three teardown paths pass through here -
+    // `dropConnection` (a transport loss), `goTerminalFatal` (a revoked
+    // credential, a mid-session plan downgrade, an incompatible handshake) and
+    // the caller's `close()`. Anchoring the retraction at `dropConnection`
+    // instead would leave a session announced forever on the two terminal
+    // paths, and an announced session suppresses ALL death evidence for its
+    // host and pins the lease `ready` - so the host could never be declared
+    // dead again. A consumer `close()` reaching here is correct too: the
+    // session really has ended, and the authority's transitions are
+    // idempotent, so a redundant retraction costs nothing while a missing one
+    // is the defect.
+    this.retractSession();
     const connection = this.connection;
     this.connection = null;
     this.openFrameBearer = null;
@@ -2326,7 +2820,7 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.phaseTimer = setTimeout(() => {
       this.phaseTimer = null;
-      this.handleConnectionLost(generation, cause);
+      this.handleConnectionLost(generation, cause, "host-transport-plane");
     }, timeoutMs);
   }
 

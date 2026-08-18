@@ -15,16 +15,36 @@ import {
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
+  // Bumped by a test to make `useHostClient()` hand back a NEW requester on
+  // the next render - what production does when the effective host moves.
+  requesterEpoch: 0,
+  requester: null as HostClient<HostRpcRegistry> | null,
+  requesterFor: -1,
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => {
+vi.mock("@/lib/host/runtime", () => {
+  const spine = () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
     }
     return globalClientRef.value;
-  },
-}));
+  };
+  return {
+    // A requester re-minted per `requesterEpoch`, which is what production
+    // `useHostClient()` hands back whenever the effective host moves. The hook
+    // under test must take its auth base from the BINDING's client (the stable
+    // spine) instead - with the requester in its build effect's deps, every
+    // Activate/failover tore down and re-dialed unrelated stream clients.
+    useHostClient: () => {
+      if (globalClientRef.requesterFor !== globalClientRef.requesterEpoch) {
+        globalClientRef.requester = spine().createRequesterForHostId(null);
+        globalClientRef.requesterFor = globalClientRef.requesterEpoch;
+      }
+      return globalClientRef.requester ?? spine();
+    },
+    useHostBinding: () => ({ hostClient: spine(), hostId: null }),
+  };
+});
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),
@@ -32,17 +52,23 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 
+// The SPINE `useHostClient` hands back in this suite - never bound to any one
+// host (redesign P4.2 deleted the active slot `.bind()` used to fill).
+const knownHostEntries = new Map<string, HostDirectoryEntry>([
+  [mockLocalHostEntry.hostId, mockLocalHostEntry],
+]);
+
 function buildGlobalClient(withContext: boolean): HostClient<HostRpcRegistry> {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (hostId) => knownHostEntries.get(hostId) ?? null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {},
     }),
   });
-  client.bind(mockLocalHostEntry);
   if (withContext) {
     client.setRequestContext(
       createRequestContextFixture({
@@ -84,9 +110,10 @@ describe("useHostStreamClientFor", () => {
     globalClientRef.value = globalClient;
     const { result } = renderHook(() => useHostStreamClientFor(TARGET_B, null));
     expect(result.current).toBeInstanceOf(WsStreamClient);
-    // Building a transient stream client for host B must not move the global
-    // client off its own active host (no global side effect).
-    expect(globalClient.getActiveHostId()).toBe(mockLocalHostEntry.hostId);
+    // Building a transient stream client for host B must not give the global
+    // SPINE an active host of its own (no global side effect) - it stays
+    // unbound (redesign P4.2 deleted the active slot `.bind()` used to set).
+    expect(globalClient.getActiveHostId()).toBeNull();
   });
 
   it("memoizes for a stable target and rebuilds for a different host", () => {
@@ -104,6 +131,29 @@ describe("useHostStreamClientFor", () => {
     const targetC: HostDirectoryEntry = { ...TARGET_B, hostId: "host-c" };
     rerender({ target: targetC });
     expect(result.current).not.toBe(first);
+  });
+
+  it("does not rebuild when the app-wide requester is re-minted (an effective-host move)", () => {
+    // `useHostClient()` returns a requester pinned to the effective host and
+    // re-minted when that host moves. This hook needs only the transport
+    // identity - request context, user id, bearer rotation - which every
+    // requester binds to the same underlying client, so it reads the
+    // BINDING's client. With the requester in the build effect's deps, an
+    // Activate or failover tore down and re-dialed every stream this hook
+    // owns, including ones bound to hosts the move never touched, and the
+    // notifications provider read its local stream's fresh instance as a
+    // respawn and wiped its replica.
+    globalClientRef.value = buildGlobalClient(true);
+    const { result, rerender } = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: TARGET_B } },
+    );
+    const first = result.current;
+    expect(first).not.toBeNull();
+
+    globalClientRef.requesterEpoch += 1;
+    rerender({ target: TARGET_B });
+    expect(result.current).toBe(first);
   });
 
   it("does not rebuild when a fresh entry has the same transport identity", async () => {

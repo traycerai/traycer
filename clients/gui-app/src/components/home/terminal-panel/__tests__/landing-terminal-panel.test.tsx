@@ -46,9 +46,12 @@ const mocks = vi.hoisted(() => {
     "legacy";
   let plainCollection: PlainTerminalCollection | undefined;
   return {
-    // React reactive host (useReactiveActiveHostId) vs client host (getActiveHostId).
+    // React reactive host (useAddressableHostId) vs client host (getActiveHostId).
     // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
     activeHostId: null as string | null,
+    // The COMPOSER placement's resolved host (the window pin). Follows
+    // `activeHostId` unless a test sets it, so one arm can make the two differ.
+    placementHostId: null as string | null,
     clientActiveHostId: null as string | null,
     probeData: undefined as TerminalListFixture | undefined,
     freshProbeData: undefined as TerminalListFixture | undefined,
@@ -80,6 +83,13 @@ const mocks = vi.hoisted(() => {
         readonly reason: string;
       }) => void
     >,
+    // The connection registry's per-host row signal. The panel used to be told
+    // "this host's transport moved" by the active slot's `host-updated` event;
+    // P4.2 deleted the slot, and the registry reports the same move per host.
+    rowChangedListeners: [] as Array<{
+      readonly hostId: string;
+      readonly listener: () => void;
+    }>,
     defaultClient: {
       getActiveHostId: () => mocks.clientActiveHostId,
       onChange: (
@@ -116,9 +126,63 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
     useQueryClient: () => mocks.queryClient,
   };
 });
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mocks.activeHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mocks.activeHostId,
 }));
+// The gesture provider resolves the COMPOSER'S placement (the window's surface
+// pin ?? effective), not the app-wide host, so the landing terminals and the
+// composer beside them describe one machine. Mocked at its seam with the same
+// `mocks.activeHostId` / `mocks.defaultClient` the rest of this suite drives.
+vi.mock("@/hooks/host/use-composer-placement", () => ({
+  useComposerPlacement: () => {
+    const resolvedHostId = mocks.placementHostId ?? mocks.activeHostId;
+    const target = {
+      resolvedHostId,
+      client: mocks.defaultClient,
+      hostLabel: null,
+      isPinned: false,
+      namedHostDead: false,
+    };
+    return {
+      pin: {
+        selection: null,
+        honoredSelection: null,
+        resolvedHostId,
+        isPinned: false,
+        setSelection: () => undefined,
+        latchOnFirstUse: () => undefined,
+      },
+      target,
+      submitTarget: target,
+      hostLabelFor: () => null,
+      followsEffective: true,
+    };
+  },
+}));
+// Partial, not whole-module: the registry also owns `acquireHostConnection`
+// and the equality helpers, and replacing the module wholesale would strand
+// whatever else in this graph reaches for them.
+vi.mock(
+  "@traycer-clients/shared/host-client/host-connection-registry",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-connection-registry")
+      >();
+    return {
+      ...actual,
+      subscribeHostRowChanged: (hostId: string, listener: () => void) => {
+        const entry = { hostId, listener };
+        mocks.rowChangedListeners.push(entry);
+        return () => {
+          mocks.rowChangedListeners = mocks.rowChangedListeners.filter(
+            (candidate) => candidate !== entry,
+          );
+        };
+      },
+    };
+  },
+);
 vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
   useTerminalListFor: () => ({
     data: mocks.probeData,
@@ -128,6 +192,8 @@ vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.defaultClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mocks.defaultClient,
   useHostDirectory: () => ({
     findById: (hostId: string) => ({ hostId, websocketUrl: "ws://test" }),
   }),
@@ -463,8 +529,10 @@ describe("<LandingTerminalPanel />", () => {
     resetPrimaryFocusCoordinatorForTests();
     resetTerminalFocusRegistryForTests();
     mocks.activeHostId = null;
+    mocks.placementHostId = null;
     mocks.clientActiveHostId = null;
     mocks.onChangeListeners = [];
+    mocks.rowChangedListeners = [];
     mocks.probeData = undefined;
     mocks.freshProbeData = undefined;
     mocks.probeError = null;
@@ -727,6 +795,28 @@ describe("<LandingTerminalPanel />", () => {
     });
     expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
+  });
+
+  it("creates on the COMPOSER's placement host, not the app-wide one, when the two differ", async () => {
+    // The landing page's composer, hero and folder picker all resolve the
+    // window's surface pin; the terminal panel used to read the app-wide host
+    // (`useAddressableHostId` / `useHostClient`), so a page pinned to host-b
+    // listed, dialed and CREATED terminals on host-a - bound for life - under
+    // a chip that said host-b, and its folder picker staged under
+    // `{landing, host-a, draft}` beside the composer's `{landing, host-b, draft}`.
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-b";
+    mocks.clientActiveHostId = "host-b";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.hostId).toBe("host-b");
   });
 
   it("holds an auto-spawn that settles while the start page is backgrounded, then spawns on return", async () => {
@@ -3066,17 +3156,20 @@ describe("<LandingTerminalPanel />", () => {
     const hostATab = useLandingTerminalStore.getState().tabs[0];
     expect(hostATab.hostId).toBe("host-a");
     expect(hostATab.cwd).toBe("/Users/host-a");
-    expect(mocks.onChangeListeners.length).toBeGreaterThan(0);
+    // Subscribed BY HOST since P4.2: the panel is told "host-a's row moved",
+    // not "the bound host changed". Asserted rather than assumed, because a
+    // registry arm that never subscribed would make the drive below a no-op
+    // and this whole case would pass without ever starting a generation.
+    const hostARowListeners = mocks.rowChangedListeners.filter(
+      (entry) => entry.hostId === "host-a",
+    );
+    expect(hostARowListeners.length).toBeGreaterThan(0);
 
     // Start a fresh Host-A list generation that stays pending (no React host change).
     deferFetches = true;
     act(() => {
-      for (const listener of mocks.onChangeListeners) {
-        listener({
-          previousHostId: "host-a",
-          currentHostId: "host-a",
-          reason: "host-updated",
-        });
+      for (const entry of hostARowListeners) {
+        entry.listener();
       }
     });
     await waitFor(() => {

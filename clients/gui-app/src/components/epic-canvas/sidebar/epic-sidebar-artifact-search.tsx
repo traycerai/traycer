@@ -39,8 +39,8 @@ import type {
   SearchArtifactHit,
   SearchArtifactsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
@@ -232,8 +232,15 @@ interface ArtifactSearchBoxProps {
 // eslint-disable-next-line complexity
 export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   const { epicId, tabId, searchQuery, debouncedQuery } = props;
-  const client = useHostClient();
-  const activeHostId = useReactiveActiveHostId();
+  // BOTH from the Epic session, and that is the point - these two were read
+  // from two different sources (the ambient client, and the app-wide
+  // addressable id beside it) and then used together: the id keys the scope
+  // signature AND binds every opened hit's tile for life. So during a re-point
+  // - when the sidebar stays interactive while only the canvas goes inert -
+  // this searched one machine and opened the results as tiles bound to
+  // another. One source makes them incapable of disagreeing.
+  const client = useEpicSessionHostClient();
+  const activeHostId = useEpicSessionHostId();
   const filter = useArtifactFilter(epicId);
   const inputRef = useRef<HTMLInputElement>(null);
   const headerSlot = usePanelHeaderSearchSlot(tabId, ARTIFACTS_PANEL_ID);

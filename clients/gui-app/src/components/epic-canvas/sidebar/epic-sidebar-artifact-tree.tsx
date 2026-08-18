@@ -31,7 +31,7 @@ import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-ca
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { ArtifactPanelSearchShell } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -761,7 +761,13 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const deletePending = deleteArtifact.isPending;
 
-  const activeHostId = useReactiveActiveHostId() ?? "unknown-host";
+  // The Epic SESSION's host, not the app-wide pointer: this tree projects the
+  // session's artifacts, and the refs built below stamp a tile with this id
+  // for life (`hostId` on the ref) and name the fallback host a created child
+  // is opened against. Read app-wide, an A-bound Epic that stays rendered
+  // through an A→B re-point (establishing, or failed) opened A's artifacts
+  // against B. `null` only outside a session, where this row never renders.
+  const activeHostId = useEpicSessionHostId() ?? "unknown-host";
 
   const openProjectedChildInTab = useCallback(
     (
@@ -1553,7 +1559,9 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isSelected,
     onToggleSelection,
   } = props;
-  const activeHostId = useReactiveActiveHostId();
+  // Session host, as above: the drag payload names the host the dropped tile
+  // binds to.
+  const activeHostId = useEpicSessionHostId();
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
       activeHostId === null

@@ -188,16 +188,6 @@ export function buildOverviewHostFixture(options: {
     }),
   };
 
-  const client = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${options.hostId}`,
-      handlers: { ...handlers, ...options.overrideHandlers },
-    }),
-  });
-
   const entry: HostDirectoryEntry = {
     hostId: options.hostId,
     label: options.hostId,
@@ -208,13 +198,32 @@ export function buildOverviewHostFixture(options: {
     version: options.hostVersion ?? "1.5.0",
     transportDialability: "dialable",
   };
-  client.bind(entry);
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    // REQUIRED for the requester below: `captureAuthority` re-resolves a
+    // requester's entry against the live directory and refuses one it cannot
+    // find. `bind()` used to satisfy that lookup through the client's own
+    // slot-reading fallback.
+    findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${options.hostId}`,
+      handlers: { ...handlers, ...options.overrideHandlers },
+    }),
+  });
+
   client.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
 
   return {
-    client,
+    // A requester pinned to this fixture's host, where `bind()` used to put
+    // the same host in the client's slot. The EXPORTED SHAPE is unchanged - a
+    // requester is a `HostClient<HostRpcRegistry>` and forwards every request
+    // to the spine below, so the per-fixture RPC counters this module hands
+    // out keep counting the same calls.
+    client: client.createRequester(entry),
     hostId: options.hostId,
     identity: () => identity,
     identitySetCalls: () => identitySetCalls,

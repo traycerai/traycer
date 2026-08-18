@@ -18,10 +18,11 @@ import {
 
 const spies = vi.hoisted(() => ({
   openTileIntoTargetGroup: vi.fn<(args: OpenTileIntoTargetGroupArgs) => void>(),
-  createChatMutate: vi.fn(),
   createTuiAgent: vi.fn(),
   refreshHostDirectory: vi.fn(() => Promise.resolve([])),
+  toast: vi.fn(),
 }));
+vi.mock("sonner", () => ({ toast: spies.toast }));
 const activeHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
   current: "default-host",
 }));
@@ -201,9 +202,13 @@ vi.mock("@/lib/commands/actions", () => ({
 }));
 vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
   useActiveEpicProjection: () => FAKE_PROJECTION,
+  // The host serving the active epic's projection - what the opener stamps
+  // into tiles and reads the epic's own records from (PR #1243 round 6). The
+  // suite's "active host" knob drives it, so every arm below reads as before.
+  useActiveEpicHostId: () => activeHostIdMock.current,
 }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdMock.current,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdMock.current,
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string) => ({ mockHostId: hostId }),
@@ -256,9 +261,6 @@ vi.mock("@/lib/host", () => ({
     getRequestContextUserId: () => "user-test",
     onChange: () => () => undefined,
   }),
-}));
-vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({ mutate: spies.createChatMutate }),
 }));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>
@@ -642,6 +644,9 @@ describe("Terminals opener sub-page", () => {
     runById(remoteWorkspaces, remoteWorkspace?.id ?? "missing");
 
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    // F20: the refusal used to be silent - the row just did nothing.
+    expect(spies.toast).toHaveBeenCalledTimes(1);
+    expect(spies.toast.mock.calls[0]?.[0]).toContain("Remote Terminal Mac");
   });
 
   it("keeps reachable remote hosts selectable while no active host is resolved", () => {

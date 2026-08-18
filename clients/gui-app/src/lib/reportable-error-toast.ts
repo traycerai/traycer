@@ -73,6 +73,9 @@ function createReportAction(
       if (!current.reportIssueAvailable) return;
       Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
         source: "notification",
+        surface: isReportIssueDraftContext(context)
+          ? context.publicPrefill.source
+          : context.source,
       });
       if (isReportIssueDraftContext(context)) {
         current.openReportIssueDraft(context);

@@ -86,8 +86,8 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
     mocks.refreshOnMount(...args);
   },
 }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mocks.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mocks.hostId,
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
   useRateLimitQueueTargetPhase: () => mocks.targetPhase,

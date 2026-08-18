@@ -4,12 +4,21 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+// The APP-WIDE client. `useEditorOpen` is the wrapper kept for the one caller
+// that is genuinely app-wide - the dead-tile "open in editor" button, a
+// FOLLOWING surface with no host of its own (selection model §2). Every
+// Epic-scoped caller now uses `useEditorOpenForClient` with its own tab client,
+// which is what `routesToThePassedClient` below pins (D15).
 const fakeClient = { __isFakeClient: true };
 vi.mock("@/lib/host", () => ({
   useHostClient: () => fakeClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => fakeClient,
 }));
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => fakeClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => fakeClient,
 }));
 
 let capturedArgs: {
@@ -30,9 +39,16 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 
 import { toast } from "sonner";
 import { renderHook } from "@testing-library/react";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
-import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
+import {
+  useEditorOpen,
+  useEditorOpenForClient,
+} from "@/hooks/editor/use-editor-open-mutation";
 import { editorMutationKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
@@ -91,5 +107,35 @@ describe("useEditorOpen", () => {
     } finally {
       track.mockRestore();
     }
+  });
+});
+
+// D15. `editor.openPaths` resolves its paths on the host it is SENT to, so a
+// diff tile bound to host A that dispatched on the app-wide client asked
+// whichever machine the app was pointed at to open A's file. The tile's own
+// client is a plain argument now; the app-wide mock above is still installed
+// and must stay unused.
+describe("useEditorOpenForClient", () => {
+  it("targets editor.openPaths with the PASSED client, not the app-wide one", () => {
+    // A real client over a mock messenger, not a chained assertion - the repo's
+    // lint forbids `as unknown as` in tests too.
+    const tileClient: HostClient<HostRpcRegistry> =
+      new HostClient<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        invalidator: { invalidateHostScope: () => undefined },
+        messenger: new MockHostMessenger<HostRpcRegistry>({
+          registry: hostRpcRegistry,
+          requestId: () => "req-editor-open-for-client",
+          handlers: {},
+        }),
+      });
+
+    renderHook(() => useEditorOpenForClient(tileClient, "file"));
+
+    expect(capturedArgs?.method).toBe("editor.openPaths");
+    expect(capturedArgs?.client).toBe(tileClient);
+    // Non-vacuous: the app-wide mock above is still installed and answering -
+    // it is simply not what an Epic-scoped caller may dispatch on.
+    expect(capturedArgs?.client).not.toBe(fakeClient);
   });
 });

@@ -13,7 +13,6 @@ import { useChatQueueActions } from "./use-chat-queue-actions";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { toast } from "sonner";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import type {
@@ -99,14 +98,17 @@ import {
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useHostClient, useHostBinding } from "@/lib/host";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useHostBinding } from "@/lib/host";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
-  useEpicCreateChat,
-  useEpicUpdateChatRunSettings,
-} from "@/hooks/epic/use-epic-chat-mutations";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
+  useHostReachability,
+  resolvedHostLabel,
+} from "@/hooks/agent/use-host-reachability";
+import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { TileHostLoadState } from "./tile-host-load-state";
+import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
+import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
 import {
   findManualCompactCommand,
@@ -314,13 +316,30 @@ export function ChatTile(props: ChatTileProps) {
   // never a reactive active-host read - tabs are bound to a host for life
   // and must not change behavior when the active host swaps).
   const hostBinding = useHostBinding();
+  // The host whose PROJECTION this tile's record gate reads: the Epic
+  // session's (the canvas host), not the app-wide effective one this used to
+  // compare against. "Same host" here means "same as the projection", and
+  // that projection is the session's - which for the whole of a re-point in
+  // flight is not the effective host. The three record-gate readers
+  // (`tab-group-view`, the route sync, this) resolve the one identity.
+  const projectionHostId = useCanvasHostId();
   const [isCrossHostOpen] = useState(() => {
-    // A null active host id is ignorance (binding still resolving), not
-    // evidence of a cross-host open - exempting on it would reopen the
-    // subscribe-first race for every chat mounted during bootstrap. Only a
-    // KNOWN, different active host earns the exemption.
-    const activeHostId = hostBinding?.hostClient.getActiveHostId() ?? null;
-    return activeHostId !== null && activeHostId !== tabHostId;
+    // A null host id is ignorance (binding still resolving), not evidence of
+    // a cross-host open - exempting on it would reopen the subscribe-first
+    // race for every chat mounted during bootstrap. Only a KNOWN, different
+    // host earns the exemption.
+    //
+    // RESOLVED against the directory, not the derived id alone, because that
+    // is what the active slot answered before P4.2 deleted it: a host whose
+    // row has not arrived was `null` here, and the ignorance arm above is
+    // written for exactly that state. Reading the bare id would promote
+    // "derived but unresolved" into KNOWN and start exempting chats a beat
+    // earlier than this gate was measured for.
+    const projectionEntry =
+      hostBinding === null || projectionHostId === null
+        ? null
+        : hostBinding.hostClient.resolveHostById(projectionHostId);
+    return projectionEntry !== null && projectionEntry.hostId !== tabHostId;
   });
   // The record-less same-host case (ticket 49): a published cloud row is
   // existence evidence too, and it is the ONLY evidence a swept chat has
@@ -363,6 +382,18 @@ export function ChatTile(props: ChatTileProps) {
     chatRecord !== null || isCrossHostOpen || isCloudKnown,
   );
   const reachability = useHostReachability(tabHostId);
+  // The chat's own bounded load (invariant 6). `handle === null` is this
+  // tile's spinner-forever shape and it has THREE causes that look identical
+  // from here: the tab's host client is null so every `useHostQuery` disabled
+  // itself (audit S3), the subscription is live but nothing has arrived (S4),
+  // or the directory has not answered at all (S5's `checking`, which this tile
+  // had no arm for). The reader cannot act on the difference, so all three get
+  // one sentence naming the host - and an end.
+  const chatLoad = useBoundedHostLoad({
+    hostId: tabHostId,
+    hostLabel: resolvedHostLabel(reachability),
+    pending: handle === null,
+  });
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
@@ -371,7 +402,8 @@ export function ChatTile(props: ChatTileProps) {
     enabled: true,
     subscribed: false,
   });
-  // The clone-offer hook runs `useEpicCreateChat`, which subscribes to
+  // The clone-offer hook runs `useEpicCreateChatForHostClient`, which
+  // subscribes to
   // the host runtime. Mount it only when the banner is actually
   // shown so the live render path does not pay the subscription cost
   // (and tests that omit the host runtime provider stay green).
@@ -419,7 +451,20 @@ export function ChatTile(props: ChatTileProps) {
         className="flex h-full min-h-0 flex-col"
       >
         {deadTileBanner}
-        <ChatTileLoading />
+        {chatLoad.kind === "ready" ? (
+          // Unreachable while `pending` is `handle === null` and we are inside
+          // that branch, but written as a fallback rather than a cast: the
+          // spinner is the strictly safer thing to render if that ever stops
+          // being true.
+          <ChatTileLoading />
+        ) : (
+          <TileHostLoadState
+            load={chatLoad}
+            subject="agent"
+            onRetry={null}
+            testId={`chat-tile-load-${node.id}`}
+          />
+        )}
       </div>
     );
   }
@@ -466,7 +511,14 @@ export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);
-  const bannerBinding = useHostBinding();
+  // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
+  // list the sidebar tree already fetched for this epic, and that fetch rides
+  // the session's client - so this must too, or it is a cache miss per host
+  // for an answer that is the same everywhere. (It used to be the app-wide
+  // client for the same sharing reason, back when the sidebar read app-wide;
+  // the two moved together.) Not this tile's host either, for the same
+  // cache reason.
+  const bannerAppHostClient = useEpicSessionHostClient();
   const providedOwnerUserId =
     props.sourceOwnerUserId !== undefined && props.sourceOwnerUserId.length > 0
       ? props.sourceOwnerUserId
@@ -478,7 +530,7 @@ export function ChatDeadTileBannerContainer(
   // it) passes it instead, and a `null` chatId keeps the hook's cloud query
   // disabled - no lookup runs for an answer the caller already had.
   const lookedUpOwnerUserId = useCloneSourceOwnerUserId({
-    client: bannerBinding?.hostClient ?? null,
+    client: bannerAppHostClient,
     epicId: props.epicId,
     chatId: providedOwnerUserId === null ? props.chatId : null,
   });
@@ -501,101 +553,6 @@ export function ChatDeadTileBannerContainer(
       testId={props.testId}
     />
   );
-}
-
-interface UseChatCloneOnHostSwitchArgs {
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly chatId: string;
-  readonly sourceHostId: string;
-  readonly sourceSettings: ChatRunSettings | null;
-  /** The owner this banner was showing, or `null` when it does not know. */
-  readonly sourceOwnerUserId: string | null;
-}
-
-/**
- * Wires the chat dead-tile banner's Clone action to
- * `cloneChatOnHostSwitch`. Targets the directory's currently selected
- * host (the user's active default). Tracks the returned cancel in a
- * ref and disposes it on unmount so an aborted clone doesn't leak the
- * projection-wait subscription (ticket 10).
- */
-function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
-  readonly clone: () => void;
-  readonly cloning: boolean;
-} {
-  const binding = useHostBinding();
-  const createChat = useEpicCreateChat();
-  const navigateNestedFocus = useEpicNestedFocusNavigation();
-  const cancelRef = useRef<(() => void) | null>(null);
-  const [cloning, setCloning] = useState(false);
-
-  useEffect(() => {
-    const cancelHandle = cancelRef;
-    return () => {
-      if (cancelHandle.current !== null) {
-        cancelHandle.current();
-        cancelHandle.current = null;
-      }
-    };
-  }, []);
-
-  const clone = useCallback(() => {
-    if (binding === null) return;
-    const target = binding.directory.getSelected();
-    if (target === null) return;
-    if (target.hostId === args.sourceHostId) return;
-    if (cancelRef.current !== null) cancelRef.current();
-    setCloning(true);
-    cancelRef.current = cloneChatOnHostSwitch({
-      epicId: args.epicId,
-      tabId: args.tabId,
-      sourceChatId: args.chatId,
-      sourceOwnerUserId: args.sourceOwnerUserId,
-      sourceHostId: args.sourceHostId,
-      targetHostId: target.hostId,
-      directory: binding.directory,
-      sourceSettings: args.sourceSettings,
-      globalClient: binding.hostClient,
-      onProfileFallbackToAmbient: () => {
-        toast(
-          "Continuing on the Terminal account - your profile isn't available on this host.",
-        );
-      },
-      onHistoryUnavailable: (reason) => {
-        toast(
-          reason === "no-checkpoint"
-            ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
-            : "This device can't send this agent's history to that host version - continuing with settings only.",
-        );
-      },
-      onCloneFailed: () => {
-        setCloning(false);
-      },
-      navigateNestedFocus,
-      createChat: (request, callbacks) => {
-        createChat.mutate(request, {
-          onSuccess: callbacks.onSuccess,
-          onError: callbacks.onError,
-        });
-      },
-    });
-  }, [
-    binding,
-    createChat,
-    navigateNestedFocus,
-    args.epicId,
-    args.tabId,
-    args.chatId,
-    // The cloud list can resolve AFTER this banner first renders, so the
-    // callback must be rebuilt when the owner lands - otherwise a click still
-    // sends the `null` this closed over on the first pass (ticket 37).
-    args.sourceOwnerUserId,
-    args.sourceHostId,
-    args.sourceSettings,
-  ]);
-
-  return { clone, cloning };
 }
 
 interface ChatTileAccessFlags {
@@ -2517,7 +2474,6 @@ function ChatSessionMessagesSurface(
         <WorkingVerbContext.Provider value={workingVerb}>
           <ChatMarkdownLinkProvider
             tabId={props.viewTabId}
-            hostId={props.tabHostId}
             workspaceRoots={props.workspaceRoots}
           >
             <ChatMessages
@@ -2725,7 +2681,15 @@ function currentSettingsForChatTile(input: {
 function useCachedCollaborators(
   epicId: string,
 ): SenderDisplayContext["collaborators"] {
-  const client = useHostClient();
+  // Cache-only read (`enabled: false` below) must key where the cache is
+  // WRITTEN, not where this tile happens to be bound: `epic.listCollaborators`
+  // is only ever filled by the sidebar tree and the sharing panel, both keyed
+  // on the Epic SESSION's host (`useEpicSessionHostClient`). The tab's host
+  // owns the transcript, not the collaborator list - a tile bound to a
+  // different host than the session (host B tile in an Epic served from A)
+  // would key its read on B, which nobody ever populates, and collaborators
+  // would stay permanently empty.
+  const client = useEpicSessionHostClient();
   const { data } = useHostQuery({
     cacheKeyIdentity: undefined,
     client,

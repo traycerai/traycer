@@ -102,9 +102,10 @@ function createHarness(ownedEntries: OwnedIndicatorRows): Harness {
   for (const entry of [mockLocalHostEntry, mockRemoteHostEntry]) {
     const stub: HostStub = { asked: [] };
     const rows = owned.get(entry.hostId) ?? {};
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => {
@@ -125,12 +126,11 @@ function createHarness(ownedEntries: OwnedIndicatorRows): Harness {
         },
       }),
     });
-    client.bind(entry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
     );
     hosts.set(entry.hostId, stub);
-    clientsByHostId.value.set(entry.hostId, client);
+    clientsByHostId.value.set(entry.hostId, spine.createRequester(entry));
   }
   useAuthStore.setState({
     contextMetadata: { userId: "user-a", username: "user-a" },

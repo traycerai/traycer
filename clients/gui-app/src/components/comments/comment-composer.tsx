@@ -12,9 +12,11 @@ import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
 import Mention from "@tiptap/extension-mention";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { useMentionCollaborators } from "@/hooks/comments/use-mention-collaborators";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useMentionCollaboratorsForClient } from "@/hooks/comments/use-mention-collaborators";
 import {
   MentionSuggestionList,
   type MentionSuggestionListHandle,
@@ -48,6 +50,12 @@ function readMentionAttrs(attrs: unknown): MentionAttrs {
 export interface CommentComposerProps {
   /** Epic the composer is mounted under - drives the mention picker source. */
   readonly epicId: string;
+  /** The host serving the surface this composer was mounted from - the tab's
+   *  client under a collab tile, the Epic session's under the sidebar. Passed
+   *  rather than read here because this component is mounted from BOTH, and an
+   *  ambient app-wide read would offer the wrong machine's collaborators
+   *  (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   /** Initial JSONContent. Pass `null` for a blank composer (most flows). */
   readonly initialContent: JsonContent | null;
   readonly placeholder: string;
@@ -102,6 +110,7 @@ interface SuggestionRenderState {
 export function CommentComposer(props: CommentComposerProps) {
   const {
     epicId,
+    hostClient,
     initialContent,
     placeholder,
     focusOnMount,
@@ -112,7 +121,7 @@ export function CommentComposer(props: CommentComposerProps) {
     ref,
   } = props;
 
-  const collaborators = useMentionCollaborators(epicId);
+  const collaborators = useMentionCollaboratorsForClient(hostClient, epicId);
   const collaboratorsRef = useStableCollaboratorRef(collaborators);
   const suggestionHandleRef = useRef<MentionSuggestionListHandle | null>(null);
   const [suggestionState, setSuggestionState] =

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { Disposable } from "../../platform/uri-callback";
 import {
   defineRpcContract,
   defineVersionedRpcRegistry,
@@ -80,7 +79,6 @@ const accountBHostEntry: HostDirectoryEntry = {
 
 class FakeDirectoryService implements IHostDirectoryService {
   entries: HostDirectoryEntry[] = [];
-  selected: HostDirectoryEntry | null = null;
   /** Every call that triggers a fetch, through EITHER `refresh()` or
    * `refreshForEra(...)` - the two are one cadence from a caller's
    * point of view, just keyed differently. */
@@ -108,10 +106,6 @@ class FakeDirectoryService implements IHostDirectoryService {
    * which is the failure mode these probes exist to avoid.
    */
   laggedIdentity: string | null = null;
-  private readonly handlers = new Set<
-    (entry: HostDirectoryEntry | null) => void
-  >();
-
   async list(): Promise<readonly HostDirectoryEntry[]> {
     return this.entries;
   }
@@ -150,38 +144,10 @@ class FakeDirectoryService implements IHostDirectoryService {
     }
     return this.entries;
   }
-
-  getSelected(): HostDirectoryEntry | null {
-    return this.selected;
-  }
-
-  selectById(hostId: string | null): void {
-    const entry = hostId === null ? null : this.findById(hostId);
-    this.setSelected(entry);
-  }
-
-  setSelected(entry: HostDirectoryEntry | null): void {
-    this.selected = entry;
-    for (const handler of this.handlers) {
-      handler(entry);
-    }
-  }
-
-  onSelectionChange(
-    handler: (entry: HostDirectoryEntry | null) => void,
-  ): Disposable {
-    this.handlers.add(handler);
-    return {
-      dispose: () => {
-        this.handlers.delete(handler);
-      },
-    };
-  }
 }
 
 function buildRuntime(options: {
   readonly initialSignedIn: { userId: string; bearer: string } | null;
-  readonly initialSelected: HostDirectoryEntry | null;
 }): {
   runtime: HostRuntime<typeof registry>;
   provider: DefaultRequestContextProvider;
@@ -200,7 +166,6 @@ function buildRuntime(options: {
   }
   const directory = new FakeDirectoryService();
   directory.entries = [mockLocalHostEntry, mockRemoteHostEntry];
-  directory.selected = options.initialSelected;
   const invalidator = new RecordingInvalidator();
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -225,6 +190,9 @@ function buildRuntime(options: {
     invalidator,
     schedulingPolicy,
     requestCoordinator: null,
+    // No registry in this harness: these cases drive the runtime's auth and
+    // directory lifecycle in isolation, and none of them resolves a client.
+    connectionRegistry: null,
   });
   return { runtime, provider, directory, invalidator, runnerHost };
 }
@@ -260,7 +228,6 @@ describe("HostRuntime lifecycle", () => {
   it("applies the initial RequestContext and selected host on start()", () => {
     const { runtime, invalidator } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },
-      initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
@@ -271,17 +238,17 @@ describe("HostRuntime lifecycle", () => {
     expect(
       runtime.hostClient.getRequestContext()?.credentials.getBearerToken(),
     ).toBe("tok-1");
-    expect(runtime.hostClient.getActiveHostId()).toBe("mock-local");
-    // bind() invalidates previous(null) + next(mock-local) on selection
-    // change; the initial setRequestContext also invalidates the host
-    // scope (mock-local) on the auth-changed event.
-    expect(invalidator.calls).toContain("mock-local");
+    // `start()` applies the context and NOTHING ELSE host-shaped: it no longer
+    // binds a host, so there is no `getActiveHostId()` to assert here (P4.2
+    // deleted the slot, and the spine's accessor is a constant `null` kept
+    // only for the requester proxy). The context application is an identity
+    // transition and still sweeps, scope-free.
+    expect(invalidator.calls).toEqual([null]);
   });
 
   it("invalidates and rebinds context when the provider emits a new identity", () => {
     const { runtime, provider, invalidator } = buildRuntime({
       initialSignedIn: null,
-      initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
@@ -292,7 +259,9 @@ describe("HostRuntime lifecycle", () => {
     expect(runtime.hostClient.getRequestContext()?.identity.userId).toBe(
       "user-1",
     );
-    expect(invalidator.calls).toEqual(["mock-local"]);
+    // Scope-free since P4.2: credentials are not per-host, so an identity
+    // transition invalidates every host this window addresses.
+    expect(invalidator.calls).toEqual([null]);
   });
 
   it("refreshes the directory immediately when the provider emits a new identity", () => {
@@ -300,7 +269,6 @@ describe("HostRuntime lifecycle", () => {
     try {
       const { runtime, provider, directory } = buildRuntime({
         initialSignedIn: null,
-        initialSelected: mockLocalHostEntry,
       });
 
       runtime.start();
@@ -320,7 +288,6 @@ describe("HostRuntime lifecycle", () => {
   it("emits null context and invalidates the host scope on sign-out", () => {
     const { runtime, provider, invalidator, directory } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },
-      initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
@@ -330,14 +297,15 @@ describe("HostRuntime lifecycle", () => {
     provider.signOut();
 
     expect(runtime.hostClient.getRequestContext()).toBeNull();
-    expect(invalidator.calls).toEqual(["mock-local"]);
+    // Scope-free since P4.2: credentials are not per-host, so an identity
+    // transition invalidates every host this window addresses.
+    expect(invalidator.calls).toEqual([null]);
     expect(directory.refreshCalls.count).toBe(refreshBaseline + 1);
   });
 
   it("preserves the host-scoped cache across same-user credential rotation (silent on the provider)", () => {
     const { runtime, provider, invalidator, directory } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },
-      initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
@@ -367,7 +335,6 @@ describe("HostRuntime lifecycle", () => {
   it("aborts the previous context and invalidates on cross-user transition", () => {
     const { runtime, provider, invalidator, directory } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },
-      initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
@@ -389,29 +356,22 @@ describe("HostRuntime lifecycle", () => {
     expect(runtime.hostClient.getRequestContext()?.identity.userId).toBe(
       "user-2",
     );
-    expect(invalidator.calls).toEqual(["mock-local"]);
+    // Scope-free since P4.2: credentials are not per-host, so an identity
+    // transition invalidates every host this window addresses.
+    expect(invalidator.calls).toEqual([null]);
     expect(directory.refreshCalls.count).toBe(refreshBaseline + 1);
   });
 
-  it("rebinds the host client when directory selection changes", () => {
-    const { runtime, directory } = buildRuntime({
-      initialSignedIn: null,
-      initialSelected: mockLocalHostEntry,
-    });
-
-    runtime.start();
-
-    directory.setSelected(mockRemoteHostEntry);
-    expect(runtime.hostClient.getActiveHostId()).toBe("mock-remote");
-
-    directory.setSelected(null);
-    expect(runtime.hostClient.getActiveHostId()).toBe(null);
-  });
+  // DELETED: "rebinds the host client when directory selection changes". It
+  // was a test OF the runtime's selection subscription, which P4.2 removed
+  // along with the slot it wrote to - `HostRuntime` no longer observes
+  // selection at all. What replaced the behaviour is not a rebind: consumers
+  // resolve `effectiveHostId` through the registry per request, which the
+  // gui-app selection-authority suites cover.
 
   it("refreshes the directory on local-host transitions from runnerHost", () => {
     const { runtime, directory, runnerHost } = buildRuntime({
       initialSignedIn: null,
-      initialSelected: null,
     });
 
     runtime.start();
@@ -433,18 +393,21 @@ describe("HostRuntime lifecycle", () => {
   it("releases all subscriptions on dispose()", () => {
     const { runtime, provider, directory, runnerHost } = buildRuntime({
       initialSignedIn: null,
-      initialSelected: null,
     });
 
     runtime.start();
     runtime.dispose();
 
+    // Two probes, not three. The `bind` spy went with the active slot, and the
+    // selection-change stimulus that drove a third went with the runtime's
+    // selection subscription (P4.2) - along with the whole selection half of
+    // the fake directory, since a stimulus that can no longer reach the
+    // subject proves nothing about dispose and reads as coverage it is not.
+    // Both survivors below still fire pre-dispose.
     const setContextSpy = vi.spyOn(runtime.hostClient, "setRequestContext");
-    const bindSpy = vi.spyOn(runtime.hostClient, "bind");
     const refreshBaseline = directory.refreshCalls.count;
 
     signInProvider(provider, "user-after-dispose", "tok-after-dispose");
-    directory.setSelected(mockLocalHostEntry);
     runnerHost.setLocalHost({
       hostId: "local-after-dispose",
       websocketUrl: "ws://127.0.0.1:4917/rpc",
@@ -456,14 +419,12 @@ describe("HostRuntime lifecycle", () => {
     });
 
     expect(setContextSpy).not.toHaveBeenCalled();
-    expect(bindSpy).not.toHaveBeenCalled();
     expect(directory.refreshCalls.count).toBe(refreshBaseline);
   });
 
   it("is idempotent across repeat start() calls and refuses start() after dispose()", () => {
     const { runtime } = buildRuntime({
       initialSignedIn: null,
-      initialSelected: null,
     });
 
     runtime.start();
@@ -493,7 +454,6 @@ describe("HostRuntime context-change refresh is stamped with the era the emissio
   it("switching identity mid-session must not let B's directory retain A's hosts, even while the lagged profile accessor still reads A", () => {
     const { runtime, provider, directory } = buildRuntime({
       initialSignedIn: { userId: "account-a", bearer: "tok-a" },
-      initialSelected: null,
     });
     directory.hostsByIdentity.set("account-a", [accountAHostEntry]);
     directory.hostsByIdentity.set("account-b", [accountBHostEntry]);
@@ -531,7 +491,6 @@ describe("HostRuntime context-change refresh is stamped with the era the emissio
   it("signing out must clear the directory, not leave A resident, even while the lagged profile accessor still reads A", () => {
     const { runtime, provider, directory } = buildRuntime({
       initialSignedIn: { userId: "account-a", bearer: "tok-a" },
-      initialSelected: null,
     });
     directory.hostsByIdentity.set("account-a", [accountAHostEntry]);
     directory.hostsByIdentity.set(null, []);

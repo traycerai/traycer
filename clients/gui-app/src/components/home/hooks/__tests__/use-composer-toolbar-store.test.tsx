@@ -150,9 +150,18 @@ import type { FocusedComposerKind } from "@/lib/commands/types";
  * host's client or a fallback default.
  */
 function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = {
+    hostId,
+    label: hostId,
+    kind: "local" as const,
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
     // Never actually dispatched - the catalog hooks are mocked wholesale
     // above, so this messenger exists only to satisfy `HostClient`'s
     // constructor.
@@ -162,15 +171,7 @@ function buildTestHostClient(hostId: string): HostClient<HostRpcRegistry> {
       handlers: {},
     }),
   });
-  client.bind({
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
-    version: "0.0.0-mock",
-    transportDialability: "dialable",
-  });
-  return client;
+  return spine.createRequester(entry);
 }
 
 // The catalog scope every test in this file used before `hostClient` became

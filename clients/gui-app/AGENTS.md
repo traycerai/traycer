@@ -96,21 +96,91 @@ Every host RPC / AuthService / RunnerHost request goes through Query. No
   `src/lib/query-keys/`.
 
 Host scope: tab tiles use `useTabHostId()` / `useTabHostClient()`; app-wide
-surfaces use `useReactiveActiveHostId()` / `useHostClient()`. Don't mix.
+surfaces use `useEffectiveHostId()` / `useHostClient()`. Don't mix.
+`useEffectiveHostId()` is the selection authority's DERIVED host (selection
+model §1) — one decider per app, delivered to every window. Settings ▸ Activate
+is the only UI gesture that changes it; no picker anywhere writes it, and
+`HostDirectoryService.selectById` is lint-restricted to the one authority
+bridge. Surface pickers write a per-surface pin (`useSurfaceHostPin`), and a
+surface with no pin resolves to `useEffectiveHostId()`.
+
+**A pin is a preference, not a binding** — the same two-tier shape as
+preferred/effective, one tier down. `resolvedHostId` is the pin while its host
+can serve and `effective` while it cannot, so a surface whose pinned host dies
+AUTO-FOLLOWS and returns on its own when the host is usable again. The pin is
+never cleared by death; that is what makes the return sticky. Only deliberate
+deregistration clears it (the host left the account — a pointer to nothing),
+mirroring the authority's own `clearPreferredOutsideFleet`, empty-fleet guard
+included. Death is `lease.status === "dead"` and deliberately NOT
+`!isUsableForSelection`: `restarting-expected` is a hold, and an incumbent
+holds through an expected restart exactly as the app-wide failover does.
+Read `honoredSelection`, never `selection`, when resolving a client — the raw
+pin still names the dead host. There is no dead-state banner: the chip renders
+the RESOLVED host, and the dead host's own picker row says `offline`.
 
 Composers have a **target host** (tab host, fork dialog's fixed host, the
-new-conversation modal's host). `null` means "follow the app-wide default":
-that is the landing page, whose picker rebinds that default, and the
-new-conversation modal opened from the app-wide sidebar trigger, which sits
-outside every `TabHostProvider`. Every host RPC around a
+new-conversation modal's host). `null` means "this surface owns its
+placement", and the two surfaces that own one resolve it differently:
+
+- the **landing composer** resolves its WINDOW-keyed pin ?? `effective`
+  (`useComposerPlacement`);
+- the **in-Epic new-conversation modal** resolves its per-**EPIC** pin ?? the
+  Epic session's host ?? `effective` (`useEpicConversationPlacement`). The
+  per-Epic pin is that Epic's _last created chat's host_: the picker writes
+  it, and every create in the modal re-records it — the same memory shape as
+  the model picker's last-used settings. So a new agent in an Epic opens on
+  the host the last one was created on, or before any on the host the Epic is
+  served from — never on wherever the window's landing chip last pointed,
+  which is not a fact about the Epic. Every in-Epic trigger (the sidebar `+`,
+  a row's "new child", the palette's new-agent items) passes `hostId: null`
+  for that reason; only a trigger with a machine genuinely in mind (a terminal
+  quote, whose terminal exists on one host) names one, and naming freezes the
+  picker (§55).
+
+Only a placement that `effective` answered FOLLOWS a derivation move
+(`ComposerPlacement.followsEffective`); one resting on a pin or on the Epic's
+host is not re-pointed by one and does not narrate one.
+
+**The composer is PLACEMENT.** Its resolved host (the pin rule above, keyed per
+WINDOW) decides where a created epic/chat lives for life, so its picker writes
+that pin and never the app-wide selection. Submit re-validates: a host the
+CALLER NAMED (the row-scoped modal's `overrideHostId`) must not be dead, and —
+named, pinned or following — the client the create is about to be sent on must
+still address the resolved host, else the composer refuses inline and creates
+nothing, never a silent fallback onto whatever the window is bound to. A PIN
+does not reach that first refusal: it re-resolves to `effective` instead, and
+the chip has been showing that host since it moved. An override does, because
+naming the machine IS the request. There is deliberately no separate
+reachability gate on the following path: usability of the effective host is the
+selection authority's call (selection model §1), and re-deriving it here would
+be a second decider.
+A create that resolves its host separately from the chip is the bug this
+structure exists to prevent; route new composer creates through the placement
+the chip is showing.
+
+Every host RPC around a
 composer — mentions, slash commands, harness/model catalog, providers/profiles,
 pack retry, catalog refresh — and every surface that dispatches into the
 focused composer (the palette's Pick provider/model, via
 `FocusedComposerEntry.hostClient`) resolves through that host's client
 (`…ForClient` hooks / `runTargetHostId` → `useHostClientForHostId`). The
-default-host wrappers (`useDefaultHostClient()`, `useProvidersList()`,
-`useGuiHarness*Query()`) are for app-wide surfaces only (prefetcher, Settings,
-a palette with no focused composer) — never inside a composer surface.
+default-host wrappers (`useProvidersList()`, `useGuiHarness*Query()`) are for
+app-wide surfaces only (prefetcher, Settings, a palette with no focused
+composer) — never inside a composer surface. (`useDefaultHostClient()` was the
+third of these and is gone: once `HostRuntimeBinding` carried its own `hostId`
+it resolved exactly what `useHostClient()` resolves.)
+
+**"Default host" means the SURFACE's host**, which inside Settings is the
+SCOPED one, not the app-wide one. A binding re-provided by a host-scoped panel
+names its host (`HostRuntimeBinding.hostId`), and every consumer below it —
+`useHostClient()`, `useAddressableHostId()`, the wrappers above — resolves to
+that host. Seven surfaces re-provide; `useScopedHostBinding` lists them and the
+two governed exceptions. Resolve a binding through
+`lib/host/binding-host-client.ts` and never inline
+`hostClient.createRequesterForHostId(...)` beside a separately-read host id:
+that pairing is a defect with its own history, and those resolvers are pure
+functions taking the binding as an ARGUMENT precisely so a consumer's own
+`useHostBinding()` — including a test's — is what they see.
 
 Persisted "last used" and pending state is per-host too:
 `composer-run-settings-store`, `composer-harness-memory-store`,

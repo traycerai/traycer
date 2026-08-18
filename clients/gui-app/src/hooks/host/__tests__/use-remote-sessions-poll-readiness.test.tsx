@@ -1,9 +1,16 @@
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The hook's whole job is to turn the pull-only cache into a reactive input,
-// so the cache itself is the one dependency the test must control.
+// The hook's whole job is to turn the push-notified cache into a reactive
+// input, so the cache's two exports are the dependencies the test must
+// control: the readiness lookup itself, and the subscription that tells the
+// hook something may have changed (redesign P4.1: push replaces the old 1s
+// poll). A test-local listener set stands in for the cache's own listener
+// set, and the test fires it explicitly wherever the poll used to tick.
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+const readinessListeners = vi.hoisted(() => ({
+  value: new Set<() => void>(),
+}));
 vi.mock(
   "@traycer-clients/shared/host-transport/remote/index",
   async (importOriginal) => {
@@ -15,23 +22,31 @@ vi.mock(
       ...actual,
       hasReadyRemoteSession: (hostId: string) =>
         readySessionHosts.value.has(hostId),
+      subscribeRemoteSessionReadiness: (listener: () => void) => {
+        readinessListeners.value.add(listener);
+        return () => {
+          readinessListeners.value.delete(listener);
+        };
+      },
     };
   },
 );
 
-import { useRemoteSessionsPollReadiness } from "../use-remote-sessions-poll-readiness";
+function fireReadinessChanged(): void {
+  for (const listener of [...readinessListeners.value]) {
+    listener();
+  }
+}
 
-beforeEach(() => {
-  vi.useFakeTimers();
-});
+import { useRemoteSessionsPollReadiness } from "../use-remote-sessions-poll-readiness";
 
 afterEach(() => {
   readySessionHosts.value = new Set();
-  vi.useRealTimers();
+  readinessListeners.value.clear();
 });
 
 describe("useRemoteSessionsPollReadiness", () => {
-  it("picks up a readiness flip on the next poll tick, changing the lookup's identity exactly once", () => {
+  it("picks up a readiness flip on the next readiness notification, changing the lookup's identity exactly once", () => {
     const { result } = renderHook(() =>
       useRemoteSessionsPollReadiness(["host-a", "host-b"]),
     );
@@ -41,17 +56,18 @@ describe("useRemoteSessionsPollReadiness", () => {
 
     readySessionHosts.value = new Set(["host-b"]);
     act(() => {
-      vi.advanceTimersByTime(1_000);
+      fireReadinessChanged();
     });
     const flipped = result.current;
     expect(flipped).not.toBe(initial);
     expect(flipped("host-a")).toBe(false);
     expect(flipped("host-b")).toBe(true);
 
-    // No change -> the identity holds through further ticks, so memoized
-    // consumers do not recompute on quiet polls.
+    // No change -> the identity holds through a further notification, so
+    // memoized consumers do not recompute on a wake that moved no listed
+    // host (the coarse-notify cost the cache module documents).
     act(() => {
-      vi.advanceTimersByTime(3_000);
+      fireReadinessChanged();
     });
     expect(result.current).toBe(flipped);
   });

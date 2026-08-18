@@ -5,8 +5,12 @@ import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-cha
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { TileHostLoadState } from "./tile-host-load-state";
 import {
   useHostReachability,
+  resolvedHostLabel,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
@@ -19,7 +23,6 @@ import {
   createPublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
 import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
-import { ChatTileLoading } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
@@ -87,6 +90,12 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // previously readable tab could turn unsupported without anything about the
   // chat changing. Host-for-life applies to the serving host too.
   const client = useTabHostClient();
+  // The host SERVING this copy - the one `client` addresses and the one whose
+  // absence is what leaves the reads pending. Deliberately distinct from
+  // `ownerReachability` below, which is about the machine that OWNS the chat;
+  // the two are different hosts and this tile exists because of that.
+  const servingHostId = useTabHostId();
+  const servingReachability = useHostReachability(servingHostId);
   // The SAME reachability source the live dead-tile banner reads, so the two
   // surfaces can never describe one host two ways. Only the label is used here:
   // this tile is opened precisely because the owner is out of reach, and it
@@ -233,10 +242,35 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.chatId,
   ]);
 
-  if (state.kind === "loading") {
+  // Audit S3, at the surface the catalog names: this tile's reads go through
+  // the TAB's client, and when that client is null every `useHostQuery` under
+  // it disables itself, leaving `isPending` true, `data` undefined and `error`
+  // null - forever. `useCloudChatTranscript` faithfully reports that as
+  // `loading`, and the arm below rendered a spinner for it with no deadline
+  // and no words. Bounded and named now, against the SERVING host (the one
+  // whose client is null), which is not the owner host the banner talks about.
+  //
+  // The replica arm folds in here rather than keeping its own spinner. Its
+  // original reason survives and still holds: while the replica read is in
+  // flight the "not published yet" notice below would flash for content that
+  // turns out to exist, so this must win over that branch - it just no longer
+  // wins by spinning indefinitely.
+  const boundedLoad = useBoundedHostLoad({
+    hostId: servingHostId,
+    hostLabel: resolvedHostLabel(servingReachability),
+    pending:
+      state.kind === "loading" || (cloudUnpublished && replicaQuery.isPending),
+  });
+
+  if (boundedLoad.kind !== "ready") {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-        <ChatTileLoading />
+        <TileHostLoadState
+          load={boundedLoad}
+          subject="agent"
+          onRetry={null}
+          testId={`published-chat-tile-load-${node.id}`}
+        />
       </div>
     );
   }
@@ -262,20 +296,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             unreadableCount: replicaConversion.unreadableCount,
           })}
         />
-      </div>
-    );
-  }
-
-  if (cloudUnpublished && replicaQuery.isPending) {
-    // The replica read is enabled and in flight - without this gate, the
-    // notice branch below would render "not published yet" for the instant
-    // between the cloud read settling `unpublished` and the replica read
-    // resolving, then immediately flip to the transcript once it does. A
-    // reader would see a real notice flash on-screen for content that turns
-    // out to exist.
-    return (
-      <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-        <ChatTileLoading />
       </div>
     );
   }

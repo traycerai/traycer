@@ -26,15 +26,23 @@ interface PersistedEpicCanvasState {
   >;
 }
 
+const ALICE_EMAIL = "alice@example.com";
+const BOB_EMAIL = "bob@example.com";
+const ALICE_ID = `user:${ALICE_EMAIL}`;
+const BOB_ID = `user:${BOB_EMAIL}`;
+
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
   email: string | null,
 ): void {
   if (status === "signed-in" && email !== null) {
+    // userId and email deliberately DIFFER: a fixture that equates them
+    // cannot detect email-keyed scoping.
+    const userId = `user:${email}`;
     useAuthStore.setState({
       status,
-      profile: { userId: email, userName: email, email },
-      contextMetadata: { userId: email, username: email },
+      profile: { userId, userName: email, email },
+      contextMetadata: { userId, username: email },
     });
     return;
   }
@@ -47,11 +55,11 @@ function resetEpicCanvasStore(): void {
 }
 
 function persistSnapshot(
-  userId: string | null,
+  bucketIdentity: string | null,
   state: PersistedEpicCanvasState,
 ): void {
   window.localStorage.setItem(
-    epicCanvasKey(userId),
+    epicCanvasKey(bucketIdentity),
     JSON.stringify({
       state,
       version: 1,
@@ -101,12 +109,14 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
     );
   });
 
-  it("rehydrates the current signed-in bucket on initial mount", async () => {
+  it("adopts the legacy email-keyed bucket into the signed-in user's canonical bucket on initial mount", async () => {
+    // Seeds ONLY the legacy (email-keyed) bucket, so a successful load can
+    // only be explained by the one-shot adoption path onto the userId key.
     persistSnapshot(
-      "alice@example.com",
+      ALICE_EMAIL,
       persistedEpicTab("epic-alice", "tab-alice", "Alice Epic"),
     );
-    resetAuth("signed-in", "alice@example.com");
+    resetAuth("signed-in", ALICE_EMAIL);
 
     render(
       <EpicCanvasPersistLifecycleBridge>
@@ -116,7 +126,7 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
 
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
-        epicCanvasKey("alice@example.com"),
+        epicCanvasKey(ALICE_ID),
       );
       const state = useEpicCanvasStore.getState();
       expect(state.activeTabId).toBe("tab-alice");
@@ -127,11 +137,11 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
 
   it("rehydrates the matching per-user bucket on sign-in and user-switch", async () => {
     persistSnapshot(
-      "alice@example.com",
+      ALICE_ID,
       persistedEpicTab("epic-alice", "tab-alice", "Alice Epic"),
     );
     persistSnapshot(
-      "bob@example.com",
+      BOB_ID,
       persistedEpicTab("epic-bob", "tab-bob", "Bob Epic"),
     );
 
@@ -142,24 +152,24 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
-        epicCanvasKey("alice@example.com"),
+        epicCanvasKey(ALICE_ID),
       );
       expect(useEpicCanvasStore.getState().activeTabId).toBe("tab-alice");
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-alice"]);
     });
 
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", BOB_EMAIL);
     });
 
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
-        epicCanvasKey("bob@example.com"),
+        epicCanvasKey(BOB_ID),
       );
       expect(useEpicCanvasStore.getState().activeTabId).toBe("tab-bob");
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-bob"]);
@@ -168,7 +178,7 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
 
   it("resets to an empty canvas when the next user has no persisted bucket", async () => {
     persistSnapshot(
-      "alice@example.com",
+      ALICE_ID,
       persistedEpicTab("epic-alice", "tab-alice", "Alice Epic"),
     );
 
@@ -179,7 +189,7 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
@@ -188,12 +198,12 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
     });
 
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", BOB_EMAIL);
     });
 
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
-        epicCanvasKey("bob@example.com"),
+        epicCanvasKey(BOB_ID),
       );
       expect(useEpicCanvasStore.getState().activeTabId).toBeNull();
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
@@ -202,7 +212,7 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
 
   it("clears the current signed-in bucket and falls back to anonymous on sign-out", async () => {
     persistSnapshot(
-      "alice@example.com",
+      ALICE_ID,
       persistedEpicTab("epic-alice", "tab-alice", "Alice Epic"),
     );
 
@@ -219,12 +229,12 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
-        epicCanvasKey("alice@example.com"),
+        epicCanvasKey(ALICE_ID),
       );
     });
 
@@ -238,9 +248,7 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
     await waitFor(() => {
       expect(clearStorageSpy).toHaveBeenCalledTimes(1);
       expect(setOptionsSpy).toHaveBeenCalledWith({ name: epicCanvasKey(null) });
-      expect(
-        window.localStorage.getItem(epicCanvasKey("alice@example.com")),
-      ).toBeNull();
+      expect(window.localStorage.getItem(epicCanvasKey(ALICE_ID))).toBeNull();
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
         epicCanvasKey(null),
       );

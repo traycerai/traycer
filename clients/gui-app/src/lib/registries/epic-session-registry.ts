@@ -2,6 +2,7 @@ import { createContext } from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
+  type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -16,6 +17,37 @@ export const EpicSessionContext = createContext<OpenEpicStoreHandle | null>(
   null,
 );
 
+type EpicSessionPresentationState =
+  | {
+      readonly kind: "ready";
+      readonly targetHostId: string | null;
+      readonly originalHostId: string | null;
+    }
+  | {
+      readonly kind: "establishing";
+      readonly targetHostId: string | null;
+      readonly originalHostId: string | null;
+    }
+  | {
+      readonly kind: "failed";
+      readonly targetHostId: string | null;
+      readonly originalHostId: string | null;
+    };
+
+export type EpicSessionPresentation = EpicSessionPresentationState & {
+  readonly retry: () => void;
+  readonly openOnOriginalHost: () => void;
+};
+
+/**
+ * Separates an established Y.Doc session from a host re-point in flight. The
+ * old handle remains in `EpicSessionContext` until the replacement has a
+ * complete snapshot; consumers use this presentation state to show a bounded
+ * recovery result instead of treating a missing effective host as silence.
+ */
+export const EpicSessionPresentationContext =
+  createContext<EpicSessionPresentation | null>(null);
+
 /**
  * The RPC client resolved for the same host that owns `EpicSessionContext`.
  * Session-level provisioning prevents sidebar rows from independently mounting
@@ -25,15 +57,13 @@ export const EpicSessionHostClientContext =
   createContext<HostClient<HostRpcRegistry> | null>(null);
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
-// Owner-identity discriminator (R-1), tracked separately from `handleHostIds`
-// so a same-host remote public-key rotation - which `activeHostId` alone
-// cannot see - also forces the acquire effect to close the stale durable
-// stream and mount a fresh session, instead of leaving it pinned to the
-// stale key.
-export const handleOwnerIdentityKeys = new WeakMap<
-  OpenEpicStoreHandle,
-  string | null
->();
+// The R-1 rotation rationale that used to live here now lives at the acquire
+// effect's comparison in `epic-session-provider.tsx` (`readOwnerIdentityVerdict`)
+// - the mechanism that actually enforces it. The `handleOwnerIdentityKeys` map
+// that used to sit here was written twice, read never, and exported: a future
+// consumer would have imported it and silently received a PRE-MOVE key, which
+// is the defect the comparison was fixed to exclude. Deleted rather than
+// corrected; read the tuple.
 
 export function getEpicSessionHandleHostId(
   handle: OpenEpicStoreHandle,
@@ -90,9 +120,33 @@ export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
  * confirmation dialog.
  */
 export function epicHasUnsyncedEdits(epicId: string): boolean {
-  const handle = registry.get(epicId);
-  if (handle === null) return false;
-  return handle.store.getState().isDirty;
+  return registry.hasUnsyncedEdits(epicId);
+}
+
+/**
+ * The epics holding work that can NEVER reach a server.
+ *
+ * Distinct from {@link epicHasUnsyncedEdits}, which asks whether there is
+ * unsynced work at all. This asks whether that work is still SAVEABLE, and it
+ * is the only honest basis for destroying it without asking: a dirty live
+ * session drains through its transport, a buffer retained across a host
+ * re-point had `detachTransport()` called on it and no epic `Y.Doc` has local
+ * persistence anywhere, so the transport was its only route out.
+ */
+export function unsyncableWork(): ReadonlyArray<UnsyncedEditsEntry> {
+  return registry.unsyncableWork();
+}
+
+/**
+ * Discard every unsynced edit for an epic, live and retained.
+ *
+ * The action counterpart to the per-epic row in the unsynced sheet. Callers
+ * must not reach for `registry.get(epicId)` and drain that handle instead:
+ * that reaches only the live session, and a retained buffer would survive a
+ * Discard the user believes covered everything.
+ */
+export function drainEpicUnsyncedEdits(epicId: string): void {
+  registry.drainUnsyncedEdits(epicId);
 }
 
 /**
@@ -100,16 +154,39 @@ export function epicHasUnsyncedEdits(epicId: string): boolean {
  * user closes a tab in the strip.
  */
 export function releaseOpenEpicSession(epicId: string): void {
-  registry.release(epicId);
+  // Tab close is the one release path where a decision was offered: the close
+  // confirmation reads `epicHasUnsyncedEdits`, which covers retained buffers,
+  // so reaching here means the user has already answered for them too.
+  registry.release(epicId, "discard");
 }
 
-export function releaseOpenEpicSessionIfUnused(epicId: string): void {
+/**
+ * Release an epic's session only if no tab in THIS window still shows it.
+ *
+ * `registry.release` keys on `epicId` and disposes unconditionally, but a
+ * window can legitimately hold the same epic in two tabs - so any path that
+ * has finished with ONE tab has to ask this question first, or it disposes the
+ * live session out from under the other one. That is the whole reason this
+ * wrapper exists, and it is the only thing standing between an epic-keyed
+ * registry and a tab-keyed UI.
+ *
+ * `retainedBuffers` is explicit at every call because the two answers are not
+ * interchangeable. `"discard"` belongs to paths where the user was ASKED - the
+ * close confirmation reads `epicHasUnsyncedEdits`, which covers retentions, so
+ * arriving there means they answered for them. `"keep"` belongs to involuntary
+ * paths, where nothing was shown and dropping the buffer would be a silent
+ * loss.
+ */
+export function releaseOpenEpicSessionIfUnused(
+  epicId: string,
+  retainedBuffers: "discard" | "keep",
+): void {
   const state = useEpicCanvasStore.getState();
   const stillOpen = state.openTabOrder.some(
     (tabId) => state.tabsById[tabId]?.epicId === epicId,
   );
   if (stillOpen) return;
-  releaseOpenEpicSession(epicId);
+  registry.release(epicId, retainedBuffers);
 }
 
 /**

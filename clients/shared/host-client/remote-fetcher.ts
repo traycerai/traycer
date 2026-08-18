@@ -433,9 +433,10 @@ export function isConfirmedHostDeath(
  * `unknown` is the one that would be tempting to admit, and must not be: a
  * blind liveness read is not evidence of reachability, and letting it through
  * would put a live-looking, selectable row in the directory on the strength of
- * a failed Redis call. It is NOT the honest `viewerReachability` pill
- * (Architecture §7) either, which only a real connection attempt at tab-open
- * may set.
+ * a failed Redis call. The per-viewer probe this used to defer to
+ * (`viewerReachability`, Architecture §7) was never built and its dead
+ * machinery was deleted in P3.4 - so there is no second opinion coming, and
+ * this answer has to be honest on its own.
  */
 export function hostListItemToDirectoryEntry(
   item: HostListItem,

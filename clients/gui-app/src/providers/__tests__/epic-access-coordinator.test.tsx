@@ -329,8 +329,8 @@ describe("EpicAccessCoordinator", () => {
     // an unreadable room; the toast must not claim either cause.
     handle.store.setState({
       snapshotFetchError: {
-        code: "UNAUTHORIZED",
-        message: "null roomInfo",
+        code: "NOT_FOUND",
+        message: "room lookup is unavailable",
         upgradeGuidance: null,
       },
     });

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { hostStopIntentPath as sharedHostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
 import {
   cliInstallHomeDir as sharedCliInstallHomeDir,
   cliManifestPath as sharedCliManifestPath,
@@ -80,7 +81,6 @@ const HOST_TRANSITION_FILENAME = "transition.json";
 const HOST_TRANSITION_PROBE_FILENAME = "transition-probe.json";
 const HOST_ACTIVATION_FILENAME = "activation.json";
 const HOST_PENDING_ACTIVATION_FILENAME = "pending-activation.json";
-const HOST_STOP_INTENT_FILENAME = "stop-intent.json";
 
 function environmentSubdir(base: string, environment: Environment): string {
   // production → base; dev → base/dev (the slot dir name is the environment
@@ -225,10 +225,15 @@ export function hostPendingActivationPath(
  * `host restart`) is never the supervisor process itself, and on Windows the
  * supervisor survives the stop it is being asked not to fight.
  */
+// Single-sourced with the host: the filename lives in
+// `@traycer/protocol/config/host-stop-intent` because the host reads this exact
+// record at SIGTERM (to tell a deliberate restart from death), and it resolves
+// its own home through the `--host-data-dir` override rather than through this
+// module's slot rules. Same file, one spelling.
 export function hostStopIntentPath(
   environment: Environment | undefined,
 ): string {
-  return join(hostHomeDir(environment), HOST_STOP_INTENT_FILENAME);
+  return sharedHostStopIntentPath(hostHomeDir(environment));
 }
 export function bootstrapLogPath(environment: Environment | undefined): string {
   return hostLogPath(environment);

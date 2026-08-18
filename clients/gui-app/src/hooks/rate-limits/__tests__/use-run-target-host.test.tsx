@@ -31,6 +31,13 @@ const messengerRef = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
+  // Spine and app-wide client are separate exports since redesign P2.1.
+  useHostRuntimeClient: () => {
+    if (globalClientRef.value === null) {
+      throw new Error("test global client not configured");
+    }
+    return globalClientRef.value;
+  },
   useHostClient: () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
@@ -70,7 +77,7 @@ function buildClient(
     },
   });
   messengerRef.value = messenger;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     messenger,
@@ -79,11 +86,10 @@ function buildClient(
       directoryRef.entries.find((entry) => entry.hostId === requestedHostId) ??
       (requestedHostId === entry.hostId ? entry : null),
   });
-  client.bind(entry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return client;
+  return spine.createRequester(entry);
 }
 
 function wrapperFor(queryClient: QueryClient) {

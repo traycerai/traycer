@@ -13,6 +13,12 @@ const deregisterHostFromAccount =
   vi.fn<(hostId: string) => Promise<DeregisterHostFetchResult>>();
 const refresh = vi.fn<() => Promise<readonly []>>();
 
+// F6: the shell capability the success path announces a membership change on.
+// Deliberately reached off the runner host, NOT the selection-authority
+// client - announcing "your copy is stale" must not widen the selection write
+// path this ticket narrowed.
+const refreshHostFleet = vi.fn<() => Promise<void>>();
+
 const auth = { deregisterHostFromAccount } as Pick<
   AuthService,
   "deregisterHostFromAccount"
@@ -25,6 +31,10 @@ const bindingRef: { value: unknown } = { value: { auth, directory } };
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => bindingRef.value,
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ refreshHostFleet }),
 }));
 
 import { useDeregisterHostFromAccount } from "@/hooks/auth/use-deregister-host-mutation";
@@ -40,6 +50,8 @@ describe("useDeregisterHostFromAccount", () => {
     deregisterHostFromAccount.mockReset();
     refresh.mockReset();
     refresh.mockResolvedValue([]);
+    refreshHostFleet.mockReset();
+    refreshHostFleet.mockResolvedValue(undefined);
     bindingRef.value = { auth, directory };
   });
 
@@ -133,6 +145,52 @@ describe("useDeregisterHostFromAccount", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * F6. Renderer-only refreshes leave the selection authority's fleet - which
+   * lives in the desktop main process - holding a host the account no longer
+   * has, so derivation can name a machine that is gone. The call is result-free
+   * and idempotent by contract, so the pin is simply that it happens.
+   */
+  it("tells the shell its fleet is stale after a successful removal", async () => {
+    deregisterHostFromAccount.mockResolvedValue({ kind: "ok" });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const { result } = renderHook(
+      () => useDeregisterHostFromAccount("host-b"),
+      { wrapper: wrapperFor(queryClient) },
+    );
+    result.current.mutate();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(refreshHostFleet).toHaveBeenCalledTimes(1);
+  });
+
+  // Nothing was removed, so main's copy is not stale. Announcing anyway would
+  // be a refetch that asserts a change that never happened.
+  it("does not announce a fleet change when the removal is refused", async () => {
+    deregisterHostFromAccount.mockResolvedValue({ kind: "revoked" });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    const { result } = renderHook(
+      () => useDeregisterHostFromAccount("host-b"),
+      { wrapper: wrapperFor(queryClient) },
+    );
+    result.current.mutate();
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(refreshHostFleet).not.toHaveBeenCalled();
   });
 
   it("leaves both caches alone when the removal is refused", async () => {

@@ -53,8 +53,18 @@ describe("hostOptionStatusWord surfaceState", () => {
       hostId: "host-down",
       connectable: false,
       planRestricted: false,
+      // The word comes from the lease-derived health state now (the merged
+      // vocabulary): an undialable host presents as offline, and that
+      // status word still outranks the surface refusal.
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
     });
-    expect(hostOptionStatusWord(unreachable, REFUSED)).toBe("unreachable");
+    expect(hostOptionStatusWord(unreachable, REFUSED)).toBe("offline");
   });
 
   it("inert yields no word on a connectable host", () => {
@@ -66,17 +76,31 @@ describe("hostOptionStatusWord surfaceState", () => {
       hostId: "host-down",
       connectable: false,
       planRestricted: false,
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
     });
     const gated = hostScopeOptionFixture({
       hostId: "host-gated",
       connectable: false,
       planRestricted: true,
+      health: {
+        state: "local-only",
+        label: "Requires upgrade",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
     });
     expect(hostOptionStatusWord(unreachable, INERT)).toBeNull();
     expect(hostOptionStatusWord(gated, INERT)).toBeNull();
     expect(
       hostOptionStatusWord(unreachable, AVAILABLE_HOST_ROW_SURFACE_STATE),
-    ).toBe("unreachable");
+    ).toBe("offline");
     expect(hostOptionStatusWord(gated, AVAILABLE_HOST_ROW_SURFACE_STATE)).toBe(
       "requires upgrade",
     );

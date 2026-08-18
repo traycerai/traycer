@@ -9,6 +9,7 @@ import type {
   StreamCloseReason,
 } from "../i-stream-session";
 import { PlainTerminalListStreamClient } from "../plain-terminal-list-stream-client";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { WsStreamClient } from "../ws-stream-client";
 
 class StubSession implements IStreamSession {
@@ -51,6 +52,11 @@ function makeWsStreamClient(
 ): WsStreamClient<typeof hostStreamRpcRegistry> {
   const client = new WsStreamClient({
     registry: hostStreamRpcRegistry,
+    // Required since this branch made transport evidence a construction
+    // input rather than an optional hook: every WsStreamClient reports
+    // dial outcomes to the selection authority. This suite asserts stream
+    // framing, not selection, so it reports into the no-op sink.
+    evidence: NO_TRANSPORT_EVIDENCE,
     endpoint: () => null,
     bearer: () => null,
     auth: null,

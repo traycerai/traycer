@@ -3,16 +3,20 @@ import type { HostWorkspaceControlsHostScope } from "@/components/home/host-work
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * Fixed for EVERY non-null hostId, even while its client is still resolving
- * (the fixed scope accepts a null client) - falling back to the active host
- * for that window would let the user browse another host's folders into a
- * draft the submit then applies to the pinned host.
+ * The picker's host is the placement's RESOLVED host - the one the chat is
+ * created on, whichever tier answered - never the raw request field: an
+ * unnamed request resolves through the Epic's pin or session host while the
+ * app-wide host may already be elsewhere. Fixed for EVERY resolved host, even
+ * while its client is still resolving (the fixed scope accepts a null client)
+ * - falling back to the active host would let the user browse another host's
+ * folders into a draft the submit then applies to the resolved one. `null`
+ * (no host resolved at all) is the only case that follows the active host.
  */
 export function modalWorkspaceHostScope(
-  hostId: string | null,
+  resolvedHostId: string | null,
   hostClient: HostClient<HostRpcRegistry> | null,
 ): HostWorkspaceControlsHostScope {
-  return hostId === null
+  return resolvedHostId === null
     ? { kind: "active" }
-    : { kind: "fixed", hostId, hostClient };
+    : { kind: "fixed", hostId: resolvedHostId, hostClient };
 }

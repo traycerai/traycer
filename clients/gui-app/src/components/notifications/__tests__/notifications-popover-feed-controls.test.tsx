@@ -21,6 +21,7 @@ import {
 } from "@tanstack/react-router";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import {
   __resetAppLocalNotificationsStoreForTests,
@@ -54,15 +55,25 @@ import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-ca
 import { useNotificationCenterGeometry } from "@/hooks/notifications/use-notification-center-geometry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
+const reconnectEngine = createHostReconnectEngine();
+
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
+/**
+ * `createRequesterForHostId` is not optional decoration: production resolves
+ * the app-wide host through the spine's id-pinned requester (redesign P4.2),
+ * so a stub without it takes the subject down at first render rather than
+ * failing an assertion. One host per fixture means the requester IS the
+ * client, which is what makes the self-return honest here.
+ */
+interface StubHostClient {
+  readonly request: typeof hostRequestMock;
+  readonly getActiveHostId: () => string | null;
+  readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
+}
+
 const hostBindingState = vi.hoisted(() => ({
-  current: null as {
-    readonly hostClient: {
-      readonly request: typeof hostRequestMock;
-      readonly getActiveHostId: () => string | null;
-    };
-  } | null,
+  current: null as { readonly hostClient: StubHostClient } | null,
 }));
 
 const activeHostIdRef = vi.hoisted(() => ({
@@ -83,8 +94,8 @@ vi.mock("@/lib/host", async (importActual) => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdRef.value,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdRef.value,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -125,13 +136,17 @@ function openGlobalStream(): {
   readonly seed: (entries: ReadonlyArray<NotificationEntry>) => void;
 } {
   let current: NotificationsStreamCallbacks | null = null;
-  openNotificationsStream((callbacks) => {
-    current = callbacks;
-    return {
-      applyUpdate: () => {},
-      close: () => {},
-    };
-  }, null);
+  openNotificationsStream(
+    reconnectEngine,
+    (callbacks) => {
+      current = callbacks;
+      return {
+        applyUpdate: () => {},
+        close: () => {},
+      };
+    },
+    null,
+  );
   return {
     seed: (entries) => {
       if (current === null) throw new Error("stream factory not invoked");
@@ -402,12 +417,12 @@ function makeDomRect(width: number, height: number): DOMRect {
 }
 
 function bindHostClient(): void {
-  hostBindingState.current = {
-    hostClient: {
-      request: hostRequestMock,
-      getActiveHostId: () => mockLocalHostEntry.hostId,
-    },
+  const hostClient: StubHostClient = {
+    request: hostRequestMock,
+    getActiveHostId: () => mockLocalHostEntry.hostId,
+    createRequesterForHostId: () => hostClient,
   };
+  hostBindingState.current = { hostClient };
 }
 
 function setScrollTop(scrollEl: HTMLElement, scrollTop: number): void {

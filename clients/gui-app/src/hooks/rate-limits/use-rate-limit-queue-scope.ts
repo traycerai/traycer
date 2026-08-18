@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useHostClient } from "@/lib/host";
 import type { RateLimitQueueConfig } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 /**
@@ -11,23 +11,28 @@ import type { RateLimitQueueConfig } from "@/lib/rate-limits/ephemeral-fetch-que
  * is the app-wide default host. The query client is shared, while `hostId`
  * keeps each host's cache entry distinct.
  *
- * The client is resolved through `useHostClientForHostId` (a requester PINNED
- * to `hostId`), not the mutable app-wide `useHostClient()`. A queued pull can
- * sit in the shared lane for as long as its response budget allows, and the
- * bare default client re-points the moment the user switches hosts - so an
- * item enqueued for host A would have gone on to fetch from host B while still
- * writing the answer under A's cache key, showing one machine's usage on
- * another's row. Pinning also matches `useRunTargetHost`, which already
- * resolves its scope this way. A `hostId` that no longer resolves yields a
- * `null` scope, which every enqueue entry point already treats as a no-op.
+ * A queued pull can sit in the shared lane for as long as its response budget
+ * allows, so "which host does this client address" has to stay fixed for the
+ * whole wait: an item enqueued for host A that re-aimed mid-flight would fetch
+ * host B and still write the answer under A's cache key, showing one machine's
+ * usage on another's row. `useHostClient()` already guarantees that - it hands
+ * back a requester PINNED to the host it resolved (redesign D17 / P2.1), and a
+ * call already aimed at the outgoing host completes against it - so this scope
+ * deliberately does NOT re-pin through `useHostClientForHostId`. Doing so would
+ * also resolve a directory client and discard the pinned client a host-scoped
+ * panel re-provides, which is the one thing `useHostClient()` gets right here.
+ *
+ * `responseTimeoutMs` is threaded per call rather than taken from the client's
+ * default frame timeout: an `ephemeralProcess` read spawns a provider CLI and
+ * legitimately outruns the default budget, and the queue owns that number.
  */
 export function useRateLimitQueueScope(): RateLimitQueueConfig | null {
-  const hostId = useReactiveActiveHostId();
-  const client = useHostClientForHostId(hostId);
+  const client = useHostClient();
+  const hostId = useAddressableHostId();
   const queryClient = useQueryClient();
 
   return useMemo(() => {
-    if (hostId === null || client === null) return null;
+    if (hostId === null) return null;
     return {
       hostId,
       queryClient,

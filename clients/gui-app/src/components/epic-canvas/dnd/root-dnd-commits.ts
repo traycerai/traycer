@@ -59,8 +59,6 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { canReparent } from "@/lib/epic-y-mutations";
 import { resolveReparentNode } from "@/lib/reparent-rules";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
-import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { copyEpicSidebarTabState } from "@/lib/epics/copy-epic-sidebar-tab-state";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -124,13 +122,6 @@ export function canDropOnHeaderStrip(
   );
 }
 
-function activeHostIdOrPlaceholder(): string {
-  return (
-    getHostBindingSnapshot()?.hostClient.getActiveHostId() ??
-    UNKNOWN_HOST_PLACEHOLDER
-  );
-}
-
 /**
  * Single source of truth for "openable (non-tab) source -> tile ref": the
  * header-strip commit, the canvas-drop commit, and the drag overlay all map
@@ -144,10 +135,16 @@ export function sourceToTileRef(
   if (source.kind === SIDEBAR_NODE_DND_TYPE) {
     const handle = getOpenEpicRegistry().peek(source.epicId);
     if (handle === null) return null;
+    // The payload's host, never the app-wide one. The sidebar producers stamp
+    // the Epic SESSION's host (or the row's owner host) into `source.hostId`
+    // precisely because chats and artifacts carry no intrinsic host id, and
+    // the ref minted here is bound for life: this root provider mounts at the
+    // app shell, so during an A->B re-point the app-wide client already
+    // answers B while the dragged row still belongs to the A-backed Epic.
     return epicNodeRefForNodeId(
       handle.store.getState(),
       source.nodeId,
-      activeHostIdOrPlaceholder(),
+      source.hostId,
     );
   }
   if (source.kind === TERMINAL_TILE_DND_TYPE) return source.tile;

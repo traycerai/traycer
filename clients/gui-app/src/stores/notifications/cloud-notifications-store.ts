@@ -12,9 +12,9 @@ import {
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  createHostStreamReopenScheduler,
   isReopenableNotificationsStreamClose,
-} from "@/lib/host/stream-reopen";
+  type HostReconnectEngine,
+} from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 
 export type CloudNotificationsConnectionState =
   "connecting" | "connected" | "reconnecting" | "unavailable";
@@ -360,7 +360,17 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
 /** Opens the distinct cloud-feed stream. It deliberately owns a fresh-session
  * retry loop: a terminal stream close is otherwise permanent in the shared
  * transport and would leave the cloud-only surface stale until app restart. */
+// eslint-disable-next-line max-params -- All five are semantically distinct: one reconnect policy, one transport, and three unrelated callbacks (auth, entitlement, snapshot) that no caller supplies together. The fifth arrived with P4.1's consolidation handing the policy IN rather than each store constructing its own; folding the callbacks into a bag would restructure this store's public surface across ten call sites for a consolidation ticket whose acceptance is "no behavior change at surfaces". Mirrors git-query-keys.ts's fileDiff.
 export function openCloudNotificationsStream(
+  /**
+   * THE reconnect policy for this stream's host (redesign P4.1 /
+   * connection-registry §6), acquired from the connection registry by the one
+   * place that opens these streams. This store no longer constructs its own
+   * scheduler: the constants, the terminal-close classification and the
+   * backoff shape live once, in the engine, and each stream still gets its
+   * own independent lane so a sibling stream's refusal cannot pace it.
+   */
+  reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   onEntitlementDenied: (() => void) | null,
@@ -377,7 +387,7 @@ export function openCloudNotificationsStream(
   // client resets the store before opening its controller; delayed callbacks
   // from this one must never repopulate that new ownership epoch.
   const sessionEpoch = useCloudNotificationsStore.getState().sessionEpoch;
-  const reopenScheduler = createHostStreamReopenScheduler(() => {
+  const reopenScheduler = reconnectEngine.openReopenLane(() => {
     currentSession?.close();
     currentSession = null;
     openSession();

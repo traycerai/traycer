@@ -59,8 +59,16 @@ const mockUseHostReachability =
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
+// The serving host the tile binds via `useTabHostId()` - the tab is bound to
+// the ref's `hostId` ("host-1" in every fixture below), same as the real
+// `<TabHostProvider>` would resolve for this tab.
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "host-1",
+}));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => mockUseHostReachability(hostId),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-transcript", () => ({
   useCloudChatTranscript: () => mockUseCloudChatTranscript(),
@@ -422,8 +430,18 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     );
 
     // Neither the notice NOR the transcript yet - a stale "not published"
-    // flash is exactly the bug this branch exists to prevent.
-    expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
+    // flash is exactly the bug this branch exists to prevent. The bounded
+    // load state (not a bare spinner testid) is what covers the window now -
+    // see `published-chat-tile.tsx`'s `boundedLoad` arm. This suite never
+    // seeds `useSelectionAuthorityStore`, so the lease read is null and the
+    // load answers "connecting" (pending, host itself not yet up) rather than
+    // "loading" (host up, content still pending) - either is a non-ready,
+    // non-terminal pending arm, which is all this test asserts.
+    const loadState = screen.queryByTestId(
+      `published-chat-tile-load-${NODE.id}`,
+    );
+    expect(loadState).not.toBeNull();
+    expect(loadState?.getAttribute("data-load-kind")).toBe("connecting");
     expect(screen.queryByTestId("published-chat-notice")).toBeNull();
     expect(screen.queryByTestId("chat-tile-session-view")).toBeNull();
   });

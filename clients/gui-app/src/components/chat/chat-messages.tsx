@@ -2504,7 +2504,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               viewportRef={transcriptContainerRef}
               bottomInset={endInset}
               onSelect={onMinimapItemSelect}
-              identity={identity}
               side={chatTurnMinimapSide}
             />
           ) : null}

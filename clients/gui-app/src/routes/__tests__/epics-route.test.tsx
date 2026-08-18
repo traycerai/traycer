@@ -51,7 +51,6 @@ function buildRouter(initialPath: "/" | "/epics" | `/epics/${string}`) {
     context: {
       queryClient: new QueryClient(),
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () => null,
       getHostClient: () => null,
     },
   });

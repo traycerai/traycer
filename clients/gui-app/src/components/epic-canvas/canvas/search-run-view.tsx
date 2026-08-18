@@ -25,10 +25,10 @@ import { CommandGroup } from "@/components/ui/command";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { PaletteItemRow } from "@/components/command-palette/palette-item-row";
 import { usePaletteLiveQuery } from "@/lib/commands/palette-query-context";
-import { useHostClient } from "@/lib/host";
 import type { HostRpcRegistry } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useWorkspaceSearchText } from "@/hooks/workspace/use-workspace-search-text-query";
 import {
   highlightSegmentsFromByteRanges,
@@ -166,8 +166,16 @@ function SearchRun({
   readonly target: SearchRunTarget;
   readonly ctx: CommandContext;
 }) {
-  const client = useHostClient();
-  const defaultHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The EPIC's session host, not the app-wide pointer. This view lives inside a
+  // retained Epic canvas: after Settings activates another host, the pointer
+  // moves while this Epic stays bound to the machine its session runs on. Sent
+  // app-wide, `workspace.searchText` went to the new host carrying a root or
+  // artifact-mirror source belonging to the old one, and artifact hits were
+  // stamped with the wrong hostId. `useWorkspaceSearchText` already takes a
+  // nullable client and disables itself, which is the right answer before the
+  // session resolves.
+  const client = useEpicSessionHostClient();
+  const defaultHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const resolveArtifact = useArtifactPathResolver(ctx.activeEpicId);
   const query = usePaletteLiveQuery();
   const trimmed = query.trim();

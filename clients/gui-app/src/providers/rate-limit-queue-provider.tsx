@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostClient } from "@/lib/host";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useConfiguredRateLimitProviders } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
@@ -53,8 +53,8 @@ export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
  * into table-owned polling and never enter this queue.
  */
 export function RateLimitQueueProvider(): null {
-  const hostId = useReactiveActiveHostId();
-  const client = useHostClientForHostId(hostId);
+  const hostId = useAddressableHostId();
+  const client = useHostClient();
   const queryClient = useQueryClient();
   const configuredProviders = useConfiguredRateLimitProviders();
   const profileSelection = useRateLimitProfileSelection();
@@ -68,23 +68,27 @@ export function RateLimitQueueProvider(): null {
   // cleanup + `null` branch clears the binding on host loss (`hostId` flips to
   // `null`). `hostId` is bound into the queue at configure time (not passed per
   // enqueue) so a queued fetch can't be reassigned to a different host
-  // mid-flight.
+  // mid-flight. `useHostClient()` is non-null once the runtime is mounted, so
+  // only host presence needs gating here.
   //
-  // The client is resolved through `useHostClientForHostId` (a requester PINNED
-  // to `hostId`), not the app-wide `useHostClient()`. That one is a stable
-  // object whose SELECTED host mutates, so binding it here only pinned the
-  // cache key: an item enqueued for host A that was still waiting when the user
-  // switched to B went on to fetch B and write the answer under A's key,
-  // showing one machine's usage on another's row. A `hostId` that no longer
-  // resolves yields a `null` client, which unbinds exactly like host loss.
+  // A queued item can outlive a host switch, so the client it captures must
+  // stay aimed where it was enqueued - otherwise an item enqueued for host A
+  // fetches B and writes the answer under A's cache key, showing one machine's
+  // usage on another's row. That guarantee is `useHostClient()`'s own: it
+  // resolves a requester PINNED to the host it named (redesign D17 / P2.1), so
+  // a call already in flight completes against the outgoing host and this
+  // effect simply re-binds with a fresh client when the effective host moves.
   useEffect(() => {
-    if (hostId === null || client === null) {
+    if (hostId === null) {
       configureRateLimitQueue(null);
       return;
     }
     configureRateLimitQueue({
       hostId,
       queryClient,
+      // `responseTimeoutMs` is the queue's own budget, not the client's default
+      // frame timeout: an `ephemeralProcess` read spawns a provider CLI and
+      // legitimately outruns that default.
       request: (_hostId, method, params, responseTimeoutMs) =>
         client.requestWithResponseTimeout(method, params, responseTimeoutMs),
     });
@@ -114,18 +118,10 @@ export function RateLimitQueueProvider(): null {
     }
   });
 
-  // Gated on `client`, not just `hostId`, and re-runs when it recovers. The
-  // pinned `useHostClientForHostId` can be null while the selected host has no
-  // resolved entry yet, and the effect above unbinds the queue in that window -
-  // so an immediate sweep fired here would silently no-op on every enqueue. The
-  // app-wide client this replaced was never null once mounted, which is why the
-  // dependency did not matter before. Without `client` in the list, a recovery
-  // whose provider list is structurally unchanged would leave usage stale until
-  // the next 15-minute tick instead of sweeping straight away.
   useEffect(() => {
-    if (hostId === null || client === null) return;
+    if (hostId === null) return;
     enqueuePollingWindow();
-  }, [hostId, client, membershipKey]);
+  }, [hostId, membershipKey]);
 
   // The single shared interval timer, gated on host presence and paused while
   // the window is hidden. Initial per-provider data still populates through the

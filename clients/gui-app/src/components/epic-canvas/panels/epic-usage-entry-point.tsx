@@ -2,8 +2,8 @@ import { useState, type ReactNode } from "react";
 import { LineChart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { StatusRowChromeBoundary } from "@/components/epic-canvas/panels/status-row-chrome-boundary";
 import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dialog";
@@ -24,9 +24,27 @@ import { cn } from "@/lib/utils";
  * on-demand with `poll: false`, matching every other actively-viewed usage
  * surface.
  *
- * App-wide host access (`useReactiveActiveHostId`/`useHostClient`), not
- * `useTabHostId` - this status row sits above the per-tile `TabHostProvider`
- * scope, same as its siblings.
+ * Resolves against the EPIC SESSION's host, not `useTabHostId` and not the
+ * app-wide effective host. The status row sits above the per-tile
+ * `TabHostProvider` scope, so a tab binding is genuinely unavailable here -
+ * but "outside a tab" does not make the app-wide host the right answer, and
+ * reading it was a defect with a visible failure: activation or failover moves
+ * the effective host from A to B while `EpicSessionProvider` is still
+ * rendering its retained A session (the whole of a re-point that is
+ * establishing, and after one that failed), during which only the CANVAS is
+ * made inert - this row stays interactive. The dialog then asked B for A's
+ * `epicId` and showed another machine's usage, or an error.
+ *
+ * The Epic is the scope of the question this button answers, so the session's
+ * host is the one that can answer it - the same rule the terminals sidebar
+ * follows for `terminal.list` and for the same reason.
+ *
+ * FAILS CLOSED on a null session host rather than following: passing `null` to
+ * `useHostClientForHostId` resolves the EFFECTIVE host's client, so a "no
+ * session yet" render would silently reproduce the defect instead of hiding.
+ * `supported` gates on the same id, so it already fails closed too; the
+ * explicit check is here because that agreement is a property to state, not
+ * one to inherit.
  */
 export function EpicUsageEntryPoint(props: {
   readonly epicId: string;
@@ -41,12 +59,12 @@ export function EpicUsageEntryPoint(props: {
 function EpicUsageEntryPointBody(props: {
   readonly epicId: string;
 }): ReactNode {
-  const hostId = useReactiveActiveHostId();
-  const client = useHostClient();
+  const hostId = useEpicSessionHostId();
+  const client = useHostClientForHostId(hostId);
   const supported = useUsageSummarySupported(hostId);
   const [open, setOpen] = useState(false);
 
-  if (!supported) return null;
+  if (hostId === null || !supported) return null;
 
   return (
     <>

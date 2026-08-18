@@ -44,13 +44,21 @@ const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
   value: "local",
 }));
 
+interface StubHostClient {
+  readonly request: typeof hostRequestMock;
+  readonly getActiveHostId: () => string | null;
+  /**
+   * The spine resolves a host id into a client (redesign P4.2); production
+   * calls this instead of reading a bound host off the client itself. This
+   * fixture has exactly one host, so the requester IS the client - what
+   * matters is that the method EXISTS, since a stub missing it takes the
+   * subject down at first render rather than failing an assertion.
+   */
+  readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
+}
+
 const hostBindingState = vi.hoisted(() => ({
-  current: null as {
-    readonly hostClient: {
-      readonly request: typeof hostRequestMock;
-      readonly getActiveHostId: () => string | null;
-    };
-  } | null,
+  current: null as { readonly hostClient: StubHostClient } | null,
 }));
 
 vi.mock("@/lib/host", async (importActual) => {
@@ -73,8 +81,8 @@ vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => notificationFeedMode.value,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () =>
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () =>
     hostBindingState.current?.hostClient.getActiveHostId() ?? null,
 }));
 
@@ -244,12 +252,12 @@ function applyHostSnapshot(
 }
 
 function bindHostClient(): void {
-  hostBindingState.current = {
-    hostClient: {
-      request: hostRequestMock,
-      getActiveHostId: () => mockLocalHostEntry.hostId,
-    },
+  const hostClient: StubHostClient = {
+    request: hostRequestMock,
+    getActiveHostId: () => mockLocalHostEntry.hostId,
+    createRequesterForHostId: () => hostClient,
   };
+  hostBindingState.current = { hostClient };
 }
 
 function defaultHostRequest(method: string): Promise<unknown> {

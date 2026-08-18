@@ -10,9 +10,19 @@ import type { HostWorkspaceControlsHostScope } from "../host-workspace-controls-
 const mocks = vi.hoisted(() => ({
   selectById: vi.fn<(hostId: string) => void>(),
   onSelect: vi.fn<(hostId: string) => void>(),
+  pinSetSelection: vi.fn<(selection: string | null) => void>(),
+}));
+
+// Ours' pin arm resolves a per-host requester; `null` = follow the app-wide
+// client, which is all these scope-routing cases need.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
 }));
 
 vi.mock("@/lib/host", () => ({
+  // The merged selector resolves per-host requesters through the runtime
+  // client seam; `null` keeps the pin arm on the app-wide client path.
+  useHostRuntimeClient: () => null,
   useHostBinding: () => ({
     directory: {
       selectById: mocks.selectById,
@@ -35,8 +45,17 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "tab-host-id",
+// The active-scope arm resolves the composer surface pin now (pin ??
+// effective) - the reactive-active module died with the redesign.
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({
+    selection: null,
+    honoredSelection: null,
+    setSelection: mocks.pinSetSelection,
+    resolvedHostId: "tab-host-id",
+    isPinned: false,
+    latchOnFirstUse: () => undefined,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -203,12 +222,13 @@ describe("ActiveHostWorkspaceControls selected scope", () => {
     expect(mocks.selectById).not.toHaveBeenCalled();
   });
 
-  it("still rebinds the app-wide host from an active scope", () => {
+  it("writes the composer surface pin from an active scope - never the app-wide directory", () => {
     renderStacked({ kind: "active" });
 
     pickOtherHost();
 
-    expect(mocks.selectById).toHaveBeenCalledWith("other-host-id");
+    expect(mocks.pinSetSelection).toHaveBeenCalledWith("other-host-id");
+    expect(mocks.selectById).not.toHaveBeenCalled();
     expect(mocks.onSelect).not.toHaveBeenCalled();
   });
 

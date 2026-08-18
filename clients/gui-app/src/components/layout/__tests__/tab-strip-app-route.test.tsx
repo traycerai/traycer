@@ -224,7 +224,6 @@ function renderAppAt(initialPath: string) {
     context: {
       queryClient,
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () => null,
       getHostClient: () => null,
     },
   });

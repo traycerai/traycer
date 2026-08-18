@@ -43,6 +43,8 @@ const mocks = vi.hoisted<MockState>(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => null,
 }));
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () => mocks.configured,

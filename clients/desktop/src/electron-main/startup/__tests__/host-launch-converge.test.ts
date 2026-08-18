@@ -10,6 +10,7 @@ import type {
 } from "../../host/host-controller-types";
 import type { HostRegistryUpdateState } from "../../../ipc-contracts/host-management-types";
 import type { DesktopStartupTestHooks } from "../desktop-startup";
+import type { SignedInGate } from "../host-launch-converge";
 
 const electronMock = vi.hoisted(() => ({
   app: {
@@ -52,11 +53,46 @@ vi.mock("../../ipc/host-management-ipc", () => ({
 // Imported after the mocks above so the module under test picks them up.
 const {
   runLaunchHostConvergeReconcile,
+  armFirstInstallOnSignIn,
   refreshHostRegistryIfNotRemoved,
   applyHostUpdateMenuState,
 } = await import("../host-launch-converge");
 const { __setDesktopStartupTestHooks, runDesktopStartup } =
   await import("../desktop-startup");
+
+/**
+ * A {@link SignedInGate} whose answer can flip, so a test can drive the
+ * sign-in TRANSITION rather than only the already-signed-in case - the
+ * transition is the arm that reproduces the pre-retirement timing, where the
+ * host was installed once the gate mounted after sign-in.
+ */
+function fakeSignedInGate(initial: boolean): SignedInGate & {
+  signIn(): void;
+  signOut(): void;
+  listenerCount(): number;
+} {
+  let signedIn = initial;
+  const listeners = new Set<(next: boolean) => void>();
+  return {
+    isSignedIn: () => signedIn,
+    onChanged: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    signIn: () => {
+      signedIn = true;
+      for (const listener of Array.from(listeners)) listener(true);
+    },
+    // Notifies exactly like `signIn`, because the production gate does: the
+    // arm's handler is what ignores the falling edge, and a fake that stayed
+    // silent would hide whether that is safe.
+    signOut: () => {
+      signedIn = false;
+      for (const listener of Array.from(listeners)) listener(false);
+    },
+    listenerCount: () => listeners.size,
+  };
+}
 
 function fakeMenu() {
   return {
@@ -109,6 +145,12 @@ function fakeHostController(
   readonly convergeReadyCalls: readonly boolean[];
   readonly stageLatestCalls: number;
   /**
+   * How many times status was sampled. Lets a test wait for an actor that
+   * DECLINES to act - "no converge" is not observable until you know the
+   * decision was actually reached, rather than still pending.
+   */
+  readonly getStatusCalls: number;
+  /**
    * Method names in invocation order. Counts alone cannot express "recovery
    * ran BEFORE the release download", which is the whole point of the
    * unavailable-first ordering.
@@ -120,6 +162,7 @@ function fakeHostController(
   const convergeReadyCalls: boolean[] = [];
   const callOrder: string[] = [];
   let stageLatestCalls = 0;
+  let getStatusCalls = 0;
   return {
     get callOrder() {
       return callOrder;
@@ -136,7 +179,11 @@ function fakeHostController(
     get stageLatestCalls() {
       return stageLatestCalls;
     },
+    get getStatusCalls() {
+      return getStatusCalls;
+    },
     async getStatus(): Promise<HostControllerStatus> {
+      getStatusCalls += 1;
       return status;
     },
     async applyStaged(
@@ -542,7 +589,15 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       runPreReady: () => undefined,
       whenReady: async () => undefined,
       runOnReady: async () => undefined,
-      runWindowPhase: async () => ({ hostController, menu: fakeMenu() }),
+      // SIGNED OUT for this composition test, so the first-install actor
+      // provably cannot contribute to the assertions below: it arms, sees no
+      // signed-in identity, and waits. What is under test here is activation
+      // debt on a host that already exists.
+      runWindowPhase: async () => ({
+        hostController,
+        menu: fakeMenu(),
+        signedIn: fakeSignedInGate(false),
+      }),
       runDeferredBackground: background,
     });
 
@@ -628,6 +683,299 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     await runLaunchHostConvergeReconcile(controller, fakeMenu());
 
     expect(refreshRegistryUpdateStateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("armFirstInstallOnSignIn", () => {
+  const neverInstalled = (removedByUser: boolean): HostControllerStatus => ({
+    ...fakeStatus(false, "unavailable", removedByUser),
+    installedVersion: null,
+  });
+
+  it("re-arms after an attempt that THREW, instead of retiring the only first-install actor", async () => {
+    // `settled` used to be set before the async work started, and the detached
+    // promise had no catch: one transient IPC failure retired first-install for
+    // the whole process, leaving a signed-in user in the unavailable-host flow
+    // until a manual retry or a relaunch.
+    const controller = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    let statusCalls = 0;
+    const throwsFirstTime: IpcHostController = {
+      ...controller,
+      getStatus: () => {
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return Promise.reject(new Error("host ipc unavailable"));
+        }
+        return controller.getStatus();
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armFirstInstallOnSignIn(throwsFirstTime, gate);
+
+    await vi.waitFor(() => {
+      expect(statusCalls).toBe(1);
+    });
+    expect(controller.convergeReadyCalls).toEqual([]);
+    // The subscription is what the failure re-arms against, so it must still
+    // be there - the immediate-attempt path used to skip subscribing entirely.
+    expect(gate.listenerCount()).toBe(1);
+
+    gate.signIn();
+
+    await vi.waitFor(() => {
+      expect(controller.convergeReadyCalls).toEqual([false]);
+    });
+    // And the retry that succeeded settles it: no third attempt.
+    expect(gate.listenerCount()).toBe(0);
+  });
+
+  it("stays armed after a RESOLVED non-ok outcome, and retries on the next sign-in edge", async () => {
+    // Deliberately NOT a throw. The throw path was fixed in `2e05de85` and its
+    // test sits directly above; this is the surviving half - `busy`,
+    // `deferred` and `failed` are ordinary resolved values, so they never
+    // reach the catch, and `outcome.kind` was logged without being read.
+    //
+    // `convergeReady` is OVERRIDDEN rather than configured, because
+    // `fakeHostController` hardcodes it to `ok` - its second parameter is
+    // `applyStagedOutcome`, not the converge outcome. Passing a `failed`
+    // there drives the SUCCESS path while looking like a failure fixture, and
+    // an earlier version of this test did exactly that and passed for the
+    // wrong reason.
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const convergeCalls: boolean[] = [];
+    let outcomeKind: MutationOutcome<ConvergeReadyOk>["kind"] = "failed";
+    const failsConverge: IpcHostController = {
+      ...base,
+      convergeReady: (force: boolean) => {
+        convergeCalls.push(force);
+        return Promise.resolve(
+          outcomeKind === "ok"
+            ? {
+                kind: "ok" as const,
+                value: { running: true, version: "1.4.0" },
+              }
+            : {
+                kind: "failed" as const,
+                message: "installer could not write to the prefix",
+              },
+        );
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armFirstInstallOnSignIn(failsConverge, gate);
+
+    await vi.waitFor(() => {
+      expect(convergeCalls).toEqual([false]);
+    });
+
+    // Premise, positively: the convergence really ran and really came back
+    // non-ok, and nothing is installed. Without this the assertions below are
+    // satisfied by an arm that never attempted anything.
+    expect(outcomeKind).toBe("failed");
+    expect(await failsConverge.getStatus()).toMatchObject({
+      installedVersion: null,
+    });
+
+    // Fixed: the arm survives, so the sign-in edge it retries from is still
+    // subscribed...
+    expect(gate.listenerCount()).toBe(1);
+
+    // ...and that edge produces a REAL second attempt which, this time
+    // succeeding, settles the arm. Asserting only the listener count would
+    // pass on a build that kept the subscription and never acted on it - the
+    // point is the retry, not the bookkeeping.
+    outcomeKind = "ok";
+    gate.signIn();
+    await vi.waitFor(() => {
+      expect(convergeCalls).toEqual([false, false]);
+    });
+    await vi.waitFor(() => {
+      expect(gate.listenerCount()).toBe(0);
+    });
+  });
+
+  it("installs once for a signed-in user on a machine that has never had a host", async () => {
+    const controller = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    armFirstInstallOnSignIn(controller, fakeSignedInGate(true));
+
+    await vi.waitFor(() => {
+      expect(controller.convergeReadyCalls).toEqual([false]);
+    });
+    // The reconciler's arms are not this actor's business, and vice versa.
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  it("CONSENT: a signed-out launch installs nothing, and waits rather than giving up", async () => {
+    const controller = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const gate = fakeSignedInGate(false);
+
+    armFirstInstallOnSignIn(controller, gate);
+    await Promise.resolve();
+
+    // Installing a background service is consent-bearing: the retired renderer
+    // path only ever provisioned for a signed-in user, and restoring it
+    // unconditionally would be the same action under a weaker precondition.
+    expect(controller.convergeReadyCalls).toEqual([]);
+    // ...and it is WAITING, not declining. A test that only asserted the empty
+    // call list would pass just as happily against an actor that gave up.
+    expect(gate.listenerCount()).toBe(1);
+  });
+
+  it("installs on the sign-in TRANSITION - the pre-retirement timing", async () => {
+    const controller = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const gate = fakeSignedInGate(false);
+    armFirstInstallOnSignIn(controller, gate);
+
+    gate.signIn();
+
+    await vi.waitFor(() => {
+      expect(controller.convergeReadyCalls).toEqual([false]);
+    });
+    // One-shot: the subscription is released once it has acted.
+    expect(gate.listenerCount()).toBe(0);
+  });
+
+  it("CONSENT: a sign-out landing inside the status round trip installs nothing", async () => {
+    // The window is real and not narrow in wall-clock terms: `getStatus()` is
+    // an IPC round trip to the host controller, and the arm's decision to act
+    // was taken BEFORE it. The falling edge reaches the subscription while
+    // that promise is pending and is ignored there by design (the handler only
+    // acts on `signedIn`), so nothing between the decision and the install
+    // re-reads consent unless this arm does.
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const gate = fakeSignedInGate(true);
+    const convergeCalls: boolean[] = [];
+    let statusCalls = 0;
+    // The sign-out is delivered FROM INSIDE the status read, which is what
+    // makes this deterministic rather than a race the scheduler might win: the
+    // continuation cannot run before its own await resolves.
+    const signsOutMidStatus: IpcHostController = {
+      ...base,
+      getStatus: () => {
+        statusCalls += 1;
+        if (statusCalls === 1) gate.signOut();
+        return Promise.resolve(neverInstalled(false));
+      },
+      convergeReady: (force: boolean) => {
+        convergeCalls.push(force);
+        return Promise.resolve({
+          kind: "ok" as const,
+          value: { running: true, version: "1.4.0" },
+        });
+      },
+    };
+
+    armFirstInstallOnSignIn(signsOutMidStatus, gate);
+
+    await vi.waitFor(() => {
+      expect(statusCalls).toBe(1);
+    });
+    // Premise, positively: the attempt really did start under a signed-in
+    // gate and really did reach the status read. Without this the assertion
+    // below is satisfied by an arm that never attempted anything at all.
+    expect(gate.isSignedIn()).toBe(false);
+    expect(convergeCalls).toEqual([]);
+
+    // WAITING, not declining - the same shape as a signed-out launch. An
+    // assertion on the empty call list alone would pass against an arm that
+    // gave up and left the machine hostless for the session.
+    expect(gate.listenerCount()).toBe(1);
+
+    // And the wait is live: a real sign-in still installs. This is the arm
+    // that fails if the re-read were implemented by settling instead of
+    // returning.
+    gate.signIn();
+    await vi.waitFor(() => {
+      expect(convergeCalls).toEqual([false]);
+    });
+    await vi.waitFor(() => {
+      expect(gate.listenerCount()).toBe(0);
+    });
+  });
+
+  it("CONSENT: a host the user removed is never reinstalled, even signed in", async () => {
+    const controller = fakeHostController(
+      neverInstalled(true),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    armFirstInstallOnSignIn(controller, fakeSignedInGate(true));
+    await vi.waitFor(() => {
+      expect(controller.getStatusCalls).toBeGreaterThan(0);
+    });
+
+    // `installedVersion` is null for a REMOVED host too, so the sentinel is
+    // the only thing separating "never had one" from "deliberately got rid of
+    // it" - and it is checked at the moment of acting, not at arming.
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  it("does nothing when a host is already installed - that debt is the reconciler's", async () => {
+    const controller = fakeHostController(
+      fakeStatus(false, "activated", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    armFirstInstallOnSignIn(controller, fakeSignedInGate(true));
+    await vi.waitFor(() => {
+      expect(controller.getStatusCalls).toBeGreaterThan(0);
+    });
+
+    expect(controller.convergeReadyCalls).toEqual([]);
   });
 });
 

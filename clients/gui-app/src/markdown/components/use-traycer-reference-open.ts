@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, type MouseEvent } from "react";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
 import {
@@ -94,7 +94,7 @@ export function useTraycerReferenceOpenHandler(input: {
   readonly requiresNode: boolean;
 }): TraycerReferenceOpenState {
   const handle = useMaybeOpenEpicHandle();
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useCanvasHostId();
   const navigate = useNavigate();
   const tileNavigation = useEpicTileNavigation();
 

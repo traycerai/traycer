@@ -53,7 +53,6 @@ import {
   usePaneActivationOwnership,
 } from "@/components/epic-canvas/pane-activation";
 import { TabSurfaceActivityProvider } from "./tab-surface-activity";
-import { SurfaceReadinessBoundary } from "./host-readiness-controller";
 import { SurfacePresentationBoundary } from "./surface-presentation-boundary";
 import {
   type TopLevelSurfaceActivator,
@@ -302,16 +301,9 @@ function TopLevelSurfaceMount(props: {
             visible={mount.activity.visible}
             focused={mount.activity.focused}
           >
-            <SurfaceReadinessBoundary
-              scope={tabSurfaceDescriptor(mount.tab.kind).readinessScope}
-              // T11 supplies a durable per-Epic host id. Current top-level
-              // members deliberately use their descriptor's default/none key.
-              tabHostId={null}
-            >
-              <Suspense fallback={null}>
-                <TabSurface tab={mount.tab} />
-              </Suspense>
-            </SurfaceReadinessBoundary>
+            <Suspense fallback={null}>
+              <TabSurface tab={mount.tab} />
+            </Suspense>
           </SurfacePresentationBoundary>
         </TabSurfaceActivityProvider>
       </div>
