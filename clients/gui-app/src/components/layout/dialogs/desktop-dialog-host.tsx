@@ -23,6 +23,9 @@ export function DesktopDialogHost(): ReactNode {
   const updateUnsyncedEpics = useDesktopDialogStore(
     (state) => state.updateUnsyncedEpics,
   );
+  const updateUnsyncedOtherWindowsUnknown = useDesktopDialogStore(
+    (state) => state.updateUnsyncedOtherWindowsUnknown,
+  );
   const close = useDesktopDialogStore((state) => state.close);
   const openEpicInNewWindowFlow = useEpicOpenInNewWindowFlow();
 
@@ -93,8 +96,16 @@ export function DesktopDialogHost(): ReactNode {
           onOpenChange={(open) => {
             if (!open) close();
           }}
-          title="Install update and discard unsaved work?"
-          description={describeUnsyncableWork(updateUnsyncedEpics)}
+          title={
+            updateUnsyncedOtherWindowsUnknown &&
+            updateUnsyncedEpics.length === 0
+              ? "Install update without checking other windows?"
+              : "Install update and discard unsaved work?"
+          }
+          description={describeUnsyncableWork(
+            updateUnsyncedEpics,
+            updateUnsyncedOtherWindowsUnknown,
+          )}
           cascadeSummary={null}
           actionLabel="Install and discard"
           isPending={false}
@@ -119,14 +130,26 @@ export function DesktopDialogHost(): ReactNode {
  * from their transport by a host re-point and no epic document has local
  * persistence, so there is no state in which they later sync on their own -
  * telling the user to wait would be the one piece of advice that cannot work.
+ *
+ * `otherWindowsUnknown` is the fail-closed arm: the app-wide check did not
+ * answer, so whatever is named here is only THIS window's share, and the copy
+ * has to say that other windows may hold more - or, when nothing local is
+ * named, that the install is proceeding without the check at all.
  */
 function describeUnsyncableWork(
   epics: ReadonlyArray<{ readonly title: string }>,
+  otherWindowsUnknown: boolean,
 ): string {
+  const unknownSuffix = otherWindowsUnknown
+    ? " Traycer could not check the other windows, which may hold more."
+    : "";
+  if (otherWindowsUnknown && epics.length === 0) {
+    return "Traycer could not check the other windows for changes that cannot be saved (changes kept when a host changed have nowhere left to sync to). Installing restarts Traycer and discards any such work in another window.";
+  }
   const titles = epics.map((epic) => epic.title).join(", ");
   const subject =
     epics.length === 1
       ? "1 Epic has changes"
       : `${epics.length} Epics have changes`;
-  return `${subject} that cannot be saved - they were kept when their host changed and have nowhere left to sync to. Installing restarts Traycer and discards them: ${titles}.`;
+  return `${subject} that cannot be saved - they were kept when their host changed and have nowhere left to sync to. Installing restarts Traycer and discards them: ${titles}.${unknownSuffix}`;
 }

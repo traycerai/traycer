@@ -60,9 +60,9 @@ import {
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
+import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
-import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
+import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
@@ -523,8 +523,18 @@ function TerminalRow(props: TerminalRowProps) {
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
   const isActive = useIsActiveTile(tabId, session.sessionId);
-  const kill = useTerminalKill();
-  const legacyRename = useTerminalRename();
+  // The row's terminal lives on the host this sidebar LISTS (the Epic
+  // session's - see the list above), so kill and rename go to that same
+  // client. The app-wide wrappers were the last two reads that stayed on
+  // the ambient host after the list moved: during a re-point they killed and
+  // renamed host B's sessions from host A's rows.
+  const rowHostClient = useEpicSessionHostClient();
+  const kill = useTerminalKillFor(
+    rowHostClient,
+    "Couldn't close the terminal.",
+    true,
+  );
+  const legacyRename = useTerminalRenameFor(rowHostClient);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareCloseCanvasTabFocusTarget,

@@ -15,7 +15,10 @@
  * contract; callers derive their item arrays with `useMemo`.
  */
 import { useCallback, useSyncExternalStore } from "react";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getEpicSessionHandleHostId,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 
 export function useActiveEpicProjection(
@@ -37,5 +40,34 @@ export function useActiveEpicProjection(
     return handle === null ? null : handle.store.getState();
   }, [epicId]);
 
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/**
+ * The host that SERVES the active epic's projection - the one its session
+ * handle was acquired against - for the opener sub-pages to stamp into the
+ * tiles they open and to address the epic's own host-scoped reads.
+ *
+ * NOT the app-wide addressable host, which is what these sub-pages read
+ * before PR #1243: during an A→B re-point the A-backed Epic keeps its
+ * projection rendered while the addressable host already answers B, so an
+ * artifact opened from the palette became a B-bound tile over A's record -
+ * bound for life (the same defect `useEpicArtifactRecords` carried). The
+ * handle→host binding is write-once per handle; the registry is subscribed
+ * so a re-point that swaps the epic's handle re-answers.
+ */
+export function useActiveEpicHostId(epicId: string | null): string | null {
+  const subscribe = useCallback(
+    (onChange: () => void): (() => void) =>
+      epicId === null
+        ? () => undefined
+        : getOpenEpicRegistry().subscribe(onChange),
+    [epicId],
+  );
+  const getSnapshot = useCallback((): string | null => {
+    if (epicId === null) return null;
+    const handle = getOpenEpicRegistry().get(epicId);
+    return handle === null ? null : getEpicSessionHandleHostId(handle);
+  }, [epicId]);
   return useSyncExternalStore(subscribe, getSnapshot);
 }

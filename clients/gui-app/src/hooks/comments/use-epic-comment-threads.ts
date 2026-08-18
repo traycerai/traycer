@@ -4,8 +4,9 @@ import type {
   ListCommentThreadsRequest,
   ListCommentThreadsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useHostClient } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /**
@@ -38,14 +39,21 @@ export interface UseEpicCommentThreadsOptions {
  * stale window plus mutation-driven invalidation; a future iteration should
  * subscribe to Y.Doc updates over `/stream` and invalidate eagerly so the
  * sidebar updates without requiring a tab focus.
+ *
+ * `client` is the caller's, and there is deliberately no app-wide wrapper: every
+ * mount of this query is Epic-scoped - the collab TILE and its hover popover
+ * (tab client), and the Epic sidebar (session client). An app-wide read here
+ * asked the machine the app happened to be pointed at for another host's
+ * threads during an A→B re-point, and keyed the cache under that host (D15).
  */
-export function useEpicCommentThreads(
-  epicId: string,
-  artifactType: EpicArtifactKind,
-  artifactId: string,
-  options: UseEpicCommentThreadsOptions,
-): UseQueryResult<ListCommentThreadsResponse, HostRpcError> {
-  const client = useHostClient();
+export function useEpicCommentThreadsForClient(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly epicId: string;
+  readonly artifactType: EpicArtifactKind;
+  readonly artifactId: string;
+  readonly options: UseEpicCommentThreadsOptions;
+}): UseQueryResult<ListCommentThreadsResponse, HostRpcError> {
+  const { client, epicId, artifactType, artifactId, options } = args;
   return useHostQuery({
     cacheKeyIdentity: undefined,
     client,

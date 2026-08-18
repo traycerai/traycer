@@ -133,6 +133,30 @@ export const SESSION_TOMBSTONE_WINDOW = 256;
 export const SESSION_ORDINAL_WINDOW = 64;
 
 /**
+ * How long a reporter's CURRENT attachment is held once a newer generation
+ * has been ISSUED but not yet CLAIMED (the handover of module header rule 4).
+ *
+ * Allocation deliberately does not retire the current attachment: the new
+ * instance's claim does, atomically with installing its own inventory, which
+ * is what keeps a reload from opening an empty-session window that concurrent
+ * refusals could count against. But a claim is not guaranteed to arrive. A
+ * renderer whose bootstrap fails AFTER its preload allocated (a script error,
+ * a bundle that never loads) stays alive, so neither `render-process-gone`
+ * nor window destruction ever reports it as detached - and the retired
+ * document's session inventory would keep suppressing the death counter for
+ * its host indefinitely (invariant 5): a host nobody can reach held `ready`
+ * in every window by a page that no longer exists. This is the authority's
+ * own bound on that handover (mechanism 7): an issuance left unclaimed this
+ * long retires the held attachment exactly as a detach would.
+ *
+ * Generous by an order of magnitude - preload allocation to the kernel's
+ * attach is one bootstrap, seconds at the outside - and benign when it does
+ * fire early: the late claim still installs its own inventory the moment it
+ * lands, and death still needs the full refusal streak in between.
+ */
+export const ATTACH_HANDOVER_CEILING_MS = 30_000;
+
+/**
  * An insertion-ordered id set with a hard cap, evicting the oldest entry when
  * it overflows. JS `Set` iterates in insertion order, which is the only
  * property this needs - dedup is a one-shot test per id, so there is nothing
@@ -404,6 +428,11 @@ interface ReporterRecord {
   latestIssuedSeq: number;
   latestSeqConsumed: boolean;
   attachment: AttachmentRecord | null;
+  /**
+   * Cancels the {@link ATTACH_HANDOVER_CEILING_MS} timer armed by the latest
+   * issuance while an attachment was held; `null` when nothing is armed.
+   */
+  cancelHandoverTimer: (() => void) | null;
 }
 
 /** The freshest compat verdict for one host (mechanism 6). */
@@ -804,8 +833,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // generation's attach is superseded from this moment, whether or not the
     // new instance ever attaches. The CURRENT attachment is deliberately NOT
     // retired here - it keeps reporting until the new claim lands, which is
-    // what makes the handover free of an empty-session window.
+    // what makes the handover free of an empty-session window - but the wait
+    // for that claim is BOUNDED (ATTACH_HANDOVER_CEILING_MS), because a
+    // renderer that never reaches attach is not a detach anyone reports.
     record.latestSeqConsumed = false;
+    this.armHandoverCeiling(reporterId, record);
     return record.latestIssuedSeq;
   }
 
@@ -872,7 +904,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
 
   reporterDetached(reporterId: string): void {
     const record = this.reporters.get(reporterId) ?? null;
-    if (record === null || record.attachment === null) return;
+    if (record === null) return;
+    // A hard detach ends any handover in flight: there is no attachment left
+    // for the ceiling to retire.
+    this.clearHandoverTimer(record);
+    if (record.attachment === null) return;
     record.attachment = null;
     this.commit("failover");
   }
@@ -1016,6 +1052,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     this.portSubscriptions.length = 0;
     this.clearDeadlineTimer();
+    for (const record of this.reporters.values()) {
+      this.clearHandoverTimer(record);
+    }
     this.selectionListeners.clear();
     this.leaseListeners.clear();
     this.reattachListeners.clear();
@@ -1047,9 +1086,45 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       latestIssuedSeq: 0,
       latestSeqConsumed: true,
       attachment: null,
+      cancelHandoverTimer: null,
     };
     this.reporters.set(reporterId, created);
     return created;
+  }
+
+  /**
+   * Arms {@link ATTACH_HANDOVER_CEILING_MS} for the generation just issued.
+   * Re-armed on every issuance (the NEWEST generation is the one whose claim
+   * the held attachment waits for), cleared by the claim itself
+   * ({@link claimSeq}), by {@link reporterDetached} and by {@link dispose}.
+   * Nothing to bound when the reporter holds no attachment.
+   */
+  private armHandoverCeiling(reporterId: string, record: ReporterRecord): void {
+    this.clearHandoverTimer(record);
+    if (record.attachment === null) return;
+    record.cancelHandoverTimer = this.options.clock.schedule(
+      ATTACH_HANDOVER_CEILING_MS,
+      () => {
+        record.cancelHandoverTimer = null;
+        // Every path that consumes or ends the generation clears this timer
+        // synchronously, so firing means the issuance is STILL unclaimed; the
+        // attachment check covers an identity transition that already
+        // retired it in between.
+        if (this.disposed || record.attachment === null) return;
+        this.options.log.warn(
+          "[selection-authority] attach handover expired; retiring the held attachment",
+          { reporterId, attachSeq: record.latestIssuedSeq },
+        );
+        record.attachment = null;
+        this.commit("failover");
+      },
+    );
+  }
+
+  private clearHandoverTimer(record: ReporterRecord): void {
+    if (record.cancelHandoverTimer === null) return;
+    record.cancelHandoverTimer();
+    record.cancelHandoverTimer = null;
   }
 
   /**
@@ -1063,6 +1138,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     if (attachSeq !== record.latestIssuedSeq) return false;
     if (record.latestSeqConsumed) return false;
     record.latestSeqConsumed = true;
+    // The claim the handover was waiting for has landed (accepted, version-
+    // mismatched or malformed - each retires the held attachment itself).
+    this.clearHandoverTimer(record);
     return true;
   }
 
@@ -1574,8 +1652,10 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     this.preferredHostId = this.options.preferredStore.load(this.identityKey);
     this.mruEffectiveHostIds.length = 0;
     for (const record of this.reporters.values()) {
-      // Generation high-waters survive (rule 4); only the attachment dies.
+      // Generation high-waters survive (rule 4); only the attachment dies -
+      // and with it any handover ceiling that was waiting to retire it.
       record.attachment = null;
+      this.clearHandoverTimer(record);
     }
     this.evidence.clear();
     this.seenTombstoneIds.clear();
@@ -1931,6 +2011,40 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     if (at === 0) return;
     if (at > 0) this.mruEffectiveHostIds.splice(at, 1);
     this.mruEffectiveHostIds.unshift(hostId);
+  }
+
+  /**
+   * B1/C6, the RESELECTION half of the corpse ceiling.
+   *
+   * The ceiling is judged against effectiveness at DERIVATION time (see
+   * `deriveLease`), so a host that lost its last session while pointed at,
+   * was left for a recovered target before its ceiling lapsed, and is later
+   * selected AGAIN derives as usable `connecting` in the very pass that
+   * selects it: its deadline is already in the past, `nextDeadline` (rightly)
+   * never wakes the engine for a lapsed instant, and no report is coming -
+   * nothing dials a host the app believes it is connected to. The
+   * authority-owned exit the ceiling exists to provide would never fire, and
+   * the app would sit on that host with no bound at all.
+   *
+   * So a host that becomes effective sessionless WITH A LOSS ON RECORD
+   * restarts its clock from this moment: a fresh window in which the
+   * renderers' first dial either proves it alive (`onHostProvedAlive` clears
+   * the record) or it dies on its own. Restarting rather than keeping the old
+   * instant is what makes the exit BOUNDED without killing the host on
+   * arrival - the "not dead on arrival" pin stands. And ONLY for a host that
+   * had a loss recorded: a host that never dropped a session while pointed
+   * at is not a corpse candidate, and arming it here would be the "arm
+   * everywhere" the ceiling's own doc rules out.
+   */
+  private restartPostSessionCeilingOnReselect(
+    effectiveHostId: string | null,
+    now: number,
+  ): void {
+    if (effectiveHostId === null) return;
+    const evidence = this.evidence.get(effectiveHostId) ?? null;
+    if (evidence === null || evidence.effectiveSessionLostAt === null) return;
+    if (this.hasLiveSession(effectiveHostId)) return;
+    evidence.effectiveSessionLostAt = now;
   }
 
   private deriveLeases(now: number): readonly HostLeaseSnapshot[] {
@@ -2533,6 +2647,12 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       const previousEffectiveHostId = this.selection.effectiveHostId;
       this.selection = selection;
       this.noteEffective(selection.effectiveHostId);
+      if (selection.effectiveHostId !== previousEffectiveHostId) {
+        this.restartPostSessionCeilingOnReselect(
+          selection.effectiveHostId,
+          now,
+        );
+      }
       this.eventQueue.push({
         kind: "selection",
         event: {

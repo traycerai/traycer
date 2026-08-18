@@ -34,6 +34,11 @@ const clients = vi.hoisted(() => ({
   session: { label: "session-client" },
 }));
 const listCalls = vi.hoisted<{ clients: unknown[] }>(() => ({ clients: [] }));
+// The client each ROW hands to its kill / rename mutation - the two reads
+// that stayed on the ambient host after the list moved (PR #1243, round 6).
+const mutationClients = vi.hoisted<{ kill: unknown[]; rename: unknown[] }>(
+  () => ({ kill: [], rename: [] }),
+);
 const terminalSessions = vi.hoisted<{
   value: ReadonlyArray<CanonicalTerminalSessionInfo>;
 }>(() => ({ value: [] }));
@@ -67,12 +72,18 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   },
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-kill-mutation", () => ({
-  useTerminalKill: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
+  useTerminalKillFor: (client: unknown) => {
+    mutationClients.kill.push(client);
+    return { mutate: vi.fn(), isPending: false };
+  },
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
-  useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: (client: unknown) => {
+    mutationClients.rename.push(client);
+    return { mutate: vi.fn(), isPending: false };
+  },
 }));
 
 // This suite is about the LEGACY unary path (`useTerminalList` above), not
@@ -136,6 +147,8 @@ function wrapper(node: ReactNode): ReactNode {
 describe("terminals panel resolves through the Epic session host", () => {
   beforeEach(() => {
     listCalls.clients = [];
+    mutationClients.kill = [];
+    mutationClients.rename = [];
     terminalSessions.value = [RUNNING_SESSION];
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useEpicCanvasStore.setState({
@@ -157,6 +170,22 @@ describe("terminals panel resolves through the Epic session host", () => {
     // `listCalls` would satisfy any `not.toContain(ambient)` phrasing.
     expect(listCalls.clients.length).toBeGreaterThan(0);
     for (const client of listCalls.clients) {
+      expect(client).toBe(clients.session);
+    }
+  });
+
+  it("a row's kill and rename mutations take the session's client, not the ambient one", () => {
+    // The list moved to the session client in an earlier round; kill and
+    // rename in the same row still rode the app-wide wrappers, so during a
+    // re-point host A's rows killed and renamed host B's sessions.
+    render(wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />));
+
+    expect(mutationClients.kill.length).toBeGreaterThan(0);
+    expect(mutationClients.rename.length).toBeGreaterThan(0);
+    for (const client of mutationClients.kill) {
+      expect(client).toBe(clients.session);
+    }
+    for (const client of mutationClients.rename) {
       expect(client).toBe(clients.session);
     }
   });

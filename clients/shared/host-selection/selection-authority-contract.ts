@@ -1182,7 +1182,12 @@ export interface SelectionAuthorityEngine {
    * called directly) and hands the value to the client instance it
    * constructs. Monotonic per reporter for the engine's lifetime - and
    * ALLOCATION ADVANCES THE SUPERSESSION FENCE: the moment this returns,
-   * every earlier-issued generation's attach is already superseded.
+   * every earlier-issued generation's attach is already superseded. The
+   * reporter's CURRENT attachment is held until the issued generation
+   * claims (no empty-session window), but that wait is bounded by the
+   * engine's own handover ceiling: an issuance never claimed - a renderer
+   * whose bootstrap failed after its preload allocated, which no detach
+   * signal reports - retires the held attachment as a detach would.
    */
   allocateAttachSeq(reporterId: string): number;
   attach(

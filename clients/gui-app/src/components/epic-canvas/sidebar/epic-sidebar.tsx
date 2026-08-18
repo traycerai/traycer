@@ -49,6 +49,7 @@ import {
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -2310,6 +2311,10 @@ interface CommentSidebarPanelProps {
 function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   const { epicId, activeArtifactId } = props;
   const artifactRecord = useEpicArtifact(activeArtifactId);
+  // The sidebar is a sibling of the canvas, deliberately outside every
+  // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
+  // one, which re-points under it while this Epic keeps rendering (D15).
+  const hostClient = useEpicSessionHostClient();
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
@@ -2326,6 +2331,7 @@ function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   return (
     <CommentSidebar
       epicId={epicId}
+      hostClient={hostClient}
       artifactType={artifactKind}
       artifactId={activeArtifactId}
       anchorPositions={anchorPositions}

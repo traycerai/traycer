@@ -7,7 +7,7 @@ const testState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
-  useEpicSweepWorktreeCandidates: () => ({
+  useEpicSweepWorktreeCandidatesForClient: () => ({
     hostId: "host-1",
     rows: [
       {
@@ -77,6 +77,7 @@ describe("SweepWorktreesDialog refresh", () => {
     render(
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
+        hostClient={null}
         taskTitle="Refresh sweep"
         onOpenChange={() => {}}
       />,

@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { buildSnapshotUnifiedPatchBundle } from "@/lib/diff/snapshot-diff-patch";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
@@ -227,6 +228,9 @@ function SnapshotDiffTileResolved(props: {
     [accumulatedFileChanges, liveAssistantBlocks, messages, node.diff],
   );
   const segmentQuery = useSnapshotDiffQuery({
+    // The snapshot blobs were written by the host this TILE is bound to - the
+    // same host its `useChatSessionHandle` above is keyed by (D15).
+    client: useTabHostClient(),
     beforeHash: segmentHashes?.beforeHash ?? null,
     afterHash: segmentHashes?.afterHash ?? null,
     enabled: segmentHashes !== null,

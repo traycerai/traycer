@@ -890,11 +890,24 @@ interface SessionOptions {
  * back. Dial ATTEMPTS stay per-socket - they are genuine per-attempt evidence,
  * and each carries the call's own request id.
  */
+/**
+ * Monotonic source for local RPC session ids, PROCESS-scoped (module state)
+ * rather than per client instance - the same shape `WsStreamClient` uses for
+ * `local-stream:s<n>`. The evidence kernel it reports into is renderer-
+ * lifetime and keys sessions by id: when the host runtime is rebuilt while an
+ * old instance's socket is still open, a per-instance counter restarting at
+ * zero made the replacement announce the SAME `local-ws:s1`, the authority
+ * deduplicated the second establishment, and the old socket's eventual `lost`
+ * deleted and tombstoned the shared id - retracting the replacement's live
+ * evidence and letting later refusals deaden or fail over from a host that
+ * still had a live socket.
+ */
+let localRpcSessionSeq = 0;
+
 class LocalHostLiveness {
   private readonly evidence: TransportEvidenceReporter;
   private readonly openSocketsByHost = new Map<string, number>();
   private readonly announcedByHost = new Map<string, string>();
-  private nextSessionSeq = 0;
 
   constructor(evidence: TransportEvidenceReporter) {
     this.evidence = evidence;
@@ -904,11 +917,12 @@ class LocalHostLiveness {
     const next = (this.openSocketsByHost.get(hostId) ?? 0) + 1;
     this.openSocketsByHost.set(hostId, next);
     if (next > 1) return;
-    this.nextSessionSeq += 1;
-    // Scoped to this client instance's counter rather than to the request id,
-    // so the id names the CONNECTIVITY episode it belongs to and not whichever
-    // RPC happened to open the first socket of it.
-    const sessionId = `local-ws:s${this.nextSessionSeq}`;
+    localRpcSessionSeq += 1;
+    // Scoped to the process-wide counter rather than to the request id, so
+    // the id names the CONNECTIVITY episode it belongs to (not whichever RPC
+    // happened to open the first socket of it) and is unique across every
+    // client instance that ever reports into this renderer's kernel.
+    const sessionId = `local-ws:s${localRpcSessionSeq}`;
     this.announcedByHost.set(hostId, sessionId);
     this.evidence.sessionEstablished(hostId, sessionId, "local-ws");
   }

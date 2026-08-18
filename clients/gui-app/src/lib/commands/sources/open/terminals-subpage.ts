@@ -15,6 +15,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
@@ -395,8 +396,13 @@ const NEW_TERMINAL_WORKSPACE_SUBPAGE: CommandSubpage = {
 export function useTerminalsOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const defaultHostId = useAddressableHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
-  const hostClient = useHostClient();
+  // The epic's terminals are listed on, and their tiles bind to, the host
+  // serving the epic's projection - see `useActiveEpicHostId`. (Creating a
+  // NEW terminal below is a placement flow with its own host picker and
+  // deliberately keeps the app-wide default.)
+  const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  const hostClient = useHostClientForHostId(activeEpicHostId);
   const scope = { kind: "epic" as const, epicId: ctx.activeEpicId ?? "" };
   const terminals = useTerminalList(scope, hostClient);
   const sessionsData = terminals.data;
@@ -444,8 +450,8 @@ export function useTerminalsOpenerItems(
           cwd: session.cwd,
           ...existingSessionOriginFields(signInProviderId, setupSession),
         },
-        // `terminal.list` is always issued against the active host's client
-        // (`useHostClient()` above) - there is no cross-host terminal listing
+        // `terminal.list` is issued against the epic's host client
+        // (`hostClient` above) - there is no cross-host terminal listing
         // today, so every session here IS already on `defaultHostId`. A badge
         // can never legitimately apply until that plumbing exists (flagged
         // back per T22's scope - inventing it is a separate, larger change).

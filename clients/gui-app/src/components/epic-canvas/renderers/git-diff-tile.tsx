@@ -6,7 +6,7 @@ import type {
   GitChangedFile,
   GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
-import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
+import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 import { useGitRefreshWorktreeStatus } from "@/hooks/git/use-git-refresh-worktree-status";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -278,7 +278,9 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const patchDiffViewerPreferences = useSettingsStore(
     (s) => s.patchDiffViewerPreferences,
   );
-  const editorOpen = useEditorOpen("file");
+  // The toolbar's "open file" targets the path the TILE is diffing, which lives
+  // on the tab's host (D15).
+  const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
   const { mutateAsync: refreshWorktreeStatus } = useGitRefreshWorktreeStatus();
   const updateView = useEpicCanvasStore((s) => s.updateGitDiffTileViewInTab);
   const { active: openFileFeedbackActive, trigger: triggerOpenFileFeedback } =
@@ -480,7 +482,7 @@ interface GitFileDiffPanelProps {
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const tabHostClient = useTabHostClient();
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  const editorOpen = useEditorOpen("file");
+  const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
     active: openExternallyFeedbackActive,
     trigger: triggerOpenExternallyFeedback,

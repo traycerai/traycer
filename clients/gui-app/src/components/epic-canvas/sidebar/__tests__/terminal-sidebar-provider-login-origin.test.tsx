@@ -43,12 +43,12 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-kill-mutation", () => ({
-  useTerminalKill: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
+  useTerminalKillFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
-  useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({

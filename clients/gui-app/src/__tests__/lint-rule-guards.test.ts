@@ -940,6 +940,11 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
   // covered it; a file list does not.
   const SIBLING_OF_EXEMPT_HOOK =
     "src/hooks/epic/use-epic-tui-agent-mutations.ts";
+  // The selector surface over the Epic session's handle: allowlisted as
+  // "canvas-serving, not tab-pinned" (the two-role premise) until round 6,
+  // where its one app-wide read stamped every projected record with the
+  // wrong host during a re-point. The census had excluded `src/lib/`.
+  const EPIC_SELECTORS_FILE = "src/lib/epic-selectors.ts";
 
   it.each([
     SIDEBAR_FILE,
@@ -949,12 +954,18 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
     BY_CALLER_EXEMPT_HOOK,
     CANVAS_HOST_HOOK,
     SIBLING_OF_EXEMPT_HOOK,
+    EPIC_SELECTORS_FILE,
   ])("anchors on %s, which must exist on disk", (file) => {
     expect(existsSync(path.join(guiAppRoot, file))).toBe(true);
   });
 
-  it.each([SIDEBAR_FILE, SHARING_PANEL_FILE, RENDERER_FILE])(
-    "restricts the app-wide reads at %s (was allowlisted as app chrome)",
+  it.each([
+    SIDEBAR_FILE,
+    SHARING_PANEL_FILE,
+    RENDERER_FILE,
+    EPIC_SELECTORS_FILE,
+  ])(
+    "restricts the app-wide reads at %s (was allowlisted as app chrome / canvas-serving)",
     async (file) => {
       expect(await fileHasReadPathImportRestriction(file)).toBe(true);
       expect(await fileHasEffectiveHostReadRestriction(file)).toBe(true);
@@ -977,6 +988,61 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
       expect(await fileHasKernelImportRestriction(file)).toBe(true);
     },
   );
+
+  // The hook-INDIRECTION half (round 6): `readPath` only ever sees a file's
+  // own imports, so a wrapper hook that resolved `useHostClient()` on behalf
+  // of an Epic surface laundered the read past the fence. Those directories
+  // now take the caller's client and carry `readPath` themselves.
+  const REPOINTED_HOOK_FILE = "src/hooks/comments/use-epic-comment-threads.ts";
+  const REPOINTED_HOOK_SIBLING =
+    "src/hooks/snapshots/use-snapshot-diff-query.ts";
+  // Exempt per FILE, with a reason: the app-wide wrapper kept for the
+  // following surface (`open-in-editor-button.tsx`).
+  const WRAPPER_EXEMPT_HOOK = "src/hooks/editor/use-editor-open-mutation.ts";
+
+  it.each([REPOINTED_HOOK_FILE, REPOINTED_HOOK_SIBLING, WRAPPER_EXEMPT_HOOK])(
+    "anchors on %s, which must exist on disk",
+    (file) => {
+      expect(existsSync(path.join(guiAppRoot, file))).toBe(true);
+    },
+  );
+
+  it.each([REPOINTED_HOOK_FILE, REPOINTED_HOOK_SIBLING])(
+    "restricts the app-wide reads at %s (wrapper hooks re-impose readPath)",
+    async (file) => {
+      expect(await fileHasReadPathImportRestriction(file)).toBe(true);
+      expect(await fileHasEffectiveHostReadRestriction(file)).toBe(true);
+    },
+  );
+
+  it("lifts readPath, and ONLY readPath, for the reasoned wrapper exemption", async () => {
+    expect(await fileHasReadPathImportRestriction(WRAPPER_EXEMPT_HOOK)).toBe(
+      false,
+    );
+    expect(await fileHasEffectiveHostReadRestriction(WRAPPER_EXEMPT_HOOK)).toBe(
+      false,
+    );
+    // POSITIVE: the file still carries the rest of its partition.
+    expect(await fileHasKernelImportRestriction(WRAPPER_EXEMPT_HOOK)).toBe(
+      true,
+    );
+  });
+
+  it("POSITIVE CONTROL: the real config flags an app-wide read at a repointed wrapper-hook path, by rule name", async () => {
+    const eslint = new ESLint({ cwd: guiAppRoot });
+    const code =
+      'import { useHostClient } from "@/lib/host";\nvoid useHostClient;\n';
+    const results = await eslint.lintText(code, {
+      filePath: path.join(guiAppRoot, REPOINTED_HOOK_FILE),
+    });
+    const messages = results[0]?.messages ?? [];
+    expect(
+      messages.filter(
+        (message) =>
+          message.ruleId === "@typescript-eslint/no-restricted-imports",
+      ),
+    ).toHaveLength(1);
+  });
 
   it("POSITIVE CONTROL: the real config flags an app-wide read at a sidebar path, by rule name", async () => {
     const eslint = new ESLint({ cwd: guiAppRoot });

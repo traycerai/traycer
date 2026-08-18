@@ -833,6 +833,86 @@ describe("WsRpcClient", () => {
     expect(recorder.callsNamed("sessionLost")).toHaveLength(1);
   });
 
+  it("two client INSTANCES never announce the same local session id - a rebuilt runtime's socket is not retracted by the old socket's close", async () => {
+    // Codex #1243: the evidence kernel is renderer-lifetime and keys sessions
+    // by id. A per-instance counter restarting at zero made a replacement
+    // client announce the same `local-ws:s1` the old one held; the authority
+    // deduplicated it, and the old socket's `lost` then tombstoned the shared
+    // id - retracting the NEW socket's live evidence.
+    const { factory, sockets } = makeFactory();
+    const recorder = new RecordingEvidence();
+    let nextRequestId = 0;
+    const makeClient = () =>
+      new WsRpcClient<typeof testRegistry>({
+        registry: testRegistry,
+        requestId: () => `req-${(nextRequestId += 1)}`,
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+        hostAttestationWindowMs: 0,
+        evidence: recorder,
+      });
+    const authority = authorityForToken("token-abc");
+
+    // Old instance: one socket open, session announced.
+    const oldClient = makeClient();
+    const pendingOld = oldClient.request(
+      "host.echo",
+      { message: "old" },
+      authority,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+
+    // Runtime rebuilt: a NEW instance opens its own socket to the same host
+    // while the old one is still open.
+    const newClient = makeClient();
+    const pendingNew = newClient.request(
+      "host.echo",
+      { message: "new" },
+      authority,
+    );
+    await flush();
+    sockets[1].socket.fireOpen();
+    await flush();
+
+    const established = recorder.calls.filter(
+      (call) => call.method === "sessionEstablished",
+    );
+    expect(established).toHaveLength(2);
+    const [oldSession, newSession] = established;
+    if (oldSession === undefined || newSession === undefined) {
+      throw new Error("expected two announcements");
+    }
+    // The load-bearing claim: distinct ids across instances.
+    expect(newSession.sessionId).not.toBe(oldSession.sessionId);
+
+    // The old socket closes: only ITS id is retracted.
+    sockets[0].socket.fireClose(1006, "old socket gone", false);
+    await expect(pendingOld).rejects.toBeInstanceOf(RetryableTransportError);
+    const lost = recorder.calls.filter((call) => call.method === "sessionLost");
+    expect(lost).toHaveLength(1);
+    expect(lost[0]?.sessionId).toBe(oldSession.sessionId);
+    expect(lost[0]?.sessionId).not.toBe(newSession.sessionId);
+
+    // Leave the new socket's request settled so nothing dangles.
+    sockets[1].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const req = expectRequestFrame(sockets[1].sent[1]);
+    sockets[1].socket.fireMessage({
+      kind: "response",
+      requestId: req.requestId,
+      method: req.method,
+      schemaVersion: req.schemaVersion,
+      result: { echoed: "NEW" },
+      error: null,
+    });
+    await expect(pendingNew).resolves.toEqual({ echoed: "NEW" });
+  });
+
   it("a socket aborted after opening decrements the refcount without leaking it - the next RPC to the same host still gets a fresh 0->1 announcement", async () => {
     const { factory, sockets } = makeFactory();
     const recorder = new RecordingEvidence();

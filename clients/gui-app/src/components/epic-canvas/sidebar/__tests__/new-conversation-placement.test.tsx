@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { isValidElement, useRef, useState } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -110,6 +110,14 @@ const testState = vi.hoisted(() => ({
     readonly overrideHostId: string | null;
     readonly sessionHostId: string | null;
   }>,
+  /**
+   * The workspace-controls element the body was handed (Codex T-50). The
+   * ComposerBody mock renders only the banner, so the picker's `hostScope`
+   * is read off the element's props rather than through a render.
+   */
+  workspaceControlsElements: [] as unknown[],
+  /** The pin the latest-conversation seed was read for (Codex T-50). */
+  latestSeedPins: [] as unknown[],
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -118,6 +126,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
       testState.bodyStartTerminal = props.onStartTerminal;
+      testState.workspaceControlsElements.push(props.workspaceControls);
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
@@ -231,7 +240,10 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
 }));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
-  useLatestConversationWorkspaceSeed: () => null,
+  useLatestConversationWorkspaceSeed: (_epicId: unknown, pin: unknown) => {
+    testState.latestSeedPins.push(pin);
+    return null;
+  },
   latestCreatedConversationOwner: () => null,
 }));
 vi.mock("@/hooks/worktree/use-owner-workspace-inheritance-seed", () => ({
@@ -352,6 +364,16 @@ function Harness() {
   );
 }
 
+/**
+ * The `hostScope` prop of the `<ActiveHostWorkspaceControls>` element the
+ * body was handed. `null` when the element is not that component (the arm
+ * then fails on the shape assertion rather than on a thrown read).
+ */
+function workspaceControlsHostScope(element: unknown): unknown {
+  if (!isValidElement<{ readonly hostScope: unknown }>(element)) return null;
+  return element.props.hostScope;
+}
+
 function renderModal(): void {
   render(<Harness />);
   act(() => {
@@ -383,6 +405,8 @@ beforeEach(() => {
   };
   testState.pinIsPinned.current = false;
   testState.followsEffective.current = true;
+  testState.workspaceControlsElements = [];
+  testState.latestSeedPins = [];
   testState.recordPlacement.mockClear();
   testState.placementInputs.length = 0;
 });
@@ -581,6 +605,34 @@ describe("new-conversation modal shares the composer's placement semantics", () 
         overrideHostId: null,
         sessionHostId: "host-session",
       });
+    }
+  });
+
+  it("scopes the workspace picker and the latest-workspace seed to the RESOLVED host, not the raw request", () => {
+    // Codex #1243 T-50: the request is unnamed (`hostId: null`) and the
+    // placement resolves it to host-a through the Epic's tiers. The picker
+    // and the seed used to key on the raw request field, so they browsed and
+    // seeded from the app-wide host while the create went to host-a.
+    testState.placement.current = {
+      resolvedHostId: "host-session",
+      client: { getActiveHostId: () => "host-session" },
+      hostLabel: "Studio Mac",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    testState.followsEffective.current = false;
+    renderModal();
+
+    const scopes = testState.workspaceControlsElements.map(
+      workspaceControlsHostScope,
+    );
+    expect(scopes.length).toBeGreaterThan(0);
+    for (const scope of scopes) {
+      expect(scope).toMatchObject({ kind: "fixed", hostId: "host-session" });
+    }
+    expect(testState.latestSeedPins.length).toBeGreaterThan(0);
+    for (const pin of testState.latestSeedPins) {
+      expect(pin).toMatchObject({ hostId: "host-session" });
     }
   });
 

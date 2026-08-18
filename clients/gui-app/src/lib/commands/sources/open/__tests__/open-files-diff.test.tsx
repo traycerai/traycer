@@ -54,13 +54,18 @@ vi.mock("@/lib/commands/actions", () => ({
   openTileIntoTargetGroup: state.openTileIntoTargetGroup,
 }));
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  useWorktreeListBindingsForEpic: () => ({
+  // The source list reads the epic's bindings on the epic's host client
+  // (PR #1243 round 6); this suite is about the leaves, not the client.
+  useWorktreeListBindingsForEpicForClient: () => ({
     data: { rows: state.rows },
     isPending: false,
     isError: false,
   }),
 }));
 vi.mock("@/lib/host", () => ({ useHostClient: () => ({}) }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => ({ mockHostId: hostId }),
+}));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => state.defaultHostId,
 }));
@@ -69,6 +74,7 @@ vi.mock("@/hooks/ui/use-debounced-value", () => ({
 }));
 vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
   useActiveEpicProjection: () => state.projection,
+  useActiveEpicHostId: () => state.defaultHostId,
 }));
 vi.mock("@/hooks/workspace/use-workspace-search-paths-query", async () => {
   const actual = await vi.importActual(

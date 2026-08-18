@@ -516,7 +516,6 @@ export function NewConversationModalBody(props: {
   const latestWorkspaceSeed = useModalWorkspaceSeed({
     epicId,
     parentId,
-    hostId,
     resolvedHostId,
     hostClient,
   });
@@ -739,12 +738,15 @@ export function NewConversationModalBody(props: {
     editorRef,
     isActive: chatComposerActive,
   });
-  // A pinned request keeps the workspace picker on the same host the chat will
-  // be created on; without it the user could pick a folder that does not exist
-  // over there.
+  // The workspace picker browses the host the chat will be CREATED on - the
+  // placement's resolved host, whichever tier answered (a caller-named host,
+  // the Epic's pin, the session's host, or effective). Keying this on the raw
+  // request field would leave every unnamed request on the app-wide host while
+  // the create went to the Epic's: the user could pick a folder that does not
+  // exist over there, and the latest-workspace seed below would be skipped.
   const workspaceHostScope = useMemo<HostWorkspaceControlsHostScope>(
-    () => modalWorkspaceHostScope(hostId, hostClient),
-    [hostClient, hostId],
+    () => modalWorkspaceHostScope(resolvedHostId, hostClient),
+    [hostClient, resolvedHostId],
   );
   const workspaceControls = (
     <ActiveHostWorkspaceControls
@@ -1097,25 +1099,25 @@ export function NewConversationModalBody(props: {
 function useModalWorkspaceSeed(args: {
   readonly epicId: string;
   readonly parentId: string | null;
-  // The REQUEST's host: `null` means "follow the app-wide active host". The
-  // latest-conversation seed reads it directly, because an unpinned modal
-  // deliberately skips that seed entirely.
-  readonly hostId: string | null;
-  // `hostId` resolved against the active host - the host `hostClient` actually
-  // speaks to. The parent's pending intent is staged under its CONCRETE host,
-  // so reading that slot with the nullable request field would land in the
-  // unresolved-host bucket and silently seed the child from the older binding.
+  // The placement's RESOLVED host - the host `hostClient` actually speaks to
+  // and the chat is created on, whichever tier answered. Both seeds below key
+  // on it: the parent's pending intent is staged under its CONCRETE host, and
+  // the latest-conversation seed is read from (and about) that same host.
+  // Neither reads the nullable request field any more - an unnamed request
+  // used to skip the latest seed and read the intent slot for the app-wide
+  // host while the create went to the Epic's.
   readonly resolvedHostId: string | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
 }): LatestConversationWorkspaceSeed | null {
-  const { epicId, parentId, hostId, resolvedHostId, hostClient } = args;
+  const { epicId, parentId, resolvedHostId, hostClient } = args;
   // Only read the latest-conversation seed for a top-level chat; a child must
   // never inherit an unrelated conversation's worktree (see below), so skip the
-  // binding read entirely when adding a child. A pinned request reads the seed
-  // from (and about) the pinned host, matching the create/picker below.
+  // binding read entirely when adding a child. Read from (and about) the
+  // resolved host, matching the create and the picker; `null` only while no
+  // host has resolved at all.
   const latestConversationSeed = useLatestConversationWorkspaceSeed(
     parentId === null ? epicId : null,
-    hostId === null ? null : { hostId, hostClient },
+    resolvedHostId === null ? null : { hostId: resolvedHostId, hostClient },
   );
   // The parent can be a chat or a terminal agent; read its real kind so the
   // binding lookup matches. Defaulting to "chat" would miss a terminal-agent

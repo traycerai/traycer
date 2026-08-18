@@ -289,21 +289,34 @@ interface WindowWithRunnerHost {
 function installOtherWindowUnsyncable(
   entries: ReadonlyArray<{ readonly epicId: string; readonly title: string }>,
 ): () => void {
+  return installAppLifecycle(() =>
+    Promise.resolve(
+      entries.map((entry) => ({
+        epicId: entry.epicId,
+        title: entry.title,
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: true,
+      })),
+    ),
+  );
+}
+
+function installAppLifecycle(
+  unsyncableWorkAcrossWindows: () => Promise<
+    ReadonlyArray<{
+      readonly epicId: string;
+      readonly title: string;
+      readonly queueSize: number;
+      readonly isDirty: boolean;
+      readonly unsyncable: boolean;
+    }>
+  >,
+): () => void {
   const target = window as Window & WindowWithRunnerHost;
   const previous = target.runnerHost;
   target.runnerHost = {
-    appLifecycle: {
-      unsyncableWorkAcrossWindows: () =>
-        Promise.resolve(
-          entries.map((entry) => ({
-            epicId: entry.epicId,
-            title: entry.title,
-            queueSize: 2,
-            isDirty: true,
-            unsyncable: true,
-          })),
-        ),
-    },
+    appLifecycle: { unsyncableWorkAcrossWindows },
   };
   return () => {
     target.runnerHost = previous;
@@ -425,6 +438,41 @@ describe("app update install vs a retained unsynced buffer", () => {
           .updateUnsyncedEpics.map((row) => row.epicId),
       ).toEqual(["epic-in-window-b"]);
     } finally {
+      restore();
+    }
+  });
+
+  it("a REJECTED app-wide check fails closed: prompts (naming the unchecked windows) instead of installing on this window's answer", async () => {
+    // Codex #1243 T-51: window A has nothing local; window B holds a retained
+    // buffer; the IPC that would have said so rejects. The old fallback took
+    // A's own "nothing" as the app's answer and installed - destroying B's
+    // work. A failed check is not a clean check.
+    const restore = installAppLifecycle(() =>
+      Promise.reject(new Error("ipc: main is not answering")),
+    );
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    try {
+      expect(__getOpenEpicRegistryForTests().getUnsyncedEdits().length).toBe(0);
+
+      const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
+      renderWithHost(<AppUpdateHeaderButton />, bridge);
+
+      fireEvent.click(await screen.findByTestId("app-update-header-button"));
+
+      await waitFor(() => {
+        expect(useDesktopDialogStore.getState().activeDialog).toBe(
+          "update-unsynced-confirm",
+        );
+      });
+      expect(bridge.installUpdate).not.toHaveBeenCalled();
+      const dialog = useDesktopDialogStore.getState();
+      // Nothing local to name, and the prompt must say WHY it is up anyway.
+      expect(dialog.updateUnsyncedEpics).toEqual([]);
+      expect(dialog.updateUnsyncedOtherWindowsUnknown).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
       restore();
     }
   });

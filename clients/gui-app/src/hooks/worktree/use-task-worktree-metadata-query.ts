@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
@@ -29,7 +30,18 @@ export interface WorktreeHostIndex {
  * base call of `useTaskWorktreeMetadata`.
  */
 export function useWorktreeHostIndex(enabled: boolean): WorktreeHostIndex {
-  const client = useHostClient();
+  return useWorktreeHostIndexForClient(useHostClient(), enabled);
+}
+
+/**
+ * {@link useWorktreeHostIndex} against a caller-resolved client. A surface
+ * inside an Epic session passes the session's client: worktrees are per HOST,
+ * so an Epic projected from host A must not be described by host B's listing.
+ */
+export function useWorktreeHostIndexForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  enabled: boolean,
+): WorktreeHostIndex {
   const baseQuery = useHostQuery<HostRpcRegistry, "worktree.listAllForHost">({
     cacheKeyIdentity: undefined,
     client,
@@ -102,8 +114,20 @@ export function useWorktreeHostActivityIndex(
 export function useTaskWorktreeMetadata(
   epicIds: readonly string[],
 ): TaskWorktreeMetadata {
-  const client = useHostClient();
-  const baseQuery = useWorktreeHostIndex(epicIds.length > 0);
+  return useTaskWorktreeMetadataForClient(useHostClient(), epicIds);
+}
+
+/**
+ * {@link useTaskWorktreeMetadata} against a caller-resolved client - the Epic
+ * panel's sweep status row passes the Epic session's client (see
+ * {@link useWorktreeHostIndexForClient}); the home history keeps the app-wide
+ * wrapper above.
+ */
+export function useTaskWorktreeMetadataForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  epicIds: readonly string[],
+): TaskWorktreeMetadata {
+  const baseQuery = useWorktreeHostIndexForClient(client, epicIds.length > 0);
   const visibleEpicIds = useMemo(() => new Set(epicIds), [epicIds]);
   const ownedPaths = useMemo(
     () =>

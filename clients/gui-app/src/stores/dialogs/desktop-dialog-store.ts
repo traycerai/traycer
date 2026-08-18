@@ -14,6 +14,18 @@ export type DesktopDialogKind =
   | "install-guidance"
   | "update-unsynced-confirm";
 
+/**
+ * What the update-install door learned before it asked. `epics` are the rows
+ * the decision is taken against; `otherWindowsUnknown` is true when the
+ * APP-WIDE check failed, so `epics` is only this window's answer and every
+ * other window's work is unaccounted for - the prompt then has to say so,
+ * because "nothing listed" is not "nothing to lose" in that state.
+ */
+export interface UpdateUnsyncedConfirmation {
+  readonly epics: ReadonlyArray<UnsyncedEditsEntry>;
+  readonly otherWindowsUnknown: boolean;
+}
+
 export interface DesktopDialogState {
   readonly activeDialog: DesktopDialogKind | null;
   readonly reportIssueAvailable: boolean;
@@ -44,6 +56,8 @@ export interface DesktopDialogState {
    * re-queried would silently disagree with the gate that raised it.
    */
   readonly updateUnsyncedEpics: ReadonlyArray<UnsyncedEditsEntry>;
+  /** See {@link UpdateUnsyncedConfirmation.otherWindowsUnknown}. */
+  readonly updateUnsyncedOtherWindowsUnknown: boolean;
   readonly lastConfirmedReport: {
     readonly draftId: number;
     readonly reportId: string;
@@ -62,7 +76,7 @@ export interface DesktopDialogState {
   ) => void;
   readonly openInstallGuidance: () => void;
   readonly openUpdateUnsyncedConfirm: (
-    epics: ReadonlyArray<UnsyncedEditsEntry>,
+    confirmation: UpdateUnsyncedConfirmation,
   ) => void;
   readonly close: () => void;
 }
@@ -74,6 +88,7 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   reportIssueDraftContext: null,
   reportIssueDraftId: 0,
   updateUnsyncedEpics: [],
+  updateUnsyncedOtherWindowsUnknown: false,
   lastConfirmedReport: null,
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });
@@ -131,10 +146,11 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   openInstallGuidance: () => {
     set({ activeDialog: "install-guidance" });
   },
-  openUpdateUnsyncedConfirm: (epics) => {
+  openUpdateUnsyncedConfirm: (confirmation) => {
     set({
       activeDialog: "update-unsynced-confirm",
-      updateUnsyncedEpics: epics,
+      updateUnsyncedEpics: confirmation.epics,
+      updateUnsyncedOtherWindowsUnknown: confirmation.otherWindowsUnknown,
     });
   },
   close: () => {

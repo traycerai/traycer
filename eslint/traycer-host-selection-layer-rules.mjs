@@ -162,8 +162,12 @@ export const hostSelectionReadAllowlist = [
   "src/providers/epic-tab-existence-reconciler.tsx",
   "src/providers/chat-records-stream-mount.tsx",
   "src/lib/registries/**/*.{ts,tsx}",
-  // Selector surface over OpenEpicStore — canvas-serving (D4), not tab-pinned.
-  "src/lib/epic-selectors.ts",
+  // NOT `src/lib/epic-selectors.ts`. It was listed here as "canvas-serving
+  // (D4), not tab-pinned" - the same two-role premise. Its selectors read the
+  // Epic session's handle, so the host that serves them is the handle's own
+  // (`getEpicSessionHandleHostId`), never the app-wide one; the one app-wide
+  // read it carried stamped every projected record with the wrong host during
+  // a re-point (PR #1243, round 6).
 
   // App chrome (layout, settings, providers, palette, sidebar lists)
   "src/components/layout/**/*.{ts,tsx}",

@@ -1,6 +1,9 @@
 import { unsyncableWork } from "@/lib/registries/epic-session-registry";
 import type { UnsyncedEditsEntry } from "@/stores/epics/open-epic/session-registry";
-import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import {
+  useDesktopDialogStore,
+  type UpdateUnsyncedConfirmation,
+} from "@/stores/dialogs/desktop-dialog-store";
 import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
 import { appLogger } from "@/lib/logger";
 
@@ -41,12 +44,12 @@ import { appLogger } from "@/lib/logger";
 export async function requestAppUpdateInstall(
   bridge: DesktopAppUpdatesBridge,
 ): Promise<void> {
-  const unsyncable = await unsyncableWorkAcrossWindows();
-  if (unsyncable.length === 0) {
+  const check = await unsyncableWorkAcrossWindows();
+  if (!check.otherWindowsUnknown && check.epics.length === 0) {
     void bridge.installUpdate();
     return;
   }
-  useDesktopDialogStore.getState().openUpdateUnsyncedConfirm(unsyncable);
+  useDesktopDialogStore.getState().openUpdateUnsyncedConfirm(check);
 }
 
 /**
@@ -61,26 +64,39 @@ export async function requestAppUpdateInstall(
  * standing in front of that buffer.
  *
  * Main answers, because main is the only process holding every window's
- * snapshot. The LOCAL registry remains the fallback rather than an error path:
- * outside Electron (gui-app-dev, mobile) there is no `appLifecycle` namespace
- * and one renderer IS the app, and an IPC that rejects must not be allowed to
- * turn "we could not check" into "nothing to lose" - falling back to this
- * window's own answer is strictly more conservative than assuming none.
+ * snapshot. Two things look like "no answer from main" and they are NOT the
+ * same:
+ *
+ *  - No `appLifecycle` namespace at all (gui-app-dev, mobile): there is no
+ *    other window - one renderer IS the app - so this window's own registry
+ *    is the whole truth and `otherWindowsUnknown` is false.
+ *  - The IPC exists and REJECTS: the other windows are unaccounted for. This
+ *    used to fall back to the local registry as if that were merely
+ *    "conservative", but a local answer of "nothing" from window A while
+ *    window B held a retained buffer read as "nothing to lose" and installed -
+ *    destroying exactly the work the check exists to protect. A failed
+ *    app-wide check therefore FAILS CLOSED: the door reports the local rows it
+ *    can see plus `otherWindowsUnknown: true`, and the caller must confirm
+ *    (the dialog says other windows could not be checked) rather than
+ *    install on an answer nobody gave.
  */
-async function unsyncableWorkAcrossWindows(): Promise<
-  ReadonlyArray<UnsyncedEditsEntry>
-> {
+async function unsyncableWorkAcrossWindows(): Promise<UpdateUnsyncedConfirmation> {
   const lifecycle = readAppLifecycle();
-  if (lifecycle === null) return unsyncableWork();
+  if (lifecycle === null) {
+    return { epics: unsyncableWork(), otherWindowsUnknown: false };
+  }
   try {
-    return await lifecycle.unsyncableWorkAcrossWindows();
+    return {
+      epics: await lifecycle.unsyncableWorkAcrossWindows(),
+      otherWindowsUnknown: false,
+    };
   } catch (error: unknown) {
     appLogger.error(
       "[app-update] cross-window unsyncable check failed",
       {},
       error,
     );
-    return unsyncableWork();
+    return { epics: unsyncableWork(), otherWindowsUnknown: true };
   }
 }
 

@@ -12,7 +12,9 @@ import {
   type SelectionIncompatibility,
 } from "../selection-authority-contract";
 import {
+  ATTACH_HANDOVER_CEILING_MS,
   CONFIRMED_DEATH_REFUSAL_STREAK,
+  EFFECTIVE_HOST_POST_SESSION_CEILING_MS,
   SESSION_ORDINAL_WINDOW,
   FAILOVER_CANDIDATE_STABILITY_MS,
   LOCAL_ENSURE_RETRY_COOLDOWN_MS,
@@ -422,6 +424,126 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
       if (lease === undefined) continue;
       expect(lease.status).toBe("ready");
     }
+
+    authority.dispose();
+  });
+
+  it("an issued generation that NEVER claims retires the held attachment at the handover ceiling - its stale inventory stops suppressing death", () => {
+    // Codex #1243 (engine): a reload's preload allocates, then the renderer's
+    // bootstrap fails while the process stays alive - no render-process-gone,
+    // no window destruction, no claim. Before this bound, window A's retired
+    // document kept H `ready` in every window for as long as the app lived.
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+
+    const seqA = engine.allocateAttachSeq("A");
+    engine.attach("A", attachRequest(seqA, [liveSession("H", "sA")]));
+    const seqB = engine.allocateAttachSeq("B");
+    const attachB = engine.attach("B", attachRequest(seqB, []));
+    if (!attachB.ok) throw new Error("expected attach B to succeed");
+
+    // A reloads: a new generation is issued, and nobody ever claims it.
+    engine.allocateAttachSeq("A");
+
+    // Inside the ceiling the handover is still open: A's held session keeps
+    // suppressing B's refusals (the no-empty-session-window guarantee).
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      engine.ingestEvidence(
+        "B",
+        attachB.incarnationId,
+        dialRefusal("H", `early-${i}`, null, i),
+      );
+    }
+    clock.advance(ATTACH_HANDOVER_CEILING_MS - 1);
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("ready");
+
+    // At the ceiling the held attachment is retired as a detach would be.
+    clock.advance(1);
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      engine.ingestEvidence(
+        "B",
+        attachB.incarnationId,
+        dialRefusal("H", `late-${i}`, null, 100 + i),
+      );
+    }
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
+
+    authority.dispose();
+  });
+
+  it("a claim landing inside the ceiling cancels it: the NEW inventory is not retired when the timer would have fired", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+
+    const seqA = engine.allocateAttachSeq("A");
+    engine.attach("A", attachRequest(seqA, [liveSession("H", "sA")]));
+    const seqB = engine.allocateAttachSeq("B");
+    const attachB = engine.attach("B", attachRequest(seqB, []));
+    if (!attachB.ok) throw new Error("expected attach B to succeed");
+
+    // The ordinary reload: issued, then claimed well inside the ceiling with
+    // the surviving session re-announced.
+    const seqA2 = engine.allocateAttachSeq("A");
+    clock.advance(1_000);
+    const attachA2 = engine.attach(
+      "A",
+      attachRequest(seqA2, [liveSession("H", "sA")]),
+    );
+    expect(attachA2.ok).toBe(true);
+    expect(clock.pendingTimerCount()).toBe(0);
+
+    // Past where the ceiling would have fired, A2's inventory still counts.
+    clock.advance(ATTACH_HANDOVER_CEILING_MS);
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      engine.ingestEvidence(
+        "B",
+        attachB.incarnationId,
+        dialRefusal("H", `refusal-${i}`, null, i),
+      );
+    }
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("ready");
+
+    authority.dispose();
+  });
+
+  it("a hard detach during the handover ends the ceiling with it (no timer left behind)", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+
+    const seqA = engine.allocateAttachSeq("A");
+    engine.attach("A", attachRequest(seqA, [liveSession("H", "sA")]));
+    engine.allocateAttachSeq("A");
+    expect(clock.pendingTimerCount()).toBe(1);
+
+    engine.reporterDetached("A");
+    expect(clock.pendingTimerCount()).toBe(0);
 
     authority.dispose();
   });
@@ -4234,6 +4356,71 @@ describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", ()
     if (after === undefined) throw new Error("expected a lease for P");
     expect(after.status).toBe("connecting");
     expect(after.dead).toBeNull();
+
+    authority.dispose();
+  });
+
+  /**
+   * The RESELECTION half (Codex #1243): the derive-time check above stops a
+   * lapsed ceiling from killing P while the app is elsewhere - but P is then
+   * carrying an already-expired deadline. Select P AGAIN and the arm reads
+   * `connecting` in the pass that selects it (effective is still L while the
+   * leases derive), `nextDeadline` never wakes the engine for an instant in
+   * the past, and no report is coming: nothing dials a host the app believes
+   * it is connected to. Without a restart the app sits on P forever - the
+   * unbounded exit the ceiling exists to close, reached one selection later.
+   */
+  it("bounds a host that is selected AGAIN after its ceiling lapsed elsewhere - a fresh window, then dead", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: readyLocalHostEnsurePort(),
+      seedPreferred: "P",
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "established", 0),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+    // Armed: pointed at P when its last session ends.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("P", "s1", "lost", 0),
+    );
+    // Moved off P before the ceiling lapses; then the ceiling lapses unseen.
+    expect(await engine.activate("A", incarnation, "L")).toEqual({ ok: true });
+    clock.advance(30 * 60_000);
+
+    // Selected AGAIN. Not dead on arrival (nothing has dialed it) - and not
+    // usable forever either.
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+    const onArrival = findLease(engine.snapshot().leases, "P");
+    if (onArrival === undefined) throw new Error("expected a lease for P");
+    expect(onArrival.status).toBe("connecting");
+
+    // Inside the fresh window: still the honest non-committal answer.
+    clock.advance(EFFECTIVE_HOST_POST_SESSION_CEILING_MS - 1);
+    expect(findLease(engine.snapshot().leases, "P")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    // The window lapses with no dial and no session: the authority's own exit.
+    clock.advance(1);
+    const after = findLease(engine.snapshot().leases, "P");
+    if (after === undefined) throw new Error("expected a lease for P");
+    expect(isUsableForSelection(after)).toBe(false);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
 
     authority.dispose();
   });

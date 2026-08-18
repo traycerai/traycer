@@ -146,6 +146,27 @@ const followingSurfaceAppWideReadExemptions = [
   "src/components/worktree/open-in-editor-button.tsx",
 ];
 
+// Hook directories whose every RPC now takes the caller's client, because
+// their surfaces are Epic-scoped (a tile's comments, a tile's snapshot
+// blobs, a session's terminals) and the app-wide read they used to launder
+// was invisible to `readPath`: the fence only sees a file's own imports, so
+// a wrapper hook resolving `useHostClient()` on behalf of an Epic surface
+// passed it. Re-impose `readPath` here so a new wrapper cannot re-open that
+// channel (PR #1243 round 6, the hook-INDIRECTION half of the class).
+const hookDirectoriesRepointedToCallerClients = [
+  "src/hooks/comments/**/*.{ts,tsx}",
+  "src/hooks/snapshots/**/*.{ts,tsx}",
+  "src/hooks/terminal/**/*.{ts,tsx}",
+  "src/hooks/editor/**/*.{ts,tsx}",
+];
+
+// `useEditorOpen`, the app-wide convenience wrapper kept for the following
+// surface above (`open-in-editor-button.tsx`); every Epic-scoped caller uses
+// `useEditorOpenForClient`.
+const hookWrapperAppWideReadExemptions = [
+  "src/hooks/editor/use-editor-open-mutation.ts",
+];
+
 const analyticsAdapterFiles = [
   "src/lib/analytics.ts",
   "src/lib/__tests__/analytics.test.ts",
@@ -497,11 +518,25 @@ export default tseslint.config(
     },
   },
   {
+    // Same re-imposition, for the wrapper-hook directories this round
+    // repointed onto caller-supplied clients.
+    files: hookDirectoriesRepointedToCallerClients,
+    ignores: [...testFileGlobs, ...hookWrapperAppWideReadExemptions],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
+        "readPath",
+        "kernel",
+      ),
+    },
+  },
+  {
     // The reasoned app-wide reads, per FILE: their partition (boundary +
     // posthog + kernel) minus `readPath`.
     files: [
       ...epicCanvasAppWideReadExemptions,
       ...followingSurfaceAppWideReadExemptions,
+      ...hookWrapperAppWideReadExemptions,
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
