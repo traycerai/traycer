@@ -1,5 +1,5 @@
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..da1122f37394a790c5feebf77bbb9fd749749576 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..0506bf22787780b57e82e72aaa6772fde6bf508f 100644
 --- a/react.js
 +++ b/react.js
 @@ -1143,6 +1143,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
@@ -55,8 +55,19 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..da1122f37394a790c5feebf77bbb9fd7
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
+@@ -7053,8 +7069,9 @@ var ScheduledWork = class {
+   cancel(key) {
+     const work = this.work.get(key);
+     if (work) {
+       this.work.delete(key);
+-      work[1](work[0]);
++      const [handle, cancel] = work;
++      cancel(handle);
+     }
+   }
+   has(key) {
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..17d1124bffa6a5d86b6e9a2695ba68204f3f1354 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..bbcb12ff5924185b1b4a8a85ab7e32fff24848bf 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -1122,6 +1122,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
@@ -112,3 +123,14 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..17d1124bffa6a5d86b6e9a2695ba6820
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
+@@ -7032,8 +7048,9 @@ var ScheduledWork = class {
+   cancel(key) {
+     const work = this.work.get(key);
+     if (work) {
+       this.work.delete(key);
+-      work[1](work[0]);
++      const [handle, cancel] = work;
++      cancel(handle);
+     }
+   }
+   has(key) {
