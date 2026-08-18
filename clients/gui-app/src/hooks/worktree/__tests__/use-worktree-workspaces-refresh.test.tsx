@@ -202,6 +202,22 @@ describe("useWorktreeWorkspacesRefresh", () => {
     });
     // Summary force lands, branch list still held: refresh must NOT report
     // done yet. The held read is the one the user is looking at.
+    //
+    // The `waitForHeldRequest` line is load-bearing and is not decoration on
+    // the `waitFor` below it. `expect(settled).toBe(false)` is a NEGATIVE
+    // assertion, so it only means anything once the thing that must block the
+    // settle is provably in flight - and `isRefreshing` does not establish
+    // that: it goes true the moment refresh starts, before the branch read is
+    // even issued. Gating on it alone left `settled` racing the very request
+    // it is about, and it failed under parallel-shard CI load while passing in
+    // isolation. Every other hold in this file already gates on
+    // `waitForHeldRequest`; this was the one that did not.
+    //
+    // Added as an EXTRA line rather than as a replacement, deliberately: the
+    // assertions after the release are themselves timing-sensitive, and
+    // reordering these two moved the failure down to line ~226 instead of
+    // removing it.
+    await fixture.waitForHeldRequest("branch", 1);
     await waitFor(() => {
       expect(rendered.result.current.refresh.isRefreshing).toBe(true);
     });
@@ -213,9 +229,18 @@ describe("useWorktreeWorkspacesRefresh", () => {
     });
 
     expect(settled).toBe(true);
-    expect(rendered.result.current.refresh.isRefreshing).toBe(false);
+    // `waitFor`, not a bare read: the promise settling and React committing
+    // the cleared flag are two different events, and asserting the flag
+    // synchronously off the promise raced them. It stayed green only because
+    // nothing awaited in between - adding the `waitForHeldRequest` gate above
+    // was enough to flip it, which is precisely how little it took.
+    await waitFor(() => {
+      expect(rendered.result.current.refresh.isRefreshing).toBe(false);
+    });
     // The spinner cleared and the deleted branch is already gone - the two
-    // facts that were allowed to disagree before.
+    // facts that were allowed to disagree before. This one stays a BARE read
+    // on purpose: it is the simultaneity claim the test exists for, so it must
+    // hold at the moment the spinner clears, not merely converge later.
     expect(rendered.result.current.branches).toEqual(["main"]);
   });
 
