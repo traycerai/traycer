@@ -1827,6 +1827,50 @@ describe("HostDirectoryService", () => {
       expect(onRegistryPollTick).toHaveBeenCalledTimes(1);
     });
 
+    it("a push arriving while the window is HIDDEN is held, and acted on once when the window becomes visible", async () => {
+      // The push path returned from `start()` before `visibilityDocument` was
+      // assigned, so `isDocumentHidden()` was permanently false on desktop and
+      // every background window refetched `GET /api/v3/hosts` on each of
+      // main's ticks - the fetch the removed per-window timer used to skip.
+      const { host, push } = makeHostWithRegistryPush(null);
+      let fetchCalls = 0;
+      const fetcher: RemoteHostFetcher = () => {
+        fetchCalls += 1;
+        return Promise.resolve({ kind: "hosts", entries: [] });
+      };
+      const onRegistryPollTick = vi.fn();
+      const directory = makeDirectory({
+        authContextId: () => "user-a",
+        credentialGeneration: null,
+        runnerHost: host,
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+        onRegistryPollTick,
+      });
+      await directory.start();
+      const fetchCallsAfterStart = fetchCalls;
+
+      setDocumentHidden(true);
+      push({ identityKey: "user-a", response: { hosts: [] } });
+      push({ identityKey: "user-a", response: { hosts: [] } });
+      await flushPromises();
+      // Nothing while hidden.
+      expect(fetchCalls).toBe(fetchCallsAfterStart);
+      expect(onRegistryPollTick).not.toHaveBeenCalled();
+
+      // Resume: ONE catch-up, not one per missed push.
+      setDocumentHidden(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await flushPromises();
+      expect(fetchCalls).toBe(fetchCallsAfterStart + 1);
+      expect(onRegistryPollTick).toHaveBeenCalledTimes(1);
+
+      // A resume with nothing missed does nothing.
+      document.dispatchEvent(new Event("visibilitychange"));
+      await flushPromises();
+      expect(fetchCalls).toBe(fetchCallsAfterStart + 1);
+    });
+
     it("a push whose identityKey does NOT match authContextId() drives NEITHER refresh() nor onRegistryPollTick() (cross-account fence)", async () => {
       const { host, push } = makeHostWithRegistryPush(null);
       let fetchCalls = 0;

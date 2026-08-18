@@ -105,27 +105,35 @@ describe("persisted account scoping keys on the canonical user id", () => {
     );
   });
 
-  it("adopts an existing email-keyed bucket once, then retires it", async () => {
-    // The upgrade path. Re-bucketing without this silently resets every
-    // existing install's pins, which is a state reset nobody asked for rather
-    // than a migration.
-    const legacyKey = surfaceHostSelectionKey(SHARED_EMAIL);
+  it("does NOT adopt an email-keyed bucket: this store never shipped keyed on the email", async () => {
+    // Unlike the composer / worktree / canvas bridges (whose suites carry the
+    // adopt-and-retire arm), surface-host-selection was ADDED in this release
+    // and has no email-keyed predecessor on any install. A blob under the
+    // email key is therefore not this account's state - it is whatever some
+    // other writer left there - and adopting it would be a mechanism with no
+    // producer that hands one account's pins to whichever account signs in
+    // next under the same address.
+    const emailKey = surfaceHostSelectionKey(SHARED_EMAIL);
     const nextKey = surfaceHostSelectionKey(ALICE_USER_ID);
-    persistPins(legacyKey, "tab-1", "host-carried");
+    persistPins(emailKey, "tab-1", "host-not-mine");
 
-    // Premise, positively: the new key does not exist yet, so the assertion
-    // below cannot pass on data that was already there.
+    // Premise, positively: the canonical key does not exist yet, so a pin
+    // that shows up under it below can only have come from adoption.
     expect(window.localStorage.getItem(nextKey)).toBeNull();
 
     signIn(ALICE_USER_ID, SHARED_EMAIL);
     renderBridge();
 
     await waitFor(() => {
-      expect(window.localStorage.getItem(nextKey)).not.toBeNull();
+      expect(useSurfaceHostSelectionStore.persist.getOptions().name).toBe(
+        nextKey,
+      );
     });
-    // Adopt-and-retire, not a standing fallback tier: a transitional bucket
-    // several accounts keep reading is the same leak in miniature.
-    expect(window.localStorage.getItem(legacyKey)).toBeNull();
+    expect(window.localStorage.getItem(nextKey) ?? "").not.toContain(
+      "host-not-mine",
+    );
+    // And the email-keyed blob is left alone: not adopted, not retired.
+    expect(window.localStorage.getItem(emailKey)).toContain("host-not-mine");
   });
 
   it("never lets the legacy bucket overwrite an account's own newer state", async () => {

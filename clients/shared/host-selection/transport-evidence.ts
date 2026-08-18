@@ -326,9 +326,39 @@ export class TransportEvidenceRelay implements TransportEvidenceReporter {
     // the strength of the older one's departure, leaving verdicts produced
     // over a live connection anchored to nothing.
     if (this.currentSessionIds.get(hostId) === sessionId) {
-      this.currentSessionIds.delete(hostId);
+      // FALL BACK TO A SURVIVING SESSION FOR THE SAME HOST before blanking the
+      // name. The unary transport announces one session per connectivity
+      // episode and retracts it when its last socket closes, and a fresh
+      // socket per RPC means non-overlapping RPCs open and close an episode
+      // EACH. So the compat probe's own `host.status` established
+      // `local-ws:s<n>` (newest wins, above), its socket closed in the
+      // caller's `finally` before the response was mapped, and this delete
+      // ran - while `/stream`'s `local-stream:s1` was live the whole time.
+      // `currentSessionIdFor(localHostId)` then read null at the one moment
+      // the probe reads it, so every local-host compat verdict was UNANCHORED
+      // and both D13 guards in `ingestCompat` were inert. A live session is a
+      // live session; the newest one leaving does not make the older one gone.
+      const survivor = this.latestLiveSessionFor(hostId);
+      if (survivor === null) {
+        this.currentSessionIds.delete(hostId);
+      } else {
+        this.currentSessionIds.set(hostId, survivor);
+      }
     }
     this.target?.sessionLost(hostId, sessionId, transportKind);
+  }
+
+  /**
+   * The most recently established session still live for `hostId`, or `null`.
+   * `liveSessions` is a `Map`, so iteration is insertion order and the last
+   * match is the newest.
+   */
+  private latestLiveSessionFor(hostId: string): string | null {
+    let latest: string | null = null;
+    for (const [sessionId, session] of this.liveSessions) {
+      if (session.hostId === hostId) latest = sessionId;
+    }
+    return latest;
   }
 
   /**

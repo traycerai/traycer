@@ -768,6 +768,51 @@ function buildSessionOptions(
 
 describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
   it(
+    "publishes the readiness DOWN edge when a READY session takes an UNAUTHORIZED fatal - the one drop that used to skip it",
+    async () => {
+      // `handleUnauthorizedSessionFatal` was the only `dropConnection` caller
+      // without a `syncReadinessLatch()`, so `subscribeReadinessLost` never
+      // fired and `hasReadyRemoteSession` held a stale `true` for the whole
+      // revalidate-and-backoff window - the class that subscription exists to
+      // close. The sync now lives in `dropConnection` itself.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const auth: StreamAuthRevalidator = {
+        revalidateForReconnect: () => {
+          lease.rotate("fresh-token");
+          return Promise.resolve("rotated");
+        },
+      };
+      const session = buildSession(relay, lease, auth);
+      let lostEvents = 0;
+      session.subscribeReadinessLost(() => {
+        lostEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(lostEvents).toBe(0);
+
+        // A session-level UNAUTHORIZED on an already-READY session (a
+        // mid-session credential rejection), not an open-frame rejection.
+        await relay.sendStreamFatal(
+          SESSION_CONTROL_STREAM_ID,
+          unauthorizedDetails(),
+        );
+        // The DOWN edge fires with the drop (the frame is delivered
+        // asynchronously through the relay); the redial that follows reaches
+        // a new ready boundary on its own and emits no second edge.
+        await vi.waitFor(() => expect(lostEvents).toBe(1), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(lostEvents).toBe(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "revalidates and redials with the fresh bearer instead of terminally closing",
     async () => {
       const relay = new FakeRelayHost();
@@ -1166,6 +1211,58 @@ describe("RemoteSession host_detached readiness evidence", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(recoveredEvents).toBe(2);
         expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "retracts the AUTHORITY session on host_detached (the socket stays), and re-announces at the re-attach's ready boundary",
+    async () => {
+      // The arm above pins the readiness LATCH (`isReady()`), which is what
+      // `hasReadyRemoteSession` reads. This one pins the other announcement
+      // this connection makes: the selection authority's session, whose
+      // presence suppresses every death verdict for the host and pins its
+      // lease `ready`. It used to survive the detach, reasoning from the
+      // latch - a different consumer - so a remote host whose box lost power
+      // read `ready` in every window, refusals against it were dropped, no
+      // corpse ceiling armed, and failover waited on the 15-minute standing
+      // bound (re-armed by every attach, so measured from the LAST attach).
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        evidence: recorder,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const established = recorder.callsNamed("sessionEstablished");
+        expect(established).toHaveLength(1);
+        const firstSessionId = established[0].sessionId;
+        // Premise: nothing retracted yet.
+        expect(recorder.callsNamed("sessionLost")).toEqual([]);
+
+        relay.sendHostAttachment("host_detached");
+        // The socket is kept (the re-attach path depends on it) ...
+        expect(session.isClosed()).toBe(false);
+        // ... and the authority session is retracted, by name, at once.
+        const lost = recorder.callsNamed("sessionLost");
+        expect(lost).toHaveLength(1);
+        expect(lost[0].sessionId).toBe(firstSessionId);
+        expect(lost[0].hostId).toBe("host-1");
+
+        // The re-attach redials and reaches a NEW ready boundary, which
+        // announces a fresh session under the next connect generation.
+        relay.sendHostAttachment("host_attached");
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const reestablished = recorder.callsNamed("sessionEstablished");
+        expect(reestablished).toHaveLength(2);
+        expect(reestablished[1].sessionId).not.toBe(firstSessionId);
+        expect(recorder.callsNamed("sessionLost")).toHaveLength(1);
       } finally {
         session.close();
       }

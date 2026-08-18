@@ -15,7 +15,10 @@ import {
   screen,
 } from "@testing-library/react";
 import * as Y from "yjs";
-import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
+import {
+  QuitInterceptBridge,
+  __parseQuitSnapshotForTests,
+} from "@/components/layout/bridges/quit-intercept-bridge";
 import {
   setActiveDesktopPerWindowProjectionBridge,
   type DesktopPerWindowProjectionBridge,
@@ -357,6 +360,27 @@ describe("QuitInterceptBridge", () => {
     const list = screen.getByTestId("quit-intercept-epic-list");
     expect(list.textContent).toContain("Alpha");
     expect(list.textContent).toContain("Beta");
+  });
+
+  // F: `unsyncable` was declared on `AppLifecycleUnsyncedEditsEntry` but the
+  // parser never read it off the wire payload, so it was permanently
+  // `undefined` regardless of what main sent. Pins both directions: an
+  // explicit `false` must round-trip as `false` (not get coerced to the
+  // absent-value default), and an explicit `true` and a genuinely absent
+  // field must both come out `true` - the safe reading when durability is
+  // unknown, since main's own parser (ipc-parsers.ts) refuses a row missing
+  // it outright rather than guessing.
+  it("round-trips unsyncable: true, false, and defaults an absent field to true", () => {
+    const parsed = __parseQuitSnapshotForTests([
+      { epicId: "eA", title: "Alpha", queueSize: 2, unsyncable: true },
+      { epicId: "eB", title: "Beta", queueSize: 1, unsyncable: false },
+      { epicId: "eC", title: "Gamma", queueSize: 3 },
+    ]);
+    expect(parsed.map((entry) => [entry.epicId, entry.unsyncable])).toEqual([
+      ["eA", true],
+      ["eB", false],
+      ["eC", true],
+    ]);
   });
 
   it("ranks the acting safe exit above the inert one: Cancel is last and carries the only primary fill", () => {

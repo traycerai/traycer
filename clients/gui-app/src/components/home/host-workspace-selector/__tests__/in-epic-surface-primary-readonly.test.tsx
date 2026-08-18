@@ -99,7 +99,6 @@ vi.mock("@/hooks/workspace/use-workspace-binding-add-folder-mutation", () => ({
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({ mutate: vi.fn(), isPending: false }),
   // Host-parametric clone create (redesign P1.2, D6): the panel now runs the
   // clone on the target host's own client via this hook, not the app-wide one.
   useEpicCreateChatForHostClient: () => ({ mutate: vi.fn(), isPending: false }),

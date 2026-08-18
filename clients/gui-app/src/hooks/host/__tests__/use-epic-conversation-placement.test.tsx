@@ -115,6 +115,17 @@ describe("useEpicConversationPlacement", () => {
     expect(result.current.submitTarget.client?.getActiveHostId()).toBe(
       "host-session",
     );
+    // The READ client too - not only the frozen submit client. The read
+    // client used to be keyed on `pin.honoredSelection`, which is null on the
+    // default tier as well as on the effective one, so every read (folder
+    // picker, harness/model catalog, workspace seed) went to the app-wide
+    // host while the chip, the staging key and the create all named the
+    // session host: a chat created on one machine carrying folders that exist
+    // only on the other. Under this file's mock the app-wide client answers
+    // "app-wide-mutable", which is what this arm rules out.
+    expect(result.current.target.client?.getActiveHostId()).toBe(
+      "host-session",
+    );
     expect(result.current.pin.isPinned).toBe(false);
     // Resting on the Epic's host: a derivation move does not re-point it.
     expect(result.current.followsEffective).toBe(false);

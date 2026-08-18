@@ -429,6 +429,14 @@ export type RunnerIpcBridgeOptions =
 interface FreshSnapshotWaiter {
   readonly windowId: string;
   readonly resolve: (snapshot: UnsyncedEditsSnapshot) => void;
+  /**
+   * Settles the same promise as "did not answer" - the shape
+   * `requestFreshUnsyncedSnapshotForWindow`'s own timeout branch produces
+   * (cached ambient snapshot, `fresh: false`). `resolve` above always means
+   * the renderer actually replied, so dispose()/`pruneClosedWindowState()`
+   * cannot reuse it without lying about freshness; they call this instead.
+   */
+  readonly resolveStale: () => void;
 }
 
 /**
@@ -736,9 +744,22 @@ export class RunnerIpcBridge {
     readonly snapshot: UnsyncedEditsSnapshot;
     readonly anyWindowStale: boolean;
   }> {
-    const requests = this.windowRegistry.records().map((record) => {
-      return this.requestFreshUnsyncedSnapshotForWindow(record, timeoutMs);
-    });
+    // Only windows that have MOUNTED the lifecycle bridge are asked - the same
+    // gate `requestQuitDecision` applies. A window that never pushed a
+    // snapshot (the readiness gate is blocking it, or it is on the sign-in
+    // route) has no `AppShell`, so no Epic canvas and no session to hold
+    // unsynced work; asking it anyway made it time out on EVERY install click
+    // for the rest of the session and report `otherWindowsUnknown` for a
+    // window that structurally could not hold anything - fail-closed in the
+    // wrong direction. Once ready, a window stays in the set until it closes,
+    // so a window that mounted and later blanks is still asked (and times
+    // out honestly).
+    const requests = this.windowRegistry
+      .records()
+      .filter((record) => this.appLifecycleReadyWindowIds.has(record.windowId))
+      .map((record) => {
+        return this.requestFreshUnsyncedSnapshotForWindow(record, timeoutMs);
+      });
     return Promise.all(requests).then((results) => ({
       snapshot: this.getUnsyncedEditsSnapshot(),
       anyWindowStale: results.some((result) => !result.fresh),
@@ -828,6 +849,11 @@ export class RunnerIpcBridge {
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
     );
+    // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
+    // armed past dispose() would either fire its setTimeout against a bridge
+    // that no longer owns any IPC handlers, or hang the awaiting caller
+    // forever if the timer is cleared without settling the promise.
+    this.settleFreshSnapshotWaitersAsStale(() => true);
   }
 
   handleInvoke(
@@ -963,6 +989,13 @@ export class RunnerIpcBridge {
           settled = true;
           clearTimeout(timer);
           resolve({ snapshot, fresh: true });
+        },
+        resolveStale: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.freshSnapshotWaiters.delete(requestId);
+          resolve(cachedFallback());
         },
       });
       if (
@@ -1150,6 +1183,13 @@ export class RunnerIpcBridge {
       (waiter) => !liveWindowIds.has(waiter.windowId),
       new Error("Quit interception window closed before resolving"),
     );
+    // A fresh-snapshot request targets one window; if that window closed
+    // before answering, no reply is ever coming and the waiter would
+    // otherwise sit armed until its own timeout - same gap the line above
+    // closes for quit-decision waiters.
+    this.settleFreshSnapshotWaitersAsStale(
+      (waiter) => !liveWindowIds.has(waiter.windowId),
+    );
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1193,6 +1233,25 @@ export class RunnerIpcBridge {
     }
     this.quitDecisionWaiters.length = 0;
     this.quitDecisionWaiters.push(...retained);
+  }
+
+  /**
+   * `rejectQuitDecisionWaiters`'s counterpart for fresh-snapshot requests.
+   * `resolveStale()` (not `reject`) because a fresh-snapshot request has a
+   * well-defined "did not answer" value - the cached ambient snapshot - so
+   * there is no error to propagate, only a freshness fact to report.
+   * Snapshotted to an array first since `resolveStale()` deletes its own
+   * entry from `freshSnapshotWaiters`, which would otherwise mutate the Map
+   * mid-iteration.
+   */
+  private settleFreshSnapshotWaitersAsStale(
+    predicate: (waiter: FreshSnapshotWaiter) => boolean,
+  ): void {
+    for (const waiter of Array.from(this.freshSnapshotWaiters.values())) {
+      if (predicate(waiter)) {
+        waiter.resolveStale();
+      }
+    }
   }
 }
 

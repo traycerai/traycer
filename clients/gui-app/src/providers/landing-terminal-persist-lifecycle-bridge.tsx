@@ -57,7 +57,9 @@ export function LandingTerminalPersistLifecycleBridge(
         retargetPersistedStore({
           store: useLandingTerminalStore,
           name: landingTerminalsKey(transition.userId),
-          legacyName: landingTerminalsKey(legacyEmail),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName:
+            legacyEmail === null ? null : landingTerminalsKey(legacyEmail),
         });
         return;
       }

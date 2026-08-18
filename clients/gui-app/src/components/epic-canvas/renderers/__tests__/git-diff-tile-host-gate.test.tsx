@@ -48,9 +48,14 @@ const state = vi.hoisted((): GateTestState => ({
 // which is what every assertion here is about. Which transport a host resolves
 // to is a different question with its own suite:
 // `use-surface-host-stream-binding.test.tsx`.
-vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
-  useSurfaceHostStreamBinding: () => null,
-}));
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => state.activeHostId,

@@ -474,9 +474,29 @@ function parseQuitSnapshot(
         title: obj.title,
         queueSize: obj.queueSize,
         isDirty: typeof obj.isDirty === "boolean" ? obj.isDirty : undefined,
+        // An absent field is an unknown durability, not a known-safe one -
+        // main (ipc-parsers.ts parseUnsyncedSnapshot) refuses to answer for
+        // it either, dropping the whole row rather than guessing. `true`
+        // ("cannot claim it is safe to destroy") is the only reading that
+        // can't be wrong in the direction that loses work.
+        unsyncable: typeof obj.unsyncable === "boolean" ? obj.unsyncable : true,
       },
     ];
   });
+}
+
+/**
+ * Test-only escape hatch onto `parseQuitSnapshot`. The dialog never renders
+ * `unsyncable` on its own - it only reaches `mergeEntries` and, from there,
+ * whatever later consumes `quitSnapshot` - so a DOM-level assertion in this
+ * component's tests cannot see the exact defect this parser fixes (the field
+ * being declared but always dropped).
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- test-only parser export; see the doc comment above for why a DOM assertion can't reach this field.
+export function __parseQuitSnapshotForTests(
+  value: unknown,
+): ReadonlyArray<AppLifecycleUnsyncedEditsEntry> {
+  return parseQuitSnapshot(value);
 }
 
 function buildQuitDecisionPayload(

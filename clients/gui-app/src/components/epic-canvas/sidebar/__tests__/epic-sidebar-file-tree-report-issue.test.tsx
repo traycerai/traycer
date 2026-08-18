@@ -23,9 +23,14 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 // to the ambient binding this suite supplies - the client every assertion here
 // is about. Which transport the pin resolves to is a different question, and
 // it has its own suite: `use-surface-host-stream-binding.test.tsx`.
-vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
-  useSurfaceHostStreamBinding: () => null,
-}));
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
 
 vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
   useEpicCanvasDnd: () => ({
@@ -159,7 +164,6 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicCreateChatForHostClient: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicDeleteChat: () => ({
     mutate: vi.fn(),

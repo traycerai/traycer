@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { use, useMemo } from "react";
 import {
   authenticatedOwnerIdentityKey,
   useHostStreamClientBindingFor,
@@ -7,7 +7,10 @@ import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClient } from "@/lib/host";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
-import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
+import {
+  StreamRuntimeContext,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
 
 /**
  * The STREAM transport for a surface PIN, to be re-provided as that surface's
@@ -30,7 +33,7 @@ import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
  * watches the wrong machine's filesystem. Nothing throws, because the param
  * is a key, not a route.
  *
- * FOLLOWING RETURNS NULL, and the caller falls back to the ambient binding.
+ * FOLLOWING RETURNS THE AMBIENT BINDING - resolved here, not by the caller.
  * This is not just the "don't open a second socket to the same machine" rule
  * `useScopedStreamBinding` states - here it also decides SHARING. The app-wide
  * `HostStreamProvider` calls `buildHostStreamClient` directly rather than
@@ -49,11 +52,26 @@ import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
  * under host C's name. Comparing the binding's own `transportKey` against the
  * identity the current target should produce makes the transport and its name
  * one value: mismatched, there is no client yet.
+ *
+ * NULL MEANS PENDING, NOT "USE THE AMBIENT ONE". The value returned is the
+ * one to PROVIDE: the ambient binding while following, the pinned host's own
+ * binding once it is built and named, and `null` in between - for the commit
+ * after a pin lands or moves, before the underlying hook's effect has built
+ * (or re-keyed) the client. Callers used to write `pinned ?? ambient`, which
+ * folded that pending commit into "following": children's subscription
+ * effects run before this ancestor's build effect, so a git-diff tile pinned
+ * to host B dispatched `git.subscribeStatus` for B's path over host A's
+ * socket for one commit on every mount, and A started a watcher on a path
+ * that commonly exists on both machines. `useWsStreamClient()` reads a null
+ * context as "no client" and its subscriptions wait, which is the honest
+ * state; the ambient socket is only the answer when the pin resolves TO the
+ * ambient host.
  */
 export function useSurfaceHostStreamBinding(
   resolvedHostId: string | null,
 ): StreamRuntimeBinding | null {
   const effectiveHostId = useEffectiveHostId();
+  const ambientStream = use(StreamRuntimeContext);
   const isFollowing =
     resolvedHostId === null || resolvedHostId === effectiveHostId;
   const entry = useHostDirectoryEntryForHostId(
@@ -69,8 +87,9 @@ export function useSurfaceHostStreamBinding(
   // Safe to read off `entry` only BECAUSE the key matched: that comparison is
   // what proves this client was built for the target we are naming it with.
   const hostId = matched === null ? null : (entry?.hostId ?? null);
-  return useMemo(
+  const pinned = useMemo(
     () => (client === null ? null : { wsStreamClient: client, hostId }),
     [client, hostId],
   );
+  return isFollowing ? ambientStream : pinned;
 }

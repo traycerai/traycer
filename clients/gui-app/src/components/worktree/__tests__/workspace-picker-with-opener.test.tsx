@@ -5,11 +5,10 @@ import { WorkspacePickerWithOpener } from "../workspace-picker-with-opener";
 const editorState = vi.hoisted(() => ({
   availability: ["vscode", "cursor", "windsurf", "zed"],
   hasLocalHost: true,
-  activeHostId: "host-1",
 }));
 
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
-  useEditorOpen: () => ({ mutate: vi.fn(), isPending: false }),
+  useEditorOpenForClient: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/hooks/editor/use-editor-availability-query", () => ({
@@ -20,16 +19,9 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ hasLocalHost: editorState.hasLocalHost }),
 }));
 
-vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => editorState.activeHostId,
-}));
-
-// `OpenInEditorButton` (rendered inside this picker) resolves against the
-// EFFECTIVE host (redesign P1.2), not the directory's active-host hook.
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => editorState.activeHostId,
-}));
-
+// `OpenInEditorButton` (rendered inside this picker) gates on the open
+// TARGET's own host directory entry now (Y6), not any app-wide "effective"
+// or "active" host - no such hook is mocked here.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string) =>
     hostId.length > 0 ? { kind: "local" } : null,
@@ -40,7 +32,6 @@ describe("<WorkspacePickerWithOpener />", () => {
     cleanup();
     editorState.availability = ["vscode", "cursor", "windsurf", "zed"];
     editorState.hasLocalHost = true;
-    editorState.activeHostId = "host-1";
   });
 
   afterEach(() => {
@@ -52,6 +43,7 @@ describe("<WorkspacePickerWithOpener />", () => {
       <WorkspacePickerWithOpener
         picker={<div data-testid="picker-slot">picker</div>}
         openTarget={null}
+        hostClient={null}
       />,
     );
 
@@ -63,6 +55,7 @@ describe("<WorkspacePickerWithOpener />", () => {
       <WorkspacePickerWithOpener
         picker={<div data-testid="picker-slot">picker</div>}
         openTarget={null}
+        hostClient={null}
       />,
     );
 
@@ -73,11 +66,12 @@ describe("<WorkspacePickerWithOpener />", () => {
     ).toBe(true);
   });
 
-  it("enables the opener when the target is on the active local host", () => {
+  it("enables the opener when the target's own host is local", () => {
     render(
       <WorkspacePickerWithOpener
         picker={<div data-testid="picker-slot">picker</div>}
         openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
       />,
     );
 

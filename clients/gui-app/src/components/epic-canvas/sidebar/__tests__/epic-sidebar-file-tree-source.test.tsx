@@ -72,18 +72,28 @@ interface RecordedReset {
 const resetPathsCalls: RecordedReset[] = [];
 const setSearchCalls: Array<string | null> = [];
 
-// The panel re-provides its own `StreamRuntimeContext` for the host its pin
-// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
-// to the ambient binding this suite supplies - the client every assertion here
-// is about. Which transport the pin resolves to is a different question, and
-// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+// The panel re-provides its own `StreamRuntimeContext` with whatever the pin
+// hook hands it: the ambient binding this suite supplies while FOLLOWING (the
+// client every assertion here is about), the pin's own binding when an arm
+// sets `pinnedStreamBindingRef`, and null only while PENDING. Which transport
+// the pin resolves to is a different question, and it has its own suite:
+// `hooks/host/__tests__/use-surface-host-stream-binding.test.tsx`.
 const pinnedStreamBindingRef = vi.hoisted(() => ({
   value: null as StreamRuntimeBinding | null,
 }));
 
-vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
-  useSurfaceHostStreamBinding: () => pinnedStreamBindingRef.value,
-}));
+// The hook returns the value to PROVIDE: the pin's own binding when this suite
+// supplies one, else the ambient binding (following). `null` would now mean
+// PENDING - no client at all - which is not what these arms drive.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return {
+    useSurfaceHostStreamBinding: () =>
+      pinnedStreamBindingRef.value ?? use(StreamRuntimeContext),
+  };
+});
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => HOST_ID,

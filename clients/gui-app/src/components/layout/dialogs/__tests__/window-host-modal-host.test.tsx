@@ -353,6 +353,52 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
   });
 
+  it("cold-start on a REMOTE target keeps the settings escape hatch: no local body to host it inline, so the action row draws it", async () => {
+    // The one arm of the family that could lose `Open settings`. Blocking cold
+    // start, target REMOTE (activated in Settings, lease still connecting),
+    // nothing failed, local host fine so the slow stage never promotes: no
+    // Retry, no Update host, and `settled.failed` false. That made
+    // `settingsOnly` true - which suppresses the action row and delegates the
+    // link to the body - while `buildLocalBootstrapBody` returns null for any
+    // non-local lifecycle. An empty card over a blocked app, with the header
+    // nav disabled: a lockout. `settingsOnly` now also asks whether the body
+    // EXISTS to host the link.
+    applySnapshot({
+      attached: true,
+      effectiveHostId: REMOTE_HOST_ID,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [
+        lease({ hostId: REMOTE_HOST_ID, status: "connecting", dead: null }),
+      ],
+    });
+
+    renderHostWithGate(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+      },
+      false,
+      undefined,
+      GATE_BLOCKING,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
+    ).toBe("cold-start");
+    // No local body on a remote target ...
+    expect(screen.queryByTestId("host-boot-open-settings")).toBeNull();
+    // ... so the action row is what carries the escape hatch.
+    const openSettings = screen.getByTestId("window-host-modal-open-settings");
+    expect(openSettings.textContent).toContain("Open settings");
+    // Still a healthy start: nothing failed, nothing to retry.
+    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+  });
+
   it("cold-start, healthy (stage: loading, no provisioningError): Retry, Report issue absent; Open settings present as a link; spinner shown; no attempt summary", async () => {
     // The markers MUST be available for this assertion to mean anything. The
     // first version of this test left the status query empty, so the summary

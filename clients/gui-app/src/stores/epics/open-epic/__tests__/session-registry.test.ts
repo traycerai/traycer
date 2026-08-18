@@ -715,3 +715,61 @@ describe("a re-point whose edits were MERGED into the replacement", () => {
     expect(registry.getUnsyncedEdits()).toHaveLength(1);
   });
 });
+
+describe("eligibility key watches the live Y.Doc title, not just metaTitle", () => {
+  it("emits when the live title changes on an already-dirty session, even though metaTitle never does", () => {
+    // The regression: `resolveUnsyncedTitle` PREFERS the live `Y.Doc` title
+    // over `metaTitle`, but the eligibility key used to watch `metaTitle`
+    // alone. A title landing in the doc on a dirty session left the key
+    // unchanged, so `handleEligibilityChange` short-circuited before
+    // `emit()` - the React-subscribed quit sheet kept the stale (bare
+    // epicId) title while an imperative `getUnsyncedEdits()` call already
+    // saw the real one.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const EPIC = "epic-live-title-emit";
+    const th = buildTestHandle(EPIC, false);
+    th.handle.store.setState({ isDirty: true, unsyncedQueueSize: 1 });
+    registry.acquireMounted(EPIC, () => h(th));
+
+    let emitCount = 0;
+    registry.subscribe(() => {
+      emitCount += 1;
+    });
+
+    // Only the live doc title moves - `isDirty`, `unsyncedQueueSize`,
+    // `isClean()` and `metaTitle` (there is no snapshot meta here at all)
+    // are all unchanged. `notify()` mirrors what a real Y-doc title write
+    // does to the store's subscription, per its own doc comment above.
+    seedEpicTitle(h(th), "Renamed while dirty");
+    th.notify();
+
+    expect(emitCount).toBeGreaterThan(0);
+    // The reader that was already correct stays correct - this proves the
+    // fix is about the emit gate firing, not about the title value itself.
+    const rows = registry.getUnsyncedEdits();
+    expect(rows.find((row) => row.epicId === EPIC)?.title).toBe(
+      "Renamed while dirty",
+    );
+  });
+
+  it("does not emit again when neither the live title nor any other key field moves", () => {
+    // The control: a `notify()` that changes nothing observable must stay
+    // silent, or the fix above would just be "always emit" wearing a title
+    // check - which defeats the whole per-keystroke gating this key exists
+    // for.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const EPIC = "epic-live-title-no-emit";
+    const th = buildTestHandle(EPIC, false);
+    th.handle.store.setState({ isDirty: true, unsyncedQueueSize: 1 });
+    registry.acquireMounted(EPIC, () => h(th));
+
+    let emitCount = 0;
+    registry.subscribe(() => {
+      emitCount += 1;
+    });
+
+    th.notify();
+
+    expect(emitCount).toBe(0);
+  });
+});

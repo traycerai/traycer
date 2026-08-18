@@ -127,6 +127,13 @@ if (runsFirstShard) {
     // check nobody enables is a coverage gap wearing a test's name.
     runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs");
     runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs");
+    // Geometry: every element of the window host modal's local-bootstrap body
+    // on ONE left edge. jsdom has no layout engine, so `self-center` there is
+    // a class-attribute substring and nothing else. Same gate as its siblings.
+    // (`scripts/toast-over-modal-hittest.mjs` is deliberately NOT here: it is
+    // a measurement that prints hit-test figures and asserts nothing, so a
+    // gate on it would be a gate on a number nobody reads - run it by hand.)
+    runBrowserRegression("scripts/window-host-modal-alignment-browser.mjs");
   }
 }
 

@@ -63,12 +63,11 @@ interface RegistryEntry {
    */
   unsubscribeActivity: (() => void) | null;
   /**
-   * Last-seen value of the only four store fields that affect prune
-   * eligibility or the unsynced-edits projection. The zustand
-   * subscription fires on every `projection.revision` bump (i.e. every
-   * keystroke); gating prune/emit on this cache key keeps Y-update bursts
-   * from re-running the MRU walk and re-emitting to every React
-   * subscriber per character.
+   * Last-seen value of the store/doc fields that affect prune eligibility or
+   * the unsynced-edits projection. The zustand subscription fires on every
+   * `projection.revision` bump (i.e. every keystroke); gating prune/emit on
+   * this cache key keeps Y-update bursts from re-running the MRU walk and
+   * re-emitting to every React subscriber per character.
    */
   lastEligibilityKey: string;
 }
@@ -79,7 +78,15 @@ function eligibilityKeyFor(
 ): string {
   const state = handle.store.getState();
   const metaTitle = state.snapshotMeta?.epicLight?.title ?? "";
-  return `${handle.isClean() ? 1 : 0}:${hasActiveAgentWork(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${metaTitle}`;
+  // `resolveUnsyncedTitle` PREFERS the live `Y.Doc` title over `metaTitle`
+  // (see below), so a key that only watched `metaTitle` could sit unchanged
+  // while the title the projection would actually show moved - a title
+  // landing in the doc on an already-dirty session bumps nothing here, no
+  // `emit()` fires, and the React-subscribed quit sheet keeps showing the
+  // bare epicId while an imperative `getUnsyncedEdits()` call already sees
+  // the real title. Reading it here too keeps the two in lockstep.
+  const liveTitle = readLiveTitle(handle, epicId);
+  return `${handle.isClean() ? 1 : 0}:${hasActiveAgentWork(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${metaTitle}:${liveTitle}`;
 }
 
 /**
@@ -722,8 +729,8 @@ export class OpenEpicSessionRegistry {
     // work without asking.
     //
     // Deliberately NOT routed through `getUnsyncedEdits()`: that memoizes on a
-    // cache key built by joining every row's `epicId:queueSize:isDirty:title`,
-    // which is a LIST identity. A per-epic boolean must not depend on a string
+    // cache key built by joining every row's wire fields, which is a LIST
+    // identity. A per-epic boolean must not depend on a string
     // that changes when an unrelated epic's title does. The walk is bounded by
     // `maxLive` (5) plus retentions and this is a gate on a user gesture, so it
     // stays unmemoized rather than borrowing an invalidation it does not fit.
@@ -736,9 +743,19 @@ export class OpenEpicSessionRegistry {
     // back would put `unsyncable` on the object at RUNTIME and send it over
     // IPC, which is the thing the split exists to prevent.
     const out = this.collectUnsyncedRows().map(toWireEntry);
-    const cacheKey = out
-      .map((e) => `${e.epicId}:${e.queueSize}:${e.isDirty}:${e.title}`)
-      .join("|");
+    // EVERY wire field is in the key. `unsyncable` was missing once: a dirty
+    // live session re-pointed into a retained buffer with a clean replacement
+    // leaves `queueSize` / `isDirty` / `title` unchanged while `unsyncable`
+    // flips to true, so the memo kept serving the row as syncable - to the
+    // lifecycle push AND to the fresh cross-window snapshot - and an app-update
+    // install could restart Desktop past the discard confirmation and destroy
+    // the retained document.
+    // JSON.stringify, not a hand-joined delimiter: `title` is user-controlled
+    // (an Epic's name), so a `:`/`|`-joined template lets a crafted title
+    // collide two distinct row lists onto the same string and serve one a
+    // stale cached array. JSON.stringify escapes every field it serializes,
+    // so two DIFFERENT row lists can never produce the same key.
+    const cacheKey = JSON.stringify(out);
     if (cacheKey === this.cachedKey) {
       return this.cachedUnsynced;
     }

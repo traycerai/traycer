@@ -44,8 +44,13 @@
  * generation, `sessionEstablished` at its ready boundary, `sessionLost` at its
  * teardown funnel), the local WS transport's refcounted per-host connectivity
  * (`host-transport/ws-rpc-client.ts`), and the compat probe
- * (`reportCompatVerdict`). `reportRestartIntent` still has no producer until
- * P1.4's liveness-plane tombstone observer.
+ * (`reportCompatVerdict`). `reportRestartIntent` has two producers, both named
+ * `reportRestartIntentIfPresent` and both reacting to a fatal-error frame's
+ * `restartIntent` tombstone: the streaming transport
+ * (`host-transport/ws-stream-client.ts`) and the remote session
+ * (`host-transport/remote/remote-session.ts`). The unary `/rpc` plane
+ * (`ws-rpc-client.ts`) deliberately has none - the host does not publish
+ * tombstones there.
  */
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
@@ -59,7 +64,10 @@ import {
   type SelectionSubscription,
   type SelectionTransportKind,
 } from "./selection-authority-contract";
-import { type AuthorityLog } from "./selection-authority-engine";
+import {
+  RESTART_INTENT_EPISODE_MS,
+  type AuthorityLog,
+} from "./selection-authority-engine";
 import { type TransportEvidenceReporter } from "./transport-evidence";
 
 /**
@@ -506,11 +514,23 @@ export class SelectionEvidenceKernel implements TransportEvidenceReporter {
    * never extend one), which is also why no third dedup mechanism is added
    * here if the relay's own retention and this one ever overlap: the engine
    * already bounds a double delivery.
+   *
+   * BOUNDED BY AGE, on this kernel's own clock. A retained value needs its own
+   * expiry: the only releases were a successful attach and a `sessionEstablished`
+   * for the host, so a refused first attach (`superseded` by a rotation) kept
+   * an intent for as long as the window stayed unattached and then delivered
+   * it at the next attach - where the engine stamps a FRESH episode from its
+   * `now`, opening a 60 s `restarting-expected` hold on a host that had been
+   * up the whole time and never re-announced a session to this kernel. An
+   * intent older than one episode length describes an outage the authority
+   * has already finished bounding; it is dropped, not delivered.
    */
   private flushRetainedRestartIntents(): void {
     const retained = Array.from(this.retainedRestartIntents);
     this.retainedRestartIntents.clear();
+    const now = this.options.now();
     for (const [hostId, intent] of retained) {
+      if (now - intent.at > RESTART_INTENT_EPISODE_MS) continue;
       void this.options.client.reportEvidence({
         kind: "restart-intent",
         hostId,

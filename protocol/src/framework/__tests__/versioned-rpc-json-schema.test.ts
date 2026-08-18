@@ -978,6 +978,359 @@ describe("response-lane value-growth strictness", () => {
     );
   });
 
+  it("accepts a projection-gated minor that REPLACES an arm sharing an incidental literal with its successor", () => {
+    // The hole this closes on the other side of `findDiscriminatedSuccessor`.
+    // An earlier version took EVERY one-value literal on the previous arm as
+    // a tag and matched a successor on ANY of them. Here `outcome:"done"` is
+    // shared incidentally between the OLD "success" arm and the NEW "failure"
+    // arm that replaces it, so that earlier matching read "failure" as
+    // "success" EDITED - its changed `kind` and dropped `value` were then
+    // reported by the recursive comparison, rejecting a replacement the
+    // `responseGrowthProjectionGated` exemption is meant to permit.
+    //
+    // The discriminator is now inferred from the WHOLE union: a field every
+    // arm pins to a single literal, with no value shared between arms. Here
+    // BOTH `kind` and `outcome` qualify, so identity is the tuple - and
+    // `("success","done")` matches neither `("failure","done")` nor
+    // `("pending","none")`. The success arm genuinely has no successor, so it
+    // is a replacement, not a reduction.
+    const replaceIncidentalV10 = defineRpcContract({
+      method: "replaceIncidental",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("success"),
+            outcome: z.literal("done"),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("pending"), outcome: z.literal("none") }),
+        ]),
+      }),
+    });
+    const replaceIncidentalV11 = defineRpcContract({
+      method: "replaceIncidental",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // REPLACES the "success" arm; shares `outcome:"done"` with it
+          // incidentally - the trap `findDiscriminatedSuccessor` used to fall
+          // into.
+          z.object({ kind: z.literal("failure"), outcome: z.literal("done") }),
+          z.object({ kind: z.literal("pending"), outcome: z.literal("none") }),
+        ]),
+      }),
+    });
+    const replaceIncidentalUpgrade = defineUpgradePath<
+      typeof replaceIncidentalV10,
+      typeof replaceIncidentalV11
+    >({
+      from: replaceIncidentalV10.schemaVersion,
+      to: replaceIncidentalV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      // v1.0 -> v1.1: the old `success` arm has no v1.1 counterpart, so it
+      // projects onto `pending`; `pending` carries over unchanged.
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "success"
+            ? { kind: "pending" as const, outcome: "none" as const }
+            : response.row,
+      }),
+    });
+    const registry = {
+      replaceIncidental: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: {
+              contract: replaceIncidentalV10,
+              upgradeFromPreviousVersion: null,
+            },
+            1: {
+              contract: replaceIncidentalV11,
+              upgradeFromPreviousVersion: replaceIncidentalUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
+  it("rejects a projection-gated minor whose reduced surviving arm comes AFTER a replaced arm", () => {
+    // Order independence on top of the "REDUCES a surviving union arm" test
+    // above: that test's reduced arm happens to come FIRST, so it would still
+    // be found even by a walk that stopped dead at the first exempt replaced
+    // arm. Here the replaced arm ("a" -> "c") comes first and the reduced arm
+    // ("b" loses its required `bv`) comes second - the shape the survival
+    // loop's own doc (see the "EXEMPT means... not stop looking" comment on
+    // the anyOf/anyOf loop) says must still be visited: `continue`, not an
+    // early `return null`, after an arm is classified as a replacement.
+    const orderV10 = defineRpcContract({
+      method: "orderIndependentReduce",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("a"), av: z.string() }),
+          z.object({ kind: z.literal("b"), bv: z.string() }),
+        ]),
+      }),
+    });
+    const orderV11 = defineRpcContract({
+      method: "orderIndependentReduce",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Arm "a" is REPLACED by "c" (exempt, no successor).
+          z.object({ kind: z.literal("c"), cv: z.string() }),
+          // Arm "b" keeps its tag and LOSES its required `bv` - a reduction,
+          // and it sits AFTER the replaced arm above.
+          z.object({ kind: z.literal("b") }),
+        ]),
+      }),
+    });
+    const orderUpgrade = defineUpgradePath<typeof orderV10, typeof orderV11>({
+      from: orderV10.schemaVersion,
+      to: orderV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "a"
+            ? { kind: "c" as const, cv: response.row.av }
+            : { kind: "b" as const },
+      }),
+    });
+    const registry = {
+      orderIndependentReduce: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: orderV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: orderV11,
+              upgradeFromPreviousVersion: orderUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'orderIndependentReduce' response drops field 'row.bv' from 1.0",
+    );
+  });
+
+  it("rejects a projection-gated minor that drops a secondary literal from every arm AND a required field from one", () => {
+    // The hole this closes: `findDiscriminatedSuccessor` used to infer the
+    // discriminator from the PREVIOUS union alone. Here `outcome` is a valid
+    // discriminator of the OLD union only (every old arm pins it to one
+    // literal, `x`/`y`); the NEW union drops it from every arm, so it is no
+    // longer a discriminator on that side. Reading identity off `outcome`
+    // (plus `kind`) would make the tuple ("a","x") match nothing in the new
+    // union - every arm unmatchable, "a" reads as a replacement with no
+    // successor, and the dropped `value` field is swallowed by the
+    // exemption.
+    //
+    // Identity is now the INTERSECTION of both sides' discriminator fields:
+    // only `kind` qualifies on the new union, so identity is just `kind`,
+    // "a" matches its "a" successor, and the successor is edited (not
+    // replaced) - so the walk reports what the edit actually dropped.
+    const bothSidesV10 = defineRpcContract({
+      method: "discriminatorBothSides",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("a"),
+            outcome: z.literal("x"),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const bothSidesV11 = defineRpcContract({
+      method: "discriminatorBothSides",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // `outcome` gone from every arm - no longer a discriminator here.
+          z.object({ kind: z.literal("a") }),
+          z.object({ kind: z.literal("b") }),
+        ]),
+      }),
+    });
+    const bothSidesUpgrade = defineUpgradePath<
+      typeof bothSidesV10,
+      typeof bothSidesV11
+    >({
+      from: bothSidesV10.schemaVersion,
+      to: bothSidesV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "a"
+            ? { kind: "a" as const }
+            : { kind: "b" as const },
+      }),
+    });
+    const registry = {
+      discriminatorBothSides: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: bothSidesV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: bothSidesV11,
+              upgradeFromPreviousVersion: bothSidesUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'discriminatorBothSides' response drops field 'row.outcome' from 1.0",
+    );
+  });
+
+  it("rejects a projection-gated union COLLAPSE whose single surviving form is a reduced arm", () => {
+    // Same edited-vs-replaced distinction as the anyOf/anyOf loop, applied to
+    // the union-COLLAPSE branch (union -> non-union). The collapse loop used
+    // to convert every arm mismatch into the exempt "replaced" verdict
+    // unconditionally; here the collapsed target IS arm "a" by discriminator
+    // (same `kind`), minus its required `value`, so the arm was edited and
+    // the reduction must be reported rather than swallowed.
+    const collapseV10 = defineRpcContract({
+      method: "unionCollapseReduced",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("a"), value: z.string() }),
+          z.object({ kind: z.literal("b") }),
+        ]),
+      }),
+    });
+    const collapseV11 = defineRpcContract({
+      method: "unionCollapseReduced",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        // No longer a union at all - collapsed to arm "a"'s tag, `value`
+        // dropped.
+        row: z.object({ kind: z.literal("a") }),
+      }),
+    });
+    const collapseUpgrade = defineUpgradePath<
+      typeof collapseV10,
+      typeof collapseV11
+    >({
+      from: collapseV10.schemaVersion,
+      to: collapseV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: () => ({ row: { kind: "a" as const } }),
+    });
+    const registry = {
+      unionCollapseReduced: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: collapseV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: collapseV11,
+              upgradeFromPreviousVersion: collapseUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    // The collapse (union -> plain object) is itself value growth under
+    // strict mode (`union-variant-added`), which keeps the annotation
+    // load-bearing without needing an unrelated sibling field - so the
+    // rejection below is the reduction itself, not a "remove the annotation"
+    // complaint.
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'unionCollapseReduced' response drops field 'row.value' from 1.0",
+    );
+  });
+
+  it("rejects a projection-gated WIDENING whose new union carries the old form edited", () => {
+    // Mirror of the collapse test above, on the WIDENING branch (non-union ->
+    // union). The widening lever used to accept whenever NO arm retained the
+    // old form additively; that is too coarse when one arm IS the old form
+    // with a field removed - it should read as the old form edited, and its
+    // reduction must be reported, not treated as if the union were an
+    // unrelated new shape.
+    const widenV10 = defineRpcContract({
+      method: "unionWideningEdited",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.object({ kind: z.literal("a"), value: z.string() }),
+      }),
+    });
+    const widenV11 = defineRpcContract({
+      method: "unionWideningEdited",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Arm "a" IS the old form (same `kind` discriminator) minus
+          // `value`.
+          z.object({ kind: z.literal("a") }),
+          z.object({ kind: z.literal("b") }),
+        ]),
+      }),
+    });
+    const widenUpgrade = defineUpgradePath<typeof widenV10, typeof widenV11>({
+      from: widenV10.schemaVersion,
+      to: widenV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: () => ({ row: { kind: "a" as const } }),
+    });
+    const registry = {
+      unionWideningEdited: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: widenV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: widenV11,
+              upgradeFromPreviousVersion: widenUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    // The widening itself is value growth under strict mode
+    // (`union-variant-added`), keeping the annotation load-bearing - the
+    // rejection below is the reduction inside arm "a", not a "remove the
+    // annotation" complaint.
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'unionWideningEdited' response drops field 'row.value' from 1.0",
+    );
+  });
+
   it("rejects a projection-gated union replacement that also drops another response field", () => {
     const replaceAndDropV10 = defineRpcContract({
       method: "replaceAndDrop",

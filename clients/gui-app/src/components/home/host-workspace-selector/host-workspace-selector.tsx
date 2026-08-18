@@ -2284,8 +2284,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       },
       // No local "in flight" state to clear here - the confirm dialog
       // already closes unconditionally below, before the async result is
-      // known. `useEpicCreateChat`'s own `onError` still toasts a terminal
-      // failure.
+      // known. `useEpicCreateChatForHostClient`'s own `onError` still toasts
+      // a terminal failure.
       onCloneFailed: () => undefined,
       navigateNestedFocus,
       createChat: (request, callbacks) => {

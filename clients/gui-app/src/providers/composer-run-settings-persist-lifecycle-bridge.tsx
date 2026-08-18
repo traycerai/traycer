@@ -32,7 +32,9 @@ export function ComposerRunSettingsPersistLifecycleBridge(
         retargetPersistedStore({
           store: useComposerRunSettingsStore,
           name: composerRunSettingsKey(transition.userId),
-          legacyName: composerRunSettingsKey(legacyEmail),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName:
+            legacyEmail === null ? null : composerRunSettingsKey(legacyEmail),
         });
         return;
       }

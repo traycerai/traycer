@@ -41,9 +41,11 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
   // awaits settings resolution before it creates, and the app-wide selection
   // can move inside that window. Reading the target here and binding the
   // mutation to THAT host up front means the clone lands where the button was
-  // pressed for, or refuses - it can never be re-pointed mid-flight. (The
-  // app-wide `useEpicCreateChat` would instead reject the whole clone on a
-  // move, which is safe but loses the user's action for no reason.)
+  // pressed for, or refuses - it can never be re-pointed mid-flight. (A
+  // mutation pinned to the app-wide active host instead would reject the
+  // whole clone on a move, which is safe but loses the user's action for no
+  // reason - `useEpicCreateChatForHostClient` is what lets the target be
+  // frozen here instead.)
   const cloneTargetHostId = useEffectiveHostId();
   const cloneTargetClient = useHostClientForHostId(cloneTargetHostId);
   const createChat = useEpicCreateChatForHostClient(cloneTargetClient);

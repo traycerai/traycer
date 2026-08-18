@@ -286,16 +286,12 @@ export function HostOverviewPanel(props: {
     readonly hostName: string;
     readonly busySessionCount: number;
   } | null>(null);
-  // Variables carry the INITIATING host's NAME (host-swap rule: capture what
-  // the settle callbacks need with the mutation, never read it back from
-  // whichever render is live when they run). The user can scope this page to
-  // another host while the bridge is still killing and relaunching, and the
-  // toast below must not go out under that other host's name.
-  const forceRestart = useMutation<
-    HostRestartRequestResult,
-    Error,
-    { readonly hostName: string }
-  >({
+  // No variables: the unified toast wording (`toastHostRestartRequested` /
+  // `toastHostRestartDeclined`, host-restart-toast.ts) dropped the host name
+  // from the message entirely - the surface the click came from already
+  // names the host being restarted - so there is nothing left for the settle
+  // callbacks to need carried past the mutation boundary.
+  const forceRestart = useMutation<HostRestartRequestResult>({
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => {
       if (management === null) {
@@ -903,7 +899,7 @@ export function HostOverviewPanel(props: {
             });
             return;
           }
-          forceRestart.mutate({ hostName: forceRestartOffer.hostName });
+          forceRestart.mutate();
         }}
         onDefer={() => setForceRestartOffer(null)}
       />

@@ -15,16 +15,36 @@ import {
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
+  // Bumped by a test to make `useHostClient()` hand back a NEW requester on
+  // the next render - what production does when the effective host moves.
+  requesterEpoch: 0,
+  requester: null as HostClient<HostRpcRegistry> | null,
+  requesterFor: -1,
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => {
+vi.mock("@/lib/host/runtime", () => {
+  const spine = () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
     }
     return globalClientRef.value;
-  },
-}));
+  };
+  return {
+    // A requester re-minted per `requesterEpoch`, which is what production
+    // `useHostClient()` hands back whenever the effective host moves. The hook
+    // under test must take its auth base from the BINDING's client (the stable
+    // spine) instead - with the requester in its build effect's deps, every
+    // Activate/failover tore down and re-dialed unrelated stream clients.
+    useHostClient: () => {
+      if (globalClientRef.requesterFor !== globalClientRef.requesterEpoch) {
+        globalClientRef.requester = spine().createRequesterForHostId(null);
+        globalClientRef.requesterFor = globalClientRef.requesterEpoch;
+      }
+      return globalClientRef.requester ?? spine();
+    },
+    useHostBinding: () => ({ hostClient: spine(), hostId: null }),
+  };
+});
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),
@@ -111,6 +131,29 @@ describe("useHostStreamClientFor", () => {
     const targetC: HostDirectoryEntry = { ...TARGET_B, hostId: "host-c" };
     rerender({ target: targetC });
     expect(result.current).not.toBe(first);
+  });
+
+  it("does not rebuild when the app-wide requester is re-minted (an effective-host move)", () => {
+    // `useHostClient()` returns a requester pinned to the effective host and
+    // re-minted when that host moves. This hook needs only the transport
+    // identity - request context, user id, bearer rotation - which every
+    // requester binds to the same underlying client, so it reads the
+    // BINDING's client. With the requester in the build effect's deps, an
+    // Activate or failover tore down and re-dialed every stream this hook
+    // owns, including ones bound to hosts the move never touched, and the
+    // notifications provider read its local stream's fresh instance as a
+    // respawn and wiped its replica.
+    globalClientRef.value = buildGlobalClient(true);
+    const { result, rerender } = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: TARGET_B } },
+    );
+    const first = result.current;
+    expect(first).not.toBeNull();
+
+    globalClientRef.requesterEpoch += 1;
+    rerender({ target: TARGET_B });
+    expect(result.current).toBe(first);
   });
 
   it("does not rebuild when a fresh entry has the same transport identity", async () => {

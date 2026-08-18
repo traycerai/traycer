@@ -39,14 +39,21 @@ const globalClientRef = vi.hoisted(() => ({
   value: null as HostClient<HostRpcRegistry> | null,
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => {
+vi.mock("@/lib/host/runtime", () => {
+  const spine = () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");
     }
     return globalClientRef.value;
-  },
-}));
+  };
+  return {
+    useHostClient: spine,
+    // The hook under test takes its auth base from the BINDING's client (the
+    // spine), not from `useHostClient()` - see its doc comment. Same object
+    // here, so every assertion about the request context still holds.
+    useHostBinding: () => ({ hostClient: spine(), hostId: null }),
+  };
+});
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),

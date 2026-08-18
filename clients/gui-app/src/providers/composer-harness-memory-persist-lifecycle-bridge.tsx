@@ -32,7 +32,9 @@ export function ComposerHarnessMemoryPersistLifecycleBridge(
         retargetPersistedStore({
           store: useComposerHarnessMemoryStore,
           name: composerHarnessMemoryKey(transition.userId),
-          legacyName: composerHarnessMemoryKey(legacyEmail),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName:
+            legacyEmail === null ? null : composerHarnessMemoryKey(legacyEmail),
         });
         return;
       }

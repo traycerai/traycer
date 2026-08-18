@@ -299,11 +299,18 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   const composerPin = useComposerSurfaceHostPin();
   const launchHostId =
     hostScope.kind === "fixed" ? hostScope.hostId : composerPin.resolvedHostId;
-  // `selection`, not the resolution: a following launcher keeps the app-wide
-  // bound client (already on the effective host); only a pin needs its own
-  // requester. Same rule as the composer.
+  // `honoredSelection`, never `selection`: a following launcher keeps the
+  // app-wide bound client (already on the effective host); only a pin that
+  // can still SERVE needs its own requester. Same rule as the composer. This
+  // read `selection` once - the raw pin - so a pin whose host had died still
+  // aimed the catalog, the profile list and the picker at the dead machine
+  // while `launchHostId` above had already re-resolved to the live one: the
+  // catalog never populated and the terminal-agent launch stayed disabled
+  // under a chip naming a host that was fine.
   const launchHostClient = useHostClientForHostId(
-    hostScope.kind === "fixed" ? hostScope.hostId : composerPin.selection,
+    hostScope.kind === "fixed"
+      ? hostScope.hostId
+      : composerPin.honoredSelection,
   );
   // Per-host memory keys on the same resolved launch host - under the
   // surface-pin model there is no separate "reactive active" to follow.

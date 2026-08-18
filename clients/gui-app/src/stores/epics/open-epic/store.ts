@@ -242,11 +242,12 @@ export interface OpenEpicStoreOptions {
   readonly epicId: string;
   readonly streamClientFactory: EpicStreamClientFactory;
   /**
-   * Identity to namespace persisted state under. When provided, the local
-   * `lastFocusedArtifactId` survives the same user signing in again but
-   * stays isolated from any other user that signs into this device - a
-   * different `userId` (or `null`) yields a disjoint persist key, so prior
-   * focus state never leaks across signed-in identities.
+   * Identity to namespace persisted state under - the CANONICAL
+   * `profile.userId`, never the email (two accounts can share an address).
+   * When provided, the local `lastFocusedArtifactId` survives the same user
+   * signing in again but stays isolated from any other user that signs into
+   * this device - a different `userId` (or `null`) yields a disjoint persist
+   * key, so prior focus state never leaks across signed-in identities.
    */
   readonly userId: string | null;
   /**
@@ -1761,10 +1762,11 @@ export function createOpenEpicStore(
   };
 
   // The projector hides chats owned by a different signed-in user. The owner
-  // id is the canonical `profile.userId` (NOT the store's `userId` option,
-  // which is the email used for persist namespacing). Read lazily so a session
-  // constructed before the auth profile hydrates picks up the id on its next
-  // projection.
+  // id is the canonical `profile.userId`, read LIVE rather than off the
+  // store's `userId` option: that option is the same canonical id today (it
+  // used to be the email), but it is fixed at construction, and a session
+  // constructed before the auth profile hydrates must pick up the id on its
+  // next projection.
   const projector: EpicProjector = createEpicProjector(
     getCurrentChatProjectionUserId,
     () => chatRecords,

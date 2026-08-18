@@ -48,8 +48,13 @@ export function retargetPersistedStore<State>(input: {
  * the first to sign in takes it while the second starts clean. That is the
  * correct outcome and is strictly better than the status quo, where both share
  * the bucket permanently.
+ *
+ * Exported for the ONE persisted store that is not a singleton behind a
+ * lifecycle bridge: the per-Epic open-epic store is created per handle with
+ * its key baked into `persist`, so its adoption has to run before creation,
+ * at the call site that knows both names.
  */
-function adoptLegacyPersistedKey(
+export function adoptLegacyPersistedKey(
   name: string,
   legacyName: string | null,
 ): void {

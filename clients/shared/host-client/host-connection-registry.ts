@@ -1,4 +1,7 @@
-import type { HostLeaseSnapshot } from "../host-selection/selection-authority-contract";
+import {
+  leaseEquals,
+  type HostLeaseSnapshot,
+} from "../host-selection/selection-authority-contract";
 import {
   createHostReconnectEngine,
   type HostReconnectEngine,
@@ -479,6 +482,11 @@ function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
  * the authority republishes a fresh array (and fresh snapshot objects) on
  * every commit, so reference equality would report a change on every publish
  * whether or not this host moved.
+ *
+ * Only the null handling lives here - the field-by-field walk is
+ * `leaseEquals` in `selection-authority-contract.ts`, whose doc comment
+ * flags "TWO READERS AND THEY MUST NOT DIVERGE"; this was a third, hand-rolled
+ * copy of that walk before it was routed through the one function.
  */
 export function hostLeaseSnapshotEquals(
   a: HostLeaseSnapshot | null,
@@ -486,19 +494,5 @@ export function hostLeaseSnapshotEquals(
 ): boolean {
   if (a === b) return true;
   if (a === null || b === null) return false;
-  if (a.hostId !== b.hostId || a.status !== b.status) return false;
-  if (a.dead === null || b.dead === null) return a.dead === b.dead;
-  if (a.dead.reason !== b.dead.reason) return false;
-  // `incompatible` is the one arm carrying structured detail, and it is the
-  // update-host modal's input - two incompatible leases naming different
-  // versions are not the same lease. Compared field-wise rather than by
-  // reference: the detail is rebuilt by the boundary parser on every publish.
-  if (a.dead.reason === "incompatible" && b.dead.reason === "incompatible") {
-    return (
-      a.dead.detail.code === b.dead.detail.code &&
-      a.dead.detail.hostVersion === b.dead.detail.hostVersion &&
-      a.dead.detail.minSupportedVersion === b.dead.detail.minSupportedVersion
-    );
-  }
-  return true;
+  return leaseEquals(a, b);
 }

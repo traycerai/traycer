@@ -2,6 +2,8 @@ import type { ComponentType } from "react";
 import { ChevronDown, Code, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { EDITORS, type EditorId } from "@traycer/protocol/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,10 +21,9 @@ import {
 } from "@/components/icons/editor-icons";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
+import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 import { useEditorAvailability } from "@/hooks/editor/use-editor-availability-query";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -70,18 +71,29 @@ export interface OpenInEditorButtonProps {
     readonly workspacePath: string;
     readonly hostId: string;
   } | null;
+  /**
+   * The panel's OWN client (its surface pin's resolved client, or the tab's),
+   * never the app-wide one: `editor.openPaths` resolves the path on the host
+   * the request is SENT to, and an Epic-scoped panel's `openTarget` names its
+   * own surface pin, not whatever the app-wide effective host happens to be.
+   * See {@link useEditorOpenForClient}.
+   */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
 }
 
 export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   const runnerHost = useRunnerHost();
-  // A FOLLOWING surface (selection model §2): it has no picker of its own, so
-  // its resolved host is the effective one. The opener itself is local-only -
-  // see the gate below - so following costs nothing here.
-  const effectiveHostId = useEffectiveHostId();
-  const effectiveHostEntry = useHostDirectoryEntry(effectiveHostId ?? "");
+  const { openTarget } = props;
+  // The opener dispatches on the PANEL'S OWN client now (`hostClient`), so the
+  // gate is no longer "does the target match the app-wide effective host" -
+  // it is local-only for a different reason: the editor URL-scheme launch
+  // itself only works on THIS machine, so the target's own host (whichever
+  // one the panel is pinned to) must be the local one, not merely dialable.
+  // Called unconditionally, before the early return below, per Rules of Hooks.
+  const openTargetHostEntry = useHostDirectoryEntry(openTarget?.hostId ?? "");
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const setDefaultEditor = useSettingsStore((s) => s.setDefaultEditor);
-  const mutation = useEditorOpen("workspace");
+  const mutation = useEditorOpenForClient(props.hostClient, "workspace");
   const { active: openFeedbackActive, trigger: triggerOpenFeedback } =
     useEditorOpenFeedback();
   const availability = useEditorAvailability();
@@ -102,20 +114,11 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
 
   if (!runnerHost.hasLocalHost) return null;
 
-  const { openTarget } = props;
-  // The opener dispatches on the effective host's client (`useEditorOpen`) and
-  // the open-in-editor surface is local-only, so it may only enable when the
-  // target lives on the effective host AND that host is local (or mock, in
-  // tests). Matching the id alone is not enough: with a remote host effective,
-  // both ids are the remote one, so an id-only check would route
-  // `editor.openPaths` through the remote machine.
-  const effectiveHostIsLocal =
-    effectiveHostEntry !== null &&
-    (effectiveHostEntry.kind === "local" || effectiveHostEntry.kind === "mock");
-  const hostMatches =
-    openTarget !== null &&
-    openTarget.hostId === effectiveHostId &&
-    effectiveHostIsLocal;
+  const openTargetHostIsLocal =
+    openTargetHostEntry !== null &&
+    (openTargetHostEntry.kind === "local" ||
+      openTargetHostEntry.kind === "mock");
+  const hostMatches = openTarget !== null && openTargetHostIsLocal;
 
   // Hide editors whose URL-scheme handler is not registered on the host's
   // machine (i.e. not installed) so a user is never offered one that fails to

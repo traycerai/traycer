@@ -40,7 +40,9 @@ export function GithubMentionFiltersPersistLifecycleBridge(
         retargetPersistedStore({
           store: useGithubMentionFilterStore,
           name: githubMentionFiltersKey(transition.userId),
-          legacyName: githubMentionFiltersKey(legacyEmail),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName:
+            legacyEmail === null ? null : githubMentionFiltersKey(legacyEmail),
         });
         return;
       }

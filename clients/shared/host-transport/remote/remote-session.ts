@@ -1841,23 +1841,28 @@ export class RemoteSession<
   /**
    * A relay `host_detached`: the host leg went away, the client leg did not.
    *
-   * THIS DELIBERATELY DOES NOT TEAR DOWN, and that is not an oversight - it
-   * has been filed as a bug (Codex P1, "Retract remote sessions when the host
-   * leg detaches") on the premise that a still-live session keeps suppressing
-   * refusal accumulation until the 15-minute standing timer. That premise is
-   * false in this code:
+   * Two different things are announced from this connection, and they part
+   * ways here:
    *
-   *  - `isReady()` includes `connection.hostAttached` (see its definition), and
-   *    the line below clears it. `hasReadyRemoteSession` reads `isReady()`, so
-   *    a detached host STOPS COUNTING IMMEDIATELY. The value was never wrong;
-   *    what was missing was anyone being told, which is why
-   *    `syncReadinessLatch()` is called at the end of this method.
-   *  - `host_detached` is TRANSIENT. `onHostAttached` gates on
-   *    `!connection.hostAttached` precisely to restore through it. Tearing the
-   *    connection down here would destroy the reattach path this design is
-   *    built around, and turn a recoverable blip into a full redial.
-   *
-   * So: clear the flag, pause, tell the subscribers. Do not close the socket.
+   *  - The SOCKET stays. `host_detached` is transient; `onHostAttached` gates
+   *    on `!connection.hostAttached` precisely to restore through it, and
+   *    tearing the connection down would turn a recoverable blip into a full
+   *    redial. `isReady()` includes `hostAttached`, so `hasReadyRemoteSession`
+   *    stops counting this host the moment the flag clears; the
+   *    `syncReadinessLatch()` at the end is what tells its subscribers.
+   *  - The AUTHORITY SESSION goes. `announceSession` at the ready boundary told
+   *    the selection authority this host has a live session, and an announced
+   *    session suppresses ALL death evidence for its host and pins its lease
+   *    `ready` (see `teardownConnection`). A previous version of this method
+   *    kept it announced through the detach, reasoning from `isReady()` - a
+   *    different consumer. The result was the silent outage: a remote host
+   *    whose box lost power read `ready` in every window, refusals against it
+   *    were dropped, no corpse ceiling was armed (that arms on `sessionLost`),
+   *    and failover was impossible until the 15-minute standing bound - which
+   *    is re-armed on every attach, so it measured from the LAST attach, not
+   *    from the detach. Retracting here is what lets the authority see the
+   *    host as it is; the next ready boundary re-announces under the new
+   *    connect generation, exactly as it does after any redial.
    */
   private onHostDetached(generation: number): void {
     if (!this.isCurrent(generation)) {
@@ -1870,6 +1875,7 @@ export class RemoteSession<
     connection.hostAttached = false;
     connection.scheduler.pause();
     this.markStreamsReconnecting();
+    this.retractSession();
     // `isReady()` includes `hostAttached`, so it is already false here - this
     // is what tells anyone.
     this.syncReadinessLatch();
@@ -2008,6 +2014,14 @@ export class RemoteSession<
     // ride an unbounded number of further attempts inside one call.
     this.settleReadyWaiters(false);
     this.markStreamsReconnecting();
+    // The DOWN edge, from the funnel every drop passes through. `isReady()`
+    // is false the moment `connection` is nulled above; publishing that here
+    // means no caller can forget. `handleUnauthorizedSessionFatal` had - the
+    // one drop from a READY session that ran without this - so
+    // `subscribeReadinessLost` never fired and `hasReadyRemoteSession` held a
+    // stale `true` for the whole revalidate-and-backoff window: exactly the
+    // stale-true class that subscription was added to close.
+    this.syncReadinessLatch();
   }
 
   /**

@@ -114,9 +114,27 @@ const selectionAuthorityComputedLiteral = {
   message: SELECTION_AUTHORITY_MESSAGE,
 };
 
+const selectionAuthorityComputedTemplate = {
+  selector:
+    "MemberExpression[computed=true][property.type='TemplateLiteral'][property.quasis.0.value.cooked='selectionAuthority']",
+  message: SELECTION_AUTHORITY_MESSAGE,
+};
+
 const selectionAuthorityDestructure = {
   selector:
     "ObjectPattern > Property[key.type='Identifier'][key.name='selectionAuthority']",
+  message: SELECTION_AUTHORITY_MESSAGE,
+};
+
+const selectionAuthorityDestructureLiteral = {
+  selector:
+    "ObjectPattern > Property[key.type='Literal'][key.value='selectionAuthority']",
+  message: SELECTION_AUTHORITY_MESSAGE,
+};
+
+const selectionAuthorityDestructureTemplate = {
+  selector:
+    "ObjectPattern > Property[key.type='TemplateLiteral'][key.quasis.0.value.cooked='selectionAuthority']",
   message: SELECTION_AUTHORITY_MESSAGE,
 };
 
@@ -124,7 +142,10 @@ const selectionAuthorityDestructure = {
 export const selectionAuthorityRestrictions = [
   selectionAuthorityMember,
   selectionAuthorityComputedLiteral,
+  selectionAuthorityComputedTemplate,
   selectionAuthorityDestructure,
+  selectionAuthorityDestructureLiteral,
+  selectionAuthorityDestructureTemplate,
 ];
 
 /**

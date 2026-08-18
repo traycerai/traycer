@@ -18,7 +18,6 @@ import {
 
 const spies = vi.hoisted(() => ({
   openTileIntoTargetGroup: vi.fn<(args: OpenTileIntoTargetGroupArgs) => void>(),
-  createChatMutate: vi.fn(),
   createTuiAgent: vi.fn(),
   refreshHostDirectory: vi.fn(() => Promise.resolve([])),
   toast: vi.fn(),
@@ -262,9 +261,6 @@ vi.mock("@/lib/host", () => ({
     getRequestContextUserId: () => "user-test",
     onChange: () => () => undefined,
   }),
-}));
-vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({ mutate: spies.createChatMutate }),
 }));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>

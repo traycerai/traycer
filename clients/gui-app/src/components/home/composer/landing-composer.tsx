@@ -151,7 +151,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // for anything that creates - see `useComposerPlacement`.
   const placementTarget = placement.target;
   const submitTarget = placement.submitTarget;
-  const composerIsPinned = placement.pin.isPinned;
+  const composerFollowsEffective = placement.followsEffective;
   const hostLabelFromDirectory = placement.hostLabelFor;
   const resolvedHostId = placementTarget.resolvedHostId;
   const hostClient = placementTarget.client;
@@ -598,11 +598,17 @@ export function LandingComposer(props: LandingComposerProps) {
   const dismissHostNotice = useCallback(() => {
     setHostNotice(null);
   }, []);
-  // G4: a FOLLOWING composer re-points when derivation moves the effective
-  // host, and its host-dependent state must not silently travel with it - the
-  // staged worktree/branch choices name paths and refs on the machine the user
-  // picked them on. Pinned composers ignore this by construction (D6): the pin
-  // is retained and the surface keeps addressing its own host.
+  // G4: this composer FOLLOWS the effective host only when nothing else
+  // answered its placement - no override, no pin IN FORCE - and only then
+  // does a derivation move re-point it and its host-dependent state must not
+  // silently travel with it: the staged worktree/branch choices name paths
+  // and refs on the machine the user picked them on. `placement.pin.isPinned`
+  // alone is NOT the right gate here: a DEPOSED pin (its host died, so the
+  // composer auto-followed) still reads `isPinned: true` while
+  // `honoredSelection` is null, and that composer genuinely re-pointed - the
+  // stale `isPinned` gate would suppress both the notice and the staged-intent
+  // reset for a move that just happened. A composer resting on its pin is not
+  // moved by the derivation and must not narrate one (D6).
   //
   // Deliberately scoped to the staged INTENT, not to the draft's chosen
   // folders: an automatic failover is not a user gesture, and discarding a
@@ -612,13 +618,13 @@ export function LandingComposer(props: LandingComposerProps) {
   // hiding it - and submit re-validation stands behind both.
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
-      if (composerIsPinned) return;
+      if (!composerFollowsEffective) return;
       useWorktreeIntentStagingStore
         .getState()
         .clear({ surface: "landing", hostId: activeHostId, draftId });
       setHostNotice({ kind: "repointed", hostId: nextEffectiveHostId });
     });
-  }, [activeHostId, composerIsPinned, draftId]);
+  }, [activeHostId, composerFollowsEffective, draftId]);
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,

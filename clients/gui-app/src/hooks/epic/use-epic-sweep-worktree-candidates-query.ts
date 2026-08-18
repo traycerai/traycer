@@ -8,7 +8,7 @@ import {
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -96,18 +96,12 @@ const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
  * busy-check on `worktree.deleteByPath` remains the authoritative backstop
  * either way.
  */
-export function useEpicSweepWorktreeCandidates(
-  epicIds: ReadonlyArray<string> | null,
-): EpicSweepWorktreeCandidatesResult {
-  return useEpicSweepWorktreeCandidatesForClient(useHostClient(), epicIds);
-}
-
 /**
- * {@link useEpicSweepWorktreeCandidates} against a caller-resolved client.
- * The proof (and the sweep it authorises, whose host id is frozen from it) is
- * per HOST: the Epics list passes the app-wide client through the wrapper
- * above; the Epic panel's sweep action passes the Epic session's, so an Epic
- * projected from host A is never offered - or swept of - host B's worktrees.
+ * Sweep-candidate rows against a caller-resolved client. The proof (and the
+ * sweep it authorises, whose host id is frozen from it) is per HOST: the
+ * Epics list passes the app-wide client; the Epic panel's sweep action
+ * passes the Epic session's, so an Epic projected from host A is never
+ * offered - or swept of - host B's worktrees.
  */
 export function useEpicSweepWorktreeCandidatesForClient(
   client: HostClient<HostRpcRegistry> | null,

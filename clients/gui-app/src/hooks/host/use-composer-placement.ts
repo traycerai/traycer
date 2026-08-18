@@ -58,9 +58,10 @@ export interface ComposerPlacement {
  *
  * **Two clients, deliberately.**
  *
- * `target.client` follows `pin.honoredSelection`, so a composer that is
+ * `target.client` addresses the tier that answered: a composer that is
  * unpinned - or pinned to a host that has died, which resolves the same way -
- * reads through the app-wide bound client and re-points when derivation moves.
+ * reads through the app-wide bound client and re-points when derivation moves;
+ * one whose pin or default tier answered reads that host.
  * That is right for queries and wrong for creates: the app-wide client rebinds IN
  * PLACE, so a multi-RPC submit chain (`epic.create` → `agent.tui.prepareLaunch`
  * → `epic.createTuiAgent`) that awaits between steps can have later steps land
@@ -145,12 +146,23 @@ function useComposerPlacementForPin(
   pinFollowsEffective: boolean,
 ): ComposerPlacement {
   const resolvedHostId = overrideHostId ?? pin.resolvedHostId;
-  // `honoredSelection`, not `selection`: a deposed pin reads through the
-  // ambient client (which is the effective host) exactly as a following
-  // composer does, so the reads land where the chip says. Reading `selection`
-  // here would point every composer query at the dead machine.
+  // The read client addresses the host the chip is SHOWING: the resolved host
+  // when a pin or the caller's default answered, and the following (ambient)
+  // client - which IS the effective host - only when `effective` answered, so
+  // that reads keep following a derivation move exactly as the chip does. A
+  // deposed pin has already re-resolved to `effective`, so it lands here too;
+  // reading `selection` would point every composer query at the dead machine.
+  //
+  // This used to be keyed on `pin.honoredSelection`, which is null on the
+  // DEFAULT tier as well as on the effective one. That is invisible for the
+  // landing composer (two tiers - no pin means effective) and wrong for the
+  // in-Epic modal (three tiers): with the Epic served from A and the app-wide
+  // host on B, the chip, the staging key and the create all named A while
+  // every read - the folder picker, the harness/model catalog, the workspace
+  // seed - went to B, and a chat landed on A carrying folders that exist only
+  // on B.
   const readClient = useHostClientForHostId(
-    overrideHostId ?? pin.honoredSelection,
+    overrideHostId ?? (pinFollowsEffective ? null : pin.resolvedHostId),
   );
   const submitClient = useHostClientForHostId(resolvedHostId);
   // OVERRIDE ONLY. A pin that dies has already re-resolved to `effective` by

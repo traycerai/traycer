@@ -10,8 +10,27 @@ import { environmentSubdir } from "../host/host-paths";
 
 const PREFERRED_HOST_STATE_VERSION = 1;
 
+/**
+ * Names the file in the refusal, not just the fact that one exists: the
+ * reason surfaces all the way up to a user deciding whether to fix
+ * permissions on it, and a fixed string with no path told them a file
+ * existed somewhere without saying where to look.
+ */
+function unreadableStateReason(filePath: string): string {
+  return `preferred-host state file exists but could not be read: ${filePath}`;
+}
+
 interface PreferredHostStoreLogger {
   warn(message: string, meta: unknown): void;
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 /**
@@ -71,7 +90,10 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
       // write; this answer holds whether or not it succeeded.
       return null;
     }
-    return this.read().get(identityKey) ?? null;
+    // Unreadable reads as "no preference" here - the contract says a failed
+    // READ is genuinely that, and derivation's local default is safe. It is
+    // the WRITE paths that must not build on it.
+    return this.read()?.get(identityKey) ?? null;
   }
 
   /**
@@ -97,6 +119,15 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
     }
     this.drainPendingWipes();
     const current = this.read();
+    if (current === null) {
+      // The file exists and could not be read, so the durable set is UNKNOWN.
+      // A wipe cannot be confirmed absent - hold it pending so `load` refuses
+      // the bucket and the next call re-attempts against a real read. An
+      // Activate cannot merge into a set it cannot see: writing would replace
+      // every other identity's preference with this one entry.
+      if (hostId === null) this.pendingWipes.add(identityKey);
+      return { ok: false, reason: unreadableStateReason(this.filePath) };
+    }
     const next = new Map(current);
     if (hostId === null) {
       if (!next.delete(identityKey)) return { ok: true };
@@ -127,6 +158,10 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
   private drainPendingWipes(): void {
     if (this.pendingWipes.size === 0) return;
     const current = this.read();
+    // Still unreadable: "absent from the durable set" cannot be claimed off a
+    // set we did not read, so the wipes stay pending rather than being cleared
+    // as honoured.
+    if (current === null) return;
     const next = new Map(current);
     let changed = false;
     for (const key of this.pendingWipes) {
@@ -142,19 +177,40 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
     this.pendingWipes.clear();
   }
 
-  private read(): Map<string, string> {
+  /**
+   * The durable set, or `null` when the file EXISTS but could not be read.
+   *
+   * Absent and unreadable are different answers and used to be one. An absent
+   * file is a legitimate state (first run; derivation defaults to local) and
+   * is cached as the empty set. An unreadable one is NOT cached: caching it as
+   * empty made a transient `EACCES` authoritative for the rest of the process,
+   * so a later sign-out found the identity "already absent", reported the wipe
+   * done without writing, and the preference came back at the next launch -
+   * and a later Activate would have written that false-empty set over every
+   * other identity's preference. Callers treat `null` as "do not trust, do not
+   * write"; the next call re-reads. Unreadable is refused, not repaired - a
+   * repair would be exactly the clobber this prevents, so the reason names
+   * the file (`unreadableStateReason`) instead, letting a user fix permissions
+   * on the one path that actually needs it.
+   */
+  private read(): Map<string, string> | null {
     const cached = this.byIdentity;
     if (cached !== null) return cached;
     const entries = new Map<string, string>();
-    this.byIdentity = entries;
     let raw: string;
     try {
       raw = readFileSync(this.filePath, "utf8");
-    } catch {
-      // No file yet (the common first-run case) or unreadable: an absent
-      // preference is a legitimate state - derivation defaults to local.
-      return entries;
+    } catch (error: unknown) {
+      if (isMissingFile(error)) {
+        this.byIdentity = entries;
+        return entries;
+      }
+      this.logger.warn("[selection-preferred] state file unreadable", {
+        error: String(error),
+      });
+      return null;
     }
+    this.byIdentity = entries;
     try {
       const parsed: unknown = JSON.parse(raw);
       if (parsed === null || typeof parsed !== "object") return entries;
@@ -169,8 +225,10 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
       }
     } catch (error: unknown) {
       // A corrupt file degrades to "no preference", never to a crash: the
-      // whole point of this value is that losing it is survivable.
-      this.logger.warn("[selection-preferred] unreadable state file", {
+      // whole point of this value is that losing it is survivable. Unlike an
+      // UNREADABLE file this IS cached and IS overwritten by the next save -
+      // there is nothing left in it to protect.
+      this.logger.warn("[selection-preferred] corrupt state file", {
         error: String(error),
       });
     }

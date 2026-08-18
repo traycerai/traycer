@@ -126,7 +126,14 @@ export function useNotificationActivationWithNavigate(
       // `null` there while the pointer names a host) - a routing failure
       // reported for a window that never moved. `null` when there is no host
       // runtime at all, which keeps the no-runtime case reporting success.
-      const beforeRouteHostId = client === null ? null : effectiveHostId;
+      //
+      // READ LIVE, same as the "after" read below: `effectiveHostId` is the
+      // render-scoped value, and a host move that lands between the render
+      // that produced this callback and the click that invokes it would
+      // otherwise be attributed to the activation itself (the "before" snapshot
+      // would already be stale before routing even starts).
+      const beforeRouteHostId =
+        client === null ? null : readEffectiveHostIdSnapshot();
       // ORIGIN-REQUIRED routes may not fall back to the hostless intent.
       //
       // `ensureOriginHostSelected` used to carry two rules at once: it SELECTED
@@ -193,6 +200,11 @@ export function useNotificationActivationWithNavigate(
           // real pointer move. Seeding the store keeps this read REAL in
           // every test: the fixture seeds what the guard asks about instead
           // of stubbing what reads it.
+          //
+          // The same argument applies to `beforeRouteHostId` above: it also
+          // reads the store live rather than the render-scoped
+          // `effectiveHostId`, or a move landing between render and click
+          // would be invisible to this guard entirely.
           afterRouteHostId:
             client === null ? null : readEffectiveHostIdSnapshot(),
         })

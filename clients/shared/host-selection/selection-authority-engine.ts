@@ -852,7 +852,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // The claim is consumed; the previous attachment is retired inside the
     // same synchronous call, and (on success) replaced before anything is
     // emitted - so no observer ever sees the reporter session-less.
-    record.attachment = null;
+    this.retireAttachment(record);
     if (
       request.callerContractVersion !== SELECTION_AUTHORITY_CONTRACT_VERSION
     ) {
@@ -909,7 +909,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // for the ceiling to retire.
     this.clearHandoverTimer(record);
     if (record.attachment === null) return;
-    record.attachment = null;
+    this.retireAttachment(record);
     this.commit("failover");
   }
 
@@ -1115,7 +1115,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
           "[selection-authority] attach handover expired; retiring the held attachment",
           { reporterId, attachSeq: record.latestIssuedSeq },
         );
-        record.attachment = null;
+        this.retireAttachment(record);
         this.commit("failover");
       },
     );
@@ -1270,6 +1270,38 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     const evidence = this.hostEvidence(hostId);
     if (evidence.effectiveSessionLostAt !== null) return;
     evidence.effectiveSessionLostAt = this.options.clock.now();
+  }
+
+  /**
+   * Retires a reporter's attachment and arms the corpse ceiling for every host
+   * whose sessions it was holding - the same arming `ingestSession`'s `lost`
+   * transition performs, for the paths that drop sessions WITHOUT one.
+   *
+   * There are four: a hard detach (`render-process-gone`, no `sessionLost`
+   * ever sent), an attach rotation, the handover ceiling, and the identity
+   * transition. Before this, only the `lost` transition armed the ceiling, so
+   * two windows both holding sessions to the effective remote H, one
+   * reporting `lost` (suppressed - the other still had one) and the other
+   * hard-destroyed, left `hasLiveSession(H)` false, `effectiveSessionLostAt`
+   * null, and the lease at `connecting` - usable - with no authority-owned
+   * exit until the redial lane happened to accumulate refusals.
+   *
+   * Arming after the attachment is nulled, so `hasLiveSession` reflects the
+   * loss. Safe for the rotation path too: the re-attach re-announces the
+   * inventory and a session appearing is proof of life, which clears the
+   * ceiling at once (see `onHostProvedAlive`); only a genuine loss lets it run.
+   */
+  private retireAttachment(record: ReporterRecord): void {
+    const attachment = record.attachment;
+    if (attachment === null) return;
+    const hostIds = new Set<string>();
+    for (const session of attachment.sessions.values()) {
+      hostIds.add(session.hostId);
+    }
+    record.attachment = null;
+    for (const hostId of hostIds) {
+      this.armPostSessionCeilingIfPointedAt(hostId);
+    }
   }
 
   /**
@@ -1653,7 +1685,10 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     this.mruEffectiveHostIds.length = 0;
     for (const record of this.reporters.values()) {
       // Generation high-waters survive (rule 4); only the attachment dies -
-      // and with it any handover ceiling that was waiting to retire it.
+      // and with it any handover ceiling that was waiting to retire it. Plain
+      // null here, not `retireAttachment`: the evidence map is cleared two
+      // lines below, so a ceiling armed now would be wiped anyway, and the
+      // outgoing identity's hosts are not this identity's to judge.
       record.attachment = null;
       this.clearHandoverTimer(record);
     }
@@ -1841,6 +1876,14 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    *    honest answer when nothing is usable.
    *  - FailedOver -> the target: the full return window.
    *  - FailedOver -> another fallback: the minimal window.
+   *  - Any phase whose INCUMBENT can no longer serve: NO window. The window
+   *    exists to keep serving what the engine has until the candidate proves
+   *    itself; an incumbent the fleet has published as dead is nothing to
+   *    keep serving. Without this arm the local host dying three seconds into
+   *    a return-to-target hold left every window pinned to a host the
+   *    authority itself called dead for the remaining seventeen - the
+   *    enumeration above asks only about the destination, and this is the one
+   *    question about the origin.
    *
    * Explicit writes bypass all of it. Activate is valid from any state (M5)
    * and must land immediately - a user who picks a host in Settings and waits
@@ -1865,7 +1908,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       cause === "deregister-clear" ||
       effectiveHostId === null ||
       effectiveHostId === targetHostId ||
-      desired === null
+      desired === null ||
+      !this.isUsable(effectiveHostId, leases)
     ) {
       this.pendingDampingDeadline = null;
       return desired;
@@ -1887,7 +1931,6 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // further evidence - without it a target that came back and then went
     // quiet would never be returned to.
     this.pendingDampingDeadline = admissibleAt;
-    void leases;
     return effectiveHostId;
   }
 

@@ -23,7 +23,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { appHostCredentialMintFlow } from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
-import { useHostClient } from "@/lib/host/runtime";
+import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appLogger } from "@/lib/logger";
@@ -296,8 +296,17 @@ export function buildHostStreamClient(params: {
  * auth rejection is the desired outcome. Callers must pass a referentially
  * stable `auth` (the hook returns one) so it does not churn the client memo.
  *
- * The bearer reads live from the global client's `RequestContext` (auth is
+ * The bearer reads live from the binding's client's `RequestContext` (auth is
  * per-user, valid across hosts) so a credential-lease rotation is reflected.
+ * The BINDING's client, not `useHostClient()`, deliberately: everything this
+ * hook needs is the transport identity (request context, user id, bearer
+ * rotation), which every requester binds to the same underlying client - and
+ * `useHostClient()` returns a requester re-minted whenever the effective host
+ * moves. With that object in the build effect's dependencies, each Activate or
+ * failover tore down and re-dialed every stream client this hook owns,
+ * including ones bound to hosts the move never touched; the notifications
+ * provider read the local host's fresh instance as a respawn and wiped its
+ * replica. Same source the app-wide `HostStreamProvider` uses for its bearer.
  * Returns `null` when there is no target, no authenticated request context, or
  * no bound user - including transiently on first mount and right after a
  * dependency change, until the acquire effect below commits (see that
@@ -311,7 +320,13 @@ export function useHostStreamClientBindingFor(
   target: HostDirectoryEntry | null,
   auth: StreamAuthRevalidator | null,
 ): HostStreamClientBinding | null {
-  const globalClient = useHostClient();
+  const runtimeBinding = useHostBinding();
+  if (runtimeBinding === null) {
+    throw new Error(
+      "useHostStreamClientBindingFor requires a HostRuntimeProvider",
+    );
+  }
+  const globalClient = runtimeBinding.hostClient;
   const authnBaseUrl = useRunnerHost().authnBaseUrl;
   // `null` when signed out or the credential lease was released - the
   // "no bound user" / "no auth" gate.

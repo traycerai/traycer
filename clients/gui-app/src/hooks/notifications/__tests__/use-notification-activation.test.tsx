@@ -883,6 +883,34 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     ).toBe(false);
   });
 
+  it("reports success when the pointer moved between render and the click, with no further move during routing", () => {
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    // Move the pointer AFTER render but BEFORE the click, with no
+    // intervening re-render - `hook.result.current.activate` still closes
+    // over the render-time host. The "before" read must go to the live
+    // store rather than that stale closure, or this reports "failure" for a
+    // move that happened before routing ever started (no move occurs during
+    // routing itself, so a correct guard sees no move at all).
+    setEffectiveHost(hostB.hostId);
+
+    act(() => {
+      hook.result.current.activate({
+        payload: { kind: "epic", epicId: "epic-shared" },
+        receivedAt: 100,
+        feedId: "host:n-1",
+        onResult,
+      });
+    });
+
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
+  });
+
   // "selects an approval's origin host before routing to its exact tile" is
   // deleted: its subject, `ensureOriginHostSelected`, no longer exists.
   // Activation does not move the app-wide selection at all now (redesign

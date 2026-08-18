@@ -801,35 +801,85 @@ function discriminantValue(
  * still reports every other reduction; the gate was quietly accepting breaking
  * changes as long as they were made INSIDE a union.
  *
- * Arm identity is the discriminant, because that is what identity means for
+ * Arm identity is the discriminator, because that is what identity means for
  * the unions the protocol actually registers: matching on shape cannot
  * distinguish "this arm was edited" from "this arm was swapped for a similar
  * one", while a shared tag says the newer schema still calls it the same
- * thing. An arm with no discriminant - a bare `z.string() | z.number()` - has
+ * thing. An arm with no discriminator - a bare `z.string() | z.number()` - has
  * no identity to match on, so it keeps the old blanket treatment rather than
  * being force-matched by position, which would report edits to unrelated arms
  * as if they were the same one.
+ *
+ * The discriminator is INFERRED FROM THE WHOLE UNION, not read off the one
+ * arm. An earlier version took every one-value literal on the previous arm as
+ * a tag and matched a successor on ANY of them, which let an incidental
+ * literal impersonate identity: with `{kind:"success", outcome:"done", value}`
+ * replaced by `{kind:"failure", outcome:"done"}`, the shared `outcome` made
+ * the new arm read as the old one EDITED, so its changed `kind` and dropped
+ * `value` were reported and a replacement the exemption permits was rejected.
+ * A property is a discriminator only if EVERY object arm pins it to a single
+ * literal and no two arms pin the same value - what `z.discriminatedUnion`
+ * guarantees of the field it names - and it must be one ON BOTH SIDES: a
+ * property inferred from the previous union alone would let a minor that
+ * drops a secondary literal from every arm make every arm unmatchable, and
+ * the arm's other reductions would then pass as permitted replacements. Where
+ * more than one property qualifies, identity is the whole tuple: an arm whose
+ * tuple changed is not the same arm.
  */
 function findDiscriminatedSuccessor(
   previousVariant: unknown,
+  previousVariants: readonly unknown[],
   nextVariants: readonly unknown[],
 ): number {
   const previous = classifySchemaNode(previousVariant);
   if (previous.kind !== "object") return -1;
-  const tags = new Map<string, string | number | boolean>();
-  for (const [field, property] of Object.entries(previous.properties)) {
-    const value = discriminantValue(property);
-    if (value !== null) tags.set(field, value);
-  }
-  if (tags.size === 0) return -1;
+  const nextFields = new Set(discriminatorFields(nextVariants));
+  const fields = discriminatorFields(previousVariants).filter((field) =>
+    nextFields.has(field),
+  );
+  if (fields.length === 0) return -1;
+  const identity = fields.map(
+    (field) => [field, discriminantValue(previous.properties[field])] as const,
+  );
   return nextVariants.findIndex((nextVariant) => {
     const next = classifySchemaNode(nextVariant);
     if (next.kind !== "object") return false;
-    for (const [field, value] of tags) {
-      if (discriminantValue(next.properties[field]) === value) return true;
-    }
-    return false;
+    return identity.every(
+      ([field, value]) => discriminantValue(next.properties[field]) === value,
+    );
   });
+}
+
+/**
+ * The properties that tell this union's arms apart: pinned to one literal in
+ * every object arm, with no value shared between two arms. Empty when the
+ * union has no object arm or no such property - including a mixed union
+ * where some arm leaves the field open, which is exactly the case where a
+ * literal on one arm says nothing about identity.
+ */
+function discriminatorFields(variants: readonly unknown[]): readonly string[] {
+  const arms: Array<Readonly<Record<string, unknown>>> = [];
+  for (const variant of variants) {
+    const classified = classifySchemaNode(variant);
+    if (classified.kind === "object") arms.push(classified.properties);
+  }
+  const first = arms[0];
+  if (first === undefined) return [];
+  const fields: string[] = [];
+  for (const field of Object.keys(first)) {
+    const seen = new Set<string | number | boolean>();
+    let qualifies = true;
+    for (const arm of arms) {
+      const value = discriminantValue(arm[field]);
+      if (value === null || seen.has(value)) {
+        qualifies = false;
+        break;
+      }
+      seen.add(value);
+    }
+    if (qualifies) fields.push(field);
+  }
+  return fields;
 }
 
 /**
@@ -980,34 +1030,61 @@ function findNodeAdditivityViolation(
             allowUnionArmReplacement,
           ) === null,
       );
-      return oldFormRetained
-        ? null
-        : unionArmReplacementViolation(
-            snippet(previous),
-            allowUnionArmReplacement,
-          );
+      if (oldFormRetained) return null;
+      // Same distinction as the union loops: an arm of the new union that IS
+      // the old form by discriminator was the old form EDITED, so its
+      // reduction is what gets reported - only an old form with no successor
+      // is the replacement the exemption covers.
+      const successorIndex = allowUnionArmReplacement
+        ? findDiscriminatedSuccessor(previous, [previous], nextNode.variants)
+        : -1;
+      if (successorIndex !== -1) {
+        return findNodeAdditivityViolation(
+          previous,
+          nextNode.variants[successorIndex],
+          path,
+          mode,
+          previousInput,
+          nextWideningArms[successorIndex] ?? null,
+          allowUnionArmReplacement,
+        );
+      }
+      return unionArmReplacementViolation(
+        snippet(previous),
+        allowUnionArmReplacement,
+      );
     }
     // Union collapse: only additive when every previous variant's payloads
     // still project onto the replacement schema.
     if (previousNode.kind === "anyOf") {
       const previousInputArms = inputVariants(previousInput);
       for (const [index, variant] of previousNode.variants.entries()) {
+        const violation = findNodeAdditivityViolation(
+          variant,
+          next,
+          path,
+          mode,
+          previousInputArms[index] ?? null,
+          nextInput,
+          allowUnionArmReplacement,
+        );
+        if (violation === null) continue;
+        // The same edited-vs-replaced distinction the anyOf/anyOf loop
+        // draws: if the ONE surviving form is this arm's discriminated
+        // successor, the arm was edited and its reduction is reported; only
+        // an arm with no successor is a replacement the exemption covers.
         if (
-          findNodeAdditivityViolation(
-            variant,
-            next,
-            path,
-            mode,
-            previousInputArms[index] ?? null,
-            nextInput,
-            allowUnionArmReplacement,
-          ) !== null
+          allowUnionArmReplacement &&
+          findDiscriminatedSuccessor(variant, previousNode.variants, [next]) ===
+            0
         ) {
-          return unionArmReplacementViolation(
-            snippet(variant),
-            allowUnionArmReplacement,
-          );
+          return violation;
         }
+        const replaced = unionArmReplacementViolation(
+          snippet(variant),
+          allowUnionArmReplacement,
+        );
+        if (replaced !== null) return replaced;
       }
       return null;
     }
@@ -1210,10 +1287,14 @@ function findNodeAdditivityViolation(
       // swapping it for a nested detail would change the error every
       // non-gated minor reports.
       const successorIndex = allowUnionArmReplacement
-        ? findDiscriminatedSuccessor(previousVariant, nextNode.variants)
+        ? findDiscriminatedSuccessor(
+            previousVariant,
+            previousNode.variants,
+            nextNode.variants,
+          )
         : -1;
       if (successorIndex !== -1) {
-        return findNodeAdditivityViolation(
+        const edited = findNodeAdditivityViolation(
           previousVariant,
           nextNode.variants[successorIndex],
           path,
@@ -1228,11 +1309,20 @@ function findNodeAdditivityViolation(
           // which consult the flag.
           allowUnionArmReplacement,
         );
+        if (edited !== null) return edited;
+        continue;
       }
-      return unionArmReplacementViolation(
+      const replaced = unionArmReplacementViolation(
         snippet(previousVariant),
         allowUnionArmReplacement,
       );
+      if (replaced !== null) return replaced;
+      // EXEMPT means "this arm's removal is not a violation", not "stop
+      // looking". Returning `null` here ended the whole walk at the first
+      // replaced arm, so a reduction in any LATER sibling was never visited
+      // and the verdict on one semantic change flipped with arm order - the
+      // exact leniency the exemption's own doc says it does not grant.
+      continue;
     }
     if (mode === "no-value-growth") {
       for (const [nextIndex, nextVariant] of nextNode.variants.entries()) {

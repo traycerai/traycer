@@ -71,22 +71,6 @@ const focusedComposerCatalogMock = vi.hoisted(() => ({
   clientCalls: [] as Array<{ getActiveHostId: () => string | null } | null>,
 }));
 
-interface CreateChatPayload {
-  readonly epicId: string;
-  readonly parentId: string | null;
-  readonly title: string;
-  readonly chatId: string;
-  readonly worktreeIntent: WorktreeIntent | null;
-}
-
-interface CreateChatOptions {
-  readonly onSuccess: () => void;
-}
-
-const createChatMock = vi.hoisted(() => ({
-  mutate:
-    vi.fn<(payload: CreateChatPayload, options: CreateChatOptions) => void>(),
-}));
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   seed: null as { readonly intent: WorktreeIntent | null } | null,
 }));
@@ -131,11 +115,6 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   },
 }));
 
-vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChat: () => ({
-    mutate: createChatMock.mutate,
-  }),
-}));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>
     latestConversationWorkspaceSeedMock.seed,
@@ -256,7 +235,6 @@ function resetCanvasStore(): void {
 
 describe("composerSource", () => {
   beforeEach(() => {
-    createChatMock.mutate.mockReset();
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     resetCanvasStore();
@@ -268,7 +246,6 @@ describe("composerSource", () => {
 
   afterEach(() => {
     cleanup();
-    createChatMock.mutate.mockReset();
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     resetCanvasStore();
@@ -407,7 +384,6 @@ describe("composerSource", () => {
 
     // The command no longer creates directly; it opens the shared modal which
     // owns the compose-then-create flow.
-    expect(createChatMock.mutate).not.toHaveBeenCalled();
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",
@@ -452,7 +428,6 @@ describe("composerSource", () => {
 
     // The command opens the modal (no direct create) and leaves the canvas
     // untouched until submit; placement carries the active group + edge.
-    expect(createChatMock.mutate).not.toHaveBeenCalled();
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",

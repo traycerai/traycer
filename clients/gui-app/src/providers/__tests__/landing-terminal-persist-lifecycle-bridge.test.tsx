@@ -17,36 +17,44 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
+const ALICE_EMAIL = "alice@example.com";
+const BOB_EMAIL = "bob@example.com";
+const ALICE_ID = `user:${ALICE_EMAIL}`;
+const BOB_ID = `user:${BOB_EMAIL}`;
+
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
   email: string | null,
 ): void {
   if (status === "signed-in" && email !== null) {
+    // userId and email deliberately DIFFER: a fixture that equates them
+    // cannot detect email-keyed scoping.
+    const userId = `user:${email}`;
     useAuthStore.setState({
       status,
-      profile: { userId: email, userName: email, email },
-      contextMetadata: { userId: email, username: email },
+      profile: { userId, userName: email, email },
+      contextMetadata: { userId, username: email },
     });
     return;
   }
   useAuthStore.setState({ status, profile: null, contextMetadata: null });
 }
 
-function persistedTab(email: string): LandingTerminalTabRef {
+function persistedTab(identity: string): LandingTerminalTabRef {
   return {
-    instanceId: `${email}-instance`,
-    sessionId: `${email}-session`,
+    instanceId: `${identity}-instance`,
+    sessionId: `${identity}-session`,
     hostId: "host-test",
     cwd: "/workspace/project",
-    name: email,
+    name: identity,
     titleSource: "default",
   };
 }
 
-function persistSnapshot(email: string): void {
-  const tab = persistedTab(email);
+function persistSnapshot(bucketIdentity: string): void {
+  const tab = persistedTab(bucketIdentity);
   window.localStorage.setItem(
-    landingTerminalsKey(email),
+    landingTerminalsKey(bucketIdentity),
     JSON.stringify({
       state: {
         tabs: [tab],
@@ -87,8 +95,8 @@ describe("<LandingTerminalPersistLifecycleBridge />", () => {
   });
 
   it("retargets on identity switch without cross-user terminal tabs", async () => {
-    persistSnapshot("alice@example.com");
-    persistSnapshot("bob@example.com");
+    persistSnapshot(ALICE_ID);
+    persistSnapshot(BOB_ID);
     render(
       <LandingTerminalPersistLifecycleBridge>
         <div />
@@ -96,26 +104,50 @@ describe("<LandingTerminalPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
     await waitFor(() => {
       expect(useLandingTerminalStore.persist.getOptions().name).toBe(
-        landingTerminalsKey("alice@example.com"),
+        landingTerminalsKey(ALICE_ID),
       );
       expect(useLandingTerminalStore.getState().tabs).toEqual([
-        persistedTab("alice@example.com"),
+        persistedTab(ALICE_ID),
       ]);
     });
 
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", BOB_EMAIL);
     });
     await waitFor(() => {
       expect(useLandingTerminalStore.persist.getOptions().name).toBe(
-        landingTerminalsKey("bob@example.com"),
+        landingTerminalsKey(BOB_ID),
       );
       expect(useLandingTerminalStore.getState().tabs).toEqual([
-        persistedTab("bob@example.com"),
+        persistedTab(BOB_ID),
+      ]);
+    });
+  });
+
+  it("adopts the legacy email-keyed bucket into the signed-in user's canonical bucket", async () => {
+    // Seeds ONLY the legacy (email-keyed) bucket, so a successful load can
+    // only be explained by the one-shot adoption path onto the userId key.
+    persistSnapshot(ALICE_EMAIL);
+    render(
+      <LandingTerminalPersistLifecycleBridge>
+        <div />
+      </LandingTerminalPersistLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", ALICE_EMAIL);
+    });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.persist.getOptions().name).toBe(
+        landingTerminalsKey(ALICE_ID),
+      );
+      expect(useLandingTerminalStore.getState().tabs).toEqual([
+        persistedTab(ALICE_EMAIL),
       ]);
     });
   });

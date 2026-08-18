@@ -49,6 +49,9 @@ const mocks = vi.hoisted(() => {
     // React reactive host (useAddressableHostId) vs client host (getActiveHostId).
     // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
     activeHostId: null as string | null,
+    // The COMPOSER placement's resolved host (the window pin). Follows
+    // `activeHostId` unless a test sets it, so one arm can make the two differ.
+    placementHostId: null as string | null,
     clientActiveHostId: null as string | null,
     probeData: undefined as TerminalListFixture | undefined,
     freshProbeData: undefined as TerminalListFixture | undefined,
@@ -125,6 +128,36 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
 });
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => mocks.activeHostId,
+}));
+// The gesture provider resolves the COMPOSER'S placement (the window's surface
+// pin ?? effective), not the app-wide host, so the landing terminals and the
+// composer beside them describe one machine. Mocked at its seam with the same
+// `mocks.activeHostId` / `mocks.defaultClient` the rest of this suite drives.
+vi.mock("@/hooks/host/use-composer-placement", () => ({
+  useComposerPlacement: () => {
+    const resolvedHostId = mocks.placementHostId ?? mocks.activeHostId;
+    const target = {
+      resolvedHostId,
+      client: mocks.defaultClient,
+      hostLabel: null,
+      isPinned: false,
+      namedHostDead: false,
+    };
+    return {
+      pin: {
+        selection: null,
+        honoredSelection: null,
+        resolvedHostId,
+        isPinned: false,
+        setSelection: () => undefined,
+        latchOnFirstUse: () => undefined,
+      },
+      target,
+      submitTarget: target,
+      hostLabelFor: () => null,
+      followsEffective: true,
+    };
+  },
 }));
 // Partial, not whole-module: the registry also owns `acquireHostConnection`
 // and the equality helpers, and replacing the module wholesale would strand
@@ -496,6 +529,7 @@ describe("<LandingTerminalPanel />", () => {
     resetPrimaryFocusCoordinatorForTests();
     resetTerminalFocusRegistryForTests();
     mocks.activeHostId = null;
+    mocks.placementHostId = null;
     mocks.clientActiveHostId = null;
     mocks.onChangeListeners = [];
     mocks.rowChangedListeners = [];
@@ -761,6 +795,28 @@ describe("<LandingTerminalPanel />", () => {
     });
     expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
+  });
+
+  it("creates on the COMPOSER's placement host, not the app-wide one, when the two differ", async () => {
+    // The landing page's composer, hero and folder picker all resolve the
+    // window's surface pin; the terminal panel used to read the app-wide host
+    // (`useAddressableHostId` / `useHostClient`), so a page pinned to host-b
+    // listed, dialed and CREATED terminals on host-a - bound for life - under
+    // a chip that said host-b, and its folder picker staged under
+    // `{landing, host-a, draft}` beside the composer's `{landing, host-b, draft}`.
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-b";
+    mocks.clientActiveHostId = "host-b";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.hostId).toBe("host-b");
   });
 
   it("holds an auto-spawn that settles while the start page is backgrounded, then spawns on return", async () => {

@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -184,6 +192,99 @@ describe("DesktopPreferredHostStore", () => {
       // that must not attempt a write either.
       expect(store.save("user-a", null)).toEqual({ ok: true });
       expect(store.load("user-a")).toBeNull();
+    });
+  });
+
+  describe("an EXISTING but UNREADABLE state file", () => {
+    // Read-failure injection seam, distinct from the write-failure seam above:
+    // making `filePath` itself a DIRECTORY makes `readFileSync(filePath, ...)`
+    // throw `EISDIR`, which is NOT `ENOENT` - a structural error, so it fails
+    // identically whether the test runs as root or not (no chmod, no fs
+    // mocking). The store's `read()` used to cache an unreadable file as an
+    // authoritative EMPTY map, indistinguishable from a genuinely absent file -
+    // so a later sign-out wipe found the identity "already absent" and
+    // reported success without writing, and a later Activate would have
+    // written that false-empty set over every other identity's preference.
+    it("a sign-out wipe is held pending, not reported done, and lands once the file is readable again", () => {
+      const dir = makeTempDir();
+      const filePath = join(dir, "prefs", "desktop-preferred-host.json");
+      const seeded = new DesktopPreferredHostStore(filePath, silentLog);
+      expect(seeded.save("user-a", "host-1")).toEqual({ ok: true });
+
+      // Sabotage the READ only: park the real file aside and put a directory
+      // at its path.
+      const parked = `${filePath}.parked`;
+      renameSync(filePath, parked);
+      mkdirSync(filePath);
+
+      const store = new DesktopPreferredHostStore(filePath, silentLog);
+
+      // Positive control that the seam actually bites (guards against this
+      // test passing for the wrong reason).
+      expect(() => readFileSync(filePath, "utf8")).toThrow();
+
+      const wipe = store.save("user-a", null);
+      // Never reports clean: the OLD code cached the unreadable file as an
+      // empty map, so the identity looked "already absent" and this returned
+      // {ok:true} having written nothing.
+      expect(wipe).toEqual({ ok: false, reason: expect.any(String) });
+      expect(store.load("user-a")).toBeNull();
+
+      // Restore readability.
+      rmSync(filePath, { recursive: true, force: true });
+      renameSync(parked, filePath);
+
+      // The next call re-attempts the wipe against a REAL read.
+      expect(store.load("user-a")).toBeNull();
+
+      // Relaunch: a fresh store reads the durable file - the preference must
+      // be GONE. OLD code: "host-1" comes back, because the wipe never
+      // actually reached disk while the false-empty cache was live.
+      const relaunched = new DesktopPreferredHostStore(filePath, silentLog);
+      expect(relaunched.load("user-a")).toBeNull();
+    });
+
+    it("an Activate refuses because the READ can't be trusted (not because the write also fails), and the unreadable read is not cached", () => {
+      const dir = makeTempDir();
+      const filePath = join(dir, "prefs", "desktop-preferred-host.json");
+      const seeded = new DesktopPreferredHostStore(filePath, silentLog);
+      expect(seeded.save("user-a", "host-1")).toEqual({ ok: true });
+
+      const parked = `${filePath}.parked`;
+      renameSync(filePath, parked);
+      mkdirSync(filePath);
+
+      // A directory at `filePath` breaks BOTH `readFileSync(filePath, ...)`
+      // (EISDIR) and `renameSync(tmpPath, filePath)` inside `write()` (the
+      // rename target is a non-empty directory) - so under the OLD code,
+      // where `save()` did not refuse until it actually tried to write,
+      // `activate.ok === false` would pass for the wrong reason: the write
+      // failing, not the read being untrustworthy. A capturing logger (not
+      // `silentLog`) makes that distinction checkable by which message
+      // actually fired.
+      const calls: string[] = [];
+      const capturingLog = {
+        warn: (message: string): void => {
+          calls.push(message);
+        },
+      };
+      const store = new DesktopPreferredHostStore(filePath, capturingLog);
+      expect(() => readFileSync(filePath, "utf8")).toThrow();
+
+      const activate = store.save("user-b", "host-2");
+      expect(activate.ok).toBe(false);
+      expect(calls).toContain("[selection-preferred] state file unreadable");
+      expect(calls).not.toContain("[selection-preferred] state write failed");
+
+      rmSync(filePath, { recursive: true, force: true });
+      renameSync(parked, filePath);
+
+      // NOT cached as empty: the same store instance now sees the real
+      // durable set. OLD code cached {} at the first (failed) read, so
+      // "user-a" would come back null here and a pending Activate would go on
+      // to write "user-b" alone over every other identity's preference.
+      expect(store.load("user-a")).toBe("host-1");
+      expect(store.load("user-b")).toBeNull();
     });
   });
 });

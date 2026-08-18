@@ -2681,7 +2681,15 @@ function currentSettingsForChatTile(input: {
 function useCachedCollaborators(
   epicId: string,
 ): SenderDisplayContext["collaborators"] {
-  const client = useTabHostClient();
+  // Cache-only read (`enabled: false` below) must key where the cache is
+  // WRITTEN, not where this tile happens to be bound: `epic.listCollaborators`
+  // is only ever filled by the sidebar tree and the sharing panel, both keyed
+  // on the Epic SESSION's host (`useEpicSessionHostClient`). The tab's host
+  // owns the transcript, not the collaborator list - a tile bound to a
+  // different host than the session (host B tile in an Epic served from A)
+  // would key its read on B, which nobody ever populates, and collaborators
+  // would stay permanently empty.
+  const client = useEpicSessionHostClient();
   const { data } = useHostQuery({
     cacheKeyIdentity: undefined,
     client,

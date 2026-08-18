@@ -985,6 +985,17 @@ function openSession(options: SessionOptions): Session {
   let opened = false;
   let closed = false;
   /**
+   * Set by `onerror` when it fires before the socket ever opened. Under Blink
+   * a pre-open `error` event is followed by the awaiting caller's `finally`
+   * closing this session (setting `closed = true`) in the microtask
+   * checkpoint, and only THEN does `close` fire - so by the time `onclose`
+   * reads `closed` for `selfInitiated`, it is true even though the caller's
+   * teardown was itself downstream of a genuine refusal, not the cause of it.
+   * Without this flag that refusal is reported as `indeterminate` and
+   * silently dropped from death detection.
+   */
+  let erroredBeforeOpen = false;
+  /**
    * Exactly-once bookkeeping for the two evidence duties this socket owes the
    * selection authority. `livenessEnded` guards the refcount decrement, which
    * must pair with its increment no matter which of the three teardown paths
@@ -1302,6 +1313,9 @@ function openSession(options: SessionOptions): Session {
   };
 
   socket.onerror = (event: WebSocketErrorEvent) => {
+    if (!opened) {
+      erroredBeforeOpen = true;
+    }
     failAll(transientFailure(`WebSocket transport error: ${event.message}`));
   };
 
@@ -1331,7 +1345,14 @@ function openSession(options: SessionOptions): Session {
     closed = true;
     endLiveness();
     if (!opened) {
-      reportDialOutcome(selfInitiated ? "indeterminate" : "refusal");
+      // `erroredBeforeOpen` overrides `selfInitiated`: an `error` event ahead
+      // of `close` is itself the refusal, and the caller's `finally`-driven
+      // `close()` that intervenes before this handler runs is a downstream
+      // reaction to it, not an independent teardown - see the flag's comment
+      // above the declaration.
+      reportDialOutcome(
+        erroredBeforeOpen || !selfInitiated ? "refusal" : "indeterminate",
+      );
       failAll(
         transientFailure(
           `WebSocket closed before open (code=${event.code}, reason='${event.reason}')`,

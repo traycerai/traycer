@@ -45,6 +45,8 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
+import { openEpicKey } from "@/lib/persist";
+import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
 
 export interface EpicSessionProviderProps {
   readonly epicId: string;
@@ -172,11 +174,33 @@ export function EpicSessionProvider(
   const queryClient = use(QueryClientContext);
   const navigate = useNavigate();
   const desktopBridge = getDesktopEpicOwnershipBridge();
-  // Persisted state (`lastFocusedArtifactId`) is bucketed under the active
-  // user's email so a different signed-in identity on this device cannot
-  // restore prior-user focus state. Email is the only stable identity field
-  // surfaced through `AuthProfile`; null means signed-out / hydrating.
-  const sessionUserId = useAuthStore((state) => state.profile?.email ?? null);
+  // The SESSION identity: the handle is stamped with it, persisted state
+  // (`lastFocusedArtifactId`) is bucketed under it, and the effect below
+  // treats a change in it as a security boundary that DISCARDS the previous
+  // session and its retained buffers. It is the canonical `profile.userId`.
+  // It used to be the email, which reads like an identity and is not one: two
+  // canonical accounts can present the same address, so for that pair the
+  // comparison saw no change, the previous user's handle stayed mounted (or
+  // the rotation arm chose "keep"), and the incoming account inherited the
+  // outgoing account's persisted focus state and retained unsynced `Y.Doc`.
+  // Null means signed-out / hydrating.
+  const sessionUserId = useAuthStore((state) => state.profile?.userId ?? null);
+  // Only to name the pre-userId persist key for one-time adoption below; NOT
+  // an identity, and nothing compares on it. Read through an effect event so
+  // it is not a dependency of the session effect: it is consulted once, at
+  // handle creation, and a change in it must never re-run the session.
+  const legacyEmail = useAuthStore((state) => state.profile?.email ?? null);
+  const adoptLegacyOpenEpicKey = useEffectEvent((userId: string): void => {
+    // Both non-null, explicitly: `openEpicKey(null, …)` is the ANONYMOUS
+    // bucket, and adopting that into an account's bucket would be its own
+    // leak. `email` is a string on every present profile, so this guard is
+    // stating the invariant rather than expecting the arm.
+    if (legacyEmail === null) return;
+    adoptLegacyPersistedKey(
+      openEpicKey(userId, epicId),
+      openEpicKey(legacyEmail, epicId),
+    );
+  });
   const cloudTasksUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
@@ -424,6 +448,10 @@ export function EpicSessionProvider(
       };
     };
     const createHandle = (): OpenEpicStoreHandle => {
+      // Before the store exists, because `persist` reads its key at creation:
+      // the bucket used to be named by the email, and re-keying without this
+      // would silently reset every install's focus state on upgrade.
+      if (sessionUserId !== null) adoptLegacyOpenEpicKey(sessionUserId);
       const created = createOpenEpicStore({
         epicId,
         streamClientFactory,

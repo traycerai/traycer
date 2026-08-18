@@ -19,16 +19,13 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
-  classifyHostRequestFailure,
   HostRpcError,
   toHostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
@@ -42,7 +39,8 @@ import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persiste
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Variables for `useEpicCreateChat.mutate`/`mutateAsync`.
+ * Variables for `useEpicCreateChatForHostClient.mutate`/`mutateAsync`
+ * (and its `useEpicCreateChatForHost` tab-scoped wrapper).
  *
  * `hostId` is REQUIRED and named by the caller - it is not projected from
  * whatever host happens to be active when `mutate` fires. A chat is bound to
@@ -100,75 +98,6 @@ export type DeleteChatMutationOptions = Omit<
 >;
 
 /**
- * Mutation hook for epic.createChat, sent on the APP-WIDE client (the active
- * host).
- *
- * The caller names the host on the request (`CreateChatMutationInput.hostId`).
- * This hook's job is to make sure the machine it is about to send to is still
- * that host: the active host can move between the moment a flow decides where
- * a chat belongs and the moment `mutate` fires, and a create that lands
- * anyway would put the chat on a machine the caller never named. A mismatch
- * (including "no host is active at all") rejects through the mutation error
- * channel with a `HostRpcError`, so it surfaces through `onError` (and
- * `toastFromHostError`, or the clone flow's `onCloneFailed`) instead of
- * silently creating the wrong thing.
- */
-export function useEpicCreateChat(): UseMutationResult<
-  CreateChatResponse,
-  HostRpcError,
-  CreateChatMutationInput,
-  CreateChatMutationContext
-> {
-  const client = useHostClient();
-  const activeHostId = useAddressableHostId();
-  const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "epic.createChat",
-    CreateChatMutationContext,
-    CreateChatMutationInput
-  >({
-    client,
-    method: "epic.createChat",
-    mapVariables: (params) => {
-      if (activeHostId !== params.hostId) {
-        throw new HostRpcError({
-          code: "RPC_ERROR",
-          message:
-            activeHostId === null
-              ? "No active host - connect to a host before creating an agent."
-              : "The active host moved - this agent would be created on a different host than the one requested.",
-          requestId: "client-pre-flight",
-          method: "epic.createChat",
-          fatalDetails: null,
-        });
-      }
-      return params;
-    },
-    options: {
-      onMutate: () => ({
-        hostId: activeHostId,
-        ownerUserId: currentProfileUserId(),
-      }),
-      onSuccess: (data, params, ctx) => {
-        retainCreatedChatUntilProjected(data, params, ctx.ownerUserId);
-        invalidateBindingsForEpic(queryClient, ctx.hostId);
-        // The created chat lands in the host's chat DATABASE and nowhere the
-        // renderer already listens (chat-sync-v2 ticket 19 stopped the doc
-        // write), so this is what makes it a record here rather than waiting
-        // out the record list's poll interval.
-        invalidateEpicChatRecords(queryClient, ctx.hostId);
-      },
-      onError: (error, variables) => {
-        releaseCreatedChat(variables);
-        if (isRecoverableLatestForkFailure(error, variables)) return;
-        toastFromHostError(error, "Couldn't create agent.");
-      },
-    },
-  });
-}
-
-/**
  * Whether the caller is expected to render this refusal ITSELF, inline, instead
  * of through the generic toast.
  *
@@ -179,43 +108,19 @@ export function useEpicCreateChat(): UseMutationResult<
  * stays OPEN on this refusal so the retry is one click, and a toast beside a
  * dialog that is already explaining itself says the same thing twice.
  *
- * Narrower than {@link isRecoverableLatestForkFailure} by construction rather
- * than by an added `forkSource` test: the host mints this code for exactly one
- * condition, reachable only from a request that named a precise fork boundary.
- * Every other caller of the hook below is therefore unaffected - they cannot
- * produce it - which is what keeps this from becoming a general "quiet fork
- * errors" bucket that would swallow a real failure for someone.
+ * Reachable only from a request that named a precise fork boundary - the
+ * host mints this code for exactly one condition - which is what keeps this
+ * from becoming a general "quiet fork errors" bucket that would swallow a
+ * real failure for someone.
  */
 function isInlineForkRefusal(error: HostRpcError): boolean {
   return error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED";
 }
 
 /**
- * Whether `error` is one of the two failures `cloneChatOnHostSwitch` (ticket
- * 34B1) recovers from by design - a settings-only retry is already in
- * flight by the time this fires, so a generic "Couldn't create agent."
- * toast here would tell the user their clone failed on the exact request
- * that is about to quietly succeed without history.
- *
- * Scoped to `forkSource.boundary === "latest"` specifically, not "any
- * `forkSource`": both failure codes are otherwise reachable in principle
- * (`E_FORK_CHECKPOINT_UNAVAILABLE` is currently only ever produced by a
- * `"latest"` request, but `DOWNGRADE_UNSUPPORTED` is a general transport
- * code), and the manual fork dialog's precise-boundary requests do NOT
- * recover from either - they must still toast on failure like every other
- * caller of this hook.
+ * Tab-scoped wrapper over {@link useEpicCreateChatForHostClient}, sending the
+ * create on the tab's own bound host client.
  */
-function isRecoverableLatestForkFailure(
-  error: HostRpcError,
-  variables: CreateChatMutationInput,
-): boolean {
-  if (variables.forkSource?.boundary !== "latest") return false;
-  return (
-    error.code === "E_FORK_CHECKPOINT_UNAVAILABLE" ||
-    classifyHostRequestFailure(error).kind === "downgrade-unsupported"
-  );
-}
-
 export function useEpicCreateChatForHost(): UseMutationResult<
   CreateChatResponse,
   HostRpcError,
@@ -227,21 +132,26 @@ export function useEpicCreateChatForHost(): UseMutationResult<
 }
 
 /**
- * Host-parametric variant of {@link useEpicCreateChat}: the caller resolves
+ * Mutation hook for `epic.createChat`, host-parametric: the caller resolves
  * an explicit `HostClient` (e.g. via `useHostClientFor` for a sidebar row's
- * OWN host) and the request is sent on THAT client rather than on the
- * app-wide active one. `null` client (offline / directory unresolved) rejects
- * through the mutation error channel so the caller can disable the affordance
- * - `useHostMutation`'s own `client === null` guard covers that case; only
- * the second-stage host check lives in `mapVariables` here (also normalized
- * to `HostRpcError` by `useHostMutation`'s boundary).
+ * OWN host, or a composer placement's frozen submit client) and the request
+ * is sent on THAT client. `null` client (offline / directory unresolved)
+ * rejects through the mutation error channel so the caller can disable the
+ * affordance - `useHostMutation`'s own `client === null` guard covers that
+ * case; only the second-stage host check lives in `mapVariables` here (also
+ * normalized to `HostRpcError` by `useHostMutation`'s boundary).
  *
- * Same rule as the app-wide hook: the caller names `hostId` on the request
+ * The caller names the host on the request (`CreateChatMutationInput.hostId`)
  * and this hook verifies the resolved client actually dials it, so a client
  * that lost (or changed) its host identity can never make the create land
  * somewhere the caller did not ask for. `useEpicCreateChatForHost` is the
  * tab-scoped wrapper over this; row child-create passes the row's host
  * client.
+ *
+ * There is deliberately no client-less `useEpicCreateChat()` wrapper any
+ * more: the app-wide one that existed had zero callers, and a create is
+ * PLACEMENT - it must be sent on the client the placement resolved, never
+ * on a host read separately from the chip.
  */
 export function useEpicCreateChatForHostClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -285,10 +195,10 @@ export function useEpicCreateChatForHostClient(
       onSuccess: (data, params, ctx) => {
         retainCreatedChatUntilProjected(data, params, ctx.ownerUserId);
         invalidateBindingsForEpic(queryClient, ctx.hostId);
-        // Same reason as the app-wide hook above, and NOT optional here: this
-        // is the variant the in-Epic new-conversation modal and the fork
-        // dialog actually run. The created chat lands in the host's chat
-        // database and in nothing this renderer already listens to, so without
+        // NOT optional here: this is the variant the in-Epic new-conversation
+        // modal and the fork dialog actually run. The created chat lands in
+        // the host's chat database and in nothing this renderer already
+        // listens to, so without
         // this the record list is never re-read - and every create-then-open
         // flow (`openCreatedChatWhenProjected`, the handoff's
         // `projectedChatId`) waits on a projection that only a poll tick can

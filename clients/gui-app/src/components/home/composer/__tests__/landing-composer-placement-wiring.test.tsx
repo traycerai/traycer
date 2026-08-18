@@ -1,10 +1,11 @@
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import { notifyEffectiveHostChanged } from "@/stores/host/surface-host-selection-store";
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 
 /**
@@ -52,6 +53,33 @@ const testState = vi.hoisted(() => ({
     ((job: (signal: AbortSignal) => Promise<void>) => void) | null,
   /** The target `useLandingComposerActions` was actually constructed with. */
   actionsTarget: null as { readonly hostLabel: string } | null,
+  // G4 fixture: `ComposerPlacement.followsEffective` as `useComposerPlacement`
+  // would compute it. Set per test - `true` for a following composer
+  // (including a DEPOSED pin, which still reads `isPinned: true`), `false`
+  // for a genuinely pinned one.
+  composerFollowsEffective: true,
+  // `pin.isPinned` varies INDEPENDENTLY of `followsEffective` - a deposed pin
+  // is the case where both are `true` at once (the pin survives death;
+  // `honoredSelection` going null is what makes it follow). Fixed `true` by
+  // default so the deposed-pin arm below is the realistic shape, not a case
+  // `isPinned` would never actually take.
+  composerIsPinned: true,
+}));
+
+// `.clear`/`.migrateKeyForAllHosts` are the only members the G4 effect and
+// the create path touch (`.getState()` only, never the reactive hook), so a
+// bare `getState()` stub is a complete fixture for this module.
+const stagingStoreMocks = vi.hoisted(() => ({
+  clear: vi.fn(),
+  migrateKeyForAllHosts: vi.fn(),
+}));
+vi.mock("@/stores/worktree/worktree-intent-staging-store", () => ({
+  useWorktreeIntentStagingStore: {
+    getState: () => ({
+      clear: stagingStoreMocks.clear,
+      migrateKeyForAllHosts: stagingStoreMocks.migrateKeyForAllHosts,
+    }),
+  },
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -62,7 +90,10 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
-      return React.createElement("div", null);
+      // Renders `topBanner` for real (unlike every other prop here) so the
+      // G4 tests below can assert on `ComposerHostNotice`'s actual DOM output
+      // instead of reaching into component-internal state.
+      return React.createElement("div", null, props.topBanner);
     },
   };
 });
@@ -73,12 +104,13 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
       selection: null,
       setSelection: () => undefined,
       resolvedHostId: "host-a",
-      isPinned: false,
+      isPinned: testState.composerIsPinned,
       latchOnFirstUse: () => undefined,
     },
     target: READ_TARGET,
     submitTarget: SUBMIT_TARGET,
     hostLabelFor: () => "Studio Mac",
+    followsEffective: testState.composerFollowsEffective,
   }),
 }));
 
@@ -271,6 +303,10 @@ afterEach(() => {
   testState.actionsTarget = null;
   testState.bodySubmit = null;
   testState.installEditor = null;
+  testState.composerFollowsEffective = true;
+  testState.composerIsPinned = true;
+  stagingStoreMocks.clear.mockReset();
+  stagingStoreMocks.migrateKeyForAllHosts.mockReset();
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
@@ -311,5 +347,55 @@ describe("landing composer placement wiring", () => {
     // equality check on fields would pass for either one.
     expect(testState.actionsTarget).toBe(SUBMIT_TARGET);
     expect(testState.actionsTarget).not.toBe(READ_TARGET);
+  });
+});
+
+describe("landing composer G4 re-point notice", () => {
+  it("fires the re-pointed notice and resets staged intent for a DEPOSED pin (isPinned true, honoredSelection null)", () => {
+    // A deposed pin still reads `pin.isPinned: true` (the pin itself is never
+    // cleared by death - only `honoredSelection` goes null), but the
+    // composer's resolved host has fallen back to `effective`, so it IS
+    // following and a derivation move DOES re-point it. Gating G4 on
+    // `isPinned` instead of `followsEffective` would wrongly suppress this.
+    testState.composerFollowsEffective = true;
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    const notice = screen.getByTestId("composer-host-notice");
+    expect(notice.dataset.noticeKind).toBe("repointed");
+    expect(stagingStoreMocks.clear).toHaveBeenCalledWith({
+      surface: "landing",
+      hostId: "host-a",
+      draftId: null,
+    });
+  });
+
+  it("does not fire the notice or reset staged intent for a composer resting on its own pin", () => {
+    testState.composerFollowsEffective = false;
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+    expect(stagingStoreMocks.clear).not.toHaveBeenCalled();
   });
 });

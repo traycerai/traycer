@@ -69,9 +69,18 @@ const pinnedStreamBindingRef = vi.hoisted(() => ({
   value: null as StreamRuntimeBinding | null,
 }));
 
-vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
-  useSurfaceHostStreamBinding: () => pinnedStreamBindingRef.value,
-}));
+// The hook returns the value to PROVIDE: the pin's own binding when this suite
+// supplies one, else the ambient binding (following). `null` would now mean
+// PENDING - no client at all - which is not what these arms drive.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return {
+    useSurfaceHostStreamBinding: () =>
+      pinnedStreamBindingRef.value ?? use(StreamRuntimeContext),
+  };
+});
 
 /**
  * The transport `useGitListChangedFilesSubscription` was handed, recorded from

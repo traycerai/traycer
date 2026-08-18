@@ -457,8 +457,20 @@ describe("selectionAuthorityRestrictions", () => {
       code: 'runnerHost["selectionAuthority"].activate(hostId);',
     },
     {
+      name: "computed template member access",
+      code: "runnerHost[`selectionAuthority`].activate(hostId);",
+    },
+    {
       name: "destructure identifier",
       code: "const { selectionAuthority } = runnerHost;\nvoid selectionAuthority;\n",
+    },
+    {
+      name: "destructure literal key",
+      code: 'const { "selectionAuthority": authority } = runnerHost;\nvoid authority;\n',
+    },
+    {
+      name: "destructure template key",
+      code: "const { [`selectionAuthority`]: authority } = runnerHost;\nvoid authority;\n",
     },
   ])("flags $name", ({ code }) => {
     expect(lint(code, restrictions)).toHaveLength(1);

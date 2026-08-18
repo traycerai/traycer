@@ -58,6 +58,9 @@ function authSessionsEqual(
   return (
     a.status === b.status &&
     a.token === b.token &&
+    // The canonical id, not just the display fields: two accounts can share
+    // an email and a userName, and a switch between them is a change.
+    a.profile?.userId === b.profile?.userId &&
     a.profile?.userName === b.profile?.userName &&
     a.profile?.email === b.profile?.email
   );

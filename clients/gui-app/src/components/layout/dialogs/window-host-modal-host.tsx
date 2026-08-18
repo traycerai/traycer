@@ -217,8 +217,22 @@ function NarratingWindowHostModal(props: {
   // the body (which hosts it inline on the footer row) and by the card (which
   // then draws no action row of its own). Two derivations of this would let a
   // card render the settings link in both places or in neither.
+  //
+  // "In neither" is exactly what happened when this did not ask whether the
+  // body EXISTS: `buildLocalBootstrapBody` returns null for anything but a
+  // local `offline` lifecycle, so a blocking cold start whose target is a
+  // REMOTE host (activated in Settings, lease still `connecting`; no Retry,
+  // no update, nothing failed) hid the action row for a body that was not
+  // there - an empty card, and the settings escape hatch this file calls a
+  // lockout if lost was the thing lost. The body can host the link only under
+  // the same two conditions it renders under, so the gate states them.
+  const bodyCanHostSettings =
+    localLifecycle && narration.variant.kind === "offline";
   const settingsOnly =
-    !blocking || retry.onRetry !== null || updateHost !== null
+    !blocking ||
+    retry.onRetry !== null ||
+    updateHost !== null ||
+    !bodyCanHostSettings
       ? false
       : !settled.failed;
   const narrationProps: WindowHostModalProps = {

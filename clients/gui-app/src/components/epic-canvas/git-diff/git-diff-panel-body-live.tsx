@@ -1,5 +1,4 @@
 import {
-  use,
   useCallback,
   useEffect,
   useMemo,
@@ -17,6 +16,8 @@ import type {
   GitListChangedFilesResponseV11,
   WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useGitDiffPanelSurfaceKey,
@@ -147,8 +148,9 @@ export function GitDiffPanelBodyLive(
   const pin = useSurfaceHostPin(surfaceKey);
   const { latchOnFirstUse } = pin;
   const client = useSurfaceHostClient(pin.resolvedHostId);
+  // The value to PROVIDE: ambient while following, the pin's own binding once
+  // built, null while pending - never the ambient socket for a pinned host.
   const pinnedStreamBinding = useSurfaceHostStreamBinding(pin.resolvedHostId);
-  const ambientStream = use(StreamRuntimeContext);
   // No dead arm: a pinned host that dies resolves to `effective`, so the panel
   // re-points instead of blanking. The selected repo is (hostId, path), so the
   // default-pick effect below finds it absent from the new host's rows and
@@ -329,9 +331,10 @@ export function GitDiffPanelBodyLive(
   // the moment a host is chosen. `null` means "following", where the ambient
   // binding is already this host's.
   return (
-    <StreamRuntimeContext.Provider value={pinnedStreamBinding ?? ambientStream}>
+    <StreamRuntimeContext.Provider value={pinnedStreamBinding}>
       {renderGitDiffPanelBody({
         surfaceKey,
+        client,
         latchOnFirstUse: pin.latchOnFirstUse,
         bindingsPending: bindingsQuery.isPending,
         bindingsError: bindingsQuery.error !== null,
@@ -350,6 +353,7 @@ export function GitDiffPanelBodyLive(
 
 function renderGitDiffPanelBody(input: {
   readonly surfaceKey: string;
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly latchOnFirstUse: () => void;
   readonly bindingsPending: boolean;
   readonly bindingsError: boolean;
@@ -395,6 +399,7 @@ function renderGitDiffPanelBody(input: {
       selectedRootRow={input.selectedRootRow}
       surfaceKey={input.surfaceKey}
       onLatchHost={input.latchOnFirstUse}
+      client={input.client}
     />
   );
 }
@@ -423,10 +428,13 @@ interface GitDiffPanelLoadedProps {
   readonly selectedRootRow: WorktreeBindingSelectorRowV12;
   readonly surfaceKey: string;
   readonly onLatchHost: () => void;
+  /** This panel's own pinned client, forwarded to the "open in editor" opener. */
+  readonly client: HostClient<HostRpcRegistry> | null;
 }
 
 function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
-  const { selected, selectedRootRow, epicId, onLatchHost, surfaceKey } = props;
+  const { selected, selectedRootRow, epicId, onLatchHost, surfaceKey, client } =
+    props;
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
@@ -594,6 +602,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
               workspacePath: selectedRootRow.runningDir,
               hostId: selectedRootRow.hostId,
             }}
+            hostClient={client}
           />
         </div>
         {/* Sits beside the repo switcher because it qualifies THIS repo's

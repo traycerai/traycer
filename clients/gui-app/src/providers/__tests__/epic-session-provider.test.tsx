@@ -147,6 +147,7 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { openEpicKey } from "@/lib/persist";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
@@ -595,6 +596,211 @@ describe("<EpicSessionProvider />", () => {
     expect(streams).toHaveLength(2);
     expect(streams[0].closeCount).toBe(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("keys the session identity on the canonical user id, so two accounts sharing an email do NOT share a session", async () => {
+    // Codex #1243 T-66. The arm above seeds `userId: email`, so it is green
+    // whether the provider reads the id or the address - it cannot tell them
+    // apart. This one seeds DIFFERENT canonical ids behind ONE address, which
+    // is the real-world shape: keyed on the email the identity comparison saw
+    // no change, the previous user's handle stayed mounted, and the incoming
+    // account inherited the outgoing account's persisted focus state and
+    // retained unsynced `Y.Doc`.
+    const SHARED_EMAIL = "shared@example.com";
+    const signInAs = (userId: string): void => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: { userId, userName: SHARED_EMAIL, email: SHARED_EMAIL },
+        contextMetadata: { userId, username: SHARED_EMAIL },
+      });
+    };
+    const streams: ControlledStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+    signInAs("user-alice");
+
+    render(
+      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+        <HandleProbe
+          onHandle={(handle) => {
+            seenHandles.push(handle);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles.at(-1)?.userId).toBe("user-alice");
+    });
+    const firstHandle = seenHandles.at(-1);
+    if (firstHandle === undefined) {
+      throw new Error("expected initial handle");
+    }
+    // The stamp is the id, not the address it signed in with.
+    expect(firstHandle.userId).not.toBe(SHARED_EMAIL);
+
+    // Same address, different account: the switch the email could not see.
+    act(() => {
+      signInAs("user-bob");
+    });
+
+    await waitFor(() => {
+      expect(seenHandles.at(-1)?.userId).toBe("user-bob");
+    });
+    const secondHandle = seenHandles.at(-1);
+    if (secondHandle === undefined) {
+      throw new Error("expected second handle");
+    }
+    expect(secondHandle).not.toBe(firstHandle);
+    expect(streams).toHaveLength(2);
+    expect(streams[0].closeCount).toBe(1);
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("adopts a legacy email-keyed persisted blob onto the canonical userId key on first acquire", async () => {
+    // Pins `adoptLegacyOpenEpicKey` (epic-session-provider.tsx), which has no
+    // coverage of its own: it runs once, inside `createHandle()`, BEFORE the
+    // per-Epic store is constructed - because `persist` reads its key at
+    // construction time, moving a pre-userId-scoping bucket onto the new one
+    // is silent by construction. A broken adoption looks exactly like a fresh
+    // install (empty `lastFocusedArtifactId`), so the only way to catch a
+    // regression here is to seed the legacy key and assert the NEW key ends
+    // up holding it - a green "nothing there" tells you nothing.
+    const EPIC_ID = "epic-session-test";
+    const LEGACY_EMAIL = "shared@example.com";
+    const CANONICAL_USER_ID = "user-alice";
+    const legacyKey = openEpicKey(LEGACY_EMAIL, EPIC_ID);
+    const canonicalKey = openEpicKey(CANONICAL_USER_ID, EPIC_ID);
+    const persistedBlob = JSON.stringify({
+      state: { lastFocusedArtifactId: "art-1", lastFocusedThreadId: null },
+      version: 1,
+    });
+    window.localStorage.setItem(legacyKey, persistedBlob);
+
+    __setEpicStreamClientFactoryForTests(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CANONICAL_USER_ID,
+        userName: LEGACY_EMAIL,
+        email: LEGACY_EMAIL,
+      },
+      contextMetadata: { userId: CANONICAL_USER_ID, username: LEGACY_EMAIL },
+    });
+
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe
+          onHandle={(handle) => {
+            seenHandles.push(handle);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles.at(-1)?.userId).toBe(CANONICAL_USER_ID);
+    });
+
+    // The blob moved: it now lives under the canonical key...
+    expect(window.localStorage.getItem(canonicalKey)).toBe(persistedBlob);
+    // ...and the legacy key is gone, or a second sign-in sharing this email
+    // would re-adopt the same stale blob into ITS OWN account.
+    expect(window.localStorage.getItem(legacyKey)).toBeNull();
+    // The VALUE actually rehydrated into the live store, not just the key -
+    // a copy that never got read back by `persist` would pass the two
+    // assertions above for the wrong reason.
+    const handle = seenHandles.at(-1);
+    if (handle === undefined) throw new Error("expected a handle");
+    expect(handle.store.getState().lastFocusedArtifactId).toBe("art-1");
+  });
+
+  it("never overwrites an existing canonical-key blob with a legacy one", async () => {
+    // The control for the arm above: adoption must be a one-shot claim, not a
+    // standing sync. Two accounts can share the legacy email bucket - the
+    // FIRST to sign in adopts it, and every later sign-in (this account's own
+    // second launch, or a different account sharing the same address) must
+    // see its own already-adopted state win rather than being clobbered back
+    // to the shared legacy blob.
+    const EPIC_ID = "epic-session-test";
+    const LEGACY_EMAIL = "shared@example.com";
+    const CANONICAL_USER_ID = "user-alice";
+    const legacyKey = openEpicKey(LEGACY_EMAIL, EPIC_ID);
+    const canonicalKey = openEpicKey(CANONICAL_USER_ID, EPIC_ID);
+    const legacyBlob = JSON.stringify({
+      state: { lastFocusedArtifactId: "legacy-art", lastFocusedThreadId: null },
+      version: 1,
+    });
+    const canonicalBlob = JSON.stringify({
+      state: { lastFocusedArtifactId: "own-art", lastFocusedThreadId: null },
+      version: 1,
+    });
+    window.localStorage.setItem(legacyKey, legacyBlob);
+    window.localStorage.setItem(canonicalKey, canonicalBlob);
+
+    __setEpicStreamClientFactoryForTests(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CANONICAL_USER_ID,
+        userName: LEGACY_EMAIL,
+        email: LEGACY_EMAIL,
+      },
+      contextMetadata: { userId: CANONICAL_USER_ID, username: LEGACY_EMAIL },
+    });
+
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe
+          onHandle={(handle) => {
+            seenHandles.push(handle);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles.at(-1)?.userId).toBe(CANONICAL_USER_ID);
+    });
+
+    // This account's own blob is untouched...
+    expect(window.localStorage.getItem(canonicalKey)).toBe(canonicalBlob);
+    // ...and so, per `adoptLegacyPersistedKey`, is the legacy one: adoption
+    // returned before ever reading or clearing it, so another account still
+    // racing for the same shared bucket sees it exactly as it was.
+    expect(window.localStorage.getItem(legacyKey)).toBe(legacyBlob);
+    const handle = seenHandles.at(-1);
+    if (handle === undefined) throw new Error("expected a handle");
+    expect(handle.store.getState().lastFocusedArtifactId).toBe("own-art");
   });
 
   it("keeps the old handle mounted, then CRDT-merges it after an equal-room re-point", async () => {

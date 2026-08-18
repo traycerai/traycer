@@ -758,6 +758,32 @@ describe("WsRpcClient", () => {
       await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
       expect(dialOutcomes(recorder)).toEqual(["reportDialRefusal"]);
     });
+
+    // Blink race, not a hypothetical: a pre-open `error` event fires, the
+    // rejection it produces is awaited by `request()`'s own `finally` (see
+    // `session.close(1000, "ok")` in `ws-rpc-client.ts`), and only THEN does
+    // `close` arrive for the same failed dial. `selfInitiated` reads as true
+    // at that point - our own `close()` ran first - so without
+    // `erroredBeforeOpen` this refusal is misreported as `indeterminate` and
+    // silently dropped from death detection.
+    it("a pre-open error, followed by our own close() reacting to it, is still reported as a refusal", async () => {
+      const { sockets, recorder, client } = makeDialScenario(
+        "req-error-then-own-close",
+      );
+      const pending = requestWithSignal(client, new AbortController().signal);
+      await flush();
+      expect(sockets).toHaveLength(1);
+
+      sockets[0].socket.fireError("connection refused");
+      // Awaiting the rejection lets `request()`'s `finally` run to completion,
+      // which calls `session.close()` and sets `closed = true` before the
+      // socket's own `close` event below ever fires.
+      await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
+
+      sockets[0].socket.fireClose(1006, "connection refused", false);
+
+      expect(dialOutcomes(recorder)).toEqual(["reportDialRefusal"]);
+    });
   });
 
   it("refcounts the local logical session to one host: overlapping RPCs announce and retract exactly once, on the 0->1 and 1->0 edges only", async () => {

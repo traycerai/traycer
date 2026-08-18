@@ -1130,6 +1130,10 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
     pin.resolvedHostId,
     pin.resolvedHostId !== null,
   );
+  // This panel's OWN client, for the "open in editor" opener: the button must
+  // dispatch on the host the workspace selection actually names, not the
+  // app-wide effective host.
+  const hostClient = useSurfaceHostClient(pin.resolvedHostId);
   const handleSelectPath = (workspacePath: string): void => {
     pin.latchOnFirstUse();
     selection.setSelectedWorkspacePath(workspacePath);
@@ -1164,6 +1168,7 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
                     }
                   : null
               }
+              hostClient={hostClient}
             />
           </div>
           <FileTreePanelBodyForWorkspace

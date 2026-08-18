@@ -402,4 +402,28 @@ describe("TransportEvidenceRelay - currentSessionIdFor (P5.2 T6-T8)", () => {
     relay.sessionLost(HOST_ID, "s1", "remote-relay");
     expect(relay.currentSessionIdFor(HOST_ID)).toBe("s2");
   });
+
+  it("T9: the NEWEST session leaving falls back to a surviving older one - the per-RPC unary episode must not blank the stream's name", () => {
+    // The unary transport opens a fresh socket per RPC and announces one
+    // session per connectivity episode, so non-overlapping RPCs open and close
+    // an episode EACH. The compat probe's own `host.status` established
+    // `rpc:s7` (newest wins), its socket closed in the caller's `finally`
+    // BEFORE the response was mapped, and the relay blanked the name - while
+    // `/stream`'s `stream:s1` was live the whole time (both are `local-ws`
+    // transports; the kind does not distinguish them, the session id does).
+    // The probe then read null at the one moment it reads, so every local-host
+    // compat verdict was unanchored and both D13 guards were inert.
+    const relay = new TransportEvidenceRelay();
+    relay.sessionEstablished(HOST_ID, "stream:s1", "local-ws");
+    relay.sessionEstablished(HOST_ID, "rpc:s7", "local-ws");
+    expect(relay.currentSessionIdFor(HOST_ID)).toBe("rpc:s7");
+
+    relay.sessionLost(HOST_ID, "rpc:s7", "local-ws");
+    // Not null: the stream session is still live and is now the name.
+    expect(relay.currentSessionIdFor(HOST_ID)).toBe("stream:s1");
+
+    // And when THAT goes too, the name is genuinely gone.
+    relay.sessionLost(HOST_ID, "stream:s1", "local-ws");
+    expect(relay.currentSessionIdFor(HOST_ID)).toBeNull();
+  });
 });

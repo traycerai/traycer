@@ -32,7 +32,9 @@ export function WorktreeIntentMemoryPersistLifecycleBridge(
         retargetPersistedStore({
           store: useWorktreeIntentMemoryStore,
           name: worktreeIntentMemoryKey(transition.userId),
-          legacyName: worktreeIntentMemoryKey(legacyEmail),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName:
+            legacyEmail === null ? null : worktreeIntentMemoryKey(legacyEmail),
         });
         return;
       }

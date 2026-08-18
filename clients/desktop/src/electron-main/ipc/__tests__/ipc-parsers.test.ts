@@ -25,10 +25,10 @@ describe("parseQuitDecision", () => {
     );
   });
 
-  it("falls back to proceed for anything it does not recognize", () => {
-    expect(parseQuitDecision("something-else")).toBe("proceed");
-    expect(parseQuitDecision(undefined)).toBe("proceed");
-    expect(parseQuitDecision(null)).toBe("proceed");
-    expect(parseQuitDecision(42)).toBe("proceed");
+  it("falls back to userCancelled for anything it does not recognize", () => {
+    expect(parseQuitDecision("something-else")).toBe("userCancelled");
+    expect(parseQuitDecision(undefined)).toBe("userCancelled");
+    expect(parseQuitDecision(null)).toBe("userCancelled");
+    expect(parseQuitDecision(42)).toBe("userCancelled");
   });
 });

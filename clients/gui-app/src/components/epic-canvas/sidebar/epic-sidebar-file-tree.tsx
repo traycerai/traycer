@@ -24,7 +24,6 @@
  * `FileTreeMode`.
  */
 import {
-  use,
   useCallback,
   useEffect,
   useMemo,
@@ -483,10 +482,11 @@ interface FileTreePanelBodyForWorkspaceProps {
 export function FileTreePanelBodyForWorkspace(
   props: FileTreePanelBodyForWorkspaceProps,
 ) {
+  // The value to PROVIDE: ambient while following, the pin's own binding once
+  // built, null while pending - never the ambient socket for a pinned host.
   const pinnedStreamBinding = useSurfaceHostStreamBinding(props.hostId);
-  const ambientStream = use(StreamRuntimeContext);
   return (
-    <StreamRuntimeContext.Provider value={pinnedStreamBinding ?? ambientStream}>
+    <StreamRuntimeContext.Provider value={pinnedStreamBinding}>
       <FileTreeBodyForResolvedHost {...props} />
     </StreamRuntimeContext.Provider>
   );

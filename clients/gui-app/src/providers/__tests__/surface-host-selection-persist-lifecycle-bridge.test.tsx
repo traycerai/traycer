@@ -8,15 +8,25 @@ import { surfaceHostSelectionKey } from "@/lib/persist";
 
 const GIT_KEY = gitDiffPanelSurfaceKey("tab-1");
 
+const ALICE_EMAIL = "a@b.com";
+const BOB_EMAIL = "b@b.com";
+// userId and email deliberately DIFFER: a fixture that equates them cannot
+// detect email-keyed scoping. Unlike the other bridges, this store was ADDED
+// in this release (TASK 2) - there is no legacy email-keyed predecessor, so
+// no arm here seeds under the raw email key.
+const ALICE_ID = `user:${ALICE_EMAIL}`;
+const BOB_ID = `user:${BOB_EMAIL}`;
+
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
   email: string | null,
 ): void {
   if (status === "signed-in" && email !== null) {
+    const userId = `user:${email}`;
     useAuthStore.setState({
       status,
-      profile: { userId: email, userName: email, email },
-      contextMetadata: { userId: email, username: email },
+      profile: { userId, userName: email, email },
+      contextMetadata: { userId, username: email },
     });
     return;
   }
@@ -30,9 +40,9 @@ function resetStore(): void {
   useSurfaceHostSelectionStore.getState().resetForTests();
 }
 
-function persistSnapshot(email: string | null, hostId: string): void {
+function persistSnapshot(bucketIdentity: string | null, hostId: string): void {
   window.localStorage.setItem(
-    surfaceHostSelectionKey(email),
+    surfaceHostSelectionKey(bucketIdentity),
     JSON.stringify({
       state: { selections: { [GIT_KEY]: hostId } },
       version: 1,
@@ -55,7 +65,7 @@ describe("<SurfaceHostSelectionPersistLifecycleBridge />", () => {
   });
 
   it("retargets to the signed-in user's surface-pin bucket", async () => {
-    persistSnapshot("a@b.com", "host-alice");
+    persistSnapshot(ALICE_ID, "host-alice");
 
     render(
       <SurfaceHostSelectionPersistLifecycleBridge>
@@ -64,7 +74,7 @@ describe("<SurfaceHostSelectionPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "a@b.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
@@ -75,14 +85,14 @@ describe("<SurfaceHostSelectionPersistLifecycleBridge />", () => {
   });
 
   it("wipes pins on sign-out", async () => {
-    persistSnapshot("a@b.com", "host-alice");
+    persistSnapshot(ALICE_ID, "host-alice");
     render(
       <SurfaceHostSelectionPersistLifecycleBridge>
         <div />
       </SurfaceHostSelectionPersistLifecycleBridge>,
     );
     act(() => {
-      resetAuth("signed-in", "a@b.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
     await waitFor(() => {
       expect(useSurfaceHostSelectionStore.getState().selections[GIT_KEY]).toBe(
@@ -97,14 +107,14 @@ describe("<SurfaceHostSelectionPersistLifecycleBridge />", () => {
     await waitFor(() => {
       expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
     });
-    expect(
-      window.localStorage.getItem(surfaceHostSelectionKey("a@b.com")),
-    ).toBe(null);
+    expect(window.localStorage.getItem(surfaceHostSelectionKey(ALICE_ID))).toBe(
+      null,
+    );
   });
 
   it("retargets the persist bucket on user switch", async () => {
-    persistSnapshot("a@b.com", "host-alice");
-    persistSnapshot("b@b.com", "host-bob");
+    persistSnapshot(ALICE_ID, "host-alice");
+    persistSnapshot(BOB_ID, "host-bob");
 
     render(
       <SurfaceHostSelectionPersistLifecycleBridge>
@@ -113,7 +123,7 @@ describe("<SurfaceHostSelectionPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "a@b.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
     await waitFor(() => {
       expect(useSurfaceHostSelectionStore.getState().selections[GIT_KEY]).toBe(
@@ -122,7 +132,7 @@ describe("<SurfaceHostSelectionPersistLifecycleBridge />", () => {
     });
 
     act(() => {
-      resetAuth("signed-in", "b@b.com");
+      resetAuth("signed-in", BOB_EMAIL);
     });
     await waitFor(() => {
       expect(useSurfaceHostSelectionStore.getState().selections[GIT_KEY]).toBe(

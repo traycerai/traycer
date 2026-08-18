@@ -1,4 +1,4 @@
-import { use, useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
 import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
@@ -173,10 +173,11 @@ function GitDiffTileStreamScope(props: {
   readonly hostId: string;
   readonly children: ReactNode;
 }): ReactNode {
+  // The value to PROVIDE: ambient while following, the pin's own binding once
+  // built, null while pending - never the ambient socket for a pinned host.
   const tileStreamBinding = useSurfaceHostStreamBinding(props.hostId);
-  const ambientStream = use(StreamRuntimeContext);
   return (
-    <StreamRuntimeContext.Provider value={tileStreamBinding ?? ambientStream}>
+    <StreamRuntimeContext.Provider value={tileStreamBinding}>
       {props.children}
     </StreamRuntimeContext.Provider>
   );

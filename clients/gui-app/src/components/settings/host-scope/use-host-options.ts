@@ -1,9 +1,12 @@
 import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostInstalledRecord,
+  MutationKind,
+} from "@traycer-clients/shared/platform/runner-host";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
-import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
@@ -85,6 +88,35 @@ export interface HostOptions {
  */
 function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
   return Promise.reject(new Error("host management bridge unavailable"));
+}
+
+/**
+ * Whether a mutation lane's KIND brings the local host UP - the sense M5's
+ * row means by "setting up or starting". `deregister`, `uninstallHost` and
+ * `removeTraycer` are TEARDOWN lanes: they are just as busy, but crediting
+ * them with "setting up" tells the person watching the row the opposite of
+ * what is happening to their machine.
+ *
+ * Exhaustive over `MutationKind` (not an exclude-list) so a new lane kind
+ * fails to compile here naming its missing arm, rather than silently
+ * defaulting to one reading or the other.
+ */
+function mutationBringsHostUp(kind: MutationKind): boolean {
+  switch (kind) {
+    case "ensure":
+    case "apply":
+    case "activate":
+    case "install":
+    case "register":
+    case "respawn":
+    case "recoverIfDown":
+    case "freePortAndRestart":
+      return true;
+    case "deregister":
+    case "uninstallHost":
+    case "removeTraycer":
+      return false;
+  }
 }
 
 export function useHostOptions(): HostOptions {
@@ -182,7 +214,16 @@ export function useHostOptions(): HostOptions {
   // (`connectable`, `health`) are built. Actor-agnostic by construction: the
   // lane is the host controller's own, so it is busy whether the desktop's
   // launch reconciler, the authority's ensure, or a user's Retry asked.
-  const localHostSettingUp = useHostProvisioningProgress() !== null;
+  //
+  // Read the SAME status source `useHostProvisioningProgress` reads (the
+  // controller status query), not that hook itself: its view answers "what
+  // copy names this lane", which is total over every kind including the
+  // teardown ones, and going through it here would lose the KIND this row
+  // needs to tell "being installed or started" apart from "being removed".
+  const provisioningLaneKind =
+    useRunnerHostControllerStatusQuery().data?.mutation?.kind ?? null;
+  const localHostSettingUp =
+    provisioningLaneKind !== null && mutationBringsHostUp(provisioningLaneKind);
 
   // The authority's own verdicts, and the flag that says whether it has
   // reached any. These are what make every row below say the same thing the

@@ -228,7 +228,12 @@ export function parseFreshSnapshotResponse(
  * chain compiling, so a renderer saying "do not quit" would have been parsed
  * as "quit" and answered by quitting. A record keyed by the union cannot omit
  * a member without failing the build, so the next member has to be decided
- * here before it can exist.
+ * here before it can exist. But the record only makes ADDING a member a
+ * compile error - it says nothing about what an unparseable payload means,
+ * same as `parseUnsyncedSnapshot` above: an unrecognized `decision` is not
+ * evidence the user asked to quit, so the fallback must be the one outcome
+ * that can't destroy anything - `userCancelled`, which keeps the app open.
+ * `stayOpen` exists on both consumers of this result for exactly that reason.
  */
 const QUIT_DECISION_MEMBERS: Readonly<Record<QuitDecision, true>> = {
   proceed: true,
@@ -247,10 +252,10 @@ export function parseQuitDecision(value: unknown): QuitDecision {
     return value;
   }
   log.warn(
-    "[runner-ipc] invalid quit decision from renderer; defaulting to proceed",
+    "[runner-ipc] invalid quit decision from renderer; defaulting to userCancelled",
     { value },
   );
-  return "proceed";
+  return "userCancelled";
 }
 
 export interface ParsedQuitDecisionResponse {

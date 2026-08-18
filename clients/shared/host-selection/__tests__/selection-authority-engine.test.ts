@@ -524,7 +524,7 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
     authority.dispose();
   });
 
-  it("a hard detach during the handover ends the ceiling with it (no timer left behind)", () => {
+  it("a hard detach during the handover ends the HANDOVER ceiling with it, and arms the CORPSE ceiling for the sessions it dropped", () => {
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -541,9 +541,20 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
     engine.attach("A", attachRequest(seqA, [liveSession("H", "sA")]));
     engine.allocateAttachSeq("A");
     expect(clock.pendingTimerCount()).toBe(1);
+    expect(engine.snapshot().effectiveHostId).toBe("H");
 
+    // The hard detach: `render-process-gone`, no `sessionLost` ever sent. The
+    // handover ceiling dies with the attachment (its whole reason to exist is
+    // gone). The ONE timer left is the corpse ceiling for H, armed because the
+    // effective host just lost its only session without anyone saying so -
+    // the authority-owned exit that used to exist only on the `lost`
+    // transition, leaving H at a usable `connecting` for ever after a hard
+    // detach unless the redial lane happened to accumulate refusals.
     engine.reporterDetached("A");
-    expect(clock.pendingTimerCount()).toBe(0);
+    expect(clock.pendingTimerCount()).toBe(1);
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("connecting");
+    clock.advance(EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
 
     authority.dispose();
   });
@@ -3239,6 +3250,63 @@ describe("SelectionAuthorityEngineImpl - P1.3 failover scenarios", () => {
     expect(ensure.calls.count).toBe(1);
     expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
     expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    authority.dispose();
+  });
+
+  it("does not hold a return-to-target behind an incumbent that has itself died", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      // L is the fallback the return-to-target hold sits on; it has to be
+      // startable, or the failover in step 2 lands on ∅ instead of L and
+      // there is no incumbent for step 4 to kill.
+      localHostEnsure: readyLocalHostEnsurePort(),
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // 1. Activate P -> effective P, target P.
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    // 2. Kill P -> failover to L. Target stays P (A2's shape): this is the
+    // premise for a return-to-target hold to have anything to hold later.
+    killHostWithRefusals(engine, "A", incarnation, "P");
+    expect(engine.snapshot().targetHostId).toBe("P");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // 3. P proves alive -> the return-to-target window opens and the engine
+    // keeps serving L. Premise that the hold is REAL: a few seconds into the
+    // window, still L - without this check the arm under test could pass
+    // vacuously because the hold never engaged in the first place.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      dialOutcome("P", "revive", "success", clock.now()),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    clock.advance(3_000);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // 4. Now L - the INCUMBENT the hold is protecting - dies too, the same
+    // three-refusal recipe used against P in step 2.
+    killHostWithRefusals(engine, "A", incarnation, "L");
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("dead");
+
+    // 5. The engine must not keep serving a host it has itself called dead
+    // for the remaining ~17s of the 20s window (clock is at 3_000ms, well
+    // inside RETURN_TO_TARGET_STABILITY_MS). Under the old code - the
+    // bypass arm asks only about the destination, never the origin - this
+    // read L until t=20_000.
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+    expect(lastSelectionChange(authority.events).cause).toBe("recovery");
 
     authority.dispose();
   });

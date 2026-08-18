@@ -233,6 +233,19 @@ export class HostDirectoryService implements IHostDirectoryService {
     void this.refresh();
   };
 
+  /**
+   * The push-riding twin of {@link handleVisibilityChange}: no poll clock to
+   * rearm, so a resume acts only on a push that arrived while hidden.
+   */
+  private readonly handleVisibilityChangeWhileRidingPushes = (): void => {
+    if (this.isDocumentHidden() || !this.pushMissedWhileHidden) {
+      return;
+    }
+    this.pushMissedWhileHidden = false;
+    this.applyRegistryPush();
+  };
+  private pushMissedWhileHidden = false;
+
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
     this.onRegistryPollTick = options.onRegistryPollTick;
@@ -554,16 +567,41 @@ export class HostDirectoryService implements IHostDirectoryService {
         });
         return;
       }
-      void this.refresh();
-      if (this.onRegistryPollTick !== null) {
-        this.onRegistryPollTick();
+      // HIDDEN WINDOWS DO NOT REFETCH ON A PUSH, the same rule the timer path
+      // applies to its own tick. Riding pushes returned from `start()` before
+      // `visibilityDocument` was ever assigned, so `isDocumentHidden()` was
+      // permanently false on desktop and every background window issued its
+      // own `GET /api/v3/hosts` on each of main's 60 s ticks - the very fetch
+      // the removed per-window timer used to skip. The push is remembered and
+      // acted on when the window next becomes visible.
+      if (this.isDocumentHidden()) {
+        this.pushMissedWhileHidden = true;
+        return;
       }
+      this.applyRegistryPush();
     });
     if (subscription === null) {
       return false;
     }
     this.registrySubscription = subscription;
+    this.visibilityDocument = typeof document === "undefined" ? null : document;
+    this.visibilityDocument?.addEventListener(
+      "visibilitychange",
+      this.handleVisibilityChangeWhileRidingPushes,
+    );
     return true;
+  }
+
+  /**
+   * What one shell push drives: the SAME two things the interval tick drives,
+   * through the same paths (see the doc above for why the pushed rows are not
+   * seeded directly).
+   */
+  private applyRegistryPush(): void {
+    void this.refresh();
+    if (this.onRegistryPollTick !== null) {
+      this.onRegistryPollTick();
+    }
   }
 
   /**
@@ -619,7 +657,12 @@ export class HostDirectoryService implements IHostDirectoryService {
       "visibilitychange",
       this.handleVisibilityChange,
     );
+    this.visibilityDocument?.removeEventListener(
+      "visibilitychange",
+      this.handleVisibilityChangeWhileRidingPushes,
+    );
     this.visibilityDocument = null;
+    this.pushMissedWhileHidden = false;
   }
 
   private isDocumentHidden(): boolean {

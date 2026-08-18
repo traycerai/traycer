@@ -183,3 +183,58 @@ describe("hasUnsyncedEdits agrees with getUnsyncedEdits", () => {
     expectAgreement("epic-orphaned", true);
   });
 });
+
+describe("getUnsyncedEdits memo key", () => {
+  afterEach(() => {
+    __getOpenEpicRegistryForTests().disposeAll();
+  });
+
+  it("changes when ONLY `unsyncable` flips, so a re-point is not served a stale cached row", () => {
+    // Pins the memo-key fix directly. The cache key used to be
+    // `epicId:queueSize:isDirty:title`, which does not mention `unsyncable`.
+    // A re-point that leaves the live session CLEAN and retains the outgoing
+    // dirty handle changes nothing else about the row - same queueSize, same
+    // isDirty, same title - only `unsyncable` flips true. Under the old key
+    // this transition was invisible, so the stale cached row (unsyncable:
+    // false) kept being served to the lifecycle push and the cross-window
+    // snapshot, and an app-update install could restart Desktop past the
+    // discard confirmation and destroy the retained document.
+    const registry = __getOpenEpicRegistryForTests();
+    const outgoing = makeHandle("epic-memo", "Memo");
+    outgoing.store.setState({ isDirty: true, unsyncedQueueSize: 3 });
+    registry.acquireMounted("epic-memo", () => outgoing);
+
+    const before = registry
+      .getUnsyncedEdits()
+      .find((row) => row.epicId === "epic-memo");
+    expect(before).toBeDefined();
+    // Premise: a dirty LIVE session (nothing retained yet) is not unsyncable.
+    expect(before === undefined ? null : before.unsyncable).toBe(false);
+    expect(before === undefined ? -1 : before.queueSize).toBe(3);
+    expect(before === undefined ? false : before.isDirty).toBe(true);
+
+    registry.replaceMounted(
+      "epic-memo",
+      outgoing,
+      makeHandle("epic-memo", "Memo"),
+      {
+        hostStamp: "host-a",
+        ownerIdentityKey: "key-a",
+        editsTransferredToReplacement: false,
+      },
+    );
+    // Premise: the re-point really did retain the outgoing handle.
+    expect(registry.retainedCountForTests("epic-memo")).toBe(1);
+
+    const after = registry
+      .getUnsyncedEdits()
+      .find((row) => row.epicId === "epic-memo");
+    expect(after).toBeDefined();
+    expect(after === undefined ? false : after.unsyncable).toBe(true);
+    // The OTHER key parts are unchanged - this is what makes the arm
+    // discriminating: a key that omits `unsyncable` would return `before`
+    // unmodified instead of recomputing on this call.
+    expect(after === undefined ? -1 : after.queueSize).toBe(3);
+    expect(after === undefined ? false : after.isDirty).toBe(true);
+  });
+});

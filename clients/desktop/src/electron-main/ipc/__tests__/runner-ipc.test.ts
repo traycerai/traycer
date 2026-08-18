@@ -2108,6 +2108,11 @@ describe("RunnerIpcBridge", () => {
       quitState: undefined,
     });
     bridge.install();
+    // Both windows have mounted the lifecycle bridge (a real window pushes a
+    // snapshot at mount). The fresh-snapshot fan-out asks READY windows only:
+    // one that never mounted has no Epic canvas and nothing unsynced to hold.
+    bridge.appLifecycleReadyWindowIds.add("window-a");
+    bridge.appLifecycleReadyWindowIds.add("window-b");
 
     const unsyncableHandler = ipcMainState.handlers.get(
       RunnerHostInvoke.unsyncableWorkAcrossWindows,
@@ -2126,6 +2131,57 @@ describe("RunnerIpcBridge", () => {
     await expect(answered).resolves.toEqual({
       epics: [],
       otherWindowsUnknown: true,
+    });
+    bridge.dispose();
+  });
+
+  it("does not ask a window that never mounted the lifecycle bridge, and does not report it unknown", async () => {
+    // A window the readiness gate is blocking (host down, or the sign-in
+    // route) has no `AppShell`, so no `QuitInterceptBridge` to answer and no
+    // Epic session to hold unsynced work. Fanning the fresh query out to it
+    // anyway timed out on EVERY install click for the rest of the session and
+    // reported `otherWindowsUnknown` for a window that structurally could not
+    // hold anything - the destructive confirmation, with nothing at risk.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    // Only window-a ever mounted; window-b is gated.
+    bridge.appLifecycleReadyWindowIds.add("window-a");
+
+    const unsyncableHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.unsyncableWorkAcrossWindows,
+    );
+    const freshResponseHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+    );
+    if (unsyncableHandler === undefined || freshResponseHandler === undefined) {
+      throw new Error("appLifecycle handlers missing");
+    }
+
+    const answered = unsyncableHandler(sender(101));
+    await replyFreshSnapshot(freshResponseHandler, windowA, 101, []);
+
+    // Not unknown: the gated window was never asked, so it cannot be stale.
+    await expect(answered).resolves.toEqual({
+      epics: [],
+      otherWindowsUnknown: false,
     });
     bridge.dispose();
   });
@@ -2704,7 +2760,7 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("awaits a terminal quit decision and defaults malformed payloads to proceed", async () => {
+  it("awaits a terminal quit decision and defaults malformed payloads to userCancelled", async () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
@@ -2717,6 +2773,9 @@ describe("RunnerIpcBridge", () => {
       window: buildWindow(),
     });
     bridge.install();
+    // The window has mounted the lifecycle bridge; the fresh-snapshot fan-out
+    // asks READY windows only.
+    bridge.appLifecycleReadyWindowIds.add("primary");
 
     const respondHandler = ipcMainState.handlers.get(
       RunnerHostInvoke.respondToQuitRequest,
@@ -2758,9 +2817,9 @@ describe("RunnerIpcBridge", () => {
 
     await respondHandler(bareEvent(), "not-a-quit-decision");
 
-    await expect(decision).resolves.toBe("proceed");
+    await expect(decision).resolves.toBe("userCancelled");
     expect(log.warn).toHaveBeenCalledWith(
-      "[runner-ipc] invalid quit decision from renderer; defaulting to proceed",
+      "[runner-ipc] invalid quit decision from renderer; defaulting to userCancelled",
       { value: "not-a-quit-decision" },
     );
     bridge.dispose();
@@ -2969,6 +3028,9 @@ describe("RunnerIpcBridge", () => {
       window: buildWindow(),
     });
     bridge.install();
+    // The window has mounted the lifecycle bridge; the fresh-snapshot fan-out
+    // asks READY windows only.
+    bridge.appLifecycleReadyWindowIds.add("primary");
 
     const freshResponseHandler = ipcMainState.handlers.get(
       RunnerHostInvoke.freshUnsyncedSnapshotResponse,
