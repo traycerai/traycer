@@ -104,6 +104,55 @@ describe("ephemeral-fetch-queue", () => {
     vi.useRealTimers();
   });
 
+  it("REISSUES a forced pull behind an in-flight automatic one instead of joining it", async () => {
+    // Joining used to be safe because every request forced a probe. Now that
+    // `force` rides the wire, the in-flight automatic pull travels as
+    // `force: false` and a v4 host may answer it from its gauge cache - so a
+    // joined forced pull gets a reading up to the host's read floor old when it
+    // asked for a probe. The refresh controls disable while their own target is
+    // fetching, but consuming a Codex rate-limit reset credit forces a re-read
+    // from outside any button, and answering THAT from cache shows the
+    // pre-reset numbers the user just paid to clear.
+    const queryClient = newQueryClient();
+    const forced: boolean[] = [];
+    const settlers: Array<() => void> = [];
+    const request: RateLimitQueueRequestFn = (_hostId, _method, params) => {
+      forced.push(params.force ?? false);
+      return new Promise((resolve) => {
+        settlers.push(() => resolve(response()));
+      });
+    };
+    configureRateLimitQueue({
+      hostId: HOST_ID,
+      queryClient,
+      request: vi.fn(request),
+    });
+
+    // Background sweep puts codex on the wire as an automatic pull.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(forced).toEqual([false]);
+
+    // The forced pull lands while that one is still FETCHING - too late to
+    // promote in place, since the request is already on the wire.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    await flush();
+    // It waits rather than joining: still just the automatic request.
+    expect(forced).toEqual([false]);
+
+    settlers[0]();
+    await flush();
+
+    // ...and then runs as its OWN request, carrying force so the host probes.
+    expect(forced).toEqual([false, true]);
+  });
+
   it("serializes concurrent enqueues across providers - only one request is ever in flight (guardrail 1)", async () => {
     const queryClient = newQueryClient();
     const { request, calls, settlers } = makeControllableRequest();
@@ -940,7 +989,7 @@ describe("rate-limit queue target registry", () => {
     await Promise.all([first, second]);
   });
 
-  it("joins an already-fetching target instead of spawning a follow-up fetch", async () => {
+  it("joins an already-fetching FORCED target instead of spawning a follow-up fetch", async () => {
     const queryClient = newQueryClient();
     const { request, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
@@ -956,7 +1005,11 @@ describe("rate-limit queue target registry", () => {
     );
 
     // A second caller (e.g. a popover row remounting) asks for the exact same
-    // target while the first fetch is still in flight.
+    // target while the first fetch is still in flight. The in-flight pull is
+    // itself forced, so its result is the probe this caller wants - joining is
+    // correct, and reissuing would spawn a redundant CLI subprocess. Contrast
+    // the reissue case above, where the in-flight pull is AUTOMATIC and may be
+    // answered from the host gauge cache.
     const joinResult = enqueueRateLimitFetchBatchForScope(
       { hostId: HOST_ID, queryClient, request },
       [ambientTarget("codex")],

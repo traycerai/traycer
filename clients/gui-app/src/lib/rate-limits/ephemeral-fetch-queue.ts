@@ -414,20 +414,47 @@ export function enqueueRateLimitFetchBatchForScope(
     );
     const pending = pendingTargets.get(targetKey);
     if (pending !== undefined) {
-      // Manual intent upgrades queued automatic work in place.
+      // Manual intent upgrades QUEUED automatic work in place - it has not
+      // reached the wire yet, so flipping the flag is enough.
+      if (opts.force && pending.phase === "queued") {
+        pending.force = true;
+        joinedPromises.push(pending.promise);
+        continue;
+      }
+
+      // Past that point the request is on the wire, so what matters is what IT
+      // carries, not what phase it is in.
       //
-      // Joining an ALREADY-FETCHING item is weaker than it used to be. The
-      // original reasoning was "its result will be fresh", which held while
-      // every request forced a probe. Now that `force` rides the wire, an
-      // in-flight automatic pull travels as `force: false` and a v4 host may
-      // answer it from its gauge cache - so a forced enqueue that joins it can
-      // receive a reading up to the host's read floor old instead of the probe
-      // it asked for. Reissuing rather than joining needs this key's pending
-      // slot to hold two items and is left as a follow-up; the exposure is
-      // bounded because every refresh control disables while its own target is
-      // `"fetching"` (see `useAnyRateLimitQueueTargetFetching`), so reaching
-      // this branch takes a non-button caller.
-      if (opts.force && pending.phase === "queued") pending.force = true;
+      // Joining an already-FORCED pull stays correct: its result is a real
+      // probe, which is exactly what this caller asked for, and reissuing would
+      // spawn a redundant CLI subprocess for an answer already coming. That is
+      // the remount/double-click case the serial lane exists to collapse.
+      //
+      // Joining an AUTOMATIC one is not. It travels as `force: false`, so a v4
+      // host may answer it from its gauge cache - handing back a reading up to
+      // the host read floor old when the caller asked to bypass exactly that.
+      // The refresh controls disable while their own target is fetching, but a
+      // non-button caller still reaches here: consuming a Codex rate-limit
+      // reset credit forces a re-read, and answering THAT from cache shows the
+      // pre-reset numbers the user just paid to clear.
+      //
+      // So chain a fresh forced pull behind an automatic one.
+      // `settlePendingTarget` deletes the registry entry BEFORE resolving this
+      // promise, so the continuation always finds an empty slot and enqueues a
+      // real item rather than re-joining this branch.
+      if (opts.force && !pending.force) {
+        joinedPromises.push(
+          pending.promise
+            .then(() =>
+              enqueueRateLimitFetchBatchForScope(scope, [target], {
+                force: true,
+              }),
+            )
+            .then(() => undefined),
+        );
+        continue;
+      }
+
       joinedPromises.push(pending.promise);
       continue;
     }
