@@ -193,6 +193,33 @@ export interface RetainedHandleIdentity {
 }
 
 /**
+ * What `replaceMounted` needs to know about the handle it is displacing: who
+ * it was (for the retention's merge rules) and whether its edits ALREADY
+ * reached the replacement.
+ *
+ * The second half exists because retention and the same-room document merge
+ * are two answers to the same question, and only one of them can be right per
+ * re-point. When both snapshots name the same room, `EpicSessionProvider`
+ * applies the outgoing `Y.Doc` into the replacement under `LOCAL_ORIGIN`
+ * FIRST, which makes those edits syncable again through the new handle's
+ * transport. Retaining the outgoing handle as well leaves a second buffer
+ * holding the same edits with no socket - one that can never observe the
+ * acknowledgements the replacement is about to receive. `isDirty` on that
+ * corpse never clears, so the epic is reported unsyncable forever and the
+ * quit and update-install prompts keep naming work that synced long ago,
+ * until the tab is closed or the buffer is explicitly discarded.
+ *
+ * So a transfer is a disposal, not a retention: the edits are not lost, they
+ * are in the replacement. Retention stays the answer for the case it was
+ * written for (F10) - a room swap, or a host below `@1.2` that sends no
+ * `roomId` at all, where nothing was transferred and destroying the handle
+ * would destroy the only copy.
+ */
+export interface ReplacedHandleDisposition extends RetainedHandleIdentity {
+  readonly editsTransferredToReplacement: boolean;
+}
+
+/**
  * The existing retention a new one should merge into, or `null` for none.
  *
  * **A merge requires positive proof on all three axes.** Same epic and same
@@ -344,7 +371,7 @@ export class OpenEpicSessionRegistry {
     epicId: string,
     previousHandle: OpenEpicStoreHandle,
     nextHandle: OpenEpicStoreHandle,
-    previousIdentity: RetainedHandleIdentity,
+    previousDisposition: ReplacedHandleDisposition,
   ): boolean {
     const previous = this.entries.get(epicId);
     if (previous === undefined || previous.handle !== previousHandle) {
@@ -359,8 +386,18 @@ export class OpenEpicSessionRegistry {
     // `isClean()` also requires an open transport, which a re-point has by
     // definition taken away, so it would retain every failover including
     // fully-synced ones and nothing would ever retire them.
-    if (previous.handle.store.getState().isDirty) {
-      this.retainDirtyHandle(previous, previousIdentity);
+    //
+    // `editsTransferredToReplacement` is the second half of that rule and has
+    // to be checked FIRST: a transferred handle is still `isDirty` (its own
+    // store never saw an acknowledgement and never will), so the dirty test
+    // alone cannot tell "the only copy" apart from "a duplicate of what the
+    // replacement now holds" - and retaining the duplicate is what pins the
+    // epic as permanently unsyncable. See `ReplacedHandleDisposition`.
+    if (
+      previous.handle.store.getState().isDirty &&
+      !previousDisposition.editsTransferredToReplacement
+    ) {
+      this.retainDirtyHandle(previous, previousDisposition);
     } else {
       this.disposeEntry(previous, false);
     }

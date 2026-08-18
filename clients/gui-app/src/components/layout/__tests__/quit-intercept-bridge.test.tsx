@@ -799,6 +799,7 @@ describe("QuitInterceptBridge", () => {
     const replaced = registry.replaceMounted(epicId, dirty, clean, {
       hostStamp: "host-a",
       ownerIdentityKey: "key-a",
+      editsTransferredToReplacement: false,
     });
     if (!replaced) {
       throw new Error("replaceMounted did not accept the outgoing handle");

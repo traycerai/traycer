@@ -106,7 +106,11 @@ describe("hasUnsyncedEdits agrees with getUnsyncedEdits", () => {
       "epic-retained",
       outgoing,
       makeHandle("epic-retained", "Retained"),
-      { hostStamp: "host-a", ownerIdentityKey: "key-a" },
+      {
+        hostStamp: "host-a",
+        ownerIdentityKey: "key-a",
+        editsTransferredToReplacement: false,
+      },
     );
     expect(registry.retainedCountForTests("epic-retained")).toBe(1);
     expectAgreement("epic-retained", true);
@@ -131,6 +135,7 @@ describe("hasUnsyncedEdits agrees with getUnsyncedEdits", () => {
     registry.replaceMounted("epic-both", outgoing, incoming, {
       hostStamp: "host-a",
       ownerIdentityKey: "key-a",
+      editsTransferredToReplacement: false,
     });
     incoming.store.setState({ isDirty: true, unsyncedQueueSize: 1 });
 
@@ -161,7 +166,11 @@ describe("hasUnsyncedEdits agrees with getUnsyncedEdits", () => {
       "epic-orphaned",
       outgoing,
       makeHandle("epic-orphaned", "Orphaned"),
-      { hostStamp: "host-a", ownerIdentityKey: "key-a" },
+      {
+        hostStamp: "host-a",
+        ownerIdentityKey: "key-a",
+        editsTransferredToReplacement: false,
+      },
     );
     registry.release("epic-orphaned", "keep");
 

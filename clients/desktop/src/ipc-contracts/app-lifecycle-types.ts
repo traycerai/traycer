@@ -92,5 +92,24 @@ export interface AppLifecycleBridge {
    * asked a different question. The caller that needs it is the update
    * install, which restarts the whole app.
    */
-  unsyncableWorkAcrossWindows(): Promise<UnsyncedEditsSnapshot>;
+  unsyncableWorkAcrossWindows(): Promise<CrossWindowUnsyncableReport>;
+}
+
+/**
+ * The cross-window unsyncable answer, WITH its own fidelity.
+ *
+ * Deliberately not a bare array. The caller is deciding whether to destroy
+ * work, and for that decision "no window reported anything" and "a window did
+ * not answer" are opposite conclusions that a bare empty array renders
+ * identical. Main can only ever fall back to a cached row for a window that
+ * missed its deadline, so the fallback is named here and travels with the
+ * data rather than being resolved silently at the boundary.
+ */
+export interface CrossWindowUnsyncableReport {
+  readonly epics: UnsyncedEditsSnapshot;
+  /**
+   * At least one window did not answer this round and its cached row stood in.
+   * Whatever `epics` names is then only a LOWER BOUND on the work at risk.
+   */
+  readonly otherWindowsUnknown: boolean;
 }

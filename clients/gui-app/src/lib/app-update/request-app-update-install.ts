@@ -79,6 +79,13 @@ export async function requestAppUpdateInstall(
  *    can see plus `otherWindowsUnknown: true`, and the caller must confirm
  *    (the dialog says other windows could not be checked) rather than
  *    install on an answer nobody gave.
+ *
+ * A THIRD case fails closed the same way and is easy to miss because the call
+ * succeeds: main answered, but a window missed its fresh-snapshot deadline and
+ * main substituted that window's cached row. `otherWindowsUnknown` comes back
+ * true on the report and is honoured here rather than being flattened into
+ * "the IPC resolved, so the answer is complete". A resolved promise is
+ * evidence that main replied, never that every window did.
  */
 async function unsyncableWorkAcrossWindows(): Promise<UpdateUnsyncedConfirmation> {
   const lifecycle = readAppLifecycle();
@@ -86,9 +93,10 @@ async function unsyncableWorkAcrossWindows(): Promise<UpdateUnsyncedConfirmation
     return { epics: unsyncableWork(), otherWindowsUnknown: false };
   }
   try {
+    const report = await lifecycle.unsyncableWorkAcrossWindows();
     return {
-      epics: await lifecycle.unsyncableWorkAcrossWindows(),
-      otherWindowsUnknown: false,
+      epics: report.epics,
+      otherWindowsUnknown: report.otherWindowsUnknown,
     };
   } catch (error: unknown) {
     appLogger.error(
@@ -105,8 +113,13 @@ async function unsyncableWorkAcrossWindows(): Promise<UpdateUnsyncedConfirmation
  * detected, exactly as `quit-intercept-bridge.tsx` does it - gui-app must not
  * depend on the desktop package, and every other shell leaves this undefined.
  */
+interface CrossWindowUnsyncableReport {
+  readonly epics: ReadonlyArray<UnsyncedEditsEntry>;
+  readonly otherWindowsUnknown: boolean;
+}
+
 interface AppLifecycleUnsyncableReader {
-  unsyncableWorkAcrossWindows(): Promise<ReadonlyArray<UnsyncedEditsEntry>>;
+  unsyncableWorkAcrossWindows(): Promise<CrossWindowUnsyncableReport>;
 }
 
 interface WindowWithRunnerHost {

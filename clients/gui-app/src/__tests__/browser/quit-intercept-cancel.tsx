@@ -93,6 +93,7 @@ function seedRetainedBuffer(): void {
   registry.replaceMounted(EPIC_ID, outgoing, incoming, {
     hostStamp: "host-a",
     ownerIdentityKey: "key-a",
+    editsTransferredToReplacement: false,
   });
 }
 

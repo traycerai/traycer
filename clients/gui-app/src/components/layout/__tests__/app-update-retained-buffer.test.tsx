@@ -216,6 +216,7 @@ function seedRetainedBuffer(liveDirty: boolean): {
   registry.replaceMounted(EPIC_ID, outgoing, incoming, {
     hostStamp: "host-a",
     ownerIdentityKey: "key-a",
+    editsTransferredToReplacement: false,
   });
   if (liveDirty) {
     incoming.store.setState({ isDirty: true, unsyncedQueueSize: 1 });
@@ -290,28 +291,30 @@ function installOtherWindowUnsyncable(
   entries: ReadonlyArray<{ readonly epicId: string; readonly title: string }>,
 ): () => void {
   return installAppLifecycle(() =>
-    Promise.resolve(
-      entries.map((entry) => ({
+    Promise.resolve({
+      epics: entries.map((entry) => ({
         epicId: entry.epicId,
         title: entry.title,
         queueSize: 2,
         isDirty: true,
         unsyncable: true,
       })),
-    ),
+      otherWindowsUnknown: false,
+    }),
   );
 }
 
 function installAppLifecycle(
-  unsyncableWorkAcrossWindows: () => Promise<
-    ReadonlyArray<{
+  unsyncableWorkAcrossWindows: () => Promise<{
+    readonly epics: ReadonlyArray<{
       readonly epicId: string;
       readonly title: string;
       readonly queueSize: number;
       readonly isDirty: boolean;
       readonly unsyncable: boolean;
-    }>
-  >,
+    }>;
+    readonly otherWindowsUnknown: boolean;
+  }>,
 ): () => void {
   const target = window as Window & WindowWithRunnerHost;
   const previous = target.runnerHost;
@@ -473,6 +476,44 @@ describe("app update install vs a retained unsynced buffer", () => {
       expect(dialog.updateUnsyncedOtherWindowsUnknown).toBe(true);
     } finally {
       errorSpy.mockRestore();
+      restore();
+    }
+  });
+
+  it("a RESOLVED app-wide check that main marked incomplete also fails closed", async () => {
+    // Codex #1243 T-56, renderer half. The IPC did not reject - main answered,
+    // and answered "no unsyncable epics". What it ALSO said is that a window
+    // missed its fresh-snapshot deadline and its cached row stood in, so that
+    // empty list is a lower bound, not a census.
+    //
+    // Distinct from the rejection arm above in exactly the way that matters:
+    // there, the failure is visible as a thrown error and any conservative
+    // handler catches it. Here the promise RESOLVES, so a door that reads only
+    // the payload sees a clean, complete-looking "nothing to lose" and
+    // installs. Flattening main's flag to `false` is the whole defect.
+    const restore = installAppLifecycle(() =>
+      Promise.resolve({ epics: [], otherWindowsUnknown: true }),
+    );
+    try {
+      // Premise: this window holds nothing either, so the ONLY thing standing
+      // between the click and an install is the flag under test.
+      expect(__getOpenEpicRegistryForTests().getUnsyncedEdits().length).toBe(0);
+
+      const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
+      renderWithHost(<AppUpdateHeaderButton />, bridge);
+
+      fireEvent.click(await screen.findByTestId("app-update-header-button"));
+
+      await waitFor(() => {
+        expect(useDesktopDialogStore.getState().activeDialog).toBe(
+          "update-unsynced-confirm",
+        );
+      });
+      expect(bridge.installUpdate).not.toHaveBeenCalled();
+      expect(
+        useDesktopDialogStore.getState().updateUnsyncedOtherWindowsUnknown,
+      ).toBe(true);
+    } finally {
       restore();
     }
   });

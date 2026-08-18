@@ -130,7 +130,11 @@ describe("epic tab host projection", () => {
       epicId,
       handleA,
       handleB,
-      { hostStamp: "host-a", ownerIdentityKey: null },
+      {
+        hostStamp: "host-a",
+        ownerIdentityKey: null,
+        editsTransferredToReplacement: false,
+      },
     );
     expect(replaced).toBe(true);
 

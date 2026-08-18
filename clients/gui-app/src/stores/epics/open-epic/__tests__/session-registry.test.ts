@@ -392,7 +392,11 @@ function seedEpicTitle(handle: OpenEpicStoreHandle, title: string): void {
 
 describe("retained unsynced buffers across a host re-point (F10)", () => {
   const EPIC = "epic-f10";
-  const IDENTITY_A = { hostStamp: "host-a", ownerIdentityKey: "key-a" };
+  const IDENTITY_A = {
+    hostStamp: "host-a",
+    ownerIdentityKey: "key-a",
+    editsTransferredToReplacement: false,
+  };
 
   function repoint(
     registry: OpenEpicSessionRegistry,
@@ -400,7 +404,13 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     next: OpenEpicStoreHandle,
     identity: { hostStamp: string | null; ownerIdentityKey: string | null },
   ): boolean {
-    return registry.replaceMounted(EPIC, previous, next, identity);
+    // Every arm in this describe is the F10 shape: a re-point with no
+    // same-room merge behind it, so the outgoing handle is the ONLY copy of
+    // its edits and retention is the whole subject.
+    return registry.replaceMounted(EPIC, previous, next, {
+      ...identity,
+      editsTransferredToReplacement: false,
+    });
   }
 
   it("reports the retained buffer even though the LIVE session is clean", () => {
@@ -606,6 +616,7 @@ describe("release states its meaning for retained buffers", () => {
     registry.replaceMounted(EPIC, onHostA.handle, onHostB.handle, {
       hostStamp: "host-a",
       ownerIdentityKey: "key-a",
+      editsTransferredToReplacement: false,
     });
     expect(registry.getUnsyncedEdits()).toHaveLength(1);
 
@@ -630,6 +641,7 @@ describe("release states its meaning for retained buffers", () => {
     registry.replaceMounted(EPIC, previous.handle, next.handle, {
       hostStamp: "host-a",
       ownerIdentityKey: "key-a",
+      editsTransferredToReplacement: false,
     });
 
     registry.release(EPIC, "discard");
@@ -638,5 +650,68 @@ describe("release states its meaning for retained buffers", () => {
     // unreachable, or the retention would simply leak instead.
     expect(registry.retainedCountForTests(EPIC)).toBe(0);
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
+  });
+});
+
+describe("a re-point whose edits were MERGED into the replacement", () => {
+  const EPIC = "epic-transferred";
+
+  it("disposes the outgoing handle instead of retaining a duplicate of it", () => {
+    // Codex #1243 T-57. When both snapshots name the same room,
+    // `EpicSessionProvider` applies the outgoing doc into the replacement
+    // under LOCAL_ORIGIN BEFORE calling this - so those edits are already
+    // queued on the new handle and will sync through its transport.
+    //
+    // The outgoing handle is nonetheless still `isDirty`: its own store never
+    // saw an acknowledgement, and never can, because `retainDirtyHandle`
+    // detaches its transport. So the dirty test ALONE cannot tell "the only
+    // copy of this work" from "a second copy of work the replacement now
+    // owns", and retaining the second copy pins the epic as unsyncable
+    // forever - the quit and update-install prompts keep naming work that
+    // synced long ago, until the tab is closed.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const outgoing = buildRetentionHandle(EPIC, true, 4);
+    registry.acquireMounted(EPIC, () => outgoing.handle);
+    const incoming = buildRetentionHandle(EPIC, false, 0);
+
+    // Premise, positively: the handle being displaced really is dirty, so
+    // this arm is exercising the transfer branch and not passing because
+    // there was nothing to retain in the first place.
+    expect(outgoing.handle.store.getState().isDirty).toBe(true);
+
+    const replaced = registry.replaceMounted(
+      EPIC,
+      outgoing.handle,
+      incoming.handle,
+      {
+        hostStamp: "host-a",
+        ownerIdentityKey: "key-a",
+        editsTransferredToReplacement: true,
+      },
+    );
+
+    expect(replaced).toBe(true);
+    expect(registry.retainedCountForTests(EPIC)).toBe(0);
+    expect(registry.getUnsyncedEdits()).toHaveLength(0);
+  });
+
+  it("still retains when nothing was transferred - F10 is not weakened", () => {
+    // The control. The flag must be what decides, not the re-point: an
+    // identical sequence with `false` is the room-swap / sub-`@1.2` case where
+    // the outgoing handle IS the only copy, and destroying it there is the
+    // data loss the retention was added for.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const outgoing = buildRetentionHandle(EPIC, true, 4);
+    registry.acquireMounted(EPIC, () => outgoing.handle);
+    const incoming = buildRetentionHandle(EPIC, false, 0);
+
+    registry.replaceMounted(EPIC, outgoing.handle, incoming.handle, {
+      hostStamp: "host-a",
+      ownerIdentityKey: "key-a",
+      editsTransferredToReplacement: false,
+    });
+
+    expect(registry.retainedCountForTests(EPIC)).toBe(1);
+    expect(registry.getUnsyncedEdits()).toHaveLength(1);
   });
 });

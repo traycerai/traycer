@@ -711,10 +711,38 @@ export class RunnerIpcBridge {
   requestFreshUnsyncedSnapshot(
     timeoutMs: number,
   ): Promise<UnsyncedEditsSnapshot> {
+    return this.requestFreshUnsyncedSnapshotWithFidelity(timeoutMs).then(
+      (result) => result.snapshot,
+    );
+  }
+
+  /**
+   * `requestFreshUnsyncedSnapshot` plus the one fact it discards: whether
+   * EVERY window actually answered.
+   *
+   * The fan-out above resolves a non-answering window with its cached ambient
+   * row, which is the right default for the quit path - that path is racing an
+   * OS shutdown and a stale row is strictly better than blocking on a wedged
+   * renderer. It is the wrong default for a caller that has to decide whether
+   * destroying work is authorized, because a silent fallback is
+   * indistinguishable from a window that genuinely holds nothing, and the two
+   * lead to opposite decisions.
+   *
+   * So the fallback is reported rather than hidden, and the caller decides
+   * what it means. `installUpdate()` treats it as unknown-and-therefore-ask;
+   * see `unsyncableWorkAcrossWindows`.
+   */
+  requestFreshUnsyncedSnapshotWithFidelity(timeoutMs: number): Promise<{
+    readonly snapshot: UnsyncedEditsSnapshot;
+    readonly anyWindowStale: boolean;
+  }> {
     const requests = this.windowRegistry.records().map((record) => {
       return this.requestFreshUnsyncedSnapshotForWindow(record, timeoutMs);
     });
-    return Promise.all(requests).then(() => this.getUnsyncedEditsSnapshot());
+    return Promise.all(requests).then((results) => ({
+      snapshot: this.getUnsyncedEditsSnapshot(),
+      anyWindowStale: results.some((result) => !result.fresh),
+    }));
   }
 
   /**
@@ -894,12 +922,27 @@ export class RunnerIpcBridge {
     return records.length === 1 ? records[0].windowId : null;
   }
 
+  /**
+   * `fresh` distinguishes "this window answered" from "this window did not,
+   * and the cached ambient row stood in for it". Both resolve with a usable
+   * snapshot; only the first is evidence about the window's CURRENT state.
+   */
   requestFreshUnsyncedSnapshotForWindow(
     record: IpcWindowRecord,
     timeoutMs: number,
-  ): Promise<UnsyncedEditsSnapshot> {
+  ): Promise<{
+    readonly snapshot: UnsyncedEditsSnapshot;
+    readonly fresh: boolean;
+  }> {
     const requestId = randomUUID();
-    return new Promise<UnsyncedEditsSnapshot>((resolve) => {
+    const cachedFallback = (): {
+      readonly snapshot: UnsyncedEditsSnapshot;
+      readonly fresh: boolean;
+    } => ({
+      snapshot: this.unsyncedEditsSnapshots.get(record.windowId) ?? [],
+      fresh: false,
+    });
+    return new Promise((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
@@ -911,7 +954,7 @@ export class RunnerIpcBridge {
           fallbackCount:
             this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
         });
-        resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
+        resolve(cachedFallback());
       }, timeoutMs);
       this.freshSnapshotWaiters.set(requestId, {
         windowId: record.windowId,
@@ -919,7 +962,7 @@ export class RunnerIpcBridge {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          resolve(snapshot);
+          resolve({ snapshot, fresh: true });
         },
       });
       if (
@@ -940,7 +983,7 @@ export class RunnerIpcBridge {
           fallbackCount:
             this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
         });
-        resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
+        resolve(cachedFallback());
       }
     });
   }

@@ -13,6 +13,20 @@ import {
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
+/**
+ * How long the update door waits for every window to answer before treating
+ * the unanswered ones as unknown.
+ *
+ * Deliberately more generous than the quit path's 200ms. That budget is set
+ * by an OS shutdown the app is already inside, and overrunning it risks the
+ * quit itself; this one is a user who just clicked Install on an app that is
+ * about to restart anyway, so the only cost of waiting is the wait. Spending
+ * it buys a real answer instead of a "could not check the other windows"
+ * prompt, which - being the fail-closed direction - is what a too-short
+ * timeout would show on every click.
+ */
+const UPDATE_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 500;
+
 export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.appLifecycleQuit, () => {
     log.info("[runner-ipc] app quit requested by renderer");
@@ -105,14 +119,36 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(RunnerHostInvoke.unsyncableWorkAcrossWindows, () =>
-    // Reads the AMBIENT per-window map rather than issuing a fresh-snapshot
-    // round trip to every window. Deliberate: the renderers push on a 100ms
-    // debounce off their own registry, and the state being asked about -
-    // whether a buffer was RETAINED across a re-point - changes on a re-point,
-    // not on a keystroke. A fan-out with a per-window timeout would make a
-    // button that installs an update wait on the slowest renderer in the app,
-    // and time out into exactly the wrong answer.
-    bridge.getUnsyncedEditsSnapshot().filter((entry) => entry.unsyncable),
+    // A FRESH fan-out, not the ambient per-window map.
+    //
+    // This used to read the ambient map, on the reasoning that retention
+    // changes on a re-point rather than on a keystroke, so a debounced push
+    // was current enough. That confuses how OFTEN the state changes with how
+    // CLOSELY a change can precede this question. A re-point that retains a
+    // buffer in window B is followed by a 100ms debounce and an IPC hop before
+    // main hears about it, and nothing stops window A's Update click from
+    // landing inside that window - at which point the aggregate says "no
+    // unsyncable work", the caller installs with no prompt, and the restart
+    // destroys the buffer this check exists to protect. Rare is not the same
+    // as safe when the loss is unrecoverable.
+    //
+    // The renderer's `getFreshUnsyncedSnapshot` handler cancels its own
+    // pending ambient push and reads the registry synchronously, so the round
+    // trip does not merely wait the debounce out - it bypasses it.
+    //
+    // The old objection to fanning out was that it makes the Update button
+    // wait on the slowest renderer "and time out into exactly the wrong
+    // answer". The wait is now bounded by `UPDATE_FRESH_UNSYNCED_SNAPSHOT_
+    // TIMEOUT_MS`, and a timeout no longer produces an answer at all: it is
+    // reported as `otherWindowsUnknown` and the caller must ask the user.
+    bridge
+      .requestFreshUnsyncedSnapshotWithFidelity(
+        UPDATE_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
+      )
+      .then((result) => ({
+        epics: result.snapshot.filter((entry) => entry.unsyncable),
+        otherWindowsUnknown: result.anyWindowStale,
+      })),
   );
 
   bridge.handleInvoke(

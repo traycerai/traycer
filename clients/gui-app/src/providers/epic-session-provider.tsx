@@ -579,12 +579,11 @@ export function EpicSessionProvider(
       const previousRoomId =
         current.handle.store.getState().snapshotMeta?.roomId;
       const nextRoomId = nextHandle.store.getState().snapshotMeta?.roomId;
-      if (
-        shouldMergeEpicRoomSwap(
-          { roomId: previousRoomId },
-          { roomId: nextRoomId },
-        )
-      ) {
+      const editsTransferredToReplacement = shouldMergeEpicRoomSwap(
+        { roomId: previousRoomId },
+        { roomId: nextRoomId },
+      );
+      if (editsTransferredToReplacement) {
         // LOCAL_ORIGIN routes the CRDT union through the replacement's normal
         // local-update path, preserving unacknowledged edits for recovery.
         Y.applyUpdate(
@@ -599,15 +598,22 @@ export function EpicSessionProvider(
       // this value decides whether a later retention merges into this buffer.
       // A wrong host here would merge two hosts' unsynced edits into one
       // document that can be honestly flushed to neither.
-      const previousIdentity = {
+      //
+      // Carries the merge OUTCOME too, so the registry can tell a handle that
+      // is the only copy of its edits from one whose edits are already in the
+      // replacement. Read from the same boolean the merge above branched on
+      // rather than recomputed, so the two can never disagree about what
+      // happened to this document.
+      const previousDisposition = {
         hostStamp: getEpicSessionHandleHostId(current.handle),
         ownerIdentityKey: current.ownerIdentityKey,
+        editsTransferredToReplacement,
       };
       const replaced = registry.replaceMounted(
         epicId,
         current.handle,
         nextHandle,
-        previousIdentity,
+        previousDisposition,
       );
       if (!replaced) {
         nextHandle.dispose();
