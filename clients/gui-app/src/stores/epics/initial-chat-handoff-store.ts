@@ -98,6 +98,86 @@ interface InitialChatHandoffStore {
 
 const KEY_SEPARATOR = "\x1f";
 
+interface InitialChatHandoffPersistedState {
+  readonly handoffs: Readonly<Record<string, InitialChatHandoff>>;
+}
+
+// Everything the v1 -> v2 migration below touches is declared BEFORE the
+// `create()` call, not after it beside the other selectors. `persist` runs
+// `hydrate()` during store creation and `toThenable` keeps that synchronous
+// for a sync storage, so `migrate` executes at MODULE EVALUATION - a `const`
+// declared further down the file would still be in its temporal dead zone.
+//
+// The failure that causes is quiet, which is what makes it worth pinning:
+// zustand catches whatever `migrate` throws, so there is no crash and no
+// import error. Hydration just yields nothing, and the handoff is dropped on
+// exactly the installs holding a v1 blob - the only ones this migration
+// exists for. Measured, not assumed: moving this declaration below `create()`
+// turns the rehydration test into `expected null not to be null`, never a
+// ReferenceError.
+const HANDOFF_STATUSES: ReadonlySet<string> = new Set<InitialChatHandoffStatus>(
+  ["pending", "waitingProjection", "waitingChat", "sending", "failed"],
+);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringOrNull(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+/**
+ * A persisted handoff, identified by the fields this store's own logic
+ * BRANCHES on - the scope triple, `chatId`, and the status union.
+ *
+ * The payload fields (`content`, `settings`, `worktreeIntent`, `placement`)
+ * are deliberately not re-validated: v1 wrote them from this same interface at
+ * these same types, and the only thing v2 changed is the map key. Checking the
+ * discriminators is what keeps a truncated or hand-edited blob from
+ * rehydrating into a record whose `status` no transition matches, which would
+ * strand it as unconsumable.
+ */
+function isPersistedHandoff(value: unknown): value is InitialChatHandoff {
+  if (!isRecord(value)) return false;
+  if (typeof value.epicId !== "string") return false;
+  if (!isStringOrNull(value.userId)) return false;
+  if (!isStringOrNull(value.hostId)) return false;
+  if (!isStringOrNull(value.chatId)) return false;
+  return typeof value.status === "string" && HANDOFF_STATUSES.has(value.status);
+}
+
+/**
+ * v1 -> v2: `initialChatHandoffKey` dropped its `hostId` segment, so every
+ * persisted key names a bucket the new lookup can no longer address.
+ *
+ * RE-KEYED rather than dropped - contrast `worktree-intent-staging-store`,
+ * whose v1 keys carried no host at all and so could not be attributed. Here
+ * each record carries its own `userId`/`epicId`, so the v2 key is recoverable
+ * exactly, and it is worth recovering: a handoff is a message the user already
+ * SENT and whose chat the host already created, so dropping one strands a
+ * seeded chat with nothing left to open it or clear its pending mark.
+ *
+ * Two v1 records for the same (user, epic) on different hosts would collapse
+ * to one, last-writer-wins. That pair cannot arise from this store's own
+ * writes - one epic is created on one host - and if it somehow did, the epic
+ * only has one canvas to hand off to.
+ */
+export function migrateInitialChatHandoffState(
+  persisted: unknown,
+): InitialChatHandoffPersistedState {
+  if (!isRecord(persisted) || !isRecord(persisted.handoffs)) {
+    return { handoffs: {} };
+  }
+  const handoffs: Record<string, InitialChatHandoff> = {};
+  for (const value of Object.values(persisted.handoffs)) {
+    if (!isPersistedHandoff(value)) continue;
+    const key = initialChatHandoffKey(value);
+    handoffs[key] = { ...value, key };
+  }
+  return { handoffs };
+}
+
 export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
   persist(
     (set) => ({
@@ -213,17 +293,36 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.initialChatHandoff)),
+      // v2 dropped the `hostId` segment from every persisted map key; see
+      // `initialChatHandoffKey` for why, and `migrateInitialChatHandoffState`
+      // for what happens to a v1 blob.
+      version: 2,
       storage: createJSONStorage(() => localStorage),
+      migrate: (persisted) => migrateInitialChatHandoffState(persisted),
     },
   ),
 );
 
+/**
+ * The handoff's IDENTITY: the user and the epic it seeds - deliberately NOT
+ * the host.
+ *
+ * `hostId` stays on the record as data (which host created this), but keying
+ * on it made the handoff unfindable the moment the two sides disagreed, and
+ * per-surface pins made them disagree routinely: `useLandingComposerActions`
+ * registers under the composer's PLACEMENT host (the pin - selection model
+ * §54, "the composer is placement"), while the canvas that consumes it reads
+ * the app-wide pointer. Pin the landing composer to host B while host A is
+ * effective and the seeded chat was never eager-opened, its pending mark never
+ * cleared, and its projection lifecycle never advanced.
+ *
+ * Sound because `epicId` is a host-minted UUID: one epic is one epic, and no
+ * two hosts can mint the same id, so the user pair is already unique. The
+ * epic's own id is what says which host it belongs to - repeating that in the
+ * key only created a way for the two to disagree.
+ */
 export function initialChatHandoffKey(scope: InitialChatHandoffScope): string {
-  return [
-    scope.hostId ?? "host:none",
-    scope.userId ?? "user:none",
-    scope.epicId,
-  ].join(KEY_SEPARATOR);
+  return [scope.userId ?? "user:none", scope.epicId].join(KEY_SEPARATOR);
 }
 
 export function selectInitialChatHandoff(

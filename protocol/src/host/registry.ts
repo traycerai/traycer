@@ -213,7 +213,9 @@ import {
   hostUpdateInstallV10,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
+  lifecycleClaimShutdownUpgradeV10ToV11,
   lifecycleClaimShutdownV10,
+  lifecycleClaimShutdownV11,
   lifecycleCommitShutdownV10,
   lifecycleReleaseShutdownV10,
 } from "@traycer/protocol/host/lifecycle/contracts";
@@ -287,6 +289,8 @@ import {
   epicEditCommentV10,
   epicFinishArtifactImageV10,
   epicGetTaskContextsV10,
+  epicGetTaskContextsV11,
+  epicGetTaskContextsUpgradeV10ToV11,
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
@@ -335,6 +339,7 @@ import {
   epicSetPinnedV10,
   epicSubscribeV10,
   epicSubscribeV11,
+  epicSubscribeV12,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
@@ -3849,11 +3854,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     // claim, so reconciliation must re-probe and use its legacy-safe path.
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      // @1.1 adds the additive `intent`, which is how a coordinator tells the
+      // host a start follows the stop - the only way the host can know, and
+      // what lets it publish its restart tombstone (D5/M1). @1.0 stays
+      // installed: its requests upgrade to `intent: "shutdown"`, reproducing
+      // today's no-tombstone behaviour exactly.
+      latestMinor: 1,
       versions: {
         0: {
           contract: lifecycleClaimShutdownV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: lifecycleClaimShutdownV11,
+          upgradeFromPreviousVersion: lifecycleClaimShutdownUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -4951,11 +4965,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // E_HOST_UNSUPPORTED for this call only and degrade to cache-only titles.
   "epic.getTaskContexts": {
     1: {
-      latestMinor: 0,
+      // @1.1's new row-union values are projection-gated in host dispatch:
+      // a v1.0 caller receives its released nullable rows, never a union arm.
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicGetTaskContextsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicGetTaskContextsV11,
+          upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -7545,13 +7566,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // negotiated it never receives the new kinds, and the resolver gates
       // emission on the negotiated version rather than assuming the peer will
       // tolerate an unknown frame.
-      latestMinor: 1,
+      //
+      // @1.2 adds `roomId` to the snapshot frame's `meta`. Unlike the @1.1
+      // frame KINDS, this one needs no emission gate - a peer on an older
+      // minor parses with its own frozen schema and strips the unknown key
+      // (see the @1.2 note in `epic/subscribe.ts` for the full asymmetry).
+      // @1.0 and @1.1 keep the pre-roomId meta shape.
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicSubscribeV10,
         },
         1: {
           contract: epicSubscribeV11,
+        },
+        2: {
+          contract: epicSubscribeV12,
         },
       },
     },

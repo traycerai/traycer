@@ -76,8 +76,8 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: () => streamState.support,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => streamState.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => streamState.hostId,
 }));
 
 function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {

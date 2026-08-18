@@ -149,6 +149,7 @@ describe("shellOutputStreamAvailability", () => {
 describe("shellOutputHostAvailability", () => {
   function reachability(over: Partial<HostReachability>): HostReachability {
     return {
+      basis: over.basis ?? "directory",
       status: over.status ?? "reachable",
       hostLabel: over.hostLabel ?? "Work laptop",
       unavailability: over.unavailability ?? null,

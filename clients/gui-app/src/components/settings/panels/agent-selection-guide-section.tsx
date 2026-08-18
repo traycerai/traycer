@@ -111,9 +111,16 @@ export function AgentSelectionGuideSection() {
   // `following` is usable but needs no re-provision either: the ambient client
   // already IS the scoped host's, and building a second one would duplicate
   // its socket for nothing.
+  //
+  // A GOVERNED SECOND COPY of `useScopedHostBinding`, narrowed to `ready` — see
+  // that hook's exception list, which names this one and why. `hostId` is what
+  // makes the re-provide reach `useHostClient()` at all, and the spread cannot
+  // be type-checked into supplying it: `...realBinding` satisfies the field
+  // with the app-wide `null`, so dropping it compiles clean and silently
+  // returns this section to the ambient host.
   const scopedBinding =
     scope.status === "ready" && realBinding !== null && scope.client !== null
-      ? { ...realBinding, hostClient: scope.client }
+      ? { ...realBinding, hostClient: scope.client, hostId: scope.hostId }
       : null;
 
   // ONE gate, wrapping everything that talks to the scoped host — including

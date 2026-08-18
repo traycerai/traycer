@@ -22,8 +22,8 @@ import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/publ
  * composite tile id.
  */
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-a",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-a",
 }));
 
 const reachability: { status: HostReachabilityStatus; hostLabel: string } = {

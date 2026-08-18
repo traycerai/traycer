@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClient } from "@/lib/host";
 import type { RateLimitQueueConfig } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
@@ -13,7 +13,7 @@ import type { RateLimitQueueConfig } from "@/lib/rate-limits/ephemeral-fetch-que
  */
 export function useRateLimitQueueScope(): RateLimitQueueConfig | null {
   const client = useHostClient();
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const queryClient = useQueryClient();
 
   return useMemo(() => {

@@ -124,12 +124,8 @@ export function TerminalDeadTileBanner(
 
 export interface WorkspaceFileDeadTileBannerProps {
   readonly hostLabel: string;
-  /**
-   * `offline` - the bound host is not in the directory / not available.
-   * `inactive` - the bound host is reachable but is not the renderer's
-   * active host, so its RPC client is not addressable from here.
-   */
-  readonly reason: "offline" | "inactive";
+  /** The bound host is not in the directory / not available. */
+  readonly reason: "offline";
   readonly testId: string;
 }
 
@@ -140,11 +136,11 @@ export function WorkspaceFileDeadTileBanner(
     <div
       className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
       data-testid={props.testId}
+      data-reason={props.reason}
     >
       <p className="max-w-md">
-        {props.reason === "offline"
-          ? `This file is on host "${props.hostLabel}", which is currently unreachable. The preview will load once that host is back.`
-          : `This file is on host "${props.hostLabel}". Switch your active host to "${props.hostLabel}" to view it.`}
+        This file is on host &quot;{props.hostLabel}&quot;, which is currently
+        unreachable. The preview will load once that host is back.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
@@ -162,7 +158,7 @@ export function WorkspaceFileDeadTileBanner(
 
 export interface GitDiffDeadTileBannerProps {
   readonly hostLabel: string;
-  readonly reason: "offline" | "inactive";
+  readonly reason: "offline";
   readonly testId: string;
 }
 
@@ -173,11 +169,11 @@ export function GitDiffDeadTileBanner(
     <div
       className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
       data-testid={props.testId}
+      data-reason={props.reason}
     >
       <p className="max-w-md">
-        {props.reason === "offline"
-          ? `This diff is on host "${props.hostLabel}", which is currently unreachable. The diff will load once that host is back.`
-          : `This diff is on host "${props.hostLabel}". Switch your active host to "${props.hostLabel}" to view it.`}
+        This diff is on host &quot;{props.hostLabel}&quot;, which is currently
+        unreachable. The diff will load once that host is back.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
@@ -195,10 +191,9 @@ export function GitDiffDeadTileBanner(
 
 /**
  * PR detail tiles subscribe through their OWN bound host's client
- * (`useHostStreamClientFor`), never the app's active host - so unlike
- * `GitDiffDeadTileBanner` there is no "inactive" reason, only "the bound
- * host itself is unreachable." The heavy PR cache lives on that host, so
- * nothing can render until it returns.
+ * (`useHostStreamClientFor`), never the app's active host — same as
+ * `GitDiffDeadTileBanner`, which only has an "offline" reason. The heavy
+ * PR cache lives on that host, so nothing can render until it returns.
  */
 export interface PrDetailDeadTileBannerProps {
   readonly hostLabel: string;

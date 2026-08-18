@@ -28,6 +28,7 @@ export function buildHostFreePortCommand(args: HostFreePortArgs): CommandFn {
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     const { killed, killError } = await withCliLock(
       {

@@ -10,6 +10,7 @@ import {
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
 import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
+import type { UnsyncedEditsSnapshotEntry } from "../../../ipc-contracts/app-lifecycle-types";
 import type {
   IpcHostController,
   IpcHostLifecycle,
@@ -108,6 +109,11 @@ vi.mock("electron", () => ({
   app: {
     getVersion: (): string => "1.0.0",
     getPath: (_key: string): string => "/tmp/traycer-desktop-test",
+    // The selection-authority binding listens for `render-process-gone` here
+    // (a crashed renderer must be reported as a detach, or its announced
+    // sessions would suppress the death counter forever).
+    on: (_event: string, _listener: unknown): void => undefined,
+    off: (_event: string, _listener: unknown): void => undefined,
   },
   safeStorage: {
     isEncryptionAvailable: (): boolean => false,
@@ -485,6 +491,32 @@ class FakeWindowRegistry implements IpcWindowRegistry {
   }
 }
 
+/**
+ * Answer ONE window's outstanding `getFreshUnsyncedSnapshot` request.
+ *
+ * Per-window on purpose: the correlation that matters is requestId -> window,
+ * and the response handler verifies the replying sender is the window the
+ * waiter was minted for. Finding the request on that window's OWN captured
+ * messages is what keeps a test from accidentally answering window A's
+ * request as window B - which the bridge would (correctly) drop, leaving a
+ * timeout that reads like a product bug.
+ */
+async function replyFreshSnapshot(
+  freshResponseHandler: (event: unknown, payload: unknown) => unknown,
+  window: CapturingWindow,
+  webContentsId: number,
+  snapshot: ReadonlyArray<UnsyncedEditsSnapshotEntry>,
+): Promise<void> {
+  const request = window.sentMessages.find(
+    (m) => m.channel === RunnerHostEvent.getFreshUnsyncedSnapshot,
+  );
+  if (request === undefined) {
+    throw new Error("no getFreshUnsyncedSnapshot was sent to this window");
+  }
+  const { requestId } = request.payload as { requestId: string };
+  await freshResponseHandler(sender(webContentsId), { requestId, snapshot });
+}
+
 function sender(webContentsId: number): {
   readonly sender: { readonly id: number };
   readonly senderFrame: { readonly parent: null };
@@ -620,8 +652,6 @@ describe("RunnerIpcBridge", () => {
     const channels = Array.from(ipcMainState.handlers.keys()).sort();
     expect(channels).toEqual(
       [
-        RunnerHostInvoke.hostPickerRequestClose,
-        RunnerHostInvoke.hostPickerRequestOpen,
         RunnerHostInvoke.workspaceFoldersPick,
         RunnerHostInvoke.validateAuthTokenIdentity,
         RunnerHostInvoke.deviceFlowStart,
@@ -660,6 +690,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.acknowledgeQuitRequest,
         RunnerHostInvoke.respondToQuitRequest,
         RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+        RunnerHostInvoke.unsyncableWorkAcrossWindows,
         RunnerHostInvoke.appUpdateCheck,
         RunnerHostInvoke.appUpdateDownload,
         RunnerHostInvoke.appUpdateGetSnapshot,
@@ -790,6 +821,11 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.zoomStepIn,
         RunnerHostInvoke.zoomStepOut,
         RunnerHostInvoke.zoomReset,
+        // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
+        RunnerHostInvoke.selectionAttach,
+        RunnerHostInvoke.selectionReportEvidence,
+        RunnerHostInvoke.selectionActivate,
+        RunnerHostInvoke.selectionRefreshFleet,
       ].sort(),
     );
     bridge.dispose();
@@ -1773,15 +1809,39 @@ describe("RunnerIpcBridge", () => {
     }
 
     await setSnapshotHandler(sender(101), [
-      { epicId: "epic-a", title: "Alpha", queueSize: 0, isDirty: true },
+      {
+        epicId: "epic-a",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     await setSnapshotHandler(sender(202), [
-      { epicId: "epic-b", title: "Beta", queueSize: 2, isDirty: true },
+      {
+        epicId: "epic-b",
+        title: "Beta",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     expect(bridge.hasUnsyncedEdits()).toBe(true);
     expect(bridge.getUnsyncedEditsSnapshot()).toEqual([
-      { epicId: "epic-a", title: "Alpha", queueSize: 0, isDirty: true },
-      { epicId: "epic-b", title: "Beta", queueSize: 2, isDirty: true },
+      {
+        epicId: "epic-a",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
+      {
+        epicId: "epic-b",
+        title: "Beta",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
 
     windowA.sentMessages.length = 0;
@@ -1800,8 +1860,20 @@ describe("RunnerIpcBridge", () => {
         payload: {
           requestId: expect.any(String),
           snapshot: [
-            { epicId: "epic-a", title: "Alpha", queueSize: 0, isDirty: true },
-            { epicId: "epic-b", title: "Beta", queueSize: 2, isDirty: true },
+            {
+              epicId: "epic-a",
+              title: "Alpha",
+              queueSize: 0,
+              isDirty: true,
+              unsyncable: false,
+            },
+            {
+              epicId: "epic-b",
+              title: "Beta",
+              queueSize: 2,
+              isDirty: true,
+              unsyncable: false,
+            },
           ],
         },
       },
@@ -1809,6 +1881,308 @@ describe("RunnerIpcBridge", () => {
 
     await respondHandler(sender(202), "userConfirmedDiscard");
     await expect(decision).resolves.toBe("userConfirmedDiscard");
+    bridge.dispose();
+  });
+
+  it("answers the cross-window unsyncable question from every window's snapshot", async () => {
+    // Main is the only process that can answer this. A renderer holds one
+    // window's Epic session registry, while `appUpdateInstall` restarts the
+    // whole app - and its quit path deliberately skips the unsynced-edits
+    // interception, so the prompt this feeds is the only thing between the
+    // restart and a buffer that can never be saved.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const setSnapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.setUnsyncedEditsSnapshot,
+    );
+    const unsyncableHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.unsyncableWorkAcrossWindows,
+    );
+    const freshResponseHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+    );
+    if (
+      setSnapshotHandler === undefined ||
+      unsyncableHandler === undefined ||
+      freshResponseHandler === undefined
+    ) {
+      throw new Error("appLifecycle handlers missing");
+    }
+
+    // Window A: dirty, but SYNCABLE - it still holds a transport and drains
+    // through the restart. Window B: a retained buffer that cannot.
+    await setSnapshotHandler(sender(101), [
+      {
+        epicId: "epic-syncable",
+        title: "Draining",
+        queueSize: 4,
+        isDirty: true,
+        unsyncable: false,
+      },
+    ]);
+    await setSnapshotHandler(sender(202), [
+      {
+        epicId: "epic-retained",
+        title: "Rewrite the onboarding",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: true,
+      },
+    ]);
+
+    // Premise: both windows really did report, so the filter below is choosing
+    // between two rows rather than passing on an empty map.
+    expect(bridge.getUnsyncedEditsSnapshot()).toHaveLength(2);
+
+    // Asked BY window A, answered about window B: the whole point. (A real
+    // window sender rather than a bare event, because this channel sits behind
+    // the bridge's sender-trust guard like every other invoke.)
+    //
+    // Both windows answer the fresh fan-out this now issues, so the report is
+    // a complete census and says so.
+    const answered = unsyncableHandler(sender(101));
+    await replyFreshSnapshot(freshResponseHandler, windowA, 101, [
+      {
+        epicId: "epic-syncable",
+        title: "Draining",
+        queueSize: 4,
+        isDirty: true,
+        unsyncable: false,
+      },
+    ]);
+    await replyFreshSnapshot(freshResponseHandler, windowB, 202, [
+      {
+        epicId: "epic-retained",
+        title: "Rewrite the onboarding",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: true,
+      },
+    ]);
+    await expect(answered).resolves.toEqual({
+      epics: [
+        {
+          epicId: "epic-retained",
+          title: "Rewrite the onboarding",
+          queueSize: 2,
+          isDirty: true,
+          unsyncable: true,
+        },
+      ],
+      otherWindowsUnknown: false,
+    });
+    bridge.dispose();
+  });
+
+  it("asks every window FRESH rather than trusting the debounced ambient push", async () => {
+    // Codex #1243 T-56, main half. Retention in window B is followed by a
+    // 100ms renderer debounce and an IPC hop before main hears about it, and
+    // nothing stopped window A's Update click from landing inside that gap:
+    // the ambient map still said "nothing unsyncable", the door installed
+    // with no prompt, and the restart destroyed the buffer.
+    //
+    // The renderer's fresh-snapshot handler cancels its own pending ambient
+    // push and reads its registry synchronously, so this round trip does not
+    // wait the debounce out - it bypasses it. Modelled here by a window whose
+    // AMBIENT row says nothing is unsyncable while its FRESH reply says
+    // otherwise, which is exactly the state the race leaves behind.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const setSnapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.setUnsyncedEditsSnapshot,
+    );
+    const unsyncableHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.unsyncableWorkAcrossWindows,
+    );
+    const freshResponseHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+    );
+    if (
+      setSnapshotHandler === undefined ||
+      unsyncableHandler === undefined ||
+      freshResponseHandler === undefined
+    ) {
+      throw new Error("appLifecycle handlers missing");
+    }
+
+    await setSnapshotHandler(sender(101), []);
+    await setSnapshotHandler(sender(202), []);
+
+    // Premise, positively: the AMBIENT answer is "nothing to lose". Without
+    // this the arm could pass on a bridge that never had a stale state to
+    // improve on, and would prove nothing about the race.
+    expect(
+      bridge.getUnsyncedEditsSnapshot().filter((row) => row.unsyncable),
+    ).toEqual([]);
+
+    const answered = unsyncableHandler(sender(101));
+    await replyFreshSnapshot(freshResponseHandler, windowA, 101, []);
+    await replyFreshSnapshot(freshResponseHandler, windowB, 202, [
+      {
+        epicId: "epic-just-retained",
+        title: "Retained a moment ago",
+        queueSize: 3,
+        isDirty: true,
+        unsyncable: true,
+      },
+    ]);
+
+    await expect(answered).resolves.toEqual({
+      epics: [
+        {
+          epicId: "epic-just-retained",
+          title: "Retained a moment ago",
+          queueSize: 3,
+          isDirty: true,
+          unsyncable: true,
+        },
+      ],
+      otherWindowsUnknown: false,
+    });
+    bridge.dispose();
+  });
+
+  it("reports otherWindowsUnknown when a window misses its deadline", async () => {
+    // The fail-closed half. A window that does not answer has its cached row
+    // substituted, and the substitution is REPORTED rather than resolved
+    // silently - because for a caller deciding whether to destroy work,
+    // "nobody reported anything" and "a window did not answer" are opposite
+    // conclusions that a bare list renders identical.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    // Both windows have mounted the lifecycle bridge (a real window pushes a
+    // snapshot at mount). The fresh-snapshot fan-out asks READY windows only:
+    // one that never mounted has no Epic canvas and nothing unsynced to hold.
+    bridge.appLifecycleReadyWindowIds.add("window-a");
+    bridge.appLifecycleReadyWindowIds.add("window-b");
+
+    const unsyncableHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.unsyncableWorkAcrossWindows,
+    );
+    const freshResponseHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+    );
+    if (unsyncableHandler === undefined || freshResponseHandler === undefined) {
+      throw new Error("appLifecycle handlers missing");
+    }
+
+    const answered = unsyncableHandler(sender(101));
+    // Only ONE of the two windows answers. The other is left to time out.
+    await replyFreshSnapshot(freshResponseHandler, windowA, 101, []);
+
+    await expect(answered).resolves.toEqual({
+      epics: [],
+      otherWindowsUnknown: true,
+    });
+    bridge.dispose();
+  });
+
+  it("does not ask a window that never mounted the lifecycle bridge, and does not report it unknown", async () => {
+    // A window the readiness gate is blocking (host down, or the sign-in
+    // route) has no `AppShell`, so no `QuitInterceptBridge` to answer and no
+    // Epic session to hold unsynced work. Fanning the fresh query out to it
+    // anyway timed out on EVERY install click for the rest of the session and
+    // reported `otherWindowsUnknown` for a window that structurally could not
+    // hold anything - the destructive confirmation, with nothing at risk.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    // Only window-a ever mounted; window-b is gated.
+    bridge.appLifecycleReadyWindowIds.add("window-a");
+
+    const unsyncableHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.unsyncableWorkAcrossWindows,
+    );
+    const freshResponseHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+    );
+    if (unsyncableHandler === undefined || freshResponseHandler === undefined) {
+      throw new Error("appLifecycle handlers missing");
+    }
+
+    const answered = unsyncableHandler(sender(101));
+    await replyFreshSnapshot(freshResponseHandler, windowA, 101, []);
+
+    // Not unknown: the gated window was never asked, so it cannot be stale.
+    await expect(answered).resolves.toEqual({
+      epics: [],
+      otherWindowsUnknown: false,
+    });
     bridge.dispose();
   });
 
@@ -1840,7 +2214,13 @@ describe("RunnerIpcBridge", () => {
       throw new Error("setUnsyncedEditsSnapshot handler missing");
     }
     await setSnapshotHandler(sender(101), [
-      { epicId: "epic-a", title: "Alpha", queueSize: 1, isDirty: true },
+      {
+        epicId: "epic-a",
+        title: "Alpha",
+        queueSize: 1,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     registry.focusById("window-b");
 
@@ -2225,12 +2605,19 @@ describe("RunnerIpcBridge", () => {
 
     expect(await getHandler(sender(202))).toEqual(signedIn);
     expect(authSession.get()).toEqual(signedIn);
-    expect(windowA.sentMessages).toEqual([
+    // Signing in is an IDENTITY TRANSITION for the selection authority (null
+    // -> userId), so every window is also told to re-attach: the transition
+    // voids every incarnation, and `reattachRequired` is the mandatory
+    // trigger that guarantees a post-transition attach.
+    const expectedFanOut = [
       { channel: RunnerHostEvent.authSessionChange, payload: signedIn },
-    ]);
-    expect(windowB.sentMessages).toEqual([
-      { channel: RunnerHostEvent.authSessionChange, payload: signedIn },
-    ]);
+      {
+        channel: RunnerHostEvent.selectionReattachRequired,
+        payload: { revision: 1 },
+      },
+    ];
+    expect(windowA.sentMessages).toEqual(expectedFanOut);
+    expect(windowB.sentMessages).toEqual(expectedFanOut);
     bridge.dispose();
   });
 
@@ -2373,7 +2760,7 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("awaits a terminal quit decision and defaults malformed payloads to proceed", async () => {
+  it("awaits a terminal quit decision and defaults malformed payloads to userCancelled", async () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
@@ -2386,6 +2773,9 @@ describe("RunnerIpcBridge", () => {
       window: buildWindow(),
     });
     bridge.install();
+    // The window has mounted the lifecycle bridge; the fresh-snapshot fan-out
+    // asks READY windows only.
+    bridge.appLifecycleReadyWindowIds.add("primary");
 
     const respondHandler = ipcMainState.handlers.get(
       RunnerHostInvoke.respondToQuitRequest,
@@ -2407,7 +2797,13 @@ describe("RunnerIpcBridge", () => {
     }
     const { requestId } = freshRequest.payload as { requestId: string };
     const snapshot = [
-      { epicId: "e-1", title: "Alpha", queueSize: 2, isDirty: true },
+      {
+        epicId: "e-1",
+        title: "Alpha",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: false,
+      },
     ];
     await freshResponseHandler(bareEvent(), { requestId, snapshot });
     await expect(fresh).resolves.toEqual(snapshot);
@@ -2421,9 +2817,9 @@ describe("RunnerIpcBridge", () => {
 
     await respondHandler(bareEvent(), "not-a-quit-decision");
 
-    await expect(decision).resolves.toBe("proceed");
+    await expect(decision).resolves.toBe("userCancelled");
     expect(log.warn).toHaveBeenCalledWith(
-      "[runner-ipc] invalid quit decision from renderer; defaulting to proceed",
+      "[runner-ipc] invalid quit decision from renderer; defaulting to userCancelled",
       { value: "not-a-quit-decision" },
     );
     bridge.dispose();
@@ -2456,13 +2852,25 @@ describe("RunnerIpcBridge", () => {
       }
 
       await setSnapshotHandler(bareEvent(), [
-        { epicId: "e-1", title: "Alpha", queueSize: 1, isDirty: true },
+        {
+          epicId: "e-1",
+          title: "Alpha",
+          queueSize: 1,
+          isDirty: true,
+          unsyncable: false,
+        },
       ]);
 
       expect(sentMessages).toEqual([]);
       await expect(
         bridge.requestQuitDecision([
-          { epicId: "e-1", title: "Alpha", queueSize: 1, isDirty: true },
+          {
+            epicId: "e-1",
+            title: "Alpha",
+            queueSize: 1,
+            isDirty: true,
+            unsyncable: false,
+          },
         ]),
       ).rejects.toThrow(/cannot receive quit interception/);
       bridge.dispose();
@@ -2494,7 +2902,13 @@ describe("RunnerIpcBridge", () => {
         throw new Error("setUnsyncedEditsSnapshot handler missing");
       }
       const snapshot = [
-        { epicId: "e-1", title: "Alpha", queueSize: 1, isDirty: true },
+        {
+          epicId: "e-1",
+          title: "Alpha",
+          queueSize: 1,
+          isDirty: true,
+          unsyncable: false,
+        },
       ];
       await setSnapshotHandler(bareEvent(), snapshot);
       sentMessages.length = 0;
@@ -2553,7 +2967,13 @@ describe("RunnerIpcBridge", () => {
         throw new Error("appLifecycle handlers missing");
       }
       const snapshot = [
-        { epicId: "e-1", title: "Alpha", queueSize: 2, isDirty: true },
+        {
+          epicId: "e-1",
+          title: "Alpha",
+          queueSize: 2,
+          isDirty: true,
+          unsyncable: false,
+        },
       ];
       await setSnapshotHandler(bareEvent(), snapshot);
       sentMessages.length = 0;
@@ -2608,6 +3028,9 @@ describe("RunnerIpcBridge", () => {
       window: buildWindow(),
     });
     bridge.install();
+    // The window has mounted the lifecycle bridge; the fresh-snapshot fan-out
+    // asks READY windows only.
+    bridge.appLifecycleReadyWindowIds.add("primary");
 
     const freshResponseHandler = ipcMainState.handlers.get(
       RunnerHostInvoke.freshUnsyncedSnapshotResponse,
@@ -2634,14 +3057,26 @@ describe("RunnerIpcBridge", () => {
     // An ambient `setUnsyncedEditsSnapshot` push arrives while the request is
     // in flight - it MUST NOT settle the in-flight fresh-snapshot promise.
     await setSnapshotHandler(bareEvent(), [
-      { epicId: "ambient", title: "Ambient", queueSize: 1, isDirty: true },
+      {
+        epicId: "ambient",
+        title: "Ambient",
+        queueSize: 1,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
 
     // A reply with a non-matching requestId also MUST NOT resolve the waiter.
     await freshResponseHandler(bareEvent(), {
       requestId: "mismatched-id",
       snapshot: [
-        { epicId: "wrong", title: "Wrong", queueSize: 9, isDirty: true },
+        {
+          epicId: "wrong",
+          title: "Wrong",
+          queueSize: 9,
+          isDirty: true,
+          unsyncable: false,
+        },
       ],
     });
 
@@ -2655,7 +3090,13 @@ describe("RunnerIpcBridge", () => {
 
     // The correct requestId resolves the waiter.
     const authoritative = [
-      { epicId: "authoritative", title: "Auth", queueSize: 3, isDirty: true },
+      {
+        epicId: "authoritative",
+        title: "Auth",
+        queueSize: 3,
+        isDirty: true,
+        unsyncable: false,
+      },
     ];
     await freshResponseHandler(bareEvent(), {
       requestId,
@@ -2690,7 +3131,13 @@ describe("RunnerIpcBridge", () => {
         throw new Error("setUnsyncedEditsSnapshot handler missing");
       }
       const cached = [
-        { epicId: "cached", title: "Cached", queueSize: 0, isDirty: true },
+        {
+          epicId: "cached",
+          title: "Cached",
+          queueSize: 0,
+          isDirty: true,
+          unsyncable: false,
+        },
       ];
       await setSnapshotHandler(bareEvent(), cached);
 
@@ -2730,13 +3177,25 @@ describe("RunnerIpcBridge", () => {
 
     // queueSize=0 but isDirty=true MUST intercept.
     await setSnapshotHandler(bareEvent(), [
-      { epicId: "e-1", title: "Alpha", queueSize: 0, isDirty: true },
+      {
+        epicId: "e-1",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     expect(bridge.hasUnsyncedEdits()).toBe(true);
 
     // queueSize>0 but isDirty=false MUST NOT intercept.
     await setSnapshotHandler(bareEvent(), [
-      { epicId: "e-2", title: "Beta", queueSize: 5, isDirty: false },
+      {
+        epicId: "e-2",
+        title: "Beta",
+        queueSize: 5,
+        isDirty: false,
+        unsyncable: false,
+      },
     ]);
     expect(bridge.hasUnsyncedEdits()).toBe(false);
 
@@ -2747,48 +3206,6 @@ describe("RunnerIpcBridge", () => {
     ]);
     expect(bridge.hasUnsyncedEdits()).toBe(false);
 
-    bridge.dispose();
-  });
-
-  it("debounces host-picker state and only emits on transitions", async () => {
-    const mod = await import("../register-runner-ipc");
-    const host = new FakeHost();
-    const bridge = new mod.RunnerIpcBridge({
-      host,
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      window: buildWindow(),
-    });
-    bridge.install();
-
-    sentMessages.length = 0;
-    const openHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.hostPickerRequestOpen,
-    );
-    const closeHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.hostPickerRequestClose,
-    );
-    expect(openHandler).toBeDefined();
-    expect(closeHandler).toBeDefined();
-    if (openHandler === undefined || closeHandler === undefined) {
-      return;
-    }
-
-    await openHandler(bareEvent());
-    await openHandler(bareEvent());
-    await closeHandler(bareEvent());
-
-    const pickerEvents = sentMessages.filter(
-      (m) => m.channel === RunnerHostEvent.hostPickerChange,
-    );
-    expect(pickerEvents).toEqual([
-      { channel: RunnerHostEvent.hostPickerChange, payload: true },
-      { channel: RunnerHostEvent.hostPickerChange, payload: false },
-    ]);
     bridge.dispose();
   });
 

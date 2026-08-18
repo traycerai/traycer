@@ -23,24 +23,29 @@ export const scopedPersistKey = (name: string, ...segments: string[]): string =>
 
 // ── Scoped builders (reproduce today's exact strings) ──────────────────────
 // Each scoped store namespaces its key by the signed-in identity; the bridges
-// pass the account email (or `null` → the shared `anon` bucket). The first
-// three are named `email` because that is literally what their bridges pass;
-// canvas/open-epic take a neutral `identity` (they receive the same email at
-// runtime — the older `userId` name was a misnomer). The registry never changes
-// WHICH value a store passes, so keys stay byte-identical; only construction is
-// centralized. Unifying the parameter naming further is a non-goal.
+// pass the CANONICAL `profile.userId` (or `null` → the shared `anon` bucket).
+// An email is passed to a builder only ONCE per sign-in, as a bridge's
+// `legacyName` argument to `retargetPersistedStore` — a one-shot migration
+// name for adopting a pre-userId-scoping bucket, never an ongoing identity.
+// The registry never changes WHICH value a store passes, so keys stay
+// byte-identical; only construction is centralized.
+//
+// Shared shape: every builder below takes `identity: string | null` — the
+// canonical user id, or `null` for the anonymous bucket. A caller may also
+// pass an email string here, but ONLY as the one-shot `legacyName` described
+// above; it is not a second kind of identity the builder understands.
 
-export const composerRunSettingsKey = (email: string | null): string =>
-  scopedPersistKey("composer-run-settings", scopeBucket(email));
+export const composerRunSettingsKey = (identity: string | null): string =>
+  scopedPersistKey("composer-run-settings", scopeBucket(identity));
 
-export const composerHarnessMemoryKey = (email: string | null): string =>
-  scopedPersistKey("composer-harness-memory", scopeBucket(email));
+export const composerHarnessMemoryKey = (identity: string | null): string =>
+  scopedPersistKey("composer-harness-memory", scopeBucket(identity));
 
-export const worktreeIntentMemoryKey = (email: string | null): string =>
-  scopedPersistKey("worktree-intent-memory", scopeBucket(email));
+export const worktreeIntentMemoryKey = (identity: string | null): string =>
+  scopedPersistKey("worktree-intent-memory", scopeBucket(identity));
 
-export const worktreeIntentStagingKey = (email: string | null): string =>
-  scopedPersistKey("worktree-intent-staging", scopeBucket(email));
+export const worktreeIntentStagingKey = (identity: string | null): string =>
+  scopedPersistKey("worktree-intent-staging", scopeBucket(identity));
 
 export const epicCanvasKey = (identity: string | null): string =>
   scopedPersistKey("epic-canvas", scopeBucket(identity));
@@ -48,16 +53,17 @@ export const epicCanvasKey = (identity: string | null): string =>
 export const landingTerminalsKey = (identity: string | null): string =>
   scopedPersistKey("landing-terminals", scopeBucket(identity));
 
+// Per-surface host pins (git-diff / file-tree / new-terminal / composer).
+// Identity-scoped like composer run settings (G1): a pin names an account's
+// host id, so another account must never inherit it across a user switch.
+export const surfaceHostSelectionKey = (identity: string | null): string =>
+  scopedPersistKey("surface-host-selection", scopeBucket(identity));
+
 // Arg order is `(identity, epicId)` but the emitted string keeps today's
 // `…:open-epic:{identityBucket}:{epicId}` order (the current store's local
 // `persistKey(epicId, userId)` emitted exactly this).
 export const openEpicKey = (identity: string | null, epicId: string): string =>
   scopedPersistKey("open-epic", scopeBucket(identity), epicId);
-
-// App-level host picker memory. This is intentionally unscoped: creation
-// surfaces share one "last selected host" value across the GUI app.
-export const lastSelectedHostKey = (): string =>
-  persistKey("last-selected-host");
 
 // The composer's PR/Issue mention filters, sticky per (task, section).
 // Identity-scoped like the run settings above, NOT like the host picker: a
@@ -66,8 +72,8 @@ export const lastSelectedHostKey = (): string =>
 // leave them readable after sign-out and hand them to the next account on
 // this profile. The lifecycle bridge retargets on sign-in and wipes the
 // bucket on sign-out, same as composer run settings.
-export const githubMentionFiltersKey = (email: string | null): string =>
-  scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(email));
+export const githubMentionFiltersKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
 
 // The hostId this machine's OWN local host last published. Unscoped and
 // identity-free like the picker memory: it is a fact about this machine, not
@@ -189,7 +195,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (9) ────────────────────────────────────────────
+  // ── Scoped zustand stores (10) ───────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -217,6 +223,11 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
+  {
+    camelName: "surfaceHostSelection",
+    leaf: "surface-host-selection",
+    kind: "scoped",
+  },
   {
     camelName: "appLocalNotifications",
     leaf: "app-local-notifications",
@@ -319,8 +330,6 @@ export const PERSIST_STORES = [
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
-  // App-level creation-surface host picker memory (host-directory-service.ts).
-  { camelName: "lastSelectedHost", leaf: "last-selected-host", kind: "static" },
   // This machine's own local host id (host-directory-service.ts).
   { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
   // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.

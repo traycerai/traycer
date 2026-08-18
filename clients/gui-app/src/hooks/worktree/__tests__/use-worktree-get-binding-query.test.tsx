@@ -57,9 +57,11 @@ function createBindingFixture(args: {
   let setupState = args.setupState;
   let fail = args.fail;
   let requestSeq = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -74,13 +76,13 @@ function createBindingFixture(args: {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "tok-1",
     }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
@@ -88,6 +90,7 @@ function createBindingFixture(args: {
   );
   return {
     client,
+    spine,
     queryClient,
     Wrapper,
     setSetupState: (next: SetupState) => {
@@ -223,15 +226,20 @@ describe("useWorktreeGetBinding condition cadence", () => {
       setupState: "running",
       fail: false,
     });
-    const originalRequest = fixture.client.requestWithSignal.bind(
-      fixture.client,
+    // Spy on the SPINE's own `requestForWithSignal`, not the pinned
+    // requester's `requestWithSignal`: the requester is a Proxy that
+    // special-cases that property to a fresh closure over the spine's method
+    // on every access, so a spy installed on the requester itself is never
+    // consulted.
+    const originalRequest = fixture.spine.requestForWithSignal.bind(
+      fixture.spine,
     );
-    vi.spyOn(fixture.client, "requestWithSignal").mockImplementation(
-      async (method, params, signal) => {
+    vi.spyOn(fixture.spine, "requestForWithSignal").mockImplementation(
+      async (entry, method, params, signal) => {
         if (method === "worktree.getBinding") {
           fetchTimes.push(Date.now());
         }
-        return originalRequest(method, params, signal);
+        return originalRequest(entry, method, params, signal);
       },
     );
 

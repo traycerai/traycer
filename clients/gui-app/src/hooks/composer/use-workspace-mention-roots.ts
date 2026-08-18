@@ -10,7 +10,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -56,9 +56,10 @@ export function useLandingComposerMentionRoots(
       null
     );
   });
-  // The landing composer follows the app-wide active host, so its global
-  // folder fallback reads that host's bucket.
-  const activeHostId = useReactiveActiveHostId();
+  // The landing composer's placement is its surface pin (pin ?? effective),
+  // so the global folder fallback reads the bucket of the host it will
+  // actually create on.
+  const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
   const globalFolders = useWorkspaceFoldersStore(
     (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
   );

@@ -121,6 +121,7 @@ export async function runHostUninstall(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     const controller = deps.createServiceController();
     const label = serviceLabelFor(ctx.environment);
@@ -154,6 +155,7 @@ export async function runHostUninstall(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   const result = await deps.uninstallHost({
     environment: ctx.environment,

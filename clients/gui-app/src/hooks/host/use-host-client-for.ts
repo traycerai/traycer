@@ -2,12 +2,15 @@ import { useMemo } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { useHostClient } from "@/lib/host/runtime";
+import { useHostRuntimeClient } from "@/lib/host/runtime";
 
 /**
  * Builds a stateless `HostRequester` facade that issues RPCs against `target`
- * WITHOUT `bind()`-ing it as the app-wide active host (which would reload the
- * Epic list and swap app-wide host state).
+ * without disturbing app-wide host state. This once meant "without `bind()`-ing
+ * it as the active host", which would have reloaded the Epic list and swapped
+ * app-wide state; P4.2 deleted the slot, so addressing a host is no longer
+ * capable of moving anything app-wide - which is what this facade wanted all
+ * along.
  *
  * The facade retains only `target`. Each request returns to `globalClient`,
  * which revalidates the target against the directory and captures the shared
@@ -46,7 +49,11 @@ export function buildTransientHostClient(
 export function useHostClientFor(
   target: HostDirectoryEntry | null,
 ): HostClient<HostRpcRegistry> | null {
-  const globalClient = useHostClient();
+  // The SPINE, not the app-wide client: this builds a requester for an
+  // explicitly named host, so taking the effective host's requester here
+  // would make the memo churn on every activation and would resolve one host
+  // through another host's routing view.
+  const globalClient = useHostRuntimeClient();
   const requestContext = globalClient.getRequestContext();
   const userId = globalClient.getRequestContextUserId();
 

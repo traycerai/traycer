@@ -7,7 +7,7 @@ import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
@@ -65,14 +65,17 @@ export function EpicSidebarCloudChatRow(
 ): ReactNode {
   const { chat } = props;
   const title = chat.title ?? "Untitled chat";
-  // The APP-WIDE host, not `useTabHostId()`. The sidebar is not a tab - it sits
-  // outside `<TabHostProvider>`, so a tab-scoped read throws here (it did) - and
-  // the repo's host-scope split says exactly this: tiles read the tab's host,
-  // app-wide surfaces read the active one. It is also the right host on the
-  // merits: this only names which host will SERVE the cloud read, the read is a
-  // byte pipe any reachable host can answer, and the tile the ref opens binds
-  // its own tab's host for life regardless. The OWNING host below is metadata.
-  const readingHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The Epic SESSION's host - not `useTabHostId()`, and not the app-wide one.
+  // The sidebar is not a tab (it sits outside every `<TabHostProvider>`, so a
+  // tab-scoped read throws here - it did), and it is not an app-wide surface
+  // either: it is the third host role, the Epic session's, and this row is
+  // projected by that session. This id only names which host will SERVE the
+  // cloud read - a byte pipe any reachable host can answer - so the one host
+  // known to be serving this sidebar is the honest choice; the app-wide
+  // pointer names, for the whole of a re-point in flight, a machine that may
+  // not be answering yet, and the tile this ref opens binds that id for life.
+  // The OWNING host below is metadata.
+  const readingHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   // The SAME tint rule a local chat row's idle glyph resolves (settings-driven
   // per-type color, muted only when the user turns icon colors off). A
   // hardcoded muted class here made the icon column encode row ORIGIN - local

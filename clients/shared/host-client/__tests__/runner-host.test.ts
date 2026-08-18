@@ -124,38 +124,6 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect(handler).toHaveBeenNthCalledWith(1);
   });
 
-  it("tracks hostPicker open/close/onChange transitions", () => {
-    const host = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.invalid/sign-in",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-
-    const onChange = vi.fn();
-    host.hostPicker.onChange(onChange);
-
-    expect(host.hostPicker.isOpen).toBe(false);
-
-    host.hostPicker.requestOpen();
-    expect(host.hostPicker.isOpen).toBe(true);
-    expect(onChange).toHaveBeenNthCalledWith(1, true);
-
-    // Repeated open is idempotent.
-    host.hostPicker.requestOpen();
-    expect(onChange).toHaveBeenCalledTimes(1);
-
-    host.hostPicker.requestClose();
-    expect(host.hostPicker.isOpen).toBe(false);
-    expect(onChange).toHaveBeenNthCalledWith(2, false);
-
-    host.hostPicker.requestClose();
-    expect(onChange).toHaveBeenCalledTimes(2);
-  });
-
   it("exposes no-op tray and notification surfaces that never fire", async () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",

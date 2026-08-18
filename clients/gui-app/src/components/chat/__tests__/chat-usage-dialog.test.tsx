@@ -20,9 +20,11 @@ type UsageSummaryResponse = ResponseOfMethod<
 
 const usageSummaryCallCount = { current: 0 };
 
-const liveHostClient = new HostClient<HostRpcRegistry>({
+const liveHostClientSpine = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
   invalidator: { invalidateHostScope: () => undefined },
+  findHostById: (hostId) =>
+    hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
   messenger: new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `req-${Math.random().toString(36).slice(2, 8)}`,
@@ -34,10 +36,10 @@ const liveHostClient = new HostClient<HostRpcRegistry>({
     },
   }),
 });
-liveHostClient.bind(mockLocalHostEntry);
-liveHostClient.setRequestContext(
+liveHostClientSpine.setRequestContext(
   createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
 );
+const liveHostClient = liveHostClientSpine.createRequester(mockLocalHostEntry);
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => liveHostClient,

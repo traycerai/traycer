@@ -10,6 +10,7 @@ import {
   runWorktreeCleanup,
   type WorktreeCleanupOutcome,
 } from "@/lib/epics/run-worktree-cleanup";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
 // Recording every construction is what lets a test assert the migration's core
@@ -123,6 +124,7 @@ function stubOpenStreamTransport(): (hostId: string) => DurableStreamTransport {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("stream WS factory must not be dialled in tests");

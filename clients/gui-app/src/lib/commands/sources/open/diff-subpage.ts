@@ -16,7 +16,9 @@ import type {
   WorktreeBindingSelectorRow,
 } from "@traycer/protocol/host";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
-import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
 import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
@@ -115,7 +117,12 @@ function makeDiffStepSubpage(row: WorktreeBindingSelectorRow): CommandSubpage {
 export function useDiffOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const bindingsQuery = useWorktreeListBindingsForEpic({
+  // The epic's worktree bindings are host-local records of the host serving
+  // the epic - read them there (`useActiveEpicHostId`), not from whichever
+  // host the app points at.
+  const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const bindingsQuery = useWorktreeListBindingsForEpicForClient({
+    client: useHostClientForHostId(activeEpicHostId),
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
   });

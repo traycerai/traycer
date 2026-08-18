@@ -4,14 +4,35 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+// Two DISTINGUISHABLE sentinels, so a regression to the ambient host fails on
+// the value rather than on an absence: a build that reads `useHostClient()`
+// again gets a real object back and would satisfy any "a client was passed"
+// assertion.
+const clients = vi.hoisted(() => ({
+  ambient: { label: "ambient-client" },
+  session: { label: "session-client" },
+}));
+
 vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => ({}),
+  useHostClient: () => clients.ambient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => clients.ambient,
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => clients.session,
 }));
 
 const capturedOptions: Record<string, unknown> = {};
+const capturedClients: Record<string, unknown> = {};
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostMutation: (args: { method: string; options: unknown }) => {
+  useHostMutation: (args: {
+    method: string;
+    options: unknown;
+    client: unknown;
+  }) => {
     capturedOptions[args.method] = args.options;
+    capturedClients[args.method] = args.client;
     return { mutate: vi.fn(), isPending: false };
   },
 }));
@@ -112,5 +133,37 @@ describe("useEpicRenameArtifact", () => {
     };
     opts.onSuccess();
     expect(track).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * An artifact is a row IN an Epic, and an Epic is projected from exactly one
+ * machine - so every write here must address the SESSION's host, never the
+ * app-wide effective one.
+ *
+ * The window where those differ is not theoretical: `EpicSessionProvider`
+ * keeps the previous handle rendered while a re-point establishes and after
+ * one fails, and only the CANVAS is made inert for it (`epic-shell.tsx` passes
+ * `readOnly` to the tile subtree alone). The sidebar that issues these
+ * mutations stays live, so a Delete clicked on a row projected from host A was
+ * sent to host B.
+ */
+describe("epic node mutations address the Epic session's host", () => {
+  const CASES: ReadonlyArray<[string, () => unknown]> = [
+    ["epic.createArtifact", () => useEpicCreateArtifact()],
+    ["epic.deleteArtifact", () => useEpicDeleteArtifact()],
+    ["epic.updateArtifactStatus", () => useEpicUpdateArtifactStatus()],
+    ["epic.renameArtifact", () => useEpicRenameArtifact(true)],
+  ];
+
+  it.each(CASES)("%s resolves the session client", (method, useHook) => {
+    delete capturedClients[method];
+    renderHook(useHook);
+
+    // Premise, positively: the hook registered at all. Without this the
+    // inequality below is satisfied by `undefined`.
+    expect(capturedClients).toHaveProperty(method);
+    expect(capturedClients[method]).toBe(clients.session);
+    expect(capturedClients[method]).not.toBe(clients.ambient);
   });
 });

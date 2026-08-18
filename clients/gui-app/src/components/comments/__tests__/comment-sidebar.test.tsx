@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
@@ -20,21 +23,30 @@ const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "artifact-1";
 const QUOTED_TEXT = "the sentence this thread hangs off";
 
-// `useHostClient` is the only thing replaced. The real `useEpicCommentThreads`,
-// the real `useHostQuery`, the real query client and the real error path all
-// run - which is the point: the defect under test is what the component does
-// with a query result the host actually produced.
+// The client is a PROP now, not an ambient read. `CommentSidebar` is mounted
+// from `epic-sidebar.tsx`, which is a sibling of the canvas and therefore
+// outside every `<TabHostProvider>`; its owner resolves the EPIC SESSION's
+// client and hands it down (D15). Nothing under `components/comments/` reads a
+// host itself any more, so the `@/lib/host/runtime` mock this file used to
+// carry is gone - and its absence is the positive control: a re-added app-wide
+// read would throw outside a provider instead of quietly answering.
+//
+// Everything else stays real - the real `useEpicCommentThreadsForClient`, the
+// real `useHostQuery`, the real query client and the real error path - which is
+// the point: the defect under test is what the component does with a query
+// result the host actually produced.
 const hostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
   current: null,
 };
 
-// Mocked at `@/lib/host/runtime`, the module that owns the binding: the
-// threads query reaches it re-exported through `@/lib/host` while the thread
-// cards' mutation hooks import it directly, and only this target covers both.
-vi.mock("@/lib/host/runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => hostClientRef.current };
-});
+// A SECOND live client on a DIFFERENT host, standing in for the app-wide one
+// during an A->B re-point. Nothing this file renders may reach it: the sidebar
+// is handed the Epic session's client and every hook below it takes that
+// client as an argument.
+const otherHostClientRef: { current: HostClient<HostRpcRegistry> | null } = {
+  current: null,
+};
+let otherHostListCalls = 0;
 
 // Read behavior for the next `epic.listCommentThreads` call. Tests swap this
 // mid-flight to model an outage arriving after a successful read.
@@ -82,22 +94,47 @@ beforeEach(() => {
       "epic.listCommentThreads": () => respondToListThreads(),
     },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger,
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  hostClientRef.current = client;
+  hostClientRef.current = spine.createRequester(mockLocalHostEntry);
+
+  otherHostListCalls = 0;
+  let otherRequestCount = 0;
+  const otherSpine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-other-${String((otherRequestCount += 1))}`,
+      handlers: {
+        "epic.listCommentThreads": () => {
+          otherHostListCalls += 1;
+          return { threads: [] };
+        },
+      },
+    }),
+  });
+  otherSpine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-2" }),
+  );
+  otherHostClientRef.current = otherSpine.createRequester(mockRemoteHostEntry);
 });
 
 afterEach(() => {
   cleanup();
   queryClient.clear();
   hostClientRef.current = null;
+  otherHostClientRef.current = null;
   useCommentThreadsStore.setState({
     activeByEpicId: {},
     hoverByEpicId: {},
@@ -112,6 +149,7 @@ function renderSidebar() {
     <QueryClientProvider client={queryClient}>
       <CommentSidebar
         epicId={EPIC_ID}
+        hostClient={hostClientRef.current}
         artifactType="spec"
         artifactId={ARTIFACT_ID}
         anchorPositions={{ positions: new Map() }}
@@ -254,5 +292,50 @@ describe("<CommentSidebar /> read failures", () => {
 
     expect(unavailablePanel()).toBeNull();
     expect(screen.getByText(QUOTED_TEXT)).not.toBeNull();
+  });
+});
+
+// D15. The sidebar sits outside every `<TabHostProvider>`, so before this it
+// read the app-wide client - and during an A->B re-point the A-backed Epic kept
+// rendering while that client already answered B, sending
+// `epic.listCommentThreads` to the wrong machine and caching the answer under
+// B's key. Both clients below are live; only the one passed as a prop may be
+// reached.
+describe("<CommentSidebar /> host scope", () => {
+  it("reads threads on the PASSED client and keys the cache under ITS host", async () => {
+    respondToListThreads = () => ({ threads: [threadFixture()] });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CommentSidebar
+          epicId={EPIC_ID}
+          hostClient={hostClientRef.current}
+          artifactType="spec"
+          artifactId={ARTIFACT_ID}
+          anchorPositions={{ positions: new Map() }}
+          currentUserId="user-1"
+          canModerate={false}
+          onActivateThread={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    // The session host answered...
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+    // ...and the other host - live, and one prop away from being asked - did
+    // not. Asserting the miss as well as the hit is what makes this arm fail
+    // when the read goes ambient again rather than merely when it breaks.
+    expect(otherHostListCalls).toBe(0);
+    expect(otherHostClientRef.current?.getActiveHostId()).toBe(
+      mockRemoteHostEntry.hostId,
+    );
+
+    const keys = queryClient
+      .getQueryCache()
+      .getAll()
+      .map((query) => query.queryKey);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toContain(mockLocalHostEntry.hostId);
+    expect(keys[0]).not.toContain(mockRemoteHostEntry.hostId);
   });
 });

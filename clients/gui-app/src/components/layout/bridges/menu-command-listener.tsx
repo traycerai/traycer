@@ -382,6 +382,10 @@ function handleMenuCommand(
   if (payload.command === "app.reportIssue") {
     Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
       source: "native_menu",
+      // No in-app surface: the menu IS the entry point, and the report it
+      // opens has no context to name one. `null` means "there was none", not
+      // "we did not look".
+      surface: null,
     });
     handlers.reportIssue();
     return;

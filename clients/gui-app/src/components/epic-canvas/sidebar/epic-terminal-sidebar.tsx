@@ -59,13 +59,13 @@ import {
   TERMINAL_TILE_DND_TYPE,
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
+import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
-import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
+import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useHostClient } from "@/lib/host";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
   deriveTitleSourceFromSessionTitle,
@@ -191,7 +191,22 @@ function TerminalsPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const { epicId, tabId } = props;
-  const hostClient = useHostClient();
+  // The Epic SESSION's host, not the app-wide effective one. This panel is a
+  // sibling of the canvas and therefore outside every tile `TabHostProvider`,
+  // which is exactly the case `useEpicSessionHostId` was written for: "host
+  // RPCs issued by the sidebar must use the session transport's host instead
+  // of ... independently re-reading the app-wide active host". `terminal.list`
+  // is such an RPC, and the pair below has to come from ONE source - the list
+  // names the machine whose terminals it shows, and the id it hands to
+  // `makeTerminalRef` binds each opened tile to that machine for life.
+  //
+  // Reading ambient made both wrong together the moment they disagreed:
+  // activation or failover moves the effective host while `EpicSessionProvider`
+  // is still rendering its previous session (and for the whole of a
+  // re-point that is establishing, or one that failed), so an Epic projected
+  // from host A listed, killed and renamed host B's terminals, and opened them
+  // as B-bound tiles under A's Epic.
+  const hostClient = useEpicSessionHostClient();
   const list = useTerminalList({ kind: "epic", epicId }, hostClient);
   // Manual escape hatch for a stranded error state: host-scoped queries get
   // no automatic retry/refetch routes (transport already retried), so without
@@ -208,7 +223,7 @@ function TerminalsPanelBodyLive(props: {
   const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareSetActiveTileTabFocusTarget,
   );
-  const activeHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const durableAuthority = useHostPlainTerminalAuthority({
     hostId: activeHostId,
     scope: { kind: "epic", epicId },
@@ -508,8 +523,18 @@ function TerminalRow(props: TerminalRowProps) {
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
   const isActive = useIsActiveTile(tabId, session.sessionId);
-  const kill = useTerminalKill();
-  const legacyRename = useTerminalRename();
+  // The row's terminal lives on the host this sidebar LISTS (the Epic
+  // session's - see the list above), so kill and rename go to that same
+  // client. The app-wide wrappers were the last two reads that stayed on
+  // the ambient host after the list moved: during a re-point they killed and
+  // renamed host B's sessions from host A's rows.
+  const rowHostClient = useEpicSessionHostClient();
+  const kill = useTerminalKillFor(
+    rowHostClient,
+    "Couldn't close the terminal.",
+    true,
+  );
+  const legacyRename = useTerminalRenameFor(rowHostClient);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareCloseCanvasTabFocusTarget,

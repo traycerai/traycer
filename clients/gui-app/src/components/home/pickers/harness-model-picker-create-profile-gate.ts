@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
@@ -50,7 +50,7 @@ function isHostLocal(
 export function useCreateProfileHostIsLocal(
   createProfileHostId: string | null,
 ): boolean {
-  const defaultActiveHostId = useReactiveActiveHostId();
+  const defaultActiveHostId = useAddressableHostId();
   const hostDirectory = useHostDirectoryList();
   return useMemo(
     () =>

@@ -18,8 +18,8 @@ export function ReadingPositionPersistLifecycleBridge(props: {
   );
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
     if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
-      if (transition.email !== null) {
-        activateReadingPositionAccount(transition.email);
+      if (transition.userId !== null) {
+        activateReadingPositionAccount(transition.userId);
       }
       return;
     }

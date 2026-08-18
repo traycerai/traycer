@@ -91,8 +91,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => projection.hostId,
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => projection.hostId ?? "host-1",
 }));
 vi.mock("@/components/epic-canvas/view-tab-context", () => ({
   useEpicViewTabId: () => projection.resolvedTabId,

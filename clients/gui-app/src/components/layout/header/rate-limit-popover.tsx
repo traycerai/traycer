@@ -44,7 +44,7 @@ import {
   mapResponseToProviderRateLimitEnvelope,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import type { RateLimitUnavailableReason } from "@traycer/protocol/host";
 import type { TraycerTeamSubscription } from "@traycer/protocol/auth";
 import type {
@@ -1321,7 +1321,7 @@ function RateLimitRefreshAllButton({
 }): ReactNode {
   const draining = useIsRateLimitQueueDraining();
   const queryClient = useQueryClient();
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const client = useHostClient();
   // The ephemeral lane's app-shell default is configured to the app-wide host,
   // so the unscoped `enqueueRateLimitFetchBatch` would refresh a machine this
@@ -1668,7 +1668,7 @@ function ProfileRateLimitProviderBlock({
   // Same reason as `RateLimitRefreshAllButton`'s: this provider's own refresh
   // must reach the host whose numbers it is redrawing, not the app-wide one.
   const queueScope = useRateLimitQueueScope();
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const client = useHostClient();
   const activeProfileId = resolveRateLimitProfileId(
     profileSelection,
@@ -2193,7 +2193,7 @@ function TraycerRateLimitBlock({
   const traycerSubscription = useTraycerSubscription();
   const setAccountContext = useAccountContextStore((s) => s.setAccountContext);
   const queryClient = useQueryClient();
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const state = resolveTraycerSubscriptionState({
     isPending: traycerSubscription.query.isPending,
     isError: traycerSubscription.query.isError,

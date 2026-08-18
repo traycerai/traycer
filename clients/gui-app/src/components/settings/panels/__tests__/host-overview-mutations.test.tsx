@@ -717,7 +717,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    expect(toast.success).toHaveBeenCalledWith("Restarting host-local");
+    // Wording unified across every restart surface (`host-restart-toast.ts`,
+    // already-landed audit F15-F17/F19/F20/F25, unrelated to this ticket) -
+    // the host name doesn't earn its place here since the surface the click
+    // came from already names it.
+    expect(toast.success).toHaveBeenCalledWith("Host restart requested");
     expect(toast.error).not.toHaveBeenCalled();
   });
 
@@ -986,15 +990,21 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
   });
 
-  it("a scope move mid-flight toasts under the INITIATING host's name, not the one the page moved to", async () => {
+  it("a scope move mid-flight still reports the restart, surviving the closure remount", async () => {
     // Mirrors the `host.restart` arm-time-capture test above, for the
     // page-remount half of the force-restart scoping fix: `HostSettingsPanel`
     // keys `HostSettingsPanelInner` by `scopeId`, so a host swap unmounts the
     // whole subtree the armed `forceRestart` mutation lives in. Its `onSuccess`
-    // closure — and the `variables.hostName` it toasts with — is frozen at the
-    // OLD render, so this proves the toast survives that remount naming the
-    // host that was actually being restarted, not whichever host the page
-    // shows once it resolves.
+    // closure is frozen at the OLD render, so this proves the toast still
+    // fires after that remount rather than the closure silently losing its
+    // callback. `variables.hostId` (captured per the host-swap rule in
+    // `host-overview-panel.tsx`) still gates `setRestartBusyCount` correctly
+    // - the sibling "Force restart armed on host A..." test below covers
+    // that half - but the toast copy itself no longer carries a host name to
+    // assert against (unified across every restart surface by
+    // `host-restart-toast.ts`, an already-landed, unrelated audit fix), so
+    // this can no longer verify attribution BY NAME, only that the report
+    // survives.
     let releaseForceRestart: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
       releaseForceRestart = resolve;
@@ -1069,11 +1079,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Restarting Host A Display");
+      expect(toast.success).toHaveBeenCalledWith("Host restart requested");
     });
-    expect(toast.success).not.toHaveBeenCalledWith(
-      expect.stringContaining("Host B Display"),
-    );
+    expect(toast.success).toHaveBeenCalledTimes(1);
     expect(restartHost).toHaveBeenCalledTimes(1);
   });
 

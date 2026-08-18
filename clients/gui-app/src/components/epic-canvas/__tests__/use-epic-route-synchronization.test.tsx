@@ -53,7 +53,7 @@ type CanvasStoreSlice = Pick<
 >;
 
 interface TestState {
-  activeHostId: string | null;
+  sessionHostId: string | null;
   activeArtifactId: string | null;
   autoOpenTarget: {
     readonly id: string;
@@ -83,7 +83,7 @@ interface TestState {
 }
 
 const testState = vi.hoisted<TestState>(() => ({
-  activeHostId: "host-1",
+  sessionHostId: "host-1",
   activeArtifactId: null,
   autoOpenTarget: null,
   nestedFocusEnabled: false,
@@ -163,8 +163,15 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTitle: () => "",
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => testState.activeHostId,
+// The host whose projection feeds `records` - the Epic session's (the canvas
+// host), which is the policing identity `isTileRefRecordLive` judges against.
+// This suite used to seed the app-wide read; the sync no longer reads it.
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => testState.sessionHostId,
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => null,
 }));
 
 vi.mock("@/lib/epic-auto-open", () => ({
@@ -289,7 +296,7 @@ function resetStores(): void {
     artifactByEpicId: {},
   });
   testState.activeArtifactId = null;
-  testState.activeHostId = "host-1";
+  testState.sessionHostId = "host-1";
   testState.nestedFocusEnabled = false;
   testState.useRealCanvasStore = false;
   testState.navigate.mockClear();

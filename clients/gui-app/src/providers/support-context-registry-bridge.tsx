@@ -6,7 +6,7 @@ import {
   TUI_HARNESS_ID_TO_PROVIDER_ID,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import {
@@ -165,7 +165,7 @@ export interface SupportContextRegistryBridgeProps {
 export function SupportContextRegistryBridge(
   props: SupportContextRegistryBridgeProps,
 ): null {
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const epicId = useActiveEpicId();
   const tabId = useActiveTabId();
   const artifactRef = useActiveEpicArtifactRef(tabId ?? undefined);

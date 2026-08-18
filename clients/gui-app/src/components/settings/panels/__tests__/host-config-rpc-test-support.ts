@@ -221,16 +221,6 @@ export function buildConfigHostFixture(options: {
     },
   };
 
-  const client = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${options.hostId}`,
-      handlers: { ...handlers, ...options.overrideHandlers },
-    }),
-  });
-
   const entry: HostDirectoryEntry = {
     hostId: options.hostId,
     label: options.hostId,
@@ -241,10 +231,20 @@ export function buildConfigHostFixture(options: {
     version: "1.5.0",
     transportDialability: "dialable",
   };
-  client.bind(entry);
-  client.setRequestContext(
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${options.hostId}`,
+      handlers: { ...handlers, ...options.overrideHandlers },
+    }),
+  });
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(entry);
 
   return {
     client,

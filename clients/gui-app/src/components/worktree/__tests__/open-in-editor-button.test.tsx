@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -9,17 +17,32 @@ import {
 import { OpenInEditorButton } from "../open-in-editor-button";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
-const editorState = vi.hoisted(() => ({
+interface EditorButtonTestState {
+  mutate: Mock<
+    (input: { readonly editorId: string; readonly paths: string[] }) => void
+  >;
+  isPending: boolean;
+  availability: string[];
+  hasLocalHost: boolean;
+  // Keyed by hostId, not by any "active"/"effective" concept - the button
+  // dispatches on the caller's OWN `hostClient` now (Y6) and gates purely on
+  // whether the OPEN TARGET's own host is local, so the fixture below answers
+  // per hostId rather than off one ambient "the active host" value.
+  hostKindByHostId: Record<string, string>;
+}
+
+const editorState = vi.hoisted((): EditorButtonTestState => ({
   mutate: vi.fn(),
   isPending: false,
   availability: ["vscode", "cursor", "windsurf", "zed"],
   hasLocalHost: true,
-  activeHostId: "host-1",
-  activeHostKind: "local",
+  hostKindByHostId: { "host-1": "local" },
 }));
 
+const directoryEntryCalls: string[] = [];
+
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
-  useEditorOpen: () => ({
+  useEditorOpenForClient: () => ({
     mutate: editorState.mutate,
     isPending: editorState.isPending,
   }),
@@ -37,13 +60,15 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => editorState.activeHostId,
-}));
-
+// The gate reads ONLY the open target's own host directory entry (Y6) - no
+// "effective"/"active" host hook is mocked at all, which is itself part of
+// the regression proof: the component no longer imports one.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string) =>
-    hostId.length > 0 ? { kind: editorState.activeHostKind } : null,
+  useHostDirectoryEntry: (hostId: string) => {
+    directoryEntryCalls.push(hostId);
+    if (!(hostId in editorState.hostKindByHostId)) return null;
+    return { kind: editorState.hostKindByHostId[hostId] };
+  },
 }));
 
 describe("<OpenInEditorButton />", () => {
@@ -54,8 +79,8 @@ describe("<OpenInEditorButton />", () => {
     editorState.isPending = false;
     editorState.availability = ["vscode", "cursor", "windsurf", "zed"];
     editorState.hasLocalHost = true;
-    editorState.activeHostId = "host-1";
-    editorState.activeHostKind = "local";
+    editorState.hostKindByHostId = { "host-1": "local" };
+    directoryEntryCalls.length = 0;
     useSettingsStore.setState({ defaultEditor: null });
   });
 
@@ -69,6 +94,7 @@ describe("<OpenInEditorButton />", () => {
     render(
       <OpenInEditorButton
         openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
       />,
     );
 
@@ -100,7 +126,7 @@ describe("<OpenInEditorButton />", () => {
   });
 
   it("disables the controls when there is no open target", () => {
-    render(<OpenInEditorButton openTarget={null} />);
+    render(<OpenInEditorButton openTarget={null} hostClient={null} />);
 
     const primaryButton = screen.getByTestId(
       "workspace-open-in-editor-primary",
@@ -116,31 +142,12 @@ describe("<OpenInEditorButton />", () => {
     expect(editorState.mutate).not.toHaveBeenCalled();
   });
 
-  it("disables the controls when the target host is not the active host", () => {
-    editorState.activeHostId = "host-2";
+  it("disables the controls when the target host itself is not local", () => {
+    editorState.hostKindByHostId = { "host-1": "remote" };
     render(
       <OpenInEditorButton
         openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
-      />,
-    );
-
-    expect(
-      screen
-        .getByTestId("workspace-open-in-editor-primary")
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByTestId("workspace-open-in-editor-chevron")
-        .hasAttribute("disabled"),
-    ).toBe(true);
-  });
-
-  it("disables the controls when the active host is not local", () => {
-    editorState.activeHostKind = "remote";
-    render(
-      <OpenInEditorButton
-        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
       />,
     );
 
@@ -159,11 +166,46 @@ describe("<OpenInEditorButton />", () => {
     expect(editorState.mutate).not.toHaveBeenCalled();
   });
 
+  // Y6 regression: the panel's own surface pin can be local while the
+  // app-wide EFFECTIVE host is remote (a git-diff / file-tree panel pinned to
+  // a different machine than the window is showing). The old gate compared
+  // `openTarget.hostId` against the app-wide effective host and hid the
+  // button for the very machine that has the editor; the new gate asks only
+  // about the target's OWN host, so it renders enabled here - and the
+  // directory lookup is proven to be keyed on the target's host id alone
+  // (never on a stand-in "effective" id this fixture also knows about).
+  it("renders enabled when the target host is local, independent of any other host's state", () => {
+    editorState.hostKindByHostId = {
+      "host-1": "local",
+      "effective-remote-host": "remote",
+    };
+    render(
+      <OpenInEditorButton
+        openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
+      />,
+    );
+
+    expect(
+      screen
+        .getByTestId("workspace-open-in-editor-primary")
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByTestId("workspace-open-in-editor-chevron")
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(directoryEntryCalls).toEqual(["host-1"]);
+    expect(directoryEntryCalls).not.toContain("effective-remote-host");
+  });
+
   it("renders nothing without a local host", () => {
     editorState.hasLocalHost = false;
     render(
       <OpenInEditorButton
         openTarget={{ workspacePath: "/repo", hostId: "host-1" }}
+        hostClient={null}
       />,
     );
 

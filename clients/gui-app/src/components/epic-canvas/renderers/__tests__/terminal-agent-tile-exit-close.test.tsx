@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -30,6 +31,8 @@ const testState = vi.hoisted(() => ({
   reachability: {
     status: "reachable",
     hostLabel: "Host A",
+    basis: "directory",
+    unavailability: null as string | null,
   },
   navigateResults: [] as Array<NestedFocusTarget | null>,
   navigateNested: vi.fn(),
@@ -59,6 +62,8 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => testState.reachability,
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
@@ -235,7 +240,12 @@ describe("<TuiAgentTile /> exit close", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __resetAppLocalNotificationsStoreForTests();
     exitedHandle.store.setState({ exitCode: 0, exitReason: null });
-    testState.reachability = { status: "reachable", hostLabel: "Host A" };
+    testState.reachability = {
+      status: "reachable",
+      hostLabel: "Host A",
+      basis: "directory",
+      unavailability: null,
+    };
     resetNavigationSpy();
   });
 
@@ -244,7 +254,12 @@ describe("<TuiAgentTile /> exit close", () => {
   });
 
   it("routes unreachable-banner close for an active tile through the nested-focus boundary", () => {
-    testState.reachability = { status: "unreachable", hostLabel: "Host A" };
+    testState.reachability = {
+      status: "unreachable",
+      hostLabel: "Host A",
+      basis: "directory",
+      unavailability: null,
+    };
     const fixture = openAgentFixture(false);
 
     render(
@@ -357,6 +372,146 @@ describe("<TuiAgentTile /> exit close", () => {
     const pane = collectPanes(canvas.root)[0];
     expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
   });
+});
+
+/**
+ * The `basis` notification gate, `tui-agent-tile.tsx`'s copy of the same
+ * `if (reachability.basis !== "directory") return;` guard `terminal-tile.tsx`
+ * carries - see that file's `basis notification gate` describe block in
+ * `terminal-tile-close-navigation.test.tsx` for the full rationale. Repeated
+ * here rather than shared because the two tiles wire their own reachability
+ * fixture and render tree; the assertions mirror that suite's exactly.
+ */
+describe("<TuiAgentTile /> basis notification gate", () => {
+  beforeEach(() => {
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    exitedHandle.store.setState({ exitCode: 0, exitReason: null });
+    resetNavigationSpy();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('fires "Terminal closed" when unreachable arrives with basis "directory"', async () => {
+    testState.reachability = {
+      status: "unreachable",
+      hostLabel: "Host A",
+      basis: "directory",
+      unavailability: null,
+    };
+    const fixture = openAgentFixture(false);
+
+    render(
+      withQueryClient(
+        <TuiAgentTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
+        1,
+      );
+    });
+    const notificationId =
+      useAppLocalNotificationsStore.getState().orderedIds[0];
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].kind,
+    ).toBe("terminal.closed");
+  });
+
+  it('withholds the notification when unreachable arrives with basis "starting-deadline", while the dead banner still renders', async () => {
+    testState.reachability = {
+      status: "unreachable",
+      hostLabel: "Host A",
+      basis: "starting-deadline",
+      unavailability: null,
+    };
+    const fixture = openAgentFixture(false);
+
+    render(
+      withQueryClient(
+        <TuiAgentTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+
+    // The render branch does not key on `basis` - the dead banner fires off
+    // `status` alone - so it must still appear even though the notification
+    // is withheld.
+    expect(
+      await screen.findByRole("button", { name: "Close tab" }),
+    ).toBeDefined();
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+  });
+});
+
+/**
+ * S5, the TuiAgentTile mirror of `terminal-tile-close-navigation.test.tsx`'s
+ * S5 block: a wordless skeleton for `checking`/`host-starting` used to be
+ * indistinguishable from an agent about to appear and never ended. Asserted
+ * on the rendered sentence, not on the absence of a spinner.
+ */
+describe("<TuiAgentTile /> S5 bounded pre-bootstrap wait", () => {
+  beforeEach(() => {
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    resetNavigationSpy();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each([
+    ["checking", "the host"],
+    ["host-starting", "Host A"],
+  ] as const)(
+    "names the host it is waiting on for reachability %s",
+    (status, expectedNaming) => {
+      testState.reachability = {
+        status,
+        hostLabel: "Host A",
+        basis: "directory",
+        unavailability: null,
+      };
+      const fixture = openAgentFixture(false);
+
+      render(
+        withQueryClient(
+          <TuiAgentTile
+            viewTabId={fixture.viewTabId}
+            node={fixture.closingNode}
+            tileId={fixture.paneId}
+            isActive
+          />,
+        ),
+      );
+
+      const load = screen.getByTestId(
+        `terminal-agent-tile-load-${fixture.paneId}`,
+      );
+      expect(load.textContent).toContain(expectedNaming);
+      expect(load.textContent).not.toBe("");
+    },
+  );
 });
 
 function expectTileOpen(viewTabId: string, instanceId: string): void {

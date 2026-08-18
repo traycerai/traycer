@@ -46,6 +46,7 @@ import {
   installWorktreeVirtualizerOffsetHeight,
   WORKTREE_TEST_VIRTUAL_ITEM_HEIGHT,
 } from "./worktrees-virtualizer-test-utils";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 // The delete is a stream: mock the wrapper so a test can drive server frames
 // (started / phase / output / complete / failed) and assert the modal + cache
@@ -294,6 +295,7 @@ function stubStreamClient(): WsStreamClient<HostStreamRpcRegistry> {
     bearer: () => null,
     auth: null,
     hostCredentialMint: null,
+    evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: {
       create: () => {
         throw new Error("stream WS factory must not be dialled in tests");
@@ -564,9 +566,11 @@ describe("useWorktreeListing", () => {
       readonly activityPaths: readonly string[] | null;
       readonly includeActivity: boolean;
     }> = [];
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-1",
@@ -587,10 +591,10 @@ describe("useWorktreeListing", () => {
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
+    const client = spine.createRequester(mockLocalHostEntry);
     const queryClient = new QueryClient();
     const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
@@ -636,9 +640,11 @@ describe("useWorktreeListing", () => {
     const stale = entry({ worktreePath: "/wt/a", branch: "stale" });
     const fresh = entry({ worktreePath: "/wt/a", branch: "fresh" });
     const requests: Array<{ readonly forceRefresh: boolean }> = [];
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-1",
@@ -654,10 +660,10 @@ describe("useWorktreeListing", () => {
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
+    const client = spine.createRequester(mockLocalHostEntry);
     const queryClient = new QueryClient();
     const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
@@ -695,9 +701,11 @@ describe("useWorktreeListing", () => {
     const first = entry({ worktreePath: "/wt/a", branch: "feat-a" });
     let firstPageCalls = 0;
     let secondPageCalls = 0;
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-1",
@@ -716,10 +724,10 @@ describe("useWorktreeListing", () => {
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
+    const client = spine.createRequester(mockLocalHostEntry);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });

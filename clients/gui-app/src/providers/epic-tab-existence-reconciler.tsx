@@ -8,6 +8,7 @@ import {
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   GET_TASK_CONTEXTS_MAX_IDS,
+  isConfirmedAbsentTaskContext,
   type GetTaskContextsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -20,7 +21,6 @@ import {
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { missingEpicIds } from "@/lib/epics/epic-tab-existence";
 import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
@@ -51,8 +51,8 @@ import {
  *  - any batch is still pending, or failed for any reason including
  *    `E_HOST_UNSUPPORTED` - no ids are treated as missing.
  *
- * Reading an absent/failed response as "no epics exist" would make
- * `missingEpicIds` return every open tab and close all of them.
+ * Reading an ambiguous or failed response as absence would close tabs that
+ * may still exist, so only a positive absence result is actionable.
  */
 const RECONCILE_METHOD = "epic.getTaskContexts" as const;
 
@@ -150,7 +150,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileRun }) {
   // value is a fresh `Set` per computation, so the effect below can re-run on
   // an unrelated render; `completionAppliedRef` keeps the apply once-only, as
   // it did for the paginated implementation.
-  const existingEpicIds = useHostQueries<
+  const confirmedAbsentEpicIds = useHostQueries<
     HostRpcRegistry,
     typeof RECONCILE_METHOD,
     ReadonlySet<string> | null
@@ -159,11 +159,11 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileRun }) {
     requests,
     cacheKeyIdentity: `${props.run.identity}|${props.run.attempt}`,
     options: { enabled: true },
-    combine: combineExistingEpicIds,
+    combine: combineConfirmedAbsentEpicIds,
   });
 
   useEffect(() => {
-    if (existingEpicIds === null) return;
+    if (confirmedAbsentEpicIds === null) return;
     if (completionAppliedRef.current) return;
     completionAppliedRef.current = true;
     // Never force-close an epic this session just created (or is creating):
@@ -177,48 +177,42 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileRun }) {
     // by `EpicAccessCoordinator` (via the live session's `epicDeleted` /
     // `accessLost` / unavailable-`snapshotFetchError` signals), not here, so
     // this exclusion cannot hide a real "epic is gone" signal.
-    const staleEpicIds = closableStaleEpicIds(
-      missingEpicIds(openEpicIds, existingEpicIds),
-    );
+    const staleEpicIds = closableStaleEpicIds([...confirmedAbsentEpicIds]);
     if (staleEpicIds.length > 0) {
       useComposerRunSettingsStore.getState().clearEpicRunSettings(staleEpicIds);
       tabCommandCoordinator.handleEpicAccessLoss(staleEpicIds);
     }
-  }, [existingEpicIds, openEpicIds]);
+  }, [confirmedAbsentEpicIds]);
 
   return null;
 }
 
 /**
- * The subset of `openEpicIds` the host positively confirmed, or `null` when
- * existence has not been established for every requested id.
+ * The subset of open epic ids the host positively confirmed absent, or `null`
+ * when a batch has not completed successfully. `unknown` and legacy `null`
+ * rows deliberately stay out of this set: only a current host's explicit
+ * `confirmed-absent` arm may close a tab.
  *
  * `null` covers pending batches and ANY failure - a transport error, and
  * specifically `E_HOST_UNSUPPORTED` from a host that does not carry the
  * method. Do not soften this into an empty set: `useEpicGetTaskContexts`
  * deliberately degrades unsupported to an empty map because its callers only
  * enrich titles, but here an empty set means "every open tab is stale".
- *
- * A confirmed id is one whose response row is non-null AND carries an epic
- * `light` - a row that resolves to a phase, or an epic row without `light`, is
- * not an existing epic, matching what the epic-filtered sweep counted.
  */
-function combineExistingEpicIds(
+function combineConfirmedAbsentEpicIds(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
 ): ReadonlySet<string> | null {
   if (results.length === 0) return null;
-  const existingEpicIds = new Set<string>();
+  const confirmedAbsentEpicIds = new Set<string>();
   for (const result of results) {
     if (!result.isSuccess) return null;
-    for (const [taskId, task] of Object.entries(result.data.tasks)) {
-      if (task === null) continue;
-      const epic = task.epic;
-      if (epic === null || epic === undefined) continue;
-      if (epic.light === null) continue;
-      existingEpicIds.add(taskId);
+    for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
+      if (isConfirmedAbsentTaskContext(resolution)) {
+        confirmedAbsentEpicIds.add(taskId);
+      }
     }
   }
-  return existingEpicIds;
+  return confirmedAbsentEpicIds;
 }
 
 function chunkEpicIds(

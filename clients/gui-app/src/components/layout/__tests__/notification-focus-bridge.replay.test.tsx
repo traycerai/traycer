@@ -28,6 +28,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -71,8 +72,18 @@ vi.mock("@/lib/host", async (importActual) => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdRef.value,
+// The bridge reads `useEffectiveHostId()` now (redesign P1.2) - the
+// authority's derived effective host, not the directory's active-host
+// hook - so that is the seam this fixture drives.
+//
+// The mock stays for the RENDER-time read, and `setEffectiveHost` below seeds
+// the STORE the same value: the notification activation guard reads the
+// pointer live at check time (it is the only way to observe a mid-route
+// move), and a fixture that fed only the hook would leave the guard comparing
+// a seeded before against an unseeded after - reporting a host move on every
+// activation.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => activeHostIdRef.value,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -215,9 +226,12 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     client = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
+      // The SPINE, kept unpinned - `useNotificationActivationWithNavigate`
+      // derives its own requester off this via `createRequesterForHostId`.
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger,
     });
-    client.bind(mockLocalHostEntry);
     client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -226,6 +240,15 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     );
     bindingState.current = { hostClient: client };
     activeHostIdRef.value = mockLocalHostEntry.hostId;
+    // Seeded, not stubbed - see the mock note above.
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: mockLocalHostEntry.hostId,
+      targetHostId: mockLocalHostEntry.hostId,
+      effectiveHostId: mockLocalHostEntry.hostId,
+      leases: [],
+      selectionRevision: 1,
+    });
     directoryRef.value = {
       findById: (hostId) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

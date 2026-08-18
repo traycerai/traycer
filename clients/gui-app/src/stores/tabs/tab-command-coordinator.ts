@@ -1337,7 +1337,12 @@ export class TabCommandCoordinator {
         this.applyExpectedSourceMutation(() => {
           useEpicCanvasStore.getState().closeTabsForEpics(epicIds);
         });
-        epicIds.forEach(releaseOpenEpicSessionIfUnused);
+        // Not point-free: `forEach` would hand the ARRAY INDEX to the
+        // retention argument. `"discard"` preserves this path's existing
+        // behaviour and is not a fresh adjudication of it.
+        epicIds.forEach((epicId) =>
+          releaseOpenEpicSessionIfUnused(epicId, "discard"),
+        );
       },
     });
   }
@@ -1574,7 +1579,9 @@ export class TabCommandCoordinator {
         useEpicCanvasStore.getState().closeTab(ref.id);
       });
       const tab = useEpicCanvasStore.getState().tabsById[ref.id];
-      if (tab !== undefined) releaseOpenEpicSessionIfUnused(tab.epicId);
+      // `"discard"` preserves this path's existing behaviour.
+      if (tab !== undefined)
+        releaseOpenEpicSessionIfUnused(tab.epicId, "discard");
       return;
     }
     if (ref.kind === "draft") {

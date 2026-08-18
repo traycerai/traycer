@@ -9,6 +9,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const globalClientRef = vi.hoisted<{
   value: HostClient<HostRpcRegistry> | null;
@@ -24,12 +25,38 @@ function getGlobalClient(): HostClient<HostRpcRegistry> {
   return globalClientRef.value;
 }
 
+/**
+ * Mirrors `lib/host/runtime.ts`'s `useHostClient` exactly: the SELECTION
+ * LAYER's effective host id, resolved through the spine's uniform requester.
+ *
+ * Reads the authority store rather than the spine's bound slot. Those agree
+ * in production, so a slot-derived mirror passed here for the wrong reason -
+ * and would keep passing after the slot is deleted (P4.2), long after the
+ * thing it claims to mirror had stopped existing. No case below reads this
+ * branch; it is kept faithful so the first one that does gets ∅ and a fixture
+ * that must NAME its effective host, rather than a quietly wrong answer.
+ */
+function getFollowingClient(): HostClient<HostRpcRegistry> {
+  return getGlobalClient().createRequesterForHostId(
+    useSelectionAuthorityStore.getState().effectiveHostId,
+  );
+}
+
 vi.mock("@/lib/host", () => ({
-  useHostClient: getGlobalClient,
+  useHostClient: getFollowingClient,
+  // `useHostClientForHostId` reads BOTH through the barrel: the spine for
+  // the directory lookups, the effective host for the following branch.
+  useHostRuntimeClient: getGlobalClient,
 }));
 
+// Two distinct hooks since redesign P2.1: `useHostRuntimeClient` is the
+// SPINE (what a host id is resolved against) and `useHostClient` is the
+// effective host resolved through it. These tests only exercise EXPLICIT ids,
+// so the following-client mirror below exists to keep the mock honest about
+// the shape, not because a case reads it.
 vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: getGlobalClient,
+  useHostRuntimeClient: getGlobalClient,
+  useHostClient: getFollowingClient,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -64,7 +91,9 @@ function buildGlobalClient(
     findHostById: (hostId) =>
       listDirectory().find((entry) => entry.hostId === hostId) ?? null,
   });
-  client.bind(mockLocalHostEntry);
+  // No binding: the spine names no host (P4.2 deleted the slot). Every
+  // resolution below goes through `findHostById` above, which is what the
+  // directory answers in production.
   client.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
@@ -79,9 +108,12 @@ describe("useHostClientForHostId", () => {
     cleanup();
     globalClientRef.value = null;
     directoryState.data = undefined;
+    // The pointer is shared module state; a case that moved it would leak
+    // into the next one's resolution.
+    useSelectionAuthorityStore.getState().reset();
   });
 
-  it("pins the bound default host while its Query snapshot hydrates", () => {
+  it("pins the directory's entry while its Query snapshot hydrates", () => {
     const { client: globalClient } = buildGlobalClient(() => [
       mockLocalHostEntry,
     ]);
@@ -127,13 +159,24 @@ describe("useHostClientForHostId", () => {
     }
 
     // The switch happens without a React re-render, matching the vulnerable
-    // window between a HostClient change event and React consuming that event.
-    globalClient.bind(TARGET_B);
+    // window between the app-wide host moving and React consuming that move.
+    // Expressed as a POINTER move now: the slot this used to bind is gone, and
+    // "the default host switched" is a fact about the selection layer.
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: TARGET_B.hostId,
+      targetHostId: TARGET_B.hostId,
+      effectiveHostId: TARGET_B.hostId,
+      leases: [],
+      selectionRevision: 1,
+    });
     await expect(
       pinnedClient.request("terminal.kill", { sessionId: "session-a" }),
     ).resolves.toEqual({ killed: true });
 
-    expect(globalClient.getActiveHostId()).toBe("host-b");
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      "host-b",
+    );
     expect(messenger.calls).toHaveLength(1);
     expect(messenger.calls[0]?.authority.endpoint.hostId).toBe(
       mockLocalHostEntry.hostId,

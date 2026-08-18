@@ -31,11 +31,4 @@ export function registerTrayIpc(bridge: RunnerIpcBridge): void {
       bridge.options.tray.setIndicator(parseIndicator(state));
     },
   );
-
-  bridge.handleInvoke(RunnerHostInvoke.hostPickerRequestOpen, () => {
-    bridge.setHostPickerOpen(true);
-  });
-  bridge.handleInvoke(RunnerHostInvoke.hostPickerRequestClose, () => {
-    bridge.setHostPickerOpen(false);
-  });
 }

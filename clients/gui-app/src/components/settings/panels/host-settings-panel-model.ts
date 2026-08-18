@@ -4,7 +4,6 @@ import type {
   HostInstalledRecord,
   HostRegistryUpdateState,
   LocalHostSnapshot,
-  MutationKind,
   MutationLaneStatus,
   ServiceStatusSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -264,55 +263,12 @@ export function formatSource(source: HostInstalledRecord["source"]): string {
     : "Local file";
 }
 
-export function formatProgressKind(kind: MutationKind): string {
-  switch (kind) {
-    case "ensure":
-      return "Setting up host";
-    case "apply":
-      return "Applying update";
-    case "activate":
-      return "Activating host";
-    case "install":
-      return "Installing version";
-    case "register":
-      return "Registering service";
-    case "deregister":
-      return "Deregistering service";
-    case "respawn":
-      return "Restarting host";
-    case "recoverIfDown":
-      return "Recovering host";
-    case "freePortAndRestart":
-      return "Freeing port";
-    case "uninstallHost":
-      return "Uninstalling host";
-    case "removeTraycer":
-      return "Removing Traycer";
-  }
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const kib = bytes / 1024;
-  if (kib < 1024) return `${kib.toFixed(1)} KiB`;
-  const mib = kib / 1024;
-  if (mib < 1024) return `${mib.toFixed(1)} MiB`;
-  const gib = mib / 1024;
-  return `${gib.toFixed(2)} GiB`;
-}
-
-export function formatTransfer(
-  bytes: number | null,
-  totalBytes: number | null,
-): string | null {
-  if (bytes === null && totalBytes === null) return null;
-  if (bytes !== null && totalBytes !== null && totalBytes > 0) {
-    return `${formatBytes(bytes)} / ${formatBytes(totalBytes)}`;
-  }
-  if (bytes !== null) return formatBytes(bytes);
-  if (totalBytes !== null) return formatBytes(totalBytes);
-  return null;
-}
+// `formatProgressKind` / `formatTransfer` / `formatBytes` lived here and are
+// DELETED, not moved with a re-export (F19). They were this file's private
+// answer to "what is the host controller doing, and how big is it" - the boot
+// surface had its own, and the two disagreed on both the wording and the unit.
+// The one answer is `@/lib/host/host-progress-copy`, which every surface now
+// reads; a shim here would be exactly the second table that let them drift.
 
 export function formatPackageManagerSource(
   source: NonNullable<

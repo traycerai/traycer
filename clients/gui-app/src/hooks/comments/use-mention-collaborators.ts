@@ -1,6 +1,7 @@
 import { useMemo } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
-import { useHostClient } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 
 /**
  * Mention-picker view over the existing `epic.listCollaborators` query.
@@ -15,12 +16,16 @@ export interface MentionCollaborator {
   readonly email: string;
 }
 
-export function useMentionCollaborators(
+export function useMentionCollaboratorsForClient(
+  client: HostClient<HostRpcRegistry> | null,
   epicId: string,
 ): ReadonlyArray<MentionCollaborator> {
-  // App-active host, matching the Sharing panel this cache entry is shared
-  // with (see the hook's doc for why the chat tree differs).
-  const client = useHostClient();
+  // The COMPOSER's host, passed down by whichever surface mounted it: the
+  // collab tile's floating draft (tab client) or the Epic sidebar's reply/edit
+  // composers (session client). It used to read the app-active host "matching
+  // the Sharing panel this cache entry is shared with" - but the composer that
+  // posts the comment is Epic-scoped, so during an A→B re-point the picker
+  // offered B's collaborator list for a thread being written to A (D15).
   const { data } = useEpicCollaboratorsQuery(epicId, {
     client,
     poll: false,

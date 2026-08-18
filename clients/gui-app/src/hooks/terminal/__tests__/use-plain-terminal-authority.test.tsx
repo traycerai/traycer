@@ -26,6 +26,7 @@ import {
   LogicalStream,
   type LogicalStreamPort,
 } from "@traycer-clients/shared/host-transport/remote/logical-stream";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
@@ -158,6 +159,9 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
           throw new Error("controlled stream must not dial");
         },
       },
+      // Evidence became a construction input when transports began reporting
+      // dial outcomes to the selection authority; this fixture never dials.
+      evidence: NO_TRANSPORT_EVIDENCE,
       dialTimeoutMs: 1_000,
       openAckTimeoutMs: 1_000,
       pingIntervalMs: 25_000,
@@ -229,6 +233,9 @@ class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> 
           throw new Error("logical stream fixture must not dial");
         },
       },
+      // Evidence became a construction input when transports began reporting
+      // dial outcomes to the selection authority; this fixture never dials.
+      evidence: NO_TRANSPORT_EVIDENCE,
       dialTimeoutMs: 1_000,
       openAckTimeoutMs: 1_000,
       pingIntervalMs: 25_000,
@@ -289,18 +296,23 @@ function fixture(list: readonly PlainTerminalProjection[]): {
       "terminal.plain.list": () => ({ terminals: [...list] }),
     },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  // `bind()` was removed with the runtime slot (redesign P4.2); a requester
+  // for a named host is now built from a spine with `findHostById` plus
+  // `createRequesterForHostId`, so the context is set on the spine first.
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     messenger,
+    findHostById: (hostId) =>
+      hostId === HOST_ID ? { ...mockLocalHostEntry, hostId: HOST_ID } : null,
   });
-  client.bind({ ...mockLocalHostEntry, hostId: HOST_ID });
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "token",
     }),
   );
+  const client = spine.createRequesterForHostId(HOST_ID);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
     createElement(QueryClientProvider, { client: queryClient }, props.children);
   return { queryClient, client, messenger, Wrapper };
@@ -1281,7 +1293,9 @@ describe("usePlainTerminalAuthority integration", () => {
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
 
-    act(() => test.client.notifyAvailabilityRecovered());
+    // Renamed to take the host explicitly once the no-arg form (which read
+    // the runtime slot) was removed with it (redesign P4.2).
+    act(() => test.client.notifyHostAvailabilityRecovered(HOST_ID));
     await waitFor(() => {
       expect(
         test.messenger.calls.filter(

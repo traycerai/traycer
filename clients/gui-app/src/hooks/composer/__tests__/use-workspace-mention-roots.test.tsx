@@ -15,27 +15,35 @@ import {
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const HOST_A = "host-a";
 
-// `useLandingComposerMentionRoots` follows the app-wide active host via
-// `useReactiveActiveHostId()` to scope its global-folders fallback. No
-// `<TabHostProvider>`/`<HostRuntimeProvider>` is mounted in this suite, so
-// left unmocked it always resolves `null` (empty global folders). Mock the
-// narrow leaf hook module so the landing composer suite below can seed and
-// read the SAME host's bucket the hook resolves against.
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-a",
+// `useLandingComposerMentionRoots` resolves the landing composer's surface
+// pin (pin ?? effective) to scope its global-folders fallback. No pin store
+// or authority is mounted in this suite, so left unmocked it always resolves
+// `null` (empty global folders). Mock the narrow leaf hook module so the
+// landing composer suite below can seed and read the SAME host's bucket the
+// hook resolves against.
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({
+    selection: null,
+    honoredSelection: null,
+    setSelection: () => undefined,
+    resolvedHostId: "host-a",
+    isPinned: false,
+    latchOnFirstUse: () => undefined,
+  }),
 }));
 
-// `useLandingDraftStore.createDraft` separately snapshots the workspace of
-// the ACTIVE host resolved imperatively via
-// `getHostBindingSnapshot()?.hostClient.getActiveHostId()` (see
-// `landing-draft-store.ts`). Left unmocked that is always `null` too, so a
-// draft created in this suite would seed an empty workspace even though the
-// reactive hook above resolves "host-a" - pin both resolution paths to the
-// SAME host id. Only `getHostBindingSnapshot` is overridden; every other
-// export is preserved via the `importOriginal` spread.
+// `useLandingDraftStore.createDraft` separately snapshots the workspace of the
+// app-wide host, resolved imperatively rather than through a hook (see
+// `landing-draft-store.ts`). That read is `activeHostIdOrNull` -> the
+// authority projection, which `resetStores` seeds; the spine override below
+// survives only for the other imperative callers this suite's tree reaches.
+// Both are pinned to the SAME host id as the reactive hook above, or a draft
+// created here would seed an empty workspace. Every other export is preserved
+// via the `importOriginal` spread.
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
   return {
@@ -65,6 +73,15 @@ function resetStores(): void {
     activeDraftId: null,
   });
   useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+  // The draft's workspace bucket resolves through the authority projection now
+  // (P4.2/D17 retired the spine's active slot). SEEDED rather than stubbed -
+  // this mock spreads `importOriginal`, so the production read runs for real
+  // and an unseeded store would silently select the unresolved-host bucket.
+  // Same host the spine override above pins.
+  useSelectionAuthorityStore.setState({
+    attached: true,
+    effectiveHostId: "host-a",
+  });
 }
 
 function bindingEntry(

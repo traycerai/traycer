@@ -14,8 +14,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { __resetPrListSubscriptionsForTesting } from "@/hooks/pr/use-pr-list-subscription";
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host1",
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => "host1",
 }));
 
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";

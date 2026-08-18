@@ -23,9 +23,9 @@ import {
   type HostNotificationPresenceFrame,
 } from "@/lib/notifications/notification-presence";
 import {
-  createHostStreamReopenScheduler,
   isReopenableNotificationsStreamClose,
-} from "@/lib/host/stream-reopen";
+  type HostReconnectEngine,
+} from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { compareFeedIdAscending } from "@/lib/notifications/notification-lifecycle";
 
 export const HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT = 50;
@@ -480,6 +480,15 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
 );
 
 export function openHostNotificationsStream(
+  /**
+   * THE reconnect policy for this stream's host (redesign P4.1 /
+   * connection-registry §6), acquired from the connection registry by the one
+   * place that opens these streams. This store no longer constructs its own
+   * scheduler: the constants, the terminal-close classification and the
+   * backoff shape live once, in the engine, and each stream still gets its
+   * own independent lane so a sibling stream's refusal cannot pace it.
+   */
+  reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   options: {
@@ -504,7 +513,7 @@ export function openHostNotificationsStream(
   // so without this reopen a single bad window (e.g. the host briefly unable
   // to validate bearers) leaves notifications dead until app restart while
   // the rest of the app self-heals through per-interaction re-subscribes.
-  const reopenScheduler = createHostStreamReopenScheduler(() => {
+  const reopenScheduler = reconnectEngine.openReopenLane(() => {
     currentSession?.close();
     currentSession = null;
     openSession();

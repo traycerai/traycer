@@ -23,7 +23,9 @@ import {
 
 const permissionRoleSchema = getRecordSchema(
   commonRecordRegistry,
-  "permission-role", "latest");
+  "permission-role",
+  "latest",
+);
 
 export const localRepoMappingEntrySchema = z.object({
   repoIdentifier: z.string(),
@@ -42,7 +44,19 @@ export type ResolvedWorkspaceFolder = z.infer<
   typeof resolvedWorkspaceFolderSchema
 >;
 
-export const snapshotMetaEpicSchema = z.object({
+/**
+ * Frozen `epic.subscribe@1.0` / `@1.1` snapshot metadata, as shipped.
+ *
+ * IMMUTABLE. A renderer that negotiated either of those minors agreed to
+ * exactly these keys, so this object must never learn a new one. Adding a
+ * key here - even a tolerated one (`.optional()`, `.catch()`, `.default()`) -
+ * is a same-version wire-shape change on an already-released line: the
+ * tolerance makes the *parse* succeed but says nothing about whether the
+ * released peer's payload ever carries the key, so a consumer typed as if
+ * the field were always populated reads `undefined` (the `providers.list`
+ * #258 incident). New fields go on a new minor's shape below.
+ */
+export const snapshotMetaEpicSchemaV10 = z.object({
   schemaVersion: z.string(),
   epicLight: epicLightSchema.nullable(),
   permissionRole: permissionRoleSchema.nullable(),
@@ -52,6 +66,43 @@ export const snapshotMetaEpicSchema = z.object({
   workspaceFolders: z.array(resolvedWorkspaceFolderSchema),
   unresolvedRepos: z.array(taskRepoIdentifierSchema),
   hostStateVectorBase64: z.string(),
+});
+export type SnapshotMetaEpicV10 = z.infer<typeof snapshotMetaEpicSchemaV10>;
+
+/**
+ * `epic.subscribe@1.2` snapshot metadata: adds the room identity.
+ *
+ * The LATEST installed shape - host code builds meta against this, and every
+ * client-side `SnapshotMetaEpic` type flows from it. A NEW schema object
+ * (not a mutation of {@link snapshotMetaEpicSchemaV10}) per the
+ * frozen-per-minor rule: `@1.0`/`@1.1` connections keep parsing the frozen
+ * shape above and silently strip the extra key a `@1.2`-built frame carries.
+ */
+export const snapshotMetaEpicSchema = snapshotMetaEpicSchemaV10.extend({
+  /**
+   * The concrete cloud collaboration room the host opened for this snapshot.
+   *
+   * Consumers must treat an absent identity as unknown, and must NOT infer it
+   * from `epicId`: a major schema migration mints a NEW room for the same
+   * Epic id, so merging two docs on equal `epicId` alone would union a
+   * pre-migration doc into its transformed successor.
+   *
+   * Optional at `@1.2`, deliberately, for two independent reasons:
+   *
+   * 1. The client parses every server frame with the LATEST schema rather
+   *    than the negotiated minor's (`epic-stream-client.ts`), so a required
+   *    key here would make a `@1.0`/`@1.1` host's snapshot frame fail to
+   *    parse at a `@1.2`-capable client - and that parse failure returns
+   *    silently, leaving the canvas on its loading skeleton forever.
+   * 2. The host genuinely may have no room open when it builds the snapshot,
+   *    so absence is a real state rather than only a version artifact.
+   *
+   * What the minor buys is that the two are now distinguishable: below `@1.2`
+   * absence is *contractual* (the key does not exist on that wire), while at
+   * `@1.2` absence means the host has no room open. Presence is a version
+   * fact instead of a runtime coin flip.
+   */
+  roomId: z.string().optional(),
 });
 export type SnapshotMetaEpic = z.infer<typeof snapshotMetaEpicSchema>;
 

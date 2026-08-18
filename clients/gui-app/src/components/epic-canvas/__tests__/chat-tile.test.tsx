@@ -63,6 +63,10 @@ vi.mock(
 const MOCK_HOST_CLIENT = {
   request: () => new Promise(() => {}),
   getActiveHostId: () => HOST_ID,
+  // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
+  // stream-runtime seam x #1227's in-tile fork dialog) - a partial client
+  // mock fails every case in this file at once through the error boundary.
+  getActiveHost: () => MOCK_HOST_ENTRY,
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
@@ -86,6 +90,8 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
 // useEpicCreateChatForHost (called inside ChatForkDialog) uses
@@ -208,8 +214,15 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSchemaVersion: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => HOST_ID,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-test",
+}));
+
+// The Epic session resolves its host through the selection authority's derived
+// pointer (selection model §1), not the active-host projection above - seed the
+// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-test",
 }));
 
 // The tile's record gate consults `epic.listCloudChats` for a chat with no
@@ -921,6 +934,9 @@ function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
 async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
     expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
+    // Since invariant 6 the pre-session state is this one; without it the
+    // wait above would be vacuous (an id that never renders is always absent).
+    expect(screen.queryByTestId("chat-tile-load-chat-1")).toBeNull();
   });
   // LegendList needs a few frames (plus its scroll-finish fallback) to
   // bootstrap its initial scroll position and measure rows in jsdom before
@@ -1077,7 +1093,11 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
+    // The pre-session presentation is now the BOUNDED load state, not the
+    // unbounded spinner: with no session handle the tile renders
+    // `TileHostLoadState`, which says which host it is waiting on and stops
+    // waiting (redesign invariant 6). The gating claim above is unchanged.
+    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
   });
 
   it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
@@ -1122,7 +1142,11 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
+    // The pre-session presentation is now the BOUNDED load state, not the
+    // unbounded spinner: with no session handle the tile renders
+    // `TileHostLoadState`, which says which host it is waiting on and stops
+    // waiting (redesign invariant 6). The gating claim above is unchanged.
+    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
   });
 
   it("keeps a cold sidebar-opened chat in one loading state until its first snapshot", async () => {

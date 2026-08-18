@@ -8,6 +8,11 @@ import type {
 import type { IHostMessenger } from "../host-transport/host-messenger";
 import { HostClient, type IHostQueryInvalidator } from "./host-client";
 import type { HostDirectoryEntry } from "./host-directory";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistry,
+  type HostConnectionRegistrySource,
+} from "./host-connection-registry";
 import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
 import { HostRequestCoordinator } from "./host-request-coordinator";
 import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
@@ -35,11 +40,6 @@ export interface IHostDirectoryService {
   refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]>;
   /** Drop any in-flight refresh — used when the credential rotates. */
   invalidateInFlightRefresh(): void;
-  getSelected(): HostDirectoryEntry | null;
-  selectById(hostId: string | null): void;
-  onSelectionChange(
-    handler: (entry: HostDirectoryEntry | null) => void,
-  ): Disposable;
 }
 
 export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
@@ -58,6 +58,18 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly directory: IHostDirectoryService;
   readonly invalidator: IHostQueryInvalidator;
   readonly schedulingPolicy: RpcSchedulingPolicy<Registry>;
+  /**
+   * The window's connection-registry wiring (connection-registry §1), or
+   * `null` for a shell that runs without one (the standalone/test path).
+   *
+   * REQUIRED rather than optional on purpose. The registry carries the
+   * per-host "row changed" signal that replaces the active slot's change
+   * event, so a shell that forgets to wire it produces windows whose pinned
+   * consumers never re-read when a host's row lands - a silent staleness
+   * bug, not a crash. A required field turns "did you wire it" into a
+   * compile error at every shell, which is the only census that cannot rot.
+   */
+  readonly connectionRegistry: HostConnectionRegistrySource | null;
   /**
    * Provider-owned binding registry. `null` keeps the standalone-runtime
    * convenience path for tests and non-React shells.
@@ -91,6 +103,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
   readonly directory: IHostDirectoryService;
 
   private readonly runnerHost: IRunnerHost;
+  private readonly connectionRegistry: HostConnectionRegistrySource | null;
   readonly authorityRegistry: HostBindingAuthorityRegistry;
   readonly requestCoordinator: HostRequestCoordinator<Registry>;
   private readonly ownsAuthorityRegistry: boolean;
@@ -105,6 +118,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.runnerHost = options.runnerHost;
     this.requestContextProvider = options.requestContextProvider;
     this.directory = options.directory;
+    this.connectionRegistry = options.connectionRegistry;
     this.ownsAuthorityRegistry =
       options.authorityRegistry === null ||
       options.authorityRegistry === undefined;
@@ -143,8 +157,18 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     }
     this.started = true;
 
+    // BEFORE anything else reads it, so a consumer that subscribes during the
+    // opening commit sees the registry already answering off the live
+    // directory rather than the empty answers an uninstalled source gives.
+    // This used to be sequenced "before the first bind"; there is no bind, and
+    // the registry is now the ONLY thing that tells a pinned consumer its row
+    // arrived, which makes the ordering more load-bearing than it was, not
+    // less.
+    if (this.connectionRegistry !== null) {
+      installHostConnectionRegistrySource(this.connectionRegistry);
+    }
+
     this.hostClient.setRequestContext(this.requestContextProvider.current());
-    this.hostClient.bind(this.directory.getSelected());
 
     this.contextUnsubscribe = this.requestContextProvider.onChange(
       (ctx, era) => {
@@ -178,12 +202,6 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
       });
 
     this.disposables.push(
-      this.directory.onSelectionChange((entry) => {
-        this.hostClient.bind(entry);
-      }),
-    );
-
-    this.disposables.push(
       this.runnerHost.onLocalHostChange(() => {
         void this.directory.refresh();
       }),
@@ -196,6 +214,10 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
       return;
     }
     this.disposed = true;
+
+    if (this.connectionRegistry !== null) {
+      resetHostConnectionRegistry();
+    }
 
     if (this.contextUnsubscribe !== null) {
       this.contextUnsubscribe();

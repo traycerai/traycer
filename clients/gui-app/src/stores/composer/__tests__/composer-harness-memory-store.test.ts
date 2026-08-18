@@ -309,6 +309,9 @@ describe("composer harness memory store", () => {
     retargetPersistedStore({
       store: useComposerHarnessMemoryStore,
       name: composerHarnessMemoryKey("alice@example.com"),
+      // This arm is about the v1 -> v2 host-bucketing migration, not the
+      // email -> userId re-scope, so there is no legacy key to adopt.
+      legacyName: null,
     });
     await useComposerHarnessMemoryStore.persist.rehydrate();
 

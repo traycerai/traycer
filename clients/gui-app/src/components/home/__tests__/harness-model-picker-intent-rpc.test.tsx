@@ -102,8 +102,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === null ? (hostBindingMock.current?.hostClient ?? null) : hostId,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -231,6 +231,8 @@ vi.mock("@/lib/host/runtime", () => ({
   // `useHostClient()` rather than `useHostBinding()?.hostClient` - both must
   // resolve to the same fixture client or the component throws on render.
   useHostClient: () => hostBindingMock.current?.hostClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => hostBindingMock.current?.hostClient,
 }));
 
 import {
@@ -337,9 +339,11 @@ function createPickerRpcFixture(
   const calls: RpcCallLog = { listModels: [], listCommands: [] };
   const queryClient = createAppQueryClient();
   let requestCounter = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -362,10 +366,10 @@ function createPickerRpcFixture(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   hostBindingMock.current = { hostClient: client };
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>

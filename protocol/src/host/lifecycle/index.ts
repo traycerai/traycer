@@ -1,5 +1,7 @@
 export {
+  lifecycleClaimShutdownUpgradeV10ToV11,
   lifecycleClaimShutdownV10,
+  lifecycleClaimShutdownV11,
   lifecycleCommitShutdownV10,
   lifecycleReleaseShutdownV10,
 } from "./contracts";
@@ -22,13 +24,17 @@ export {
 
 export {
   claimShutdownRequestSchema,
+  claimShutdownRequestSchemaV11,
   claimShutdownResponseSchema,
   commitShutdownRequestSchema,
   commitShutdownResponseSchema,
   releaseShutdownRequestSchema,
   releaseShutdownResponseSchema,
+  shutdownClaimIntentSchema,
   SHUTDOWN_CLAIM_MAX_TTL_MS,
   type ClaimShutdownRequest,
+  type ClaimShutdownRequestV11,
+  type ShutdownClaimIntent,
   type ClaimShutdownResponse,
   type CommitShutdownRequest,
   type CommitShutdownResponse,

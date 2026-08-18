@@ -89,6 +89,25 @@ export function HostIdentityCard(props: {
    * here and the wrap returns.
    */
   readonly actions: ReactNode;
+  /**
+   * The remedy for the health state currently shown, or `null` when the state
+   * has none this app can offer.
+   *
+   * A SLOT rather than a derivation, so this component stays presentational:
+   * the only state that carries one today is `update-required`, whose action
+   * needs the lease's structured incompatibility and the host-controller
+   * mutation lane, and reading either here would put a `useRunnerHost` and a
+   * lease subscription below the boundary that every panel suite mocks — the
+   * same layering mistake `settingUp` was moved OUT of the row component to
+   * fix. The panel owns those facts; this owns where the button sits.
+   *
+   * It sits beside the health word, not in `actions`, and that is deliberate:
+   * `actions` is the card's narrow name-row cluster (one control plus a `⋯`),
+   * documented above as something that wraps badly the moment a worded button
+   * joins it. A remedy also belongs next to the problem it answers rather than
+   * opposite the title.
+   */
+  readonly healthAction: ReactNode;
   readonly children: ReactNode;
 }): ReactNode {
   const { host } = props;
@@ -178,6 +197,7 @@ export function HostIdentityCard(props: {
                 {host.health.detail}
               </span>
             )}
+            {props.healthAction}
             {facts.length === 0 ? null : (
               // Folded up from its own line. The card gained a footer verb bar,
               // and three stacked lines of identity above it pushed Host ID and

@@ -88,9 +88,25 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => testState.role,
 }));
 
+// Captures the client the controller hands the list query, so the suite can
+// say WHICH host the panel reads on - the two client mocks below answer
+// different ids for exactly this reason.
+const collaboratorsQueryClientIds = vi.hoisted(
+  () => [] as Array<string | null>,
+);
+
 vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
   EPIC_COLLABORATORS_OPEN_REFRESH_MS: 5 * 60_000,
-  useEpicCollaboratorsQuery: () => ({
+  useEpicCollaboratorsQuery: (
+    _epicId: string,
+    options: {
+      readonly client: { getActiveHostId: () => string | null } | null;
+    },
+  ) => ({
+    ...(collaboratorsQueryClientIds.push(
+      options.client?.getActiveHostId() ?? null,
+    ),
+    {}),
     data: testState.collaborators,
     error: null,
     isError: false,
@@ -157,6 +173,8 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({ getActiveHostId: () => "active-host" }),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => ({ getActiveHostId: () => "active-host" }),
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
@@ -358,6 +376,22 @@ describe("<SharingPanel />", () => {
         }),
       );
     });
+  });
+
+  it("reads the collaborator list on the EPIC SESSION's client, not the app-wide one", () => {
+    // Codex #1243 sweep: the panel's grant/revoke/role mutations were moved
+    // onto the Epic session's client, and the list must agree with the host
+    // those writes land on. The controller's own comment recorded this as
+    // deferred ("would have to move the mutation hooks with it"); this pins
+    // that it is no longer deferred. Both client mocks are installed with
+    // distinct ids, so a controller reading the app-wide client fails here
+    // by name.
+    collaboratorsQueryClientIds.length = 0;
+    renderSharingPanel();
+    expect(collaboratorsQueryClientIds.length).toBeGreaterThan(0);
+    expect(new Set(collaboratorsQueryClientIds)).toEqual(
+      new Set(["epic-host"]),
+    );
   });
 
   it("renders direct people separately from shared and unshared teams", () => {

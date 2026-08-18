@@ -33,16 +33,9 @@ function neutralPresentation(): DefaultHostReadinessPresentation {
     reinstall: () => undefined,
     configureShell: () => undefined,
     refreshDirectory: () => undefined,
-    openHostPicker: () => undefined,
     openSettings: () => undefined,
-    anyHostDialable: false,
-    requestRespawn: () => undefined,
-    respawnPending: false,
     compatibility: {
       status: "compatible",
-      errorMessage: null,
-      retrying: false,
-      retry: () => undefined,
       degraded: false,
       unreachable: false,
       hostStatus: null,
@@ -185,4 +178,63 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
     const message = reportedMessage(compatiblePresentation(null));
     expect(message).not.toContain("busy");
   });
+});
+
+describe("hostFailureReportIssueAction — the compat verdict word", () => {
+  // Found by a SURVIVED kill probe (P3.2 R6): with `compatibilityPresentation`
+  // mutated to report every failed probe as `compatible`, all six tests above
+  // stayed green. They vary `hostStatus` and never the verdict - so the health
+  // line's whole reason-for-existing, telling triage WHY the probe failed, had
+  // no cover at all.
+  //
+  // It matters most now: the compat verdict no longer reaches a user through
+  // any surface (D13 - it is a lease input), so this diagnostic line is the
+  // only place a wrong verdict would ever show up, and it shows up in the bug
+  // report someone files about something else entirely.
+  const verdictCases = [
+    {
+      name: "a probe that never reached the host reads `unreachable`, never `rejected`",
+      status: "failed",
+      unreachable: true,
+      degraded: false,
+      expected: "unreachable",
+    },
+    {
+      name: "a host that answered and rejected the handshake reads `rejected`",
+      status: "failed",
+      unreachable: false,
+      degraded: false,
+      expected: "rejected",
+    },
+    {
+      name: "a held verdict reads `compatible (degraded)`, so triage can tell held from fresh",
+      status: "compatible",
+      unreachable: false,
+      degraded: true,
+      expected: "compatible (degraded)",
+    },
+    {
+      name: "a version disagreement reads `incompatible`",
+      status: "incompatible",
+      unreachable: false,
+      degraded: false,
+      expected: "incompatible",
+    },
+  ] as const;
+
+  for (const testCase of verdictCases) {
+    it(testCase.name, () => {
+      const base = neutralPresentation();
+      const message = reportedMessage({
+        ...base,
+        compatibility: {
+          ...base.compatibility,
+          status: testCase.status,
+          unreachable: testCase.unreachable,
+          degraded: testCase.degraded,
+        },
+      });
+      expect(message).toContain(`compat ${testCase.expected}`);
+    });
+  }
 });

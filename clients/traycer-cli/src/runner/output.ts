@@ -14,6 +14,24 @@ export interface ProgressEvent {
   readonly bytes: number | null;
   readonly totalBytes: number | null;
   readonly message: string | null;
+  /**
+   * Monotonic count of DISCRETE UNITS OF WORK the producer has observed
+   * complete within this stage - archive entries extracted, and nothing else so
+   * far.
+   *
+   * ⚠ INCREMENTS ONLY WHEN A UNIT OF WORK HAS COMPLETED, AND NEVER ON A TIMER.
+   * That prohibition is the field's entire content. A consumer uses it to tell
+   * "this stage is advancing" from "this stage has gone quiet", so a producer
+   * that ticked it on an interval would report a wedged install as healthy - the
+   * exact defect this field exists to remove, reintroduced with the mechanism
+   * meant to prevent it.
+   *
+   * `null` where the producer has no discrete unit to count, which is most
+   * stages. A stage with a real measured position reports it through
+   * `bytes`/`percent` instead; this is for work that advances in steps rather
+   * than in bytes.
+   */
+  readonly workUnits: number | null;
   readonly timestamp: string;
 }
 
@@ -48,6 +66,24 @@ export interface ProgressInfo {
   readonly percent: number | null;
   readonly bytes: number | null;
   readonly totalBytes: number | null;
+  /**
+   * Monotonic count of DISCRETE UNITS OF WORK the producer has observed
+   * complete within this stage - archive entries extracted, and nothing else so
+   * far.
+   *
+   * ⚠ INCREMENTS ONLY WHEN A UNIT OF WORK HAS COMPLETED, AND NEVER ON A TIMER.
+   * That prohibition is the field's entire content. A consumer uses it to tell
+   * "this stage is advancing" from "this stage has gone quiet", so a producer
+   * that ticked it on an interval would report a wedged install as healthy - the
+   * exact defect this field exists to remove, reintroduced with the mechanism
+   * meant to prevent it.
+   *
+   * `null` where the producer has no discrete unit to count, which is most
+   * stages. A stage with a real measured position reports it through
+   * `bytes`/`percent` instead; this is for work that advances in steps rather
+   * than in bytes.
+   */
+  readonly workUnits: number | null;
 }
 
 // Output sink the runner hands to each command. In JSON mode it writes
@@ -146,6 +182,19 @@ export function createOutput(runtime: RuntimeContext): Output {
           percent: info.percent,
           bytes: info.bytes,
           totalBytes: info.totalBytes,
+          // FORWARDED, not nulled. This line used to drop the field, and
+          // dropping it here disabled the whole mechanism on the ONLY
+          // population it was written for: `workUnits` exists so Desktop can
+          // tell an advancing extract from a wedged one, and Desktop runs this
+          // CLI in JSON mode. Extraction reports no `percent` and no byte
+          // position - an archive entry count is all it has - so with this
+          // nulled every heartbeat serialized byte-identically, the host
+          // controller's advance key never moved, and a healthy first install
+          // was promoted to the Retry surface while it was actively
+          // extracting. That is the exact symptom `fa9c6093` set out to fix;
+          // the producer and the consumer both landed, and only the wire
+          // between them kept saying `null`.
+          workUnits: info.workUnits,
           message: info.message,
           timestamp: now(),
         };
@@ -242,6 +291,7 @@ export function createOutput(runtime: RuntimeContext): Output {
             percent: openBarInfo.percent,
             bytes: openBarInfo.bytes,
             totalBytes: openBarInfo.totalBytes,
+            workUnits: null,
           })}`,
         );
         return;
