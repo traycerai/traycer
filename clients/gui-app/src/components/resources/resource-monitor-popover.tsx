@@ -123,6 +123,7 @@ import {
   type DesktopAppResourceUsage,
 } from "@/lib/resources/desktop-app-resource-usage";
 import { queryClient } from "@/lib/query-client";
+import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
 import {
   rejectClosedPlainTerminalRestore,
   retainedPlainTerminalTombstoneBlocksClosedRestore,
@@ -1248,7 +1249,13 @@ function ResourceMonitorPanel(props: {
     ],
   );
 
-  const canvasIndex = useMemo(() => buildCanvasResourceIndex(canvas), [canvas]);
+  const tombstoneEvidence = usePlainTerminalTombstoneEvidence();
+  const canvasIndex = useMemo(() => {
+    // Not read by the builder directly - it is the Query-side input the
+    // builder's tombstone gate reads, so the index has to re-derive with it.
+    void tombstoneEvidence;
+    return buildCanvasResourceIndex(canvas);
+  }, [canvas, tombstoneEvidence]);
   const recordByOwner = useMemo(() => buildRecordByOwner(canvas), [canvas]);
   const epicTitleById = useMemo(() => buildEpicTitleById(tasks), [tasks]);
   const taskRows = useMemo(
@@ -3938,6 +3945,51 @@ function filterOwnerProcessRowsForSearch(
     rootRows: includeRoots ? rows : processRows.rootRows,
     canExpand: rows.length > 0,
   };
+}
+
+/**
+ * Retained-tombstone evidence that `buildCanvasResourceIndex` consults through
+ * `retainedPlainTerminalTombstoneBlocksClosedRestore`. It lives in Query, not
+ * in the canvas snapshot, so the index has to observe it separately: a
+ * tombstone that arrives before its presentation fanout leaves the closed-tile
+ * row visible while `openResourceOwner` already rejects it, which reads to the
+ * user as a click that does nothing. Only the tombstoned ids and the live
+ * revision that could overtake them are folded in, so an ordinary projection
+ * tick does not churn the index.
+ */
+function plainTerminalTombstoneEvidence(): string {
+  const parts: string[] = [];
+  for (const [queryKey, collection] of queryClient.getQueriesData<
+    PlainTerminalCollection | undefined
+  >({
+    predicate: (query) => query.queryKey[2] === "terminal.plain.list",
+  })) {
+    if (collection === undefined) continue;
+    for (const [terminalId, revision] of Object.entries(
+      collection.deletedRevisionById,
+    )) {
+      const live = collection.terminalsById[terminalId]?.record.revision ?? -1;
+      parts.push(
+        `${String(queryKey[1])}:${terminalId}:${String(revision)}:${String(live)}`,
+      );
+    }
+  }
+  return parts.sort().join("|");
+}
+
+function subscribeToPlainTerminalTombstones(
+  onStoreChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe(onStoreChange);
+}
+
+function usePlainTerminalTombstoneEvidence(): string {
+  // A string snapshot, so an unrelated cache event re-derives it but does not
+  // re-render. This panel only mounts while the popover is open.
+  return useSyncExternalStore(
+    subscribeToPlainTerminalTombstones,
+    plainTerminalTombstoneEvidence,
+  );
 }
 
 function buildCanvasResourceIndex(

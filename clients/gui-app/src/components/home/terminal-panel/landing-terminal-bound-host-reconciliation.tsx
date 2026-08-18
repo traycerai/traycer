@@ -88,6 +88,11 @@ function LandingTerminalBoundHostReconciliation(props: {
     if (reconciliationRef.current === reconciliationKey) return;
     reconciliationRef.current = reconciliationKey;
     let disposed = false;
+    const releaseLatch = (): void => {
+      if (!disposed && reconciliationRef.current === reconciliationKey) {
+        reconciliationRef.current = null;
+      }
+    };
 
     void reconcileCapableLandingTerminals({
       activeHostId: hostId,
@@ -98,11 +103,16 @@ function LandingTerminalBoundHostReconciliation(props: {
       importLegacyTerminal: (request) =>
         entry.mutations.importLegacy.mutateAsync(request),
       queryClient,
-    }).catch(() => {
-      if (!disposed && reconciliationRef.current === reconciliationKey) {
-        reconciliationRef.current = null;
-      }
-    });
+    }).then(
+      (outcome) => {
+        // A non-fresh snapshot no longer rejects, so release the latch for it
+        // too - otherwise this key would stay claimed and the pass that the
+        // returning snapshot should re-run would be skipped.
+        if (outcome === "reconciled") return;
+        releaseLatch();
+      },
+      () => releaseLatch(),
+    );
 
     return () => {
       disposed = true;

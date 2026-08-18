@@ -122,7 +122,7 @@ export function usePlainTerminalMutations(args: {
       onSuccess: (response, _request, captured) => {
         writeCanonicalTerminal(queryClient, {
           hostId: captured.hostId,
-          scope: response.terminal.record.scope,
+          scope: captured.scope,
           terminal: response.terminal,
           barrier: captured.barrier,
         });
@@ -165,7 +165,7 @@ export function usePlainTerminalMutations(args: {
       onSuccess: (response, _request, captured) => {
         writeCanonicalTerminal(queryClient, {
           hostId: captured.hostId,
-          scope: response.terminal.record.scope,
+          scope: captured.scope,
           terminal: response.terminal,
           barrier: captured.barrier,
         });
@@ -190,7 +190,7 @@ export function usePlainTerminalMutations(args: {
       onSuccess: (response, _request, captured) => {
         writeCanonicalTerminal(queryClient, {
           hostId: captured.hostId,
-          scope: response.terminal.record.scope,
+          scope: captured.scope,
           terminal: response.terminal,
           barrier: captured.barrier,
         });
@@ -269,7 +269,7 @@ export function usePlainTerminalMutations(args: {
         }
         writeCanonicalTerminal(queryClient, {
           hostId: captured.hostId,
-          scope: response.terminal.record.scope,
+          scope: captured.scope,
           terminal: response.terminal,
           barrier: captured.barrier,
         });
@@ -301,6 +301,12 @@ export function useHostPlainTerminalMutations(
   });
 }
 
+/**
+ * The scope must be the one `onMutate` captured, because the barrier was
+ * captured from that cache slot. Writing a response scope instead would apply
+ * an ordering barrier belonging to a different slot and lose the guarantee for
+ * both. The deletion paths capture the same way.
+ */
 function writeCanonicalTerminal(
   queryClient: QueryClient,
   args: {

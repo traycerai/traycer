@@ -2334,24 +2334,11 @@ describe("ResourceMonitorPopover", () => {
 
   it("cannot reopen a resource owner after terminal invalidation prunes its closed payload", async () => {
     routerMock.pathname = "/epics/epic-1/tab-1";
-    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {
-      "tile-term-tombstoned": {
-        node: {
-          id: "term-tombstoned",
-          instanceId: "tile-term-tombstoned",
-          type: "terminal",
-          name: "Tombstoned Build",
-          titleSource: "manual",
-          hostId: "host-1",
-          cwd: "/work/background",
-        },
-        pendingCreate: false,
-      },
-    };
-    Reflect.deleteProperty(
-      canvasMock.state.closedTilePayloadsByTabId["tab-closed"] ?? {},
-      "tile-term-tombstoned",
-    );
+    // The canvas store is mocked here, so the real invalidation fanout cannot
+    // reach it. Terminal invalidation having already pruned the tile's closed
+    // payload is the precondition under test - stated directly rather than
+    // written and then deleted, which read as pruning but was a no-op pair.
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {};
     const stub = installStubFactory();
     renderPopover();
 

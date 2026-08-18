@@ -131,17 +131,19 @@ describe("<TopLevelTabHost /> evicted epic tombstone restore", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toContain("epic-0");
 
     const evictedTabId = "epic-0";
-    useEpicCanvasStore.setState((state) => ({
-      canvasByTabId: {
-        ...state.canvasByTabId,
-        [evictedTabId]: {
-          root: pane("pane-0", []),
-          activePaneId: "pane-0",
-          tilesByInstanceId: {},
-          sizesByGroupId: {},
+    act(() => {
+      useEpicCanvasStore.setState((state) => ({
+        canvasByTabId: {
+          ...state.canvasByTabId,
+          [evictedTabId]: {
+            root: pane("pane-0", []),
+            activePaneId: "pane-0",
+            tilesByInstanceId: {},
+            sizesByGroupId: {},
+          },
         },
-      },
-    }));
+      }));
+    });
     expect(
       commitPlainTerminalDeletion({
         queryClient,
@@ -180,16 +182,18 @@ describe("<TopLevelTabHost /> evicted epic tombstone restore", () => {
       titleSource: "manual",
       cwd: "/other",
     };
-    useEpicCanvasStore.setState((state) => ({
-      closedTilePayloadsByTabId: {
-        ...state.closedTilePayloadsByTabId,
-        [evictedTabId]: {
-          [legacy.instanceId]: { node: legacy, pendingCreate: false },
-          [future.instanceId]: { node: future, pendingCreate: false },
-          [otherId.instanceId]: { node: otherId, pendingCreate: false },
+    act(() => {
+      useEpicCanvasStore.setState((state) => ({
+        closedTilePayloadsByTabId: {
+          ...state.closedTilePayloadsByTabId,
+          [evictedTabId]: {
+            [legacy.instanceId]: { node: legacy, pendingCreate: false },
+            [future.instanceId]: { node: future, pendingCreate: false },
+            [otherId.instanceId]: { node: otherId, pendingCreate: false },
+          },
         },
-      },
-    }));
+      }));
+    });
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[evictedTabId]?.[
         legacy.instanceId
@@ -202,7 +206,7 @@ describe("<TopLevelTabHost /> evicted epic tombstone restore", () => {
       1,
     );
     vi.spyOn(history, "go").mockImplementation(() => {});
-    goBack({ history });
+    act(() => goBack({ history }));
 
     expect(
       useEpicCanvasStore.getState().canvasByTabId[evictedTabId]

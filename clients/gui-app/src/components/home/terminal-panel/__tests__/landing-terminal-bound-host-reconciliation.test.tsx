@@ -167,13 +167,13 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
     const importA = vi.fn(() => Promise.reject(new Error("wrong host")));
     const closeA = vi.fn(() => Promise.resolve());
     const closeB = vi.fn(() => Promise.resolve());
+    // Recorded rather than asserted inline: a thrown assertion inside the
+    // mock would surface as a rejected `importLegacy`, which the component
+    // reads as a host failure and reports much later as "importB not called
+    // once" instead of naming the field that broke.
+    const importBRequests: ImportLegacyPlainTerminalRequest[] = [];
     const importB = vi.fn((request: ImportLegacyPlainTerminalRequest) => {
-      expect(request).toMatchObject({
-        hostId: "host-b",
-        terminalId: "legacy-b",
-        cwd: "/legacy/b",
-        name: "Local B",
-      });
+      importBRequests.push(request);
       queryClient.setQueryData(
         hostQueryKeys.plainTerminals("host-b", SCOPE),
         freshCollection([hostBWinner, hostBDiscovered], undefined),
@@ -211,6 +211,12 @@ describe("<LandingTerminalBoundHostReconciliationFleet />", () => {
       expect(
         useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
       ).toEqual(["terminal-a", "legacy-b", "discovered-b"]);
+    });
+    expect(importBRequests[0]).toMatchObject({
+      hostId: "host-b",
+      terminalId: "legacy-b",
+      cwd: "/legacy/b",
+      name: "Local B",
     });
     let state = useLandingTerminalStore.getState();
     expect(state.tabs[1]).toMatchObject({

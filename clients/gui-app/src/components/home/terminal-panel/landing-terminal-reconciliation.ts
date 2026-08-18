@@ -177,7 +177,13 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
       return [tab];
     }
     matchedTerminalIds.add(projection.record.terminalId);
-    return [hostAcknowledgedTab(tab, projection)];
+    const acknowledged = hostAcknowledgedTab(tab, projection);
+    // Reuse the existing reference when nothing derived actually moved, the
+    // same way the legacy pass above reuses `tab` on an unchanged name. Stream
+    // frames bump `projectionSequence` constantly, and every new object here
+    // becomes a fresh `tabs` array in the store - re-rendering every tab
+    // consumer and re-serializing the persisted slot for identical data.
+    return [landingTerminalTabsEqual(tab, acknowledged) ? tab : acknowledged];
   });
 
   const adoptedTabs = input.terminals.flatMap((terminal) => {
@@ -212,6 +218,29 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
     exitedInstanceIds: removedInstanceIds,
     collapseWhenEmpty: nextTabs.length === 0 && removedInstanceIds.length > 0,
   };
+}
+
+/**
+ * Every field `hostAcknowledgedTab` writes, plus the identity it preserves.
+ * Extend this together with that helper: a field compared here but not written
+ * there is harmless, one written there but missed here silently re-pins the
+ * stale value by reusing the old reference.
+ */
+function landingTerminalTabsEqual(
+  left: LandingTerminalTabRef,
+  right: LandingTerminalTabRef,
+): boolean {
+  return (
+    left.instanceId === right.instanceId &&
+    left.sessionId === right.sessionId &&
+    left.hostId === right.hostId &&
+    left.cwd === right.cwd &&
+    left.name === right.name &&
+    left.titleSource === right.titleSource &&
+    left.hostAuthorityAcknowledged === right.hostAuthorityAcknowledged &&
+    left.pendingCreate === right.pendingCreate &&
+    left.sourceStoreVersion === right.sourceStoreVersion
+  );
 }
 
 function defaultLandingTerminalTitle(

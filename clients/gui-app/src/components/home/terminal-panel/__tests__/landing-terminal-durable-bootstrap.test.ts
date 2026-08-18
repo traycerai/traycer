@@ -153,8 +153,42 @@ describe("durable landing-terminal bootstrap", () => {
     await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
   });
 
-  it("does not loop on a stable dormant failure and retries explicitly", async () => {
-    const dispatch = vi.fn(() => Promise.reject(new Error("offline")));
+  it("exposes requestPending while a deferred dispatch is in flight and clears it after settlement", async () => {
+    const pending = deferred<PlainTerminalProjection>();
+    const dispatch = vi.fn(() => pending.promise);
+    const adopt = vi.fn();
+    const rendered = renderHook(() =>
+      useLandingTerminalDurableLifecycle({
+        projectionStatus: "dormant",
+        pendingCreate: false,
+        active: true,
+        canMutate: true,
+        gridReady: true,
+        dispatch,
+        adopt,
+      }),
+    );
+    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    expect(rendered.result.current.requestPending).toBe(true);
+    expect(rendered.result.current.requestSettled).toBe(false);
+
+    await act(() => {
+      pending.resolve(projection("running"));
+      return Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.requestPending).toBe(false),
+    );
+    expect(rendered.result.current.requestSettled).toBe(true);
+    expect(adopt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the error presentation while an explicit retry is pending", async () => {
+    const retryRequest = deferred<PlainTerminalProjection>();
+    const dispatch = vi
+      .fn<() => Promise<PlainTerminalProjection>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockReturnValueOnce(retryRequest.promise);
     const rendered = renderHook(() =>
       useLandingTerminalDurableLifecycle({
         projectionStatus: "dormant",
@@ -174,6 +208,17 @@ describe("durable landing-terminal bootstrap", () => {
 
     act(() => rendered.result.current.retry());
     await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+    expect(rendered.result.current.requestError?.message).toBe("offline");
+    expect(rendered.result.current.requestPending).toBe(true);
+
+    await act(() => {
+      retryRequest.resolve(projection("running"));
+      return Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.requestPending).toBe(false),
+    );
+    expect(rendered.result.current.requestError).toBeNull();
   });
 
   it("ignores stale responses after a runtime transition and unmount", async () => {

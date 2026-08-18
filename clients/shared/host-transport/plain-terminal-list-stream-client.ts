@@ -110,6 +110,14 @@ export class PlainTerminalListStreamClient {
       case "pong": {
         return;
       }
+      default: {
+        const unhandled: never = frame;
+        console.warn(
+          `[stream] terminal.plain.subscribeList unhandled frame kind; dropping frame`,
+          unhandled,
+        );
+        return;
+      }
     }
   }
 }

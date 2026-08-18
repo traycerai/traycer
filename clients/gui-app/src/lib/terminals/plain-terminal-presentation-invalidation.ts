@@ -426,11 +426,22 @@ export function commitPlainTerminalDeferredDeletion(args: {
   return true;
 }
 
-/** Commits one absence proved by a settled snapshot initialization epoch. */
+/**
+ * Commits one absence proved by a settled snapshot initialization epoch.
+ *
+ * Snapshot absence proves deletion only for host-acknowledged pointers: an
+ * unacknowledged ref or a pending create is legitimately absent from the
+ * host's snapshot, so absence alone must never destroy it. That precondition
+ * is enforced here through `acknowledgedPlainTerminalPresentationIdsForScope`
+ * rather than left to the caller, because both exports are public and a caller
+ * that passes a raw terminal id would otherwise delete a user's pending
+ * terminal.
+ */
 export function commitPlainTerminalSnapshotOmission(args: {
   readonly queryClient: QueryClient;
   readonly queryKey: QueryKey;
   readonly hostId: string;
+  readonly scope: PlainTerminalScope;
   readonly terminalId: string;
   readonly snapshotEpoch: number;
 }): boolean {
@@ -441,6 +452,14 @@ export function commitPlainTerminalSnapshotOmission(args: {
     collection?.streamSnapshotFresh !== true ||
     collection.snapshotEpoch !== args.snapshotEpoch ||
     collection.terminalsById[args.terminalId] !== undefined
+  ) {
+    return false;
+  }
+  if (
+    !acknowledgedPlainTerminalPresentationIdsForScope(
+      args.hostId,
+      args.scope,
+    ).has(args.terminalId)
   ) {
     return false;
   }

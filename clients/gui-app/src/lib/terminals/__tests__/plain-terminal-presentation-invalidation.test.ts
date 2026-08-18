@@ -62,6 +62,9 @@ describe("plain terminal presentation invalidation", () => {
   afterEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingTerminalStore.getState().resetForTests();
+    // The GUI Vitest config does not restore mocks automatically, so the
+    // store-action `vi.spyOn` wrappers below would otherwise leak forward.
+    vi.restoreAllMocks();
   });
 
   it("sweeps both scopes by host and terminal without touching future authority, another host, another terminal, or terminal-agent", () => {
@@ -316,13 +319,13 @@ describe("plain terminal presentation invalidation", () => {
       "landing-other-host",
     );
     expect(
-      Object.values(
-        useEpicCanvasStore.getState().closedTilePayloadsByTabId,
-      ).flatMap((forTab) => Object.keys(forTab ?? {})),
+      Object.values(useEpicCanvasStore.getState().closedTilePayloadsByTabId)
+        .flatMap((forTab) => Object.keys(forTab ?? {}))
+        .sort(),
     ).toEqual([
       "closed-agent-ref",
-      "closed-other-host-ref",
       "closed-future-ref",
+      "closed-other-host-ref",
       "closed-other-terminal-ref",
     ]);
   });
@@ -1084,6 +1087,7 @@ describe("plain terminal presentation invalidation", () => {
             queryClient,
             queryKey,
             hostId: TARGET_HOST_ID,
+            scope,
             terminalId,
             snapshotEpoch: settled.snapshotEpoch,
           });

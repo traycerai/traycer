@@ -784,3 +784,135 @@ describe("closeAllTabs", () => {
     ).toBe(true);
   });
 });
+
+describe("adoptHostTerminal", () => {
+  beforeEach(() => {
+    useLandingTerminalStore.getState().resetForTests();
+  });
+
+  it("rekeys a tab to the canonical terminal id returned by a capable host", () => {
+    useLandingTerminalStore.getState().addTab(
+      tab({
+        instanceId: "local",
+        sessionId: "legacy-evidence",
+        hostId: HOST_A,
+      }),
+    );
+    const canonical = plainTerminal({
+      terminalId: "canonical-terminal",
+      hostId: HOST_A,
+      launchCwd: "/host/launch",
+      manualTitle: "Host title",
+      runtime: {
+        status: "running",
+        currentCwd: "/host/live",
+        activeProcessName: "bun",
+      },
+    });
+
+    // Matched on instanceId + hostId only: importLegacy's canonical winner may
+    // carry a different terminalId than the legacy evidence sent, and this is
+    // exactly the pointer swap `adoptHostTerminal` must still perform.
+    useLandingTerminalStore.getState().adoptHostTerminal("local", canonical);
+
+    expect(useLandingTerminalStore.getState().tabs).toEqual([
+      {
+        instanceId: "local",
+        sessionId: "canonical-terminal",
+        hostId: HOST_A,
+        cwd: "/host/launch",
+        name: "Host title",
+        titleSource: "manual",
+        hostAuthorityAcknowledged: true,
+        pendingCreate: false,
+        sourceStoreVersion: 1,
+      },
+    ]);
+  });
+
+  it("leaves a tab bound to a different host untouched", () => {
+    const otherHostTab = tab({
+      instanceId: "local",
+      sessionId: "legacy-evidence",
+      hostId: HOST_B,
+    });
+    useLandingTerminalStore.getState().addTab(otherHostTab);
+    const canonical = plainTerminal({
+      terminalId: "canonical-terminal",
+      hostId: HOST_A,
+      launchCwd: "/host/launch",
+      manualTitle: null,
+      runtime: { status: "dormant" },
+    });
+
+    useLandingTerminalStore.getState().adoptHostTerminal("local", canonical);
+
+    expect(useLandingTerminalStore.getState().tabs).toEqual([otherHostTab]);
+  });
+});
+
+describe("reconcileHostAuthoritativeLandingTerminalTabs identity reuse", () => {
+  it("returns the original tab reference when acknowledged fields are unchanged", () => {
+    const seed = tab({
+      instanceId: "shared",
+      sessionId: "terminal-1",
+      hostId: HOST_A,
+    });
+    const projection = plainTerminal({
+      terminalId: "terminal-1",
+      hostId: HOST_A,
+      launchCwd: "/host/launch",
+      manualTitle: "Host title",
+      runtime: {
+        status: "running",
+        currentCwd: "/host/live",
+        activeProcessName: "bun",
+      },
+    });
+    const first = reconcileHostAuthoritativeLandingTerminalTabs({
+      tabs: [seed],
+      activeInstanceId: "shared",
+      hostId: HOST_A,
+      terminals: [projection],
+      excludedTerminalKeys: new Set(),
+      mintInstanceId: () => "unused",
+    }).tabs[0];
+
+    const second = reconcileHostAuthoritativeLandingTerminalTabs({
+      tabs: [first],
+      activeInstanceId: "shared",
+      hostId: HOST_A,
+      terminals: [projection],
+      excludedTerminalKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    // Stream frames bump `projectionSequence` constantly, so an object
+    // rebuilt on every pass would re-render every tab consumer for data that
+    // never actually changed.
+    expect(second.tabs[0]).toBe(first);
+
+    const renamed = plainTerminal({
+      terminalId: "terminal-1",
+      hostId: HOST_A,
+      launchCwd: "/host/launch",
+      manualTitle: "Renamed on host",
+      runtime: {
+        status: "running",
+        currentCwd: "/host/live",
+        activeProcessName: "bun",
+      },
+    });
+    const afterRename = reconcileHostAuthoritativeLandingTerminalTabs({
+      tabs: [first],
+      activeInstanceId: "shared",
+      hostId: HOST_A,
+      terminals: [renamed],
+      excludedTerminalKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    expect(afterRename.tabs[0]).not.toBe(first);
+    expect(afterRename.tabs[0]?.name).toBe("Renamed on host");
+  });
+});

@@ -17,6 +17,9 @@ export const PLAIN_TERMINAL_RPC_METHODS = [
   "terminal.plain.importLegacy",
 ] as const;
 
+export type PlainTerminalRpcMethod =
+  (typeof PLAIN_TERMINAL_RPC_METHODS)[number];
+
 export const PLAIN_TERMINAL_STREAM_METHOD =
   "terminal.plain.subscribeList" as const;
 
@@ -34,7 +37,7 @@ export type PlainTerminalCapability =
  */
 export function resolvePlainTerminalCapability(input: {
   readonly manifestKnown: boolean;
-  readonly versionFor: (method: string) => SchemaVersion | null;
+  readonly versionFor: (method: PlainTerminalRpcMethod) => SchemaVersion | null;
 }): PlainTerminalCapability {
   if (!input.manifestKnown) return { status: "unknown" };
   for (const method of PLAIN_TERMINAL_RPC_METHODS) {
@@ -361,12 +364,9 @@ export function setPlainTerminalStreamStatus(
   return {
     ...base,
     streamStatus: status,
-    streamSnapshotFresh:
-      status === "connecting" ||
-      status === "reconnecting" ||
-      status === "closed"
-        ? false
-        : base.streamSnapshotFresh,
+    // Only an open connection carries snapshot freshness forward. Any other
+    // status - including one added later - must invalidate it.
+    streamSnapshotFresh: status === "open" ? base.streamSnapshotFresh : false,
   };
 }
 

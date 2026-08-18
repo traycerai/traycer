@@ -545,6 +545,59 @@ describe("terminal sidebar Close", () => {
     expect(legacyRenameMutate).not.toHaveBeenCalled();
   });
 
+  it("disables sidebar rename for a capable host compatibility row while canMutate is false", () => {
+    durableAuthority.capability = "capable";
+    durableAuthority.canMutate = false;
+    durableAuthority.collectionIncludesSession = false;
+    const { getByTestId, queryByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    const rename = getByTestId(`epic-terminal-sidebar-rename-${SESSION_ID}`);
+    expect(rename.getAttribute("disabled")).not.toBeNull();
+    fireEvent.click(rename);
+    fireEvent.doubleClick(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    );
+    expect(
+      queryByTestId(`epic-terminal-sidebar-rename-input-${SESSION_ID}`),
+    ).toBeNull();
+    expect(durableRenameMutate).not.toHaveBeenCalled();
+    expect(legacyRenameMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy rename for a capable host's compatibility row", () => {
+    // Setup and provider-login shells stay `terminal.list` rows and never
+    // enter the durable collection. The host still serves `terminal.rename`
+    // for them, so a capable host must not strand them with rename disabled.
+    durableAuthority.capability = "capable";
+    durableAuthority.canMutate = true;
+    durableAuthority.collectionIncludesSession = false;
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    expect(
+      getByTestId(`epic-terminal-sidebar-rename-${SESSION_ID}`).getAttribute(
+        "disabled",
+      ),
+    ).toBeNull();
+    fireEvent.doubleClick(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    );
+    const input = getByTestId(
+      `epic-terminal-sidebar-rename-input-${SESSION_ID}`,
+    );
+    fireEvent.change(input, { target: { value: "Compatibility title" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(legacyRenameMutate.mock.calls[0]?.[0]).toEqual({
+      sessionId: SESSION_ID,
+      title: "Compatibility title",
+    });
+    expect(durableRenameMutate).not.toHaveBeenCalled();
+  });
+
   it("retains legacy sidebar rename only for a positively known old host", () => {
     const { getByTestId } = render(
       wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
@@ -586,13 +639,6 @@ describe("terminal sidebar Close", () => {
       capability: "capable",
       canMutate: false,
       includesSession: true,
-      renamePending: false,
-    },
-    {
-      name: "missing fresh projection",
-      capability: "capable",
-      canMutate: true,
-      includesSession: false,
       renamePending: false,
     },
     {

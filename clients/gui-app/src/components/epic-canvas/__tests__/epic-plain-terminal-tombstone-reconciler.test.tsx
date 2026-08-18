@@ -47,8 +47,10 @@ describe("EpicPlainTerminalTombstoneReconciler", () => {
     });
 
     const store = useEpicCanvasStore.getState();
-    const tabId = store.openEpicTab("epic-1", "Epic");
+    let openedTabId = "";
     act(() => {
+      const tabId = store.openEpicTab("epic-1", "Epic");
+      openedTabId = tabId;
       useEpicCanvasStore.setState((state) => ({
         closedTilePayloadsByTabId: {
           ...state.closedTilePayloadsByTabId,
@@ -86,6 +88,7 @@ describe("EpicPlainTerminalTombstoneReconciler", () => {
         },
       }));
     });
+    const tabId = openedTabId;
 
     await waitFor(() => {
       expect(

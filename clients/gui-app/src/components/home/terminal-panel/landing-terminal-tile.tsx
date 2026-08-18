@@ -27,6 +27,7 @@ import type {
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   useHostReachability,
@@ -112,7 +113,7 @@ function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
   return <LandingTerminalWaiting />;
 }
 
-function LandingTerminalLegacyBootstrap(
+export function LandingTerminalLegacyBootstrap(
   props: LandingTerminalTileProps,
 ): ReactNode {
   const removeExitedTab = useLandingTerminalStore(
@@ -194,21 +195,17 @@ function LandingTerminalLegacyBootstrap(
     // this tile used to render the dead state for both.
     return <LandingTerminalWaiting />;
   }
-  if (bootstrap.createIsError) {
+  if (bootstrap.createIsError || bootstrap.createRetryIsPending) {
     return (
-      <div className="flex h-full min-h-0 w-full flex-col items-center justify-center gap-3 bg-canvas p-4 text-center text-ui-sm text-destructive">
-        <span>
-          {bootstrap.createError?.message ?? "Could not start terminal."}
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={bootstrap.retry}
-        >
-          Retry
-        </Button>
-      </div>
+      <LandingTerminalErrorState
+        message={
+          bootstrap.createRetryError?.message ??
+          bootstrap.createError?.message ??
+          "Could not start terminal."
+        }
+        isPending={bootstrap.createRetryIsPending}
+        onRetry={bootstrap.retry}
+      />
     );
   }
   if (bootstrap.handle === null) {
@@ -256,10 +253,10 @@ function LandingTerminalDurableBootstrap(
     readonly rows: number;
   } | null>(null);
   const [measureTimedOut, setMeasureTimedOut] = useState(false);
-  const reportMeasuredGrid = (cols: number, rows: number): void => {
+  const reportMeasuredGrid = useCallback((cols: number, rows: number): void => {
     if (cols <= 0 || rows <= 0) return;
     setMeasuredGrid({ cols, rows });
-  };
+  }, []);
 
   useEffect(() => {
     if (measuredGrid !== null || measureTimedOut) return;
@@ -277,28 +274,49 @@ function LandingTerminalDurableBootstrap(
       rows: TERMINAL_DEFAULT_ROWS,
     };
   const runtimeRunning = projection?.runtime.status === "running";
-  const dispatch = async (action: "create" | "ensure-running") => {
-    const response =
-      action === "create"
-        ? await entry.mutations.create.mutateAsync({
-            terminalId: props.tab.sessionId,
-            scope: INDEPENDENT_SCOPE,
-            cwd: props.tab.cwd,
-            cols: openingGrid.cols,
-            rows: openingGrid.rows,
-          })
-        : await entry.mutations.ensureRunning.mutateAsync({
-            terminalId: props.tab.sessionId,
-            cols: openingGrid.cols,
-            rows: openingGrid.rows,
-          });
-    return response.terminal;
-  };
-  const adopt = (terminal: PlainTerminalProjection): void => {
-    useLandingTerminalStore
-      .getState()
-      .adoptHostTerminal(props.tab.instanceId, terminal);
-  };
+  // Memoized because `useLandingTerminalDurableLifecycle` lists both in its
+  // effect deps: fresh identities every render re-run that effect on every
+  // render, leaving its dispatched-episode ref as the only thing standing
+  // between a re-render and a duplicate create. `mutateAsync` is referentially
+  // stable (the authority fleet already depends on it that way), so the real
+  // inputs are the request fields.
+  const createTerminal = entry.mutations.create.mutateAsync;
+  const ensureTerminalRunning = entry.mutations.ensureRunning.mutateAsync;
+  const dispatch = useCallback(
+    async (action: "create" | "ensure-running") => {
+      const response =
+        action === "create"
+          ? await createTerminal({
+              terminalId: props.tab.sessionId,
+              scope: INDEPENDENT_SCOPE,
+              cwd: props.tab.cwd,
+              cols: openingGrid.cols,
+              rows: openingGrid.rows,
+            })
+          : await ensureTerminalRunning({
+              terminalId: props.tab.sessionId,
+              cols: openingGrid.cols,
+              rows: openingGrid.rows,
+            });
+      return response.terminal;
+    },
+    [
+      createTerminal,
+      ensureTerminalRunning,
+      openingGrid.cols,
+      openingGrid.rows,
+      props.tab.cwd,
+      props.tab.sessionId,
+    ],
+  );
+  const adopt = useCallback(
+    (terminal: PlainTerminalProjection): void => {
+      useLandingTerminalStore
+        .getState()
+        .adoptHostTerminal(props.tab.instanceId, terminal);
+    },
+    [props.tab.instanceId],
+  );
   const lifecycle = useLandingTerminalDurableLifecycle({
     projectionStatus:
       projection === undefined ? "missing" : projection.runtime.status,
@@ -331,6 +349,7 @@ function LandingTerminalDurableBootstrap(
       reachability={reachability}
       canMutate={entry.authority.canMutate}
       requestError={lifecycle.requestError}
+      requestPending={lifecycle.requestPending}
       retry={lifecycle.retry}
       handle={handle}
       tab={props.tab}
@@ -348,6 +367,7 @@ function LandingTerminalDurableState(props: {
   readonly reachability: HostReachability;
   readonly canMutate: boolean;
   readonly requestError: Error | null;
+  readonly requestPending: boolean;
   readonly retry: () => void;
   readonly handle: TerminalSessionStoreHandle | null;
   readonly tab: LandingTerminalTabRef;
@@ -364,22 +384,28 @@ function LandingTerminalDurableState(props: {
   }
   if (
     props.reachability.status === "checking" ||
-    props.reachability.status === "host-starting" ||
-    !props.canMutate
+    props.reachability.status === "host-starting"
   ) {
     return <LandingTerminalWaiting />;
   }
   if (props.requestError !== null) {
     return (
-      <div className="flex h-full min-h-0 w-full flex-col items-center justify-center gap-3 bg-canvas p-4 text-center text-ui-sm text-destructive">
-        <span>{props.requestError.message}</span>
-        <Button type="button" variant="outline" size="sm" onClick={props.retry}>
-          Retry
-        </Button>
-      </div>
+      <LandingTerminalErrorState
+        message={props.requestError.message}
+        isPending={props.requestPending}
+        onRetry={props.retry}
+      />
     );
   }
   if (props.handle === null) {
+    // `canMutate` tracks LIST-STREAM freshness, not terminal liveness - the
+    // authority hook drops it on every `reconnecting` status and restores it
+    // only once a fresh snapshot lands. Gating the whole tile on it swapped a
+    // running terminal (and the input focus in it) for a skeleton on each
+    // reconnect, which the legacy branch never does. It only means "cannot
+    // dispatch a mutation yet", so it belongs here, where there is nothing to
+    // tear down.
+    if (!props.canMutate) return <LandingTerminalWaiting />;
     return (
       <div className="relative flex h-full min-h-0 w-full flex-col bg-canvas">
         <div className="relative min-h-0 flex-1">
@@ -513,6 +539,39 @@ function LandingTerminalTileLive(props: {
           />
         </Suspense>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The tile replaced by a failed start and its retry. Shared by the legacy and
+ * durable branches so the two failures stay one visual state - only the
+ * message source differs.
+ */
+export function LandingTerminalErrorState(props: {
+  readonly message: string;
+  readonly isPending: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  return (
+    <div className="flex h-full min-h-0 w-full flex-col items-center justify-center gap-3 bg-canvas p-4 text-center text-ui-sm text-destructive">
+      <span>{props.message}</span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.isPending}
+        onClick={props.onRetry}
+      >
+        {props.isPending ? (
+          <AgentSpinningDots
+            className="shrink-0"
+            testId="landing-terminal-retry-pending"
+            variant={undefined}
+          />
+        ) : null}
+        Retry
+      </Button>
     </div>
   );
 }

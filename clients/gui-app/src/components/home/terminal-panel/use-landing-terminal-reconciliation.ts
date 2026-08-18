@@ -248,34 +248,46 @@ export function useLandingTerminalReconciliation(
       const initial = useLandingTerminalStore.getState();
 
       if (plainAuthority.authority.capability.status === "capable") {
+        // A read-only authority is a reconnecting list stream, not a failed
+        // fetch. `onError` clears the picker's selected target and reports
+        // "The terminal directory could not be opened.", which is simply
+        // untrue here - and destroys a directory choice the user must then
+        // make again. The reconciliation latch keys on `canMutate`, so this
+        // pass re-runs by itself the moment mutability returns.
         if (!plainAuthority.authority.canMutate) {
-          onError();
           releaseLatch();
           return;
         }
-        const reconciled = await reconcileCapableLandingTerminals({
-          activeHostId,
-          landingPageId,
-          capability: plainAuthority.authority.capability,
-          canMutate: plainAuthority.authority.canMutate,
-          closeTerminal: (request) =>
-            plainAuthority.mutations.close.mutateAsync(request),
-          importLegacyTerminal: (request) =>
-            plainAuthority.mutations.importLegacy.mutateAsync(request),
-          queryClient,
-        }).then(
-          () => true,
-          () => false,
-        );
+        const outcome: CapableLandingTerminalReconciliationOutcome | "failed" =
+          await reconcileCapableLandingTerminals({
+            activeHostId,
+            landingPageId,
+            capability: plainAuthority.authority.capability,
+            canMutate: plainAuthority.authority.canMutate,
+            closeTerminal: (request) =>
+              plainAuthority.mutations.close.mutateAsync(request),
+            importLegacyTerminal: (request) =>
+              plainAuthority.mutations.importLegacy.mutateAsync(request),
+            queryClient,
+          }).then(
+            (settled) => settled,
+            (): "failed" => "failed",
+          );
+        // Same reasoning as the read-only guard above: a snapshot that went
+        // non-fresh mid-pass is a wait, not a fetch failure, and only a real
+        // rejection may surface the directory error.
+        if (outcome !== "reconciled") {
+          if (outcome === "failed") onError();
+          releaseLatch();
+          return;
+        }
         if (
-          !reconciled ||
           reconciliationGenerationIsStale(
             controller.signal,
             client,
             activeHostId,
           )
         ) {
-          if (!reconciled) onError();
           releaseLatch();
           return;
         }
@@ -366,6 +378,15 @@ export function useLandingTerminalReconciliation(
   ]);
 }
 
+/**
+ * `"snapshot-not-fresh"` is a wait, not a failure: the list stream is
+ * reconnecting or its snapshot has been invalidated, so this pass has nothing
+ * authoritative to classify against and the next fresh projection re-runs it.
+ * Genuine failures (a rejected close or import) still reject.
+ */
+export type CapableLandingTerminalReconciliationOutcome =
+  "reconciled" | "snapshot-not-fresh";
+
 export async function reconcileCapableLandingTerminals(args: {
   readonly activeHostId: string;
   readonly landingPageId: string;
@@ -378,12 +399,17 @@ export async function reconcileCapableLandingTerminals(args: {
     request: ImportLegacyPlainTerminalRequest,
   ) => Promise<ImportLegacyPlainTerminalResponse>;
   readonly queryClient: QueryClient;
-}): Promise<void> {
+}): Promise<CapableLandingTerminalReconciliationOutcome> {
   const { activeHostId, queryClient } = args;
   const queryKey = hostQueryKeys.plainTerminals(
     activeHostId,
     INDEPENDENT_SCOPE,
   );
+  const initialCollection =
+    queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+  if (initialCollection?.streamSnapshotFresh !== true) {
+    return "snapshot-not-fresh";
+  }
   const store = useLandingTerminalStore.getState();
   const pendingKills = store.pendingKills.filter(
     (pending) => pending.hostId === activeHostId,
@@ -401,6 +427,12 @@ export async function reconcileCapableLandingTerminals(args: {
         .clearPendingKill(activeHostId, pending.sessionId);
     }),
   );
+
+  const postKillCollection =
+    queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+  if (postKillCollection?.streamSnapshotFresh !== true) {
+    return "snapshot-not-fresh";
+  }
 
   const legacyTabs = useLandingTerminalStore
     .getState()
@@ -475,7 +507,7 @@ export async function reconcileCapableLandingTerminals(args: {
   const collection =
     queryClient.getQueryData<PlainTerminalCollection>(queryKey);
   if (collection?.streamSnapshotFresh !== true) {
-    throw new Error("Landing terminal authority snapshot is not fresh");
+    return "snapshot-not-fresh";
   }
   const current = useLandingTerminalStore.getState();
   const excludedTerminalKeys = new Set(
@@ -497,4 +529,5 @@ export async function reconcileCapableLandingTerminals(args: {
     reconciliation.activeInstanceId,
     reconciliation.collapseWhenEmpty,
   );
+  return "reconciled";
 }

@@ -40,7 +40,6 @@ import {
 } from "@/lib/host/stream-runtime-context";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
-  PLAIN_TERMINAL_RPC_METHODS,
   PLAIN_TERMINAL_STREAM_METHOD,
   capturePlainTerminalProjectionBarrier,
   markPlainTerminalStreamIncompatible,
@@ -56,6 +55,7 @@ import {
   type PlainTerminalCapability,
   type PlainTerminalCollection,
   type PlainTerminalProjectionBarrier,
+  type PlainTerminalRpcMethod,
 } from "@/lib/terminals/plain-terminal-authority";
 import {
   acknowledgedPlainTerminalPresentationIdsForScope,
@@ -112,11 +112,13 @@ function pushHostEpicPresentationId(args: {
   readonly instanceId: string;
   readonly ref: EpicCanvasTileRef | null | undefined;
   readonly hostId: string;
+  readonly tombstonedIds: ReadonlySet<string>;
 }): void {
   if (
     args.ref?.type === "terminal" &&
     !isUnsupportedEpicTerminalRef(args.ref) &&
-    args.ref.hostId === args.hostId
+    args.ref.hostId === args.hostId &&
+    args.tombstonedIds.has(args.ref.id)
   ) {
     args.ids.push(
       `${args.prefix}:${args.tabId}:${args.instanceId}:${args.ref.id}`,
@@ -124,10 +126,21 @@ function pushHostEpicPresentationId(args: {
   }
 }
 
-function epicPresentationSignatureForHost(
+/**
+ * Change token for the retained-tombstone sweep, not a general presentation
+ * signature. The sweep can only ever act on a tombstoned id, so the token
+ * ignores every other ref - and short-circuits entirely while no tombstone is
+ * retained, which is the steady state. That keeps this out of the hot path:
+ * a Zustand selector runs on every store commit, including the pane-focus,
+ * layout and tile-state commits that have nothing to do with terminals, and
+ * every mounted authority in the cohort pays for it.
+ */
+function epicTombstonePresentationTokenForHost(
   hostId: string,
+  tombstonedIds: ReadonlySet<string>,
   state: Pick<EpicCanvasStore, "canvasByTabId" | "closedTilePayloadsByTabId">,
 ): string {
+  if (tombstonedIds.size === 0) return "";
   const ids: string[] = [];
   for (const [tabId, canvas] of Object.entries(state.canvasByTabId)) {
     for (const [instanceId, ref] of Object.entries(
@@ -140,6 +153,7 @@ function epicPresentationSignatureForHost(
         instanceId,
         ref,
         hostId,
+        tombstonedIds,
       });
     }
   }
@@ -154,18 +168,21 @@ function epicPresentationSignatureForHost(
         instanceId,
         ref: payload?.node,
         hostId,
+        tombstonedIds,
       });
     }
   }
   return ids.sort().join("|");
 }
 
-function landingPresentationSignatureForHost(
+function landingTombstonePresentationTokenForHost(
   hostId: string,
+  tombstonedIds: ReadonlySet<string>,
   tabs: readonly LandingTerminalTabRef[],
 ): string {
+  if (tombstonedIds.size === 0) return "";
   return tabs
-    .filter((tab) => tab.hostId === hostId)
+    .filter((tab) => tab.hostId === hostId && tombstonedIds.has(tab.sessionId))
     .map((tab) => `${tab.instanceId}:${tab.sessionId}`)
     .sort()
     .join("|");
@@ -183,11 +200,20 @@ function useRetainedPlainTerminalTombstoneReconciliation(args: {
     Readonly<Partial<Record<string, number>>> | undefined;
 }): void {
   const queryClient = useQueryClient();
-  const epicSignature = useEpicCanvasStore((state) =>
-    epicPresentationSignatureForHost(args.hostId, state),
+  const deletedRevisionById = args.deletedRevisionById;
+  const tombstonedIds = useMemo(
+    () => new Set(Object.keys(deletedRevisionById ?? {})),
+    [deletedRevisionById],
   );
-  const landingSignature = useLandingTerminalStore((state) =>
-    landingPresentationSignatureForHost(args.hostId, state.tabs),
+  const epicToken = useEpicCanvasStore((state) =>
+    epicTombstonePresentationTokenForHost(args.hostId, tombstonedIds, state),
+  );
+  const landingToken = useLandingTerminalStore((state) =>
+    landingTombstonePresentationTokenForHost(
+      args.hostId,
+      tombstonedIds,
+      state.tabs,
+    ),
   );
   useEffect(() => {
     reconcileRetainedPlainTerminalTombstones({
@@ -200,8 +226,8 @@ function useRetainedPlainTerminalTombstoneReconciliation(args: {
     args.queryKey,
     args.hostId,
     args.deletedRevisionById,
-    epicSignature,
-    landingSignature,
+    epicToken,
+    landingToken,
   ]);
 }
 
@@ -342,17 +368,22 @@ export function usePlainTerminalAuthority(args: {
     args.hostId,
     "terminal.plain.importLegacy",
   );
-  const versions: Readonly<Record<string, SchemaVersion | null>> = {
-    [PLAIN_TERMINAL_RPC_METHODS[0]]: createVersion,
-    [PLAIN_TERMINAL_RPC_METHODS[1]]: listVersion,
-    [PLAIN_TERMINAL_RPC_METHODS[2]]: renameVersion,
-    [PLAIN_TERMINAL_RPC_METHODS[3]]: ensureVersion,
-    [PLAIN_TERMINAL_RPC_METHODS[4]]: closeVersion,
-    [PLAIN_TERMINAL_RPC_METHODS[5]]: importVersion,
+  // Keyed by method-name literal so a reorder or extension of
+  // `PLAIN_TERMINAL_RPC_METHODS` cannot silently bind a version to the wrong
+  // method. `PlainTerminalRpcMethod` keeps the map exhaustive at compile time.
+  const versions: Readonly<
+    Record<PlainTerminalRpcMethod, SchemaVersion | null>
+  > = {
+    "terminal.plain.create": createVersion,
+    "terminal.plain.list": listVersion,
+    "terminal.plain.rename": renameVersion,
+    "terminal.plain.ensureRunning": ensureVersion,
+    "terminal.plain.close": closeVersion,
+    "terminal.plain.importLegacy": importVersion,
   };
   const unaryCapability = resolvePlainTerminalCapability({
     manifestKnown: listSupport !== null,
-    versionFor: (method) => versions[method] ?? null,
+    versionFor: (method) => versions[method],
   });
 
   useHostCapabilityProbe({
@@ -552,6 +583,7 @@ export function usePlainTerminalAuthority(args: {
                   queryClient,
                   queryKey,
                   hostId: args.hostId,
+                  scope: stableScope,
                   terminalId,
                   snapshotEpoch: pending.snapshotEpoch,
                 });

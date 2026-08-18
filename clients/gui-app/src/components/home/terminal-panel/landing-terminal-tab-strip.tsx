@@ -41,6 +41,12 @@ export interface LandingTerminalTabStripProps {
   readonly onCloseAll: () => void;
   readonly onRename: (instanceId: string, name: string) => void;
   readonly canRename: (tab: LandingTerminalTabRef) => boolean;
+  /**
+   * Whether this tab's host can currently be asked to close it. `onClose`
+   * refuses on its own when authority is not ready, so an always-enabled "x"
+   * was a control that swallowed the click and said nothing.
+   */
+  readonly canClose: (tab: LandingTerminalTabRef) => boolean;
   readonly terminalViewModels: Readonly<
     Partial<Record<string, PlainTerminalViewModel>>
   >;
@@ -60,6 +66,9 @@ export function LandingTerminalTabStrip(
 ): ReactNode {
   const { createDisabledReason, onAdd } = props;
   const canCreate = createDisabledReason === null;
+  // "Close All" closes only the tabs whose host can be asked to, so it is dead
+  // exactly when none of them can.
+  const canCloseAll = props.tabs.some(props.canClose);
   const handleStripDoubleClick = (event: MouseEvent<HTMLDivElement>): void => {
     if (!canCreate) return;
     // Only the empty strip background opens a terminal. A double-click that
@@ -91,6 +100,8 @@ export function LandingTerminalTabStrip(
               onCloseAll={props.onCloseAll}
               onRename={props.onRename}
               canRename={props.canRename(tab)}
+              canClose={props.canClose(tab)}
+              canCloseAll={canCloseAll}
               viewModel={props.terminalViewModels[tab.instanceId] ?? null}
             />
           ))}
@@ -173,6 +184,8 @@ function LandingTerminalTab(props: {
   readonly onCloseAll: () => void;
   readonly onRename: (instanceId: string, name: string) => void;
   readonly canRename: boolean;
+  readonly canClose: boolean;
+  readonly canCloseAll: boolean;
   readonly viewModel: PlainTerminalViewModel | null;
 }): ReactNode {
   const { tab, active, onActivate, onRename } = props;
@@ -256,6 +269,7 @@ function LandingTerminalTab(props: {
             variant="ghost"
             size="icon-sm"
             aria-label={`Close ${displayName}`}
+            disabled={!props.canClose}
             className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
             onClick={(event) => {
               event.stopPropagation();
@@ -275,10 +289,18 @@ function LandingTerminalTab(props: {
           Rename
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => props.onClose(tab)}>
+        <ContextMenuItem
+          disabled={!props.canClose}
+          onSelect={() => props.onClose(tab)}
+        >
           Close
         </ContextMenuItem>
-        <ContextMenuItem onSelect={props.onCloseAll}>Close All</ContextMenuItem>
+        <ContextMenuItem
+          disabled={!props.canCloseAll}
+          onSelect={props.onCloseAll}
+        >
+          Close All
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

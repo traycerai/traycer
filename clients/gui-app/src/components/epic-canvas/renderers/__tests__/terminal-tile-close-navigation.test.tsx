@@ -100,6 +100,7 @@ vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
     migrationPending: false,
     migrationError: null,
     retryMigration: () => undefined,
+    create: {},
     ensureRunning: {},
     rename: {},
     close: {},

@@ -1363,6 +1363,18 @@ function sizesEqual(
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+function shellArgsEqual(
+  left: ReadonlyArray<string> | undefined,
+  right: ReadonlyArray<string> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 /**
  * Commit a group's child fractions (clamped + normalized). Touches ONLY
  * `sizesByGroupId` - the tree object is untouched, so layout subscribers
@@ -1514,6 +1526,26 @@ export function adoptHostTerminalProjection(
       if (isUnsupportedEpicTerminalRef(ref)) return ref;
       const fallbackName =
         terminal.record.manualTitle ?? DEFAULT_TERMINAL_TITLE;
+      const titleSource =
+        terminal.record.manualTitle === null ? "default" : "manual";
+      // `updateTilesWhere` treats any new object as a change, so an already
+      // adopted ref that matches the projection byte-for-byte would still mint
+      // a new canvas identity on every stream tick - re-rendering every canvas
+      // subscriber and invalidating the persist cache for every tab.
+      if (
+        isHostEpicTerminalRef(ref) &&
+        ref.legacyFallback.name === fallbackName &&
+        ref.legacyFallback.titleSource === titleSource &&
+        ref.legacyFallback.cwd === terminal.record.launch.cwd &&
+        ref.legacyFallback.shellCommand ===
+          terminal.record.launch.shellCommand &&
+        shellArgsEqual(
+          ref.legacyFallback.shellArgs,
+          terminal.record.launch.shellArgs,
+        )
+      ) {
+        return ref;
+      }
       return {
         id: ref.id,
         instanceId: ref.instanceId,
@@ -1523,8 +1555,7 @@ export function adoptHostTerminalProjection(
         authority: "host",
         legacyFallback: {
           name: fallbackName,
-          titleSource:
-            terminal.record.manualTitle === null ? "default" : "manual",
+          titleSource,
           cwd: terminal.record.launch.cwd,
           shellCommand: terminal.record.launch.shellCommand,
           shellArgs: terminal.record.launch.shellArgs,

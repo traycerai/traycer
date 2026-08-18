@@ -892,7 +892,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     ).toBeUndefined();
   });
 
-  it("cannot restore a closed durable terminal after the accepted tombstone prunes its payload", () => {
+  it("cannot restore a closed durable terminal while a retained tombstone is still in Query", () => {
     const hostId = bindActiveHost();
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("e1", "Task");
@@ -911,9 +911,23 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     };
     store.openTileInTab(tabId, ref);
     const paneId = requirePaneId(tabId);
-    // Durable close gestures are intentionally retained until host ack, so
-    // seed the already-closed history cache directly to exercise the later
-    // conclusive-deletion invalidation boundary.
+    // The tombstone lands under the real epic-scoped plain-terminal key, which
+    // is what `rejectClosedPlainTerminalRestore` reads. Its presentation fanout
+    // is key-independent, so the closed payload is seeded AFTER the commit -
+    // otherwise the fanout prunes it first and `goBack` has nothing to reject.
+    expect(
+      commitPlainTerminalDeletion({
+        queryClient,
+        queryKey: hostQueryKeys.plainTerminals(hostId, {
+          kind: "epic",
+          epicId: "e1",
+        }),
+        hostId,
+        terminalId: ref.id,
+        evidence: { kind: "stream", revision: 1 },
+        deferPresentation: false,
+      }),
+    ).toBe(true);
     useEpicCanvasStore.setState((state) => ({
       closedTilePayloadsByTabId: {
         ...state.closedTilePayloadsByTabId,
@@ -928,28 +942,17 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
       ],
     ).toBeDefined();
 
-    expect(
-      commitPlainTerminalDeletion({
-        queryClient,
-        queryKey: ["history-terminal-tombstone"],
-        hostId,
-        terminalId: ref.id,
-        evidence: { kind: "stream", revision: 1 },
-        deferPresentation: false,
-      }),
-    ).toBe(true);
-    expect(
-      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
-        ref.instanceId
-      ],
-    ).toBeUndefined();
-
     const landing = nestedHref("e1", tabId, paneId, ref.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
     vi.spyOn(history, "go").mockImplementation(() => {});
     goBack({ history });
 
     expect(tileByContentId(tabId, ref.id)).toBeUndefined();
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        ref.instanceId
+      ],
+    ).toBeUndefined();
   });
 
   it("cannot restore a closed legacy terminal when a retained tombstone is still in Query", () => {

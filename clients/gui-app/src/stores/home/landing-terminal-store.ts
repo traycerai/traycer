@@ -376,12 +376,18 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
             tab.instanceId === instanceId ? { ...tab, sessionId } : tab,
           ),
         })),
+      // Matched on instance + host only. The canonical terminal a capable host
+      // returns for `importLegacy` ("existing"/"imported") may carry a
+      // DIFFERENT terminalId than the legacy evidence we sent - the response
+      // contract permits it - and rekeying that pointer is exactly what
+      // `hostAcknowledgedTab` is for. Also demanding the ids already match
+      // dropped the acknowledgement, left the tab unacknowledged beside a
+      // freshly adopted canonical duplicate, and re-imported on the next pass.
       adoptHostTerminal: (instanceId, terminal) =>
         set((state) => ({
           tabs: state.tabs.map((tab) =>
             tab.instanceId === instanceId &&
-            tab.hostId === terminal.record.hostId &&
-            tab.sessionId === terminal.record.terminalId
+            tab.hostId === terminal.record.hostId
               ? hostAcknowledgedTab(tab, terminal)
               : tab,
           ),

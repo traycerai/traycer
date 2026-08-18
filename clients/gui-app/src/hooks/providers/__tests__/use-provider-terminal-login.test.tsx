@@ -257,23 +257,21 @@ describe("useProviderTerminalLogin", () => {
     });
     unmount();
 
-    await act(async () => {
-      pending.resolve({
-        sessionId: "term-new",
-        replacedSessionId: OLD_TERMINAL.id,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
+    pending.resolve({
+      sessionId: "term-new",
+      replacedSessionId: OLD_TERMINAL.id,
     });
 
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
-    if (canvas === undefined) throw new Error("expected view tab canvas");
-    expect(canvas.tilesByInstanceId[OLD_TERMINAL.instanceId]).toBeUndefined();
-    expect(
-      Object.values(canvas.tilesByInstanceId).some(
-        (tile) => tile?.type === "terminal" && tile.id === "term-new",
-      ),
-    ).toBe(true);
+    await waitFor(() => {
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+      if (canvas === undefined) throw new Error("expected view tab canvas");
+      expect(canvas.tilesByInstanceId[OLD_TERMINAL.instanceId]).toBeUndefined();
+      expect(
+        Object.values(canvas.tilesByInstanceId).some(
+          (tile) => tile?.type === "terminal" && tile.id === "term-new",
+        ),
+      ).toBe(true);
+    });
   });
 
   // Row 4b: "Start again" on a dead sign-in tile passes its OWN tile as

@@ -1,4 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
+import { waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ImportLegacyPlainTerminalRequest,
@@ -86,6 +87,30 @@ function freshCollection(
     ),
     "open",
   );
+}
+
+/** An open stream that has not yet settled a snapshot in this connection episode. */
+function staleCollection(
+  terminals: readonly PlainTerminalProjection[],
+): PlainTerminalCollection {
+  return setPlainTerminalStreamStatus(
+    replacePlainTerminalSnapshot(undefined, terminals),
+    "open",
+  );
+}
+
+function deferred<Value>(): {
+  readonly promise: Promise<Value>;
+  readonly resolve: (value: Value) => void;
+} {
+  let resolvePromise: ((value: Value) => void) | null = null;
+  const promise = new Promise<Value>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value) => resolvePromise?.(value),
+  };
 }
 
 describe("capable landing-terminal reconciliation", () => {
@@ -269,5 +294,191 @@ describe("capable landing-terminal reconciliation", () => {
         hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
       )?.deletedRevisionById["terminal-1"],
     ).toBe(2);
+  });
+
+  it("returns snapshot-not-fresh instead of throwing while the stream has not settled", async () => {
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      staleCollection([]),
+    );
+
+    await expect(
+      reconcileCapableLandingTerminals({
+        activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
+        capability: CAPABILITY,
+        canMutate: true,
+        closeTerminal: () => Promise.resolve(),
+        importLegacyTerminal: () =>
+          Promise.reject(new Error("unexpected import")),
+        queryClient,
+      }),
+    ).resolves.toBe("snapshot-not-fresh");
+    // A wait, not a failure: nothing in the store should be touched.
+    expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+  });
+
+  it("returns snapshot-not-fresh before closing a pending kill against a stale collection", async () => {
+    const canonical = {
+      ...tab({
+        instanceId: "local-instance",
+        terminalId: "terminal-close",
+        name: "Host title",
+      }),
+      hostAuthorityAcknowledged: true,
+    };
+    const projection = terminal({
+      terminalId: "terminal-close",
+      manualTitle: "Host title",
+      revision: 3,
+      runtime: "running",
+    });
+    useLandingTerminalStore.getState().addTab(canonical);
+    useLandingTerminalStore
+      .getState()
+      .closeTab(LANDING_PAGE_ID, canonical.instanceId);
+    const tabsBefore = useLandingTerminalStore.getState().tabs;
+    const pendingKillsBefore = useLandingTerminalStore.getState().pendingKills;
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      staleCollection([projection]),
+    );
+    const closeTerminal = vi.fn(() => Promise.resolve());
+
+    await expect(
+      reconcileCapableLandingTerminals({
+        activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
+        capability: CAPABILITY,
+        canMutate: true,
+        closeTerminal,
+        importLegacyTerminal: () =>
+          Promise.reject(new Error("unexpected import")),
+        queryClient,
+      }),
+    ).resolves.toBe("snapshot-not-fresh");
+
+    expect(closeTerminal).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().tabs).toEqual(tabsBefore);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
+      pendingKillsBefore,
+    );
+  });
+
+  it("returns snapshot-not-fresh before importing legacy evidence against a stale collection", async () => {
+    const legacy = tab({
+      instanceId: "local-instance",
+      terminalId: "terminal-1",
+      name: "Local title",
+    });
+    useLandingTerminalStore.getState().addTab(legacy);
+    const tabsBefore = useLandingTerminalStore.getState().tabs;
+    const pendingKillsBefore = useLandingTerminalStore.getState().pendingKills;
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      staleCollection([]),
+    );
+    const importLegacy = vi.fn(() =>
+      Promise.reject(new Error("unexpected import")),
+    );
+
+    await expect(
+      reconcileCapableLandingTerminals({
+        activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
+        capability: CAPABILITY,
+        canMutate: true,
+        closeTerminal: () => Promise.resolve(),
+        importLegacyTerminal: importLegacy,
+        queryClient,
+      }),
+    ).resolves.toBe("snapshot-not-fresh");
+
+    expect(importLegacy).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().tabs).toEqual(tabsBefore);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
+      pendingKillsBefore,
+    );
+  });
+
+  it("does not import legacy evidence when freshness is lost during a pending close", async () => {
+    const canonical = {
+      ...tab({
+        instanceId: "canonical-instance",
+        terminalId: "terminal-close",
+        name: "Host title",
+      }),
+      hostAuthorityAcknowledged: true,
+    };
+    const legacy = tab({
+      instanceId: "legacy-instance",
+      terminalId: "terminal-import",
+      name: "Local title",
+    });
+    const projection = terminal({
+      terminalId: "terminal-close",
+      manualTitle: "Host title",
+      revision: 3,
+      runtime: "running",
+    });
+    const store = useLandingTerminalStore.getState();
+    store.addTab(canonical);
+    store.addTab(legacy);
+    store.closeTab(LANDING_PAGE_ID, canonical.instanceId);
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([projection]),
+    );
+    const pendingClose = deferred<unknown>();
+    const closeTerminal = vi.fn(() => pendingClose.promise);
+    const importLegacy = vi.fn(() =>
+      Promise.reject(new Error("unexpected import")),
+    );
+
+    const reconciliation = reconcileCapableLandingTerminals({
+      activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
+      capability: CAPABILITY,
+      canMutate: true,
+      closeTerminal,
+      importLegacyTerminal: importLegacy,
+      queryClient,
+    });
+    await waitFor(() => expect(closeTerminal).toHaveBeenCalledTimes(1));
+
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      staleCollection([projection]),
+    );
+    pendingClose.resolve(undefined);
+
+    await expect(reconciliation).resolves.toBe("snapshot-not-fresh");
+    expect(importLegacy).not.toHaveBeenCalled();
+    expect(
+      useLandingTerminalStore
+        .getState()
+        .tabs.find((candidate) => candidate.instanceId === legacy.instanceId)
+        ?.hostAuthorityAcknowledged,
+    ).not.toBe(true);
+  });
+
+  it("returns reconciled after a successful pass", async () => {
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([]),
+    );
+
+    await expect(
+      reconcileCapableLandingTerminals({
+        activeHostId: HOST_ID,
+        landingPageId: LANDING_PAGE_ID,
+        capability: CAPABILITY,
+        canMutate: true,
+        closeTerminal: () => Promise.resolve(),
+        importLegacyTerminal: () =>
+          Promise.reject(new Error("unexpected import")),
+        queryClient,
+      }),
+    ).resolves.toBe("reconciled");
   });
 });

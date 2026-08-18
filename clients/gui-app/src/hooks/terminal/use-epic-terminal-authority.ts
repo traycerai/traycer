@@ -111,6 +111,14 @@ export function useEpicTerminalAuthority(args: {
           },
         },
       )
+      .then((outcome) => {
+        // A later automatic re-run that reaches a conclusion retires the
+        // earlier failure, so the tile does not keep rendering a resolved
+        // error until the user presses Retry. A `preserved` outcome made no
+        // attempt, so it leaves the previous error standing.
+        if (disposed || outcome.status === "preserved") return;
+        setMigrationError(null);
+      })
       .catch((error: unknown) => {
         if (disposed) return;
         setMigrationError(

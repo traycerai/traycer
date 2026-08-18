@@ -5,7 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
-import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
+import {
+  replacePlainTerminalSnapshot,
+  setPlainTerminalStreamStatus,
+  settlePlainTerminalSnapshot,
+  type PlainTerminalCollection,
+} from "@/lib/terminals/plain-terminal-authority";
 
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-1";
@@ -42,19 +47,12 @@ function epicRunningPlainTerminal(terminalId: string): PlainTerminalProjection {
 function freshPlainCollection(
   terminals: readonly PlainTerminalProjection[],
 ): PlainTerminalCollection {
-  return {
-    terminalsById: Object.fromEntries(
-      terminals.map((terminal) => [terminal.record.terminalId, terminal]),
+  return setPlainTerminalStreamStatus(
+    settlePlainTerminalSnapshot(
+      replacePlainTerminalSnapshot(undefined, terminals),
     ),
-    deletedRevisionById: {},
-    pendingPresentationDeletionRevisionById: {},
-    projectionSequence: 1,
-    snapshotEpoch: 1,
-    lastStreamSequenceById: {},
-    streamStatus: "open",
-    streamCompatibility: "compatible",
-    streamSnapshotFresh: true,
-  };
+    "open",
+  );
 }
 
 const durableCollection = vi.hoisted(() => ({

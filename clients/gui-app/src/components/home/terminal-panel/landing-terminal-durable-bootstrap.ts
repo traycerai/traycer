@@ -21,6 +21,7 @@ export function resolveLandingTerminalDurableBootstrapAction(input: {
 export interface LandingTerminalDurableLifecycleResult {
   readonly requestSettled: boolean;
   readonly requestError: Error | null;
+  readonly requestPending: boolean;
   readonly retry: () => void;
 }
 
@@ -57,6 +58,9 @@ export function useLandingTerminalDurableLifecycle(args: {
   const [retryGeneration, setRetryGeneration] = useState(0);
   const [requestSettled, setRequestSettled] = useState(false);
   const [requestError, setRequestError] = useState<Error | null>(null);
+  const [pendingRequestGenerations, setPendingRequestGenerations] = useState<
+    readonly number[]
+  >([]);
 
   useEffect(() => {
     if (canMutate) return;
@@ -95,14 +99,21 @@ export function useLandingTerminalDurableLifecycle(args: {
     dispatchedEpisodeRef.current = episode;
     const requestGeneration = requestGenerationRef.current + 1;
     requestGenerationRef.current = requestGeneration;
-    setRequestError(null);
+    setPendingRequestGenerations((current) => [...current, requestGeneration]);
     void dispatch(action).then(
       (terminal) => {
+        setPendingRequestGenerations((current) =>
+          current.filter((generation) => generation !== requestGeneration),
+        );
         if (requestGenerationRef.current !== requestGeneration) return;
         adopt(terminal);
+        setRequestError(null);
         setRequestSettled(true);
       },
       (error: unknown) => {
+        setPendingRequestGenerations((current) =>
+          current.filter((generation) => generation !== requestGeneration),
+        );
         if (requestGenerationRef.current !== requestGeneration) return;
         setRequestError(
           error instanceof Error
@@ -126,9 +137,9 @@ export function useLandingTerminalDurableLifecycle(args: {
     requestGenerationRef.current += 1;
     dispatchedEpisodeRef.current = null;
     setRequestSettled(false);
-    setRequestError(null);
     setRetryGeneration((current) => current + 1);
   };
 
-  return { requestSettled, requestError, retry };
+  const requestPending = pendingRequestGenerations.length > 0;
+  return { requestSettled, requestError, requestPending, retry };
 }

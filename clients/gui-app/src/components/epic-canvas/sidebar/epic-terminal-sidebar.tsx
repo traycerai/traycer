@@ -367,9 +367,12 @@ function resolveTerminalSidebarRenameMode(args: {
   readonly hasProjection: boolean;
 }): TerminalSidebarRenameMode {
   if (args.capability === "legacy") return "legacy";
-  if (args.capability !== "capable" || !args.canMutate || !args.hasProjection) {
-    return "disabled";
-  }
+  if (args.capability !== "capable") return "disabled";
+  if (!args.canMutate) return "disabled";
+  // A row with no durable projection is a `terminal.list` compatibility row
+  // (setup / provider-login shell). The host still serves `terminal.rename`
+  // for it, so keep the legacy path instead of disabling rename.
+  if (!args.hasProjection) return "legacy";
   return "capable";
 }
 
@@ -652,7 +655,9 @@ function TerminalRow(props: TerminalRowProps) {
   };
   const rowMenuEntries = terminalRowMenuEntries({
     sessionId: session.sessionId,
-    closePending:
+    // Not a pending flag: it also encodes "not permitted" (unsupported future
+    // ref, unknown capability, no mutation authority).
+    closeDisabled:
       hasUnsupportedFutureRef ||
       closeCapability === "unknown" ||
       (closeCapability === "capable"
@@ -755,7 +760,7 @@ function TerminalRow(props: TerminalRowProps) {
 
 interface TerminalRowMenuEntriesProps {
   readonly sessionId: string;
-  readonly closePending: boolean;
+  readonly closeDisabled: boolean;
   readonly onStartRename: () => void;
   readonly renameDisabled: boolean;
   readonly onRequestClose: () => void;
@@ -785,7 +790,7 @@ function terminalRowMenuEntries(
       id: "close",
       label: "Close",
       icon: <Trash2 className="size-3.5" />,
-      disabled: props.closePending,
+      disabled: props.closeDisabled,
       disabledTooltip: null,
       variant: "destructive",
       testIds: {

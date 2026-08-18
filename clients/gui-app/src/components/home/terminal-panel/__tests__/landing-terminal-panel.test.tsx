@@ -1043,11 +1043,81 @@ describe("<LandingTerminalPanel />", () => {
     const plus = await screen.findByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(plus);
-    fireEvent.click(screen.getByRole("button", { name: "Close Cached title" }));
+    const closeButton = screen.getByRole("button", {
+      name: "Close Cached title",
+    });
+    expect(
+      closeButton instanceof HTMLButtonElement && closeButton.disabled,
+    ).toBe(true);
+    fireEvent.click(closeButton);
 
     expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("enables the close button once a capable host's authority is ready", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const projection = plainTerminal({
+      terminalId: "terminal-ready",
+      manualTitle: "Ready title",
+      runtime: "running",
+    });
+    mocks.plainCollection = freshPlainCollection([projection]);
+    const local = {
+      instanceId: "ready-instance",
+      sessionId: "terminal-ready",
+      hostId: "host-a",
+      cwd: "/legacy",
+      name: "Legacy title",
+      titleSource: "manual" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    useLandingTerminalStore.getState().addTab(local);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const closeButton = await screen.findByRole("button", {
+      name: "Close Ready title",
+    });
+    expect(
+      closeButton instanceof HTMLButtonElement && closeButton.disabled,
+    ).toBe(false);
+  });
+
+  it("blocks terminal creation while the host's capability probe is unresolved", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "unknown";
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    const plus = await screen.findByRole("button", { name: "New terminal" });
+    expect(plus.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(plus);
+    // Bypasses the disabled "+" affordance: before the fix, every creation
+    // path funneled into `addTerminalTab` without consulting the host's
+    // authority readiness, so a chord could still persist a tab that looked
+    // exactly like legacy import evidence for a terminal never created on any
+    // host.
+    act(() => {
+      dispatchAction("tab.new", router);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
   });
 
   it("closes every terminal from the context menu, tombstoning before killing", async () => {
