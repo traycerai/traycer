@@ -93,8 +93,8 @@ function rateLimitProviderCandidates(
  * so `providers.list` is subscribed for the window's lifetime rather than
  * lazily on Settings open. `subscribed: true` keeps it refreshing so a
  * credential change (login/logout invalidates `providers.list`) re-gates the
- * set - a removed credential drops its provider here immediately, and the next
- * timer tick reads the shortened list.
+ * set - a removed credential drops that target immediately; the provider
+ * remains only when another ambient/managed target is still authenticated.
  *
  * TanStack's structural sharing keeps `data.providers` referentially stable
  * across identical polls, so the memoized projection only recomputes on a real
@@ -106,7 +106,12 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
   return useMemo(() => {
     if (providers === undefined) return [];
     return rateLimitProviderCandidates(providers).flatMap((provider) =>
-      provider.fetchEligibility.ambient ? [provider] : [],
+      provider.fetchEligibility.ambient ||
+      provider.profiles.some((profile) =>
+        isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+      )
+        ? [provider]
+        : [],
     );
   }, [providers]);
 }
@@ -114,8 +119,8 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
 /**
  * Rate-limit providers that should be displayed in user-facing surfaces
  * (header glyph / popover). This deliberately has a wider gate than
- * `useConfiguredRateLimitProviders()`: the queue still polls only providers
- * whose account probe currently says a usage pull is safe, but display also
+ * `useConfiguredRateLimitProviders()`: the queue polls only providers with at
+ * least one target whose account probe says a usage pull is safe, while display also
  * includes a provider once the shared provider-usage query cache has data or an
  * error for it. Candidate construction deliberately includes signed-out
  * providers: auth still makes `configured` false (so the polling hook above
