@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { nextActiveProfileIdAfterDelete } from "@/lib/workspace/next-active-profile-after-delete";
 import {
   resolvePrimaryPath,
   trimFoldersPreservingPrimary,
@@ -182,10 +183,11 @@ export const useProjectProfilesStore = create<ProjectProfilesStore>()(
                 profiles: bucket.profiles.filter(
                   (profile) => profile.id !== profileId,
                 ),
-                activeProfileId:
-                  bucket.activeProfileId === profileId
-                    ? null
-                    : bucket.activeProfileId,
+                activeProfileId: nextActiveProfileIdAfterDelete({
+                  profiles: bucket.profiles,
+                  activeProfileId: bucket.activeProfileId,
+                  deletedProfileId: profileId,
+                }),
               },
             },
           };

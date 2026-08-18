@@ -144,4 +144,13 @@ describe("<ProjectProfileCreateDialog />", () => {
     expect(active?.folderPaths).toEqual([PICKED_PATH]);
     expect(active?.primaryPath).toBe(PICKED_PATH);
   });
+
+  it("hides All current folders and Empty until Advanced is opened", () => {
+    render(<Harness />);
+    expect(screen.queryByTestId("project-profile-seed-all")).toBeNull();
+    expect(screen.queryByTestId("project-profile-seed-empty")).toBeNull();
+    fireEvent.click(screen.getByTestId("project-profile-advanced"));
+    expect(screen.getByTestId("project-profile-seed-all")).not.toBeNull();
+    expect(screen.getByTestId("project-profile-seed-empty")).not.toBeNull();
+  });
 });

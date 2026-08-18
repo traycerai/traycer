@@ -117,6 +117,15 @@ describe("useProjectProfilesStore", () => {
     expect(bucket(HOST_A).activeProfileId).toBeNull();
   });
 
+  it("deleting the active profile activates a remaining sibling", () => {
+    const titanos = create(HOST_A, "Titanos", ["/titanos"], "/titanos");
+    const crm = create(HOST_A, "CRM", ["/crm"], "/crm");
+    useProjectProfilesStore.getState().setActiveProfile(HOST_A, titanos);
+    useProjectProfilesStore.getState().deleteProfile(HOST_A, titanos ?? "");
+    expect(bucket(HOST_A).profiles.map((profile) => profile.id)).toEqual([crm]);
+    expect(bucket(HOST_A).activeProfileId).toBe(crm);
+  });
+
   it("rejects an unknown color and keeps the catalog closed", () => {
     expect(PROJECT_PROFILE_COLORS).toContain("orange");
     const id = create(HOST_A, "Titanos", [], null);
