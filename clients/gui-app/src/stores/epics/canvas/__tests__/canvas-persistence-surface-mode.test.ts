@@ -24,4 +24,36 @@ describe("canvas Phase-migration persistence", () => {
       phaseId: "phase-1",
     });
   });
+
+  it("restores the persisted project workspace stamp on an epic tab", () => {
+    const state = sanitizePersistedCanvasState({
+      tabsById: {
+        "epic-tab": {
+          tabId: "epic-tab",
+          epicId: "epic-1",
+          name: "Issue 1180",
+          projectWorkspace: {
+            primaryPath: "/Users/g/work/Titanos",
+            linkedWorkspaces: [
+              { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+            ],
+            worktreePaths: [],
+          },
+        },
+      },
+      canvasByTabId: {},
+      openTabOrder: ["epic-tab"],
+      activeTabId: "epic-tab",
+      mostRecentTabIdByEpicId: { "epic-1": "epic-tab" },
+      artifactTreeByEpicId: {},
+    });
+
+    expect(state.tabsById["epic-tab"]?.projectWorkspace).toEqual({
+      primaryPath: "/Users/g/work/Titanos",
+      linkedWorkspaces: [
+        { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+      ],
+      worktreePaths: [],
+    });
+  });
 });

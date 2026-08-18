@@ -100,6 +100,7 @@ import {
 } from "@/hooks/home/use-history-query";
 import { historyListEmptyState } from "@/lib/workspace/history-item-matches-project";
 import { claimEpicOnActiveProfile } from "@/lib/workspace/claim-epic-on-active-profile";
+import { workspaceHintFromHistoryItem } from "@/lib/workspace/header-tab-matches-project";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   useAmbientHistorySearchState,
@@ -1437,11 +1438,19 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     [],
   );
   const openEpic = useCallback(() => {
+    if (!isPhase) {
+      useEpicCanvasStore
+        .getState()
+        .stampEpicWorkspaceHint(
+          item.epicId,
+          workspaceHintFromHistoryItem(item),
+        );
+    }
     openHistoryItem(item);
     if (projectFilterActive) {
       claimEpicOnActiveProfile(hostId, item.epicId);
     }
-  }, [hostId, item, openHistoryItem, projectFilterActive]);
+  }, [hostId, isPhase, item, openHistoryItem, projectFilterActive]);
   const toggleEpicSelection = () => {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);

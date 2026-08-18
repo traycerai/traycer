@@ -12,7 +12,102 @@ export type ProjectScopedHeaderTab =
 export type EpicWorkspaceHint = Pick<
   HistoryItem,
   "worktreePaths" | "linkedWorkspaces"
->;
+> & {
+  readonly primaryPath?: string | null;
+};
+
+const TRAYCER_WORKTREES_MARKER = "/.traycer/worktrees/";
+
+function hintPrimaryPath(hint: EpicWorkspaceHint | null): string | null {
+  if (hint === null) return null;
+  if (typeof hint.primaryPath === "string" && hint.primaryPath.length > 0) {
+    return hint.primaryPath;
+  }
+  const linked = hint.linkedWorkspaces[0]?.workspacePath;
+  if (linked !== undefined && linked.length > 0) return linked;
+  const worktree = hint.worktreePaths[0];
+  if (worktree !== undefined && worktree.length > 0) return worktree;
+  return null;
+}
+
+export function resolveEpicWorkspaceHint(input: {
+  readonly live: EpicWorkspaceHint | null;
+  readonly stamped: EpicWorkspaceHint | null;
+}): EpicWorkspaceHint | null {
+  if (hintPrimaryPath(input.live) !== null) return input.live;
+  if (hintPrimaryPath(input.stamped) !== null) return input.stamped;
+  return null;
+}
+
+export function stampedWorkspaceHintForEpic(
+  tabsById: Readonly<
+    Record<
+      string,
+      | {
+          readonly epicId: string;
+          readonly projectWorkspace?: EpicWorkspaceHint | null;
+        }
+      | undefined
+    >
+  >,
+  epicId: string,
+): EpicWorkspaceHint | null {
+  for (const tab of Object.values(tabsById)) {
+    if (tab === undefined || tab.epicId !== epicId) continue;
+    const stamp = tab.projectWorkspace;
+    if (stamp === undefined || stamp === null) continue;
+    if (hintPrimaryPath(stamp) === null) continue;
+    return stamp;
+  }
+  return null;
+}
+
+export function workspaceHintFromHistoryItem(
+  item: Pick<HistoryItem, "linkedWorkspaces" | "worktreePaths">,
+): EpicWorkspaceHint {
+  return {
+    worktreePaths: item.worktreePaths,
+    linkedWorkspaces: item.linkedWorkspaces,
+    primaryPath:
+      item.linkedWorkspaces[0]?.workspacePath ?? item.worktreePaths[0] ?? null,
+  };
+}
+
+export function workspaceHintFromSnapshotFolders(
+  folders: ReadonlyArray<{
+    readonly hostId: string;
+    readonly workspacePath: string;
+  }>,
+): EpicWorkspaceHint | null {
+  if (folders.length === 0) return null;
+  return {
+    worktreePaths: [],
+    linkedWorkspaces: folders.map((folder) => ({
+      hostId: folder.hostId,
+      workspacePath: folder.workspacePath,
+    })),
+    primaryPath: folders[0]?.workspacePath ?? null,
+  };
+}
+
+function epicOwnedByProfile(
+  epicId: string,
+  hint: EpicWorkspaceHint | null,
+  profile: ProjectProfile,
+): boolean {
+  const primary = hintPrimaryPath(hint);
+  if (primary === null) return profile.epicIds.includes(epicId);
+  return historyItemMatchesProject(
+    {
+      epicId: "",
+      linkedWorkspaces: primary.includes(TRAYCER_WORKTREES_MARKER)
+        ? []
+        : [{ hostId: "", workspacePath: primary }],
+      worktreePaths: primary.includes(TRAYCER_WORKTREES_MARKER) ? [primary] : [],
+    },
+    { ...profile, epicIds: [] },
+  );
+}
 
 export function headerTabMatchesProject(
   tab: ProjectScopedHeaderTab,
@@ -21,14 +116,27 @@ export function headerTabMatchesProject(
 ): boolean {
   if (profile === null) return true;
   if (tab.kind !== "epic") return true;
-  return historyItemMatchesProject(
-    {
-      epicId: tab.epicId,
-      worktreePaths: hint?.worktreePaths ?? [],
-      linkedWorkspaces: hint?.linkedWorkspaces ?? [],
-    },
-    profile,
+  return epicOwnedByProfile(tab.epicId, hint, profile);
+}
+
+export function resolveOwningProjectProfile(
+  profiles: ReadonlyArray<ProjectProfile>,
+  epicId: string,
+  hint: EpicWorkspaceHint | null,
+): ProjectProfile | null {
+  const owners = profiles.filter((profile) =>
+    epicOwnedByProfile(epicId, hint, profile),
   );
+  return owners.length === 1 ? owners[0] : null;
+}
+
+export function headerTabProjectBadge(
+  activeProfile: ProjectProfile | null,
+  owner: ProjectProfile | null,
+): { readonly color: ProjectProfile["color"]; readonly name: string } | null {
+  if (activeProfile !== null) return null;
+  if (owner === null) return null;
+  return { color: owner.color, name: owner.name };
 }
 
 export function filterHeaderStripItemIdsForProject(input: {
