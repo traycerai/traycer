@@ -159,6 +159,7 @@ function cursor(
     includedLimitUsd: null,
     usedUsd: null,
     remainingUsd: null,
+    bonusUsedUsd: null,
     onDemandLimitType: "user",
     onDemandLimitUsd: null,
     onDemandUsedUsd: null,

@@ -1283,6 +1283,7 @@ describe("cursor rate-limit arm", () => {
     includedLimitUsd: 400,
     usedUsd: 314.08,
     remainingUsd: 85.92,
+    bonusUsedUsd: null,
     onDemandLimitType: "user",
     // Cents on the wire: a $1 on-demand limit arrives as individualLimit 100.
     onDemandLimitUsd: 1,

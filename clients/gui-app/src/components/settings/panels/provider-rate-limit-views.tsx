@@ -1431,7 +1431,17 @@ export function CursorRateLimitView({
       />
       <ProviderNumberRow
         label="Included usage left"
-        value={data.remainingUsd}
+        // Once spend crosses the purchased allowance the wire's remaining may
+        // run negative; "-$12 left" is meaningless to a reader, and the
+        // overflow already shows in the meter's detail and the bonus row.
+        value={
+          data.remainingUsd === null ? null : Math.max(0, data.remainingUsd)
+        }
+        format={formatProviderCurrency}
+      />
+      <ProviderNumberRow
+        label="Bonus usage"
+        value={data.bonusUsedUsd}
         format={formatProviderCurrency}
       />
       {!overview ? (
@@ -1460,9 +1470,16 @@ export function CursorRateLimitView({
 // Cursor's blended purchased pool as a credit meter, mirroring
 // `HuggingFaceCreditBar`: the fill percentage and the dollar detail share one
 // denominator by construction, so the money can sit under the bucket bars
-// without reading as a wrong computation of them. `usedUsd` can exceed the
-// purchased limit once bonus usage kicks in, so the fill is clamped rather
-// than allowed to overflow the meter.
+// without reading as a wrong computation of them.
+//
+// Deliberately NOT `creditUsageSeverity`, and never red: for the credit
+// providers, exhausting the allowance means real billing, so red is earned.
+// Cursor's purchased pool is a VALUE meter - spend runs past it onto the
+// bonus grant ("free usage beyond what you've purchased") with nothing cut
+// off and nothing billed; the enforcing gates are the bucket bars above,
+// which own the red. Past the allowance the fill pins at 100% (MeterRow
+// clamps) while the detail keeps the REAL spend ("$412.10 / $400.00"), so
+// the overflow stays visible instead of dressing up as a limit event.
 function CursorIncludedUsageBar({
   includedLimitUsd,
   usedUsd,
@@ -1473,14 +1490,13 @@ function CursorIncludedUsageBar({
   if (includedLimitUsd === null || includedLimitUsd <= 0 || usedUsd === null) {
     return null;
   }
-  const consumed = Math.min(Math.max(0, usedUsd), includedLimitUsd);
-  const usedPercent = (consumed / includedLimitUsd) * 100;
+  const usedPercent = (Math.max(0, usedUsd) / includedLimitUsd) * 100;
   return (
     <MeterRow
       label="Included usage"
       usedPercent={usedPercent}
-      severity={creditUsageSeverity(usedPercent)}
-      detail={`${formatProviderCurrency(consumed)} / ${formatProviderCurrency(includedLimitUsd)}`}
+      severity={usedPercent > 85 ? "running_low" : "healthy"}
+      detail={`${formatProviderCurrency(Math.max(0, usedUsd))} / ${formatProviderCurrency(includedLimitUsd)}`}
     />
   );
 }

@@ -348,6 +348,12 @@ const cursorRateLimitsSchema = z
     includedLimitUsd: z.number().nullable(),
     usedUsd: z.number().nullable(),
     remainingUsd: z.number().nullable(),
+    // Spend covered by Cursor's bonus grant ("free usage beyond what you've
+    // purchased") - the payload's `bonusSpend`, expected to populate once
+    // `usedUsd` crosses `includedLimitUsd`. Null until then (proto3 omits
+    // zero-valued fields), so a consumer can distinguish "no bonus consumed"
+    // from a payload that never carried the field.
+    bonusUsedUsd: z.number().nullable(),
     onDemandLimitType: z.string().nullable(),
     onDemandLimitUsd: z.number().nullable(),
     onDemandUsedUsd: z.number().nullable(),

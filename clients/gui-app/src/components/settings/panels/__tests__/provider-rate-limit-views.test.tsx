@@ -1262,6 +1262,7 @@ describe("CursorRateLimitView", () => {
     includedLimitUsd: 400,
     usedUsd: 325.37,
     remainingUsd: 74.63,
+    bonusUsedUsd: null,
     onDemandLimitType: "user",
     onDemandLimitUsd: 1,
     onDemandUsedUsd: 0.25,
@@ -1304,6 +1305,34 @@ describe("CursorRateLimitView", () => {
     expect(screen.getByText("On-demand limit")).toBeTruthy();
     expect(screen.getByText("$1.00")).toBeTruthy();
     expect(screen.queryByText("$100.00")).toBeNull();
+  });
+
+  it("shows overflow honestly once spend runs past the purchased allowance", () => {
+    // Past $400 the account is on Cursor's bonus grant - nothing is limited
+    // and nothing is billed, so the meter must NOT dress this up as a limit
+    // event: fill pins at 100% in the amber running-low tone (red stays
+    // reserved for the bucket bars, the actual gates), the detail keeps the
+    // REAL spend, "left" clamps at $0.00 instead of going negative, and the
+    // bonus spend gets its own row.
+    const { container } = render(
+      <CursorRateLimitView
+        data={{
+          ...cursor,
+          usedUsd: 412.1,
+          remainingUsd: -12.1,
+          bonusUsedUsd: 12.1,
+        }}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("$412.10 / $400.00")).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$0.00")).toBeTruthy();
+    expect(screen.queryByText("-$12.10")).toBeNull();
+    expect(screen.getByText("Bonus usage")).toBeTruthy();
+    expect(screen.getByText("$12.10")).toBeTruthy();
+    expect(container.querySelector(".bg-amber-500")).toBeTruthy();
+    expect(container.querySelector(".bg-red-500")).toBeNull();
   });
 
   it("falls back to the billing-cycle range when no bucket was reported", () => {
