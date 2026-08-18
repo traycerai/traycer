@@ -66,6 +66,24 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
     ).toBeTruthy();
   });
 
+  it("uses singular wording for a single parked item", () => {
+    render(
+      <RevertOnEditDialog
+        open
+        onOpenChange={onOpenChange}
+        onRevert={onRevert}
+        onDontRevert={onDontRevert}
+        artifactCount={0}
+        queuedCount={1}
+      />,
+    );
+    expect(
+      screen.getByText(
+        /1 queued message stays queued and sends after the edited message/i,
+      ),
+    ).toBeTruthy();
+  });
+
   it("omits the note when the queue is empty", () => {
     render(renderDialog(true));
     expect(screen.queryByText(/queued message/i)).toBeNull();
