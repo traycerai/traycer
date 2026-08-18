@@ -78,6 +78,7 @@ import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-s
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
+import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
 
@@ -284,7 +285,7 @@ export function HostOverviewPanel(props: {
   const [forceRestartOffer, setForceRestartOffer] = useState<{
     readonly hostId: string;
     readonly hostName: string;
-    readonly busySessionCount: number;
+    readonly verdict: HostRestartBusyVerdict;
   } | null>(null);
   // No variables: the unified toast wording (`toastHostRestartRequested` /
   // `toastHostRestartDeclined`, host-restart-toast.ts) dropped the host name
@@ -834,17 +835,14 @@ export function HostOverviewPanel(props: {
                   // respawn uses, deliberately not an error toast.
                   if (forceRestartLocalHostId === null) {
                     toastHostRestartDeclined(
-                      busyRestartMessage(
-                        response.verdict.busySessionCount,
-                        false,
-                      ),
+                      busyRestartMessage(response.verdict, false),
                     );
                     return;
                   }
                   setForceRestartOffer({
                     hostId: forceRestartLocalHostId,
                     hostName: displayName,
-                    busySessionCount: response.verdict.busySessionCount,
+                    verdict: response.verdict,
                   });
                   return;
                 }
@@ -873,7 +871,7 @@ export function HostOverviewPanel(props: {
         message={
           forceRestartOffer === null
             ? ""
-            : busyRestartMessage(forceRestartOffer.busySessionCount, true)
+            : busyRestartMessage(forceRestartOffer.verdict, true)
         }
         // CACHE-derived, matching what the menu/tray flow passes here
         // (`forceRestart.isPending || respawnInFlight`), and for its reason
