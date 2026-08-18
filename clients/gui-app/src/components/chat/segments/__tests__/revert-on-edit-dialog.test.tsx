@@ -59,11 +59,9 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
         queuedCount={2}
       />,
     );
-    expect(
-      screen.getByText(
-        /2 queued messages stay queued and will send after the edited message when the queue next runs/i,
-      ),
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).toMatch(
+      /2 queued messages stay queued and will send after the edited message when the queue next runs/i,
+    );
   });
 
   it("uses singular wording for a single parked item", () => {
@@ -77,15 +75,15 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
         queuedCount={1}
       />,
     );
-    expect(
-      screen.getByText(
-        /1 queued message stays queued and will send after the edited message when the queue next runs/i,
-      ),
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).toMatch(
+      /1 queued message stays queued and will send after the edited message when the queue next runs/i,
+    );
   });
 
   it("omits the note when the queue is empty", () => {
     render(renderDialog(true));
-    expect(screen.queryByText(/queued message/i)).toBeNull();
+    expect(screen.getByRole("dialog").textContent).not.toMatch(
+      /queued message/i,
+    );
   });
 });
