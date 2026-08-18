@@ -210,9 +210,14 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       // DIFFERENT denominator than the bucket windows above (each bucket is
       // measured against its own unpublished limit), so this line reads as
       // money, never as a percentage that could contradict the windows.
-      rateLimits.includedLimitUsd === null
-        ? null
-        : `included usage: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`,
+      // Spend-only when the limit was not reported, exactly like the Hugging
+      // Face arm above: the fields are independently nullable, and a missing
+      // denominator must not hide the spend that IS known.
+      rateLimits.includedLimitUsd !== null
+        ? `included usage: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`
+        : rateLimits.usedUsd === null && rateLimits.remainingUsd === null
+          ? null
+          : `spend: ${formatNumber(rateLimits.usedUsd)} this cycle${rateLimits.remainingUsd === null ? "" : `, ${formatNumber(rateLimits.remainingUsd)} remaining`}`,
       // Only worth a line when no bucket window already carried the reset -
       // otherwise it restates the instant `formatWindowLine` printed.
       hasBucketWindow ||

@@ -190,6 +190,42 @@ describe("detailed rate-limit formatting", () => {
     );
   });
 
+  it("keeps Cursor's known spend when the included limit was not reported", () => {
+    // The money fields are independently nullable (proto3 omits zero-valued
+    // fields), so a payload can carry spend without a limit. A missing
+    // denominator must not hide the spend that IS known - the same spend-only
+    // fallback the Hugging Face arm uses.
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "cursor",
+        available: true,
+        cycleStart: CAPTURED_AT,
+        cycleEnd: Date.UTC(2026, 7, 12, 9, 30, 0),
+        cursorModels: null,
+        otherModels: null,
+        includedLimitUsd: null,
+        usedUsd: 325.37,
+        remainingUsd: null,
+        bonusUsedUsd: null,
+        onDemandLimitType: null,
+        onDemandLimitUsd: null,
+        onDemandUsedUsd: null,
+        onDemandRemainingUsd: null,
+        displayMessage: null,
+      },
+      usageUpdatedAt: CAPTURED_AT,
+    };
+
+    const human = formatAgentProviderProfileRateLimitsResponse(
+      { kind: "ambient" },
+      response,
+    );
+
+    expect(human).toContain("spend: 325.37 this cycle");
+    expect(human).not.toContain("included usage:");
+    expect(human).not.toContain("unknown remaining");
+  });
+
   it("renders the unavailable arm with its reason instead of inventing limits", () => {
     const response: AgentGetProviderProfileRateLimitsResponse = {
       rateLimits: {
