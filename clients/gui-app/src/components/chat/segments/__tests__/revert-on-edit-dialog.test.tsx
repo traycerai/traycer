@@ -61,7 +61,7 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
     );
     expect(
       screen.getByText(
-        /2 queued messages stay queued and send after the edited message/i,
+        /2 queued messages stay queued and will send after the edited message when the queue next runs/i,
       ),
     ).toBeTruthy();
   });
@@ -79,7 +79,7 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
     );
     expect(
       screen.getByText(
-        /1 queued message stays queued and sends after the edited message/i,
+        /1 queued message stays queued and will send after the edited message when the queue next runs/i,
       ),
     ).toBeTruthy();
   });

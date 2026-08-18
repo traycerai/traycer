@@ -17,9 +17,12 @@ interface RevertOnEditDialogProps {
   readonly onDontRevert: () => void;
   readonly artifactCount: number;
   /**
-   * Items parked in the message queue. They are not cleared by the edit -
-   * they send after the edited message's turn - so the dialog names them to
-   * avoid surprise.
+   * Items parked in the message queue. The edit neither clears them nor
+   * changes when they run, so the dialog names them to avoid surprise. The
+   * copy deliberately says "when the queue next runs" rather than "after this
+   * turn": a queue paused by an errored turn holds its items individually
+   * paused, which blocks the host's auto-resume, so those messages wait for
+   * the user to resume rather than following the replacement turn.
    */
   readonly queuedCount: number;
 }
@@ -77,7 +80,7 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
             Submitting from a previous message will revert file changes to
             before this message and clear the messages after this one.
             {queuedCount > 0
-              ? ` ${queuedCount} queued ${queuedCount === 1 ? "message stays" : "messages stay"} queued and ${queuedCount === 1 ? "sends" : "send"} after the edited message.`
+              ? ` ${queuedCount} queued ${queuedCount === 1 ? "message stays" : "messages stay"} queued and will send after the edited message when the queue next runs.`
               : null}
           </DialogDescription>
         </DialogHeader>
