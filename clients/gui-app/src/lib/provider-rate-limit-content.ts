@@ -86,6 +86,14 @@ export function resolveProviderRateLimitViewState(
     };
   }
   if (props.isError) return { kind: "error" };
+  // No reading and no failure to report, but work is in flight - which now
+  // includes a read whose failure was SUPPRESSED because the queue scheduled a
+  // delayed collection for it (callers fold that window into `isFetching`).
+  // Without this the section fell through to `empty` and rendered a blank card
+  // for the whole recovery window, then popped to data - the silent half of
+  // the visible-failure-then-silent-success pair. `empty` still covers the
+  // genuinely-nothing case, where nothing is fetching.
+  if (props.isFetching) return { kind: "loading" };
   return { kind: "empty" };
 }
 
@@ -191,7 +199,17 @@ export function resolvePopoverProviderRateLimitState(
     // Once a queued fetch actually fails, TanStack moves the observer out of
     // `isPending` and into `isError`, revealing retryable error content instead
     // of staying hidden in Overview.
-    return props.isFetching || props.isPending
+    //
+    // `isError` is consulted rather than inferred from "idle with no data".
+    // Callers pass the SUPPRESSED value (`isRateLimitQueryFailure`), which is
+    // false while a read we stopped waiting for still has its delayed
+    // collection coming. On a COLD read there is no envelope to fall back on,
+    // so inferring the failure from idleness reported one anyway - and then
+    // silently succeeded when the collection landed, which is the exact
+    // visible-failure-then-silent-success transition the suppression exists to
+    // remove. A read that genuinely failed still arrives here with `isError`
+    // true (including once the follow-up budget is spent) and still reports.
+    return props.isFetching || props.isPending || !props.isError
       ? { kind: "cold" }
       : { kind: "error" };
   }

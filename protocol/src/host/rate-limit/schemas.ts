@@ -68,6 +68,37 @@ export type RateLimitUsageRequestV12 = z.infer<
   typeof rateLimitUsageRequestSchemaV12
 >;
 
+// v4.0 request adds `force`: whether this provider pull must initiate a fresh
+// read, or may be served from the host's per-`(provider, profile)` gauge cache
+// within that lane's cooldown floor. Every released version (1.2 / 2.0 / 2.1 /
+// 3.0) keeps `rateLimitUsageRequestSchemaV12` untouched, so no released peer's
+// request schema moves; `4` is the newest major and no peer in the field has
+// ever negotiated it (see `rateLimitUsageResponseSchemaV40`), which is why this
+// rides the live line instead of a further minor.
+//
+// ABSENT means force. That is the released behavior this field carves an
+// opt-out from: the host resolver has always passed `force: true`, so a v3.0
+// caller upgraded onto this line, and a v4.0 caller that omits the key, both
+// keep getting a fresh spawn. Only a caller that explicitly says `false` opts
+// into the cached-gauge path - the GUI's automatic sweeps, which already gate
+// their own cadence client-side and do not need to re-spawn a CLI for a gauge
+// the passive per-turn capture (or another surface's pull) refreshed seconds
+// ago. Optional rather than `.default(true)` so it stays absent from a request
+// that never opts out: the GUI keys its rate-limit query cache on this params
+// object, and a defaulted key would make an automatic pull and a manual refresh
+// address two different cache entries.
+//
+// Travelling down to a released peer (the 4->3/2/1 bridges in `contracts.ts`)
+// drops the key, so an old host still forces - a strictly safe degradation
+// (an extra spawn), never a stale read.
+export const rateLimitUsageRequestSchemaV40 =
+  rateLimitUsageRequestSchemaV12.extend({
+    force: z.boolean().optional(),
+  });
+export type RateLimitUsageRequestV40 = z.infer<
+  typeof rateLimitUsageRequestSchemaV40
+>;
+
 // A normalized rolling rate-limit window, shared by every provider arm below.
 // `resetsAt` is epoch-ms (each provider's native reset representation is
 // normalized to this at the host boundary).

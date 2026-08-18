@@ -379,6 +379,7 @@ describe("useProfileUsagePresentation", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-a",
+        force: true,
       },
     ]);
   });

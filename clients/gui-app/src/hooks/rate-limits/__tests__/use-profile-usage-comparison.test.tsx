@@ -338,6 +338,7 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-managed",
+        force: true,
       },
     ]);
   });
@@ -371,6 +372,7 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-a",
+        force: true,
       },
     ]);
   });
@@ -485,6 +487,9 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-tab",
+        // `force` rides the WIRE request only; the query key below stays
+        // force-less so manual and automatic pulls share one cache entry.
+        force: true,
       },
     ]);
     expect(

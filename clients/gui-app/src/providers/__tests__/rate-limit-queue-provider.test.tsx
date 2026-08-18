@@ -16,7 +16,7 @@ type ConfiguredFixture = {
 
 type MockState = {
   hostId: string | null;
-  client: { request: () => Promise<unknown> } | null;
+  client: { requestWithResponseTimeout: () => Promise<unknown> } | null;
   configured: ReadonlyArray<ConfiguredFixture>;
   profileSelection: {
     activeChatSettings: null;
@@ -26,7 +26,7 @@ type MockState = {
 
 const mocks = vi.hoisted<MockState>(() => ({
   hostId: "host-a",
-  client: { request: () => Promise.resolve({}) },
+  client: { requestWithResponseTimeout: () => Promise.resolve({}) },
   configured: [],
   profileSelection: { activeChatSettings: null, lastProfileByHarness: {} },
 }));
@@ -155,7 +155,9 @@ describe("<RateLimitQueueProvider />", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.hostId = "host-a";
-    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
+    mocks.client = {
+      requestWithResponseTimeout: vi.fn(() => Promise.resolve({})),
+    };
     mocks.configured = [];
     mocks.profileSelection = {
       activeChatSettings: null,
@@ -326,7 +328,9 @@ describe("<RateLimitQueueProvider /> background profile polling", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.hostId = "host-a";
-    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
+    mocks.client = {
+      requestWithResponseTimeout: vi.fn(() => Promise.resolve({})),
+    };
     mocks.configured = [];
     mocks.profileSelection = {
       activeChatSettings: null,

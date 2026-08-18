@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { isRateLimitReadStillRunningOnHost } from "@/lib/rate-limits/rate-limit-read-status";
 import type { HostRpcRegistry } from "@/lib/host";
 import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { queryKeys } from "@/lib/query-keys";
@@ -14,7 +15,12 @@ import {
   type ProviderRateLimitEnvelope,
   type RateLimitUsageResponse,
 } from "@/lib/rate-limits/rate-limit-envelope";
-import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
+import {
+  EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS,
+  RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS,
+  RATE_LIMIT_READ_FOLLOW_UP_LIMIT,
+  RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+} from "@/lib/rate-limits/rate-limit-timing";
 
 /**
  * Shared fetch queue for the `ephemeralProcess` rate-limit providers (codex,
@@ -43,10 +49,18 @@ type RateLimitUsageParams = RequestOfMethod<
   "host.getRateLimitUsage"
 >;
 
+/**
+ * The transport call one queued pull makes. `responseTimeoutMs` is the frame
+ * budget this lane needs (`RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS`); the binding
+ * site forwards it to `requestWithResponseTimeout`, because the transport's
+ * 30s default is exactly the host's *default* probe budget and so discarded
+ * every slow-but-successful claude probe client-side.
+ */
 export type RateLimitQueueRequestFn = (
   hostId: string,
   method: "host.getRateLimitUsage",
   params: RateLimitUsageParams,
+  responseTimeoutMs: number,
 ) => Promise<RateLimitUsageResponse>;
 
 export interface RateLimitQueueConfig {
@@ -81,9 +95,52 @@ interface PendingRateLimitTarget {
   readonly resolve: () => void;
   readonly shouldSkipAutomatic: () => boolean;
   readonly fetch: () => Promise<ProviderRateLimitEnvelope>;
+  /** Re-read this target from the host gauge cache. See `scheduleReadFollowUp`. */
+  readonly followUp: () => void;
 }
 
 const pendingTargets = new Map<string, PendingRateLimitTarget>();
+
+/**
+ * Targets whose next pull is a FOLLOW-UP to a read we stopped waiting for, and
+ * must therefore ignore the freshness floor. Without this the follow-up
+ * silently no-ops whenever the last successful read is still inside the floor -
+ * precisely the impatient-refresh case it exists to rescue.
+ */
+const followUpDue = new Set<string>();
+
+/** Consecutive follow-ups spent per target; cleared on any completed read. */
+const followUpAttempts = new Map<string, number>();
+// `window.setTimeout` (not the ambient one) so the handle is a plain number,
+// matching how the poll interval is held in `rate-limit-queue-provider`.
+const followUpTimers = new Map<string, number>();
+
+function scheduleReadFollowUp(
+  target: PendingRateLimitTarget,
+  error: unknown,
+): void {
+  if (!isRateLimitReadStillRunningOnHost(error)) return;
+  if (followUpTimers.has(target.key)) return;
+  const spent = followUpAttempts.get(target.key) ?? 0;
+  if (spent >= RATE_LIMIT_READ_FOLLOW_UP_LIMIT) return;
+
+  followUpAttempts.set(target.key, spent + 1);
+  const timer = window.setTimeout(() => {
+    followUpTimers.delete(target.key);
+    target.followUp();
+  }, RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+  followUpTimers.set(target.key, timer);
+}
+
+/** Drop any pending follow-up for a key whose read has since completed. */
+function clearReadFollowUp(key: string): void {
+  const timer = followUpTimers.get(key);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    followUpTimers.delete(key);
+  }
+  followUpAttempts.delete(key);
+}
 
 /**
  * Post-`usage_fetch_failed` cool-down: how long *automatic* enqueues (the
@@ -219,6 +276,71 @@ export function getRateLimitQueueTargetPhase(
   );
 }
 
+/**
+ * Whether this target's queued pull is ALREADY forced - i.e. a user asked for
+ * it, rather than the background sweep enqueuing it.
+ *
+ * A control uses this to tell the two queued states apart. An automatic queued
+ * item must stay clickable, because that click is what promotes it
+ * (`pending.force = true`) and stops the pull being skipped by its second
+ * freshness/cool-down check or served from the host gauge cache. Once it IS
+ * forced, a further click can add nothing, so the control should show pending
+ * instead of sitting idle while the user waits behind the lane.
+ */
+export function isRateLimitQueueTargetForced(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  return (
+    pendingTargets.get(rateLimitQueueProfileKey(hostId, providerId, profileId))
+      ?.force ?? false
+  );
+}
+
+/**
+ * Whether this target's follow-up budget is spent with nothing left in flight -
+ * i.e. we stopped waiting on a read, already spent the one delayed collection
+ * `scheduleReadFollowUp` allows, and that collection ALSO came back unheard.
+ *
+ * This is the limit of the "something will come back for it" reasoning that
+ * lets `isRateLimitQueryFailure` hide a still-running read. Once
+ * `scheduleReadFollowUp` declines a further attempt, nothing is scheduled to
+ * collect the answer, so continuing to suppress would leave a stale reading on
+ * screen looking healthy until some later poll happens along - the same
+ * silent-staleness the `queueOwned` arm rules out for the `httpFetch` lanes,
+ * one level deeper.
+ *
+ * Derived from the three registries rather than a fourth flag, so it cannot
+ * drift from the scheduler that owns the budget. Each clause is what keeps the
+ * transitions from flashing a failure the moment before a retry:
+ *
+ * - `attempts >= LIMIT` - the budget is spent. Absent (0) on a first failure,
+ *   which is why the initial "still running" read stays suppressed.
+ * - `!followUpTimers.has` - the delayed collection is not still waiting to run.
+ * - `!pendingTargets.has` - and it is not on the wire right now. Without this
+ *   the window between the timer firing and the follow-up settling would read
+ *   as exhausted and surface a failure DURING its own retry.
+ *
+ * So it turns true only after the follow-up has settled unheard, which
+ * `settlePendingTarget` publishes via `notifyTargets`. A `null` scope at
+ * follow-up time never enqueues, so the key never reappears in `pendingTargets`
+ * and this reports exhausted - correct, since an unconfigured queue is exactly
+ * the case where nothing is coming back.
+ */
+export function isRateLimitReadFollowUpExhausted(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  const key = rateLimitQueueProfileKey(hostId, providerId, profileId);
+  return (
+    (followUpAttempts.get(key) ?? 0) >= RATE_LIMIT_READ_FOLLOW_UP_LIMIT &&
+    !followUpTimers.has(key) &&
+    !pendingTargets.has(key)
+  );
+}
+
 export function subscribeRateLimitQueueTargets(
   listener: () => void,
 ): () => void {
@@ -330,6 +452,8 @@ function createPendingPromise(): {
 }
 
 function settlePendingTarget(target: PendingRateLimitTarget): void {
+  // One-shot: the bypass covers exactly the pull it was set for.
+  followUpDue.delete(target.key);
   if (pendingTargets.get(target.key) === target) {
     pendingTargets.delete(target.key);
     notifyTargets();
@@ -347,9 +471,16 @@ async function runPendingTarget(target: PendingRateLimitTarget): Promise<void> {
   notifyTargets();
   try {
     await target.fetch();
-  } catch {
+    clearReadFollowUp(target.key);
+  } catch (error) {
     // TanStack keeps the normalized failure on this target's cache entry.
     // Swallow it here so one profile cannot poison the shared serial lane.
+    //
+    // A response timeout is not a failed read though - the host is still
+    // running the probe and will capture it. Collect it shortly rather than
+    // leaving the user with a refresh that visibly failed and silently
+    // succeeded later.
+    scheduleReadFollowUp(target, error);
   } finally {
     settlePendingTarget(target);
   }
@@ -381,9 +512,57 @@ export function enqueueRateLimitFetchBatchForScope(
     );
     const pending = pendingTargets.get(targetKey);
     if (pending !== undefined) {
-      // Manual intent upgrades queued automatic work in place. Once a fetch is
-      // already running, joining it is sufficient: its result will be fresh.
-      if (opts.force && pending.phase === "queued") pending.force = true;
+      // Manual intent upgrades QUEUED automatic work in place - it has not
+      // reached the wire yet, so flipping the flag is enough.
+      if (opts.force && pending.phase === "queued") {
+        if (!pending.force) {
+          pending.force = true;
+          // Publish it. Subscribers snapshot this flag through
+          // `subscribeRateLimitQueueTargets` (`useIsRateLimitQueueTargetForced`),
+          // and mutating in place without notifying leaves a promoted target
+          // still reading as unforced - so the control that was just clicked
+          // stays "clickable, nothing pending" until some unrelated queue event
+          // happens to notify. The phase does not change here, which is exactly
+          // why nothing else publishes it for us.
+          notifyTargets();
+        }
+        joinedPromises.push(pending.promise);
+        continue;
+      }
+
+      // Past that point the request is on the wire, so what matters is what IT
+      // carries, not what phase it is in.
+      //
+      // Joining an already-FORCED pull stays correct: its result is a real
+      // probe, which is exactly what this caller asked for, and reissuing would
+      // spawn a redundant CLI subprocess for an answer already coming. That is
+      // the remount/double-click case the serial lane exists to collapse.
+      //
+      // Joining an AUTOMATIC one is not. It travels as `force: false`, so a v4
+      // host may answer it from its gauge cache - handing back a reading up to
+      // the host read floor old when the caller asked to bypass exactly that.
+      // The refresh controls disable while their own target is fetching, but a
+      // non-button caller still reaches here: consuming a Codex rate-limit
+      // reset credit forces a re-read, and answering THAT from cache shows the
+      // pre-reset numbers the user just paid to clear.
+      //
+      // So chain a fresh forced pull behind an automatic one.
+      // `settlePendingTarget` deletes the registry entry BEFORE resolving this
+      // promise, so the continuation always finds an empty slot and enqueues a
+      // real item rather than re-joining this branch.
+      if (opts.force && !pending.force) {
+        joinedPromises.push(
+          pending.promise
+            .then(() =>
+              enqueueRateLimitFetchBatchForScope(scope, [target], {
+                force: true,
+              }),
+            )
+            .then(() => undefined),
+        );
+        continue;
+      }
+
       joinedPromises.push(pending.promise);
       continue;
     }
@@ -399,6 +578,11 @@ export function enqueueRateLimitFetchBatchForScope(
     >(hostId, "host.getRateLimitUsage", params);
 
     function shouldSkipAutomatic(): boolean {
+      // A follow-up is collecting a probe we already paid for, so neither the
+      // freshness floor nor the cool-down applies: both exist to stop
+      // SPECULATIVE automatic work, and this reading is already sitting in the
+      // host's gauge cache waiting to be picked up.
+      if (followUpDue.has(targetKey)) return false;
       const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
       return (
         Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS ||
@@ -412,10 +596,20 @@ export function enqueueRateLimitFetchBatchForScope(
     // the same cache slot HostRpcError-typed observers read.
     function queryFn(): Promise<ProviderRateLimitEnvelope> {
       return withHostQueryErrorBoundary("host.getRateLimitUsage", async () => {
+        // `force` reaches the host only here - deliberately NOT in `params`,
+        // which is this pull's cache identity above. Were it keyed, a user's
+        // forced click would occupy a different slot from the automatic lane's
+        // and the two would stop de-duplicating. Read from the registry rather
+        // than the captured `opts` so a pull promoted to forced while queued
+        // (see `pending.force = true`) travels as forced. An absent field on a
+        // released peer that never learned it still means force, so an older
+        // host is unaffected.
+        const forced = pendingTargets.get(targetKey)?.force ?? opts.force;
         const response = await request(
           hostId,
           "host.getRateLimitUsage",
-          params,
+          { ...params, force: forced },
+          RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
         );
         const envelope = mapResponseToProviderRateLimitEnvelope({
           response,
@@ -440,6 +634,12 @@ export function enqueueRateLimitFetchBatchForScope(
       promise: deferred.promise,
       resolve: deferred.resolve,
       shouldSkipAutomatic,
+      followUp: () => {
+        followUpDue.add(targetKey);
+        void enqueueRateLimitFetchBatchForScope(scope, [target], {
+          force: false,
+        });
+      },
       fetch: () =>
         queryClient.fetchQuery({
           queryKey,
@@ -447,6 +647,16 @@ export function enqueueRateLimitFetchBatchForScope(
           // The registry owns freshness and force semantics. Once a target
           // reaches this point, TanStack must invoke queryFn.
           staleTime: 0,
+          // This queue owns recovery, so TanStack must not also attempt it.
+          // The app-wide default retries every non-`RetryableTransportError`
+          // once, and the failure this lane expects most - the response budget
+          // elapsing on a read the host is still running - is exactly that. A
+          // retry there re-sends the SAME forced CLI probe while the first may
+          // still be completing, holds the serial lane for up to another full
+          // budget, and only then reaches the catch that schedules the single
+          // delayed gauge read. One cheap cache read is the recovery; a second
+          // subprocess is the thing this lane exists to prevent.
+          retry: false,
           meta: stampHostRpcMethod(undefined, "host.getRateLimitUsage"),
           gcTime: Infinity,
         }),
@@ -494,4 +704,8 @@ export function __resetRateLimitQueueForTests(): void {
   drainingListeners.clear();
   targetListeners.clear();
   cooldownUntil.clear();
+  for (const timer of followUpTimers.values()) window.clearTimeout(timer);
+  followUpTimers.clear();
+  followUpAttempts.clear();
+  followUpDue.clear();
 }

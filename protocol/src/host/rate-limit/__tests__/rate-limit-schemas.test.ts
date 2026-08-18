@@ -11,6 +11,10 @@ import {
   hostGetRateLimitUsageDowngradeV4ToV3,
   hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageUpgradeV30ToV40,
+  hostGetRateLimitUsageV12,
+  hostGetRateLimitUsageV20,
+  hostGetRateLimitUsageV21,
+  hostGetRateLimitUsageV30,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -20,6 +24,7 @@ import {
   rateLimitUnavailableReasonSchemaV1,
   rateLimitUnavailableReasonSchemaV2,
   rateLimitUsageRequestSchemaV12,
+  rateLimitUsageRequestSchemaV40,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
@@ -1255,6 +1260,133 @@ describe("host.getRateLimitUsage v4.0 OpenCode arm + downgrade bridges", () => {
     }
   });
 
+});
+
+// `host.getRateLimitUsage@4.0`'s `force` opt-out (see
+// `rateLimitUsageRequestSchemaV40`'s doc comment). ABSENT means force - every
+// released version forced unconditionally, so the field is `.optional()`
+// rather than `.default(true)` specifically so it stays ABSENT (not merely
+// `undefined`) on a request that never opts out.
+describe("rateLimitUsageRequestSchemaV40 force opt-out", () => {
+  it("parses force: true and force: false", () => {
+    expect(
+      rateLimitUsageRequestSchemaV40.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        force: true,
+      }).force,
+    ).toBe(true);
+    expect(
+      rateLimitUsageRequestSchemaV40.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        force: false,
+      }).force,
+    ).toBe(false);
+  });
+
+  it("leaves force ABSENT - not merely undefined - when the caller omits it", () => {
+    const parsed = rateLimitUsageRequestSchemaV40.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    });
+    expect("force" in parsed).toBe(false);
+    expect(parsed.force).toBeUndefined();
+  });
+
+  it("strips an unknown force key on every released version's request schema", () => {
+    for (const contract of [
+      hostGetRateLimitUsageV12,
+      hostGetRateLimitUsageV20,
+      hostGetRateLimitUsageV21,
+      hostGetRateLimitUsageV30,
+    ]) {
+      const parsedWithForceTrue = contract.requestSchema.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        force: true,
+      });
+      expect("force" in parsedWithForceTrue).toBe(false);
+
+      const parsedWithForceFalse = contract.requestSchema.parse({
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        force: false,
+      });
+      expect("force" in parsedWithForceFalse).toBe(false);
+    }
+  });
+});
+
+// The downgrade bridges below travel FROM the v4.0 line, so they are the
+// only place `force` can be dropped - a released major never carried it.
+describe("host.getRateLimitUsage v4.0 -> v3.0 / v2.1 / v1.2 force downgrade bridges", () => {
+  const v40RequestWithForceFalse = rateLimitUsageRequestSchemaV40.parse({
+    accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    providerId: "claude-code",
+    profileId: "work",
+    force: false,
+  });
+
+  const releasedShape = {
+    accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    providerId: "claude-code",
+    profileId: "work",
+  };
+
+  it("drops force while preserving accountContext/providerId/profileId on the 4.0 -> 3.0 bridge", () => {
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV3.downgradeRequest(
+        v40RequestWithForceFalse,
+      ),
+    ).toEqual({ ok: true, value: releasedShape });
+  });
+
+  it("drops force while preserving accountContext/providerId/profileId on the 4.0 -> 2.1 bridge", () => {
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV2.downgradeRequest(
+        v40RequestWithForceFalse,
+      ),
+    ).toEqual({ ok: true, value: releasedShape });
+  });
+
+  it("drops force while preserving accountContext/providerId/profileId on the 4.0 -> 1.2 bridge", () => {
+    expect(
+      hostGetRateLimitUsageDowngradeV4ToV1.downgradeRequest(
+        v40RequestWithForceFalse,
+      ),
+    ).toEqual({ ok: true, value: releasedShape });
+  });
+
+  it("drops force: true too - every downgrade strips the key regardless of its value", () => {
+    const v40RequestWithForceTrue = rateLimitUsageRequestSchemaV40.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      force: true,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV3,
+      hostGetRateLimitUsageDowngradeV4ToV2,
+      hostGetRateLimitUsageDowngradeV4ToV1,
+    ]) {
+      const result = bridge.downgradeRequest(v40RequestWithForceTrue);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect("force" in result.value).toBe(false);
+    }
+  });
+});
+
+describe("host.getRateLimitUsage v3.0 -> v4.0 request upgrade", () => {
+  it("upgrades a v3.0 request to v4.0 leaving force absent - which the host reads as force", () => {
+    const v30Request = rateLimitUsageRequestSchemaV12.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "claude-code",
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV30ToV40.upgradeRequest(v30Request);
+
+    expect("force" in upgraded).toBe(false);
+    expect(
+      rateLimitUsageRequestSchemaV40.parse(upgraded).force,
+    ).toBeUndefined();
+  });
 });
 
 describe("cursor rate-limit arm", () => {
