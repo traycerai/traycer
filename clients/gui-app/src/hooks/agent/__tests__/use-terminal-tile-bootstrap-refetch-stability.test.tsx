@@ -208,4 +208,54 @@ describe("useTerminalTileBootstrap handle gate across list refetches", () => {
 
     expect(lastHandleArgs().enabled).toBe(false);
   });
+
+  it("clears a retained retry error when the refetch finds the session running", async () => {
+    mockList.data = { sessions: [] };
+    mockCreate.isError = true;
+    mockCreate.isIdle = false;
+    mockCreate.error = new Error("response lost");
+    mockCreate.reset = () => {
+      mockCreate.isError = false;
+      mockCreate.isIdle = true;
+      mockCreate.error = null;
+    };
+    let resolveRefetch:
+      | ((result: {
+          readonly data: {
+            readonly sessions: ReadonlyArray<Record<string, unknown>>;
+          };
+        }) => void)
+      | null = null;
+    mockList.refetch = () => {
+      mockList.isFetching = true;
+      return new Promise((resolve) => {
+        resolveRefetch = resolve;
+      });
+    };
+    const { result, rerender } = runBootstrap();
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+      result.current.retry();
+    });
+    expect(result.current.createRetryIsPending).toBe(true);
+
+    const runningListData = {
+      sessions: [
+        { sessionId: "term-1", sessionKind: "terminal", status: "running" },
+      ],
+    };
+    mockList.data = runningListData;
+    mockList.isFetching = false;
+    await act(() => {
+      resolveRefetch?.({ data: runningListData });
+      return Promise.resolve();
+    });
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current.createRetryIsPending).toBe(false);
+      expect(lastHandleArgs().enabled).toBe(true);
+    });
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
 });

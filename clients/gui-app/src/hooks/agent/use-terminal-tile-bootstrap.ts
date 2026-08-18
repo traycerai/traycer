@@ -415,13 +415,26 @@ export function useTerminalTileBootstrap(
   }, [handle, sessionId]);
 
   const resetPrepare = input.resetPrepare;
+  const retrySessionId = input.sessionId;
+  const retrySessionKind = input.sessionKind;
   const retry = useCallback(() => {
     hasDispatchedRef.current = false;
     setCreateRetryError(create.error);
     create.reset();
     if (resetPrepare !== undefined) resetPrepare();
-    void list.refetch();
-  }, [create, list, resetPrepare]);
+    void list.refetch().then((result) => {
+      if (
+        result.data?.sessions.some(
+          (session) =>
+            session.sessionId === retrySessionId &&
+            session.sessionKind === retrySessionKind &&
+            session.status === "running",
+        ) === true
+      ) {
+        setCreateRetryError(null);
+      }
+    });
+  }, [create, list, resetPrepare, retrySessionId, retrySessionKind]);
 
   return {
     hostHasSession,
