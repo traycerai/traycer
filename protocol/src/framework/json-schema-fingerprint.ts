@@ -892,6 +892,64 @@ function discriminantValue(
 }
 
 /**
+ * Every literal value a property pins, or `null` when it pins none.
+ *
+ * {@link discriminantValue}'s multi-value sibling, and used ONLY for a
+ * DECLARED discriminator. Inference must keep rejecting a multi-value column
+ * (nothing tells it apart from an ordinary enum field that happens to differ
+ * per arm), but a declared tag is not inferred - the union named it - so a
+ * grouped arm like `kind: z.enum(["subagent", "monitor"])` is a perfectly
+ * good identity.
+ */
+function discriminantValues(
+  property: unknown,
+): ReadonlySet<string | number | boolean> | null {
+  const classified = classifySchemaNode(property);
+  if (classified.kind !== "enum" || classified.values.length === 0) return null;
+  return new Set(classified.values);
+}
+
+function sameValueSet(
+  a: ReadonlySet<string | number | boolean>,
+  b: ReadonlySet<string | number | boolean>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether `declared` actually tells THIS side's arms apart: pinned to at least
+ * one literal on every object arm, with no value shared between two of them.
+ *
+ * The same qualification {@link discriminatorFields} applies, minus the
+ * one-value-per-arm restriction. When it fails, the declaration has stopped
+ * answering the identity question on this side and the inferred tuple is the
+ * honest fallback.
+ */
+function declaredTagIdentifies(
+  variants: readonly unknown[],
+  declared: string,
+): boolean {
+  const seen = new Set<string | number | boolean>();
+  let objectArms = 0;
+  for (const variant of variants) {
+    const classified = classifySchemaNode(variant);
+    if (classified.kind !== "object") continue;
+    objectArms += 1;
+    const values = discriminantValues(classified.properties[declared]);
+    if (values === null) return false;
+    for (const value of values) {
+      if (seen.has(value)) return false;
+      seen.add(value);
+    }
+  }
+  return objectArms > 0;
+}
+
+/**
  * The index of the next variant that IS this previous variant - the same arm,
  * edited - or `-1` when the arm genuinely has no successor.
  *
@@ -940,19 +998,43 @@ function findDiscriminatedSuccessor(
 ): number {
   const previous = classifySchemaNode(previousVariant);
   if (previous.kind !== "object") return -1;
-  const nextFields = new Set(discriminatorFields(nextVariants));
-  const inferred = discriminatorFields(previousVariants).filter((field) =>
-    nextFields.has(field),
-  );
   // The DECLARED field wins outright when the union names one and that field
   // still tells the arms apart on both sides. Identity is then that field
   // ALONE: a secondary literal moving on an arm whose declared tag is
   // unchanged is an EDIT to that arm, and folding it into a tuple made the
   // arm unmatchable - which handed its dropped fields to the replacement
-  // exemption. The tuple survives only as the fallback for a plain
-  // `z.union(...)`, where nothing declares which field carries identity.
-  const fields =
-    declared !== null && inferred.includes(declared) ? [declared] : inferred;
+  // exemption.
+  //
+  // Matched as a VALUE SET, not a single literal. A declared tag may
+  // legitimately group several values in ONE arm - this repo does it with
+  // `kind: z.enum(["subagent", "monitor"])` in `agent/gui/subscribe.ts` - and
+  // `discriminatorFields` cannot see such a column, because INFERENCE has to
+  // reject it (nothing says the grouping is deliberate). A declared tag needs
+  // no inference: the union already named the column. Requiring it to survive
+  // inference therefore silently dropped every multi-value union straight back
+  // onto the incidental-tuple fallback, i.e. back into this exact defect.
+  if (
+    declared !== null &&
+    declaredTagIdentifies(previousVariants, declared) &&
+    declaredTagIdentifies(nextVariants, declared)
+  ) {
+    const previousValues = discriminantValues(previous.properties[declared]);
+    if (previousValues === null) return -1;
+    return nextVariants.findIndex((nextVariant) => {
+      const next = classifySchemaNode(nextVariant);
+      if (next.kind !== "object") return false;
+      const nextValues = discriminantValues(next.properties[declared]);
+      return nextValues !== null && sameValueSet(previousValues, nextValues);
+    });
+  }
+  const nextFields = new Set(discriminatorFields(nextVariants));
+  const inferred = discriminatorFields(previousVariants).filter((field) =>
+    nextFields.has(field),
+  );
+  // The tuple is the fallback: a plain `z.union(...)` declares nothing, and a
+  // union whose declared column stopped telling the arms apart is no longer
+  // answering the identity question either.
+  const fields = inferred;
   if (fields.length === 0) return -1;
   const identity = fields.map(
     (field) => [field, discriminantValue(previous.properties[field])] as const,
@@ -1025,6 +1107,12 @@ const NON_CONSTRAINING_SCHEMA_KEYS = new Set([
   "readOnly",
   "writeOnly",
   "$comment",
+  // OUR OWN metadata, not the peer's contract. It records which column a
+  // union was DECLARED on so arm identity can be resolved; it constrains no
+  // value, and two schemas differing only in it accept and emit byte-identical
+  // JSON. Left in, a union that merely moves its declaration from one valid
+  // tag column to another reads as a changed schema.
+  DECLARED_DISCRIMINATOR_KEY,
 ]);
 
 /**
@@ -1681,9 +1769,16 @@ export function findBreakingChange(
       };
     }
     for (const field of Object.keys(previous.properties)) {
+      // `constrainingShape`, not raw `JSON.stringify`: this decides whether a
+      // MAJOR is justified, and the raw node carries annotation-only keywords
+      // plus our own `x-traycer-discriminator` stamp. A nested union that
+      // moves its declaration between two equally valid tag columns emits
+      // identical JSON, and comparing raw would have called that
+      // `schema-changed` and justified a major on metadata this file wrote
+      // itself.
       if (
-        JSON.stringify(previous.properties[field]) !==
-        JSON.stringify(next.properties[field])
+        constrainingShape(previous.properties[field]) !==
+        constrainingShape(next.properties[field])
       ) {
         return { kind: "field", detail: field, reason: "schema-changed" };
       }

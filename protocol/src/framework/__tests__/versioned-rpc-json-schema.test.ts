@@ -537,6 +537,71 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
     );
   });
 
+  it("does not let the discriminator STAMP alone justify a major bump", () => {
+    // `x-traycer-discriminator` is metadata this framework writes onto the
+    // emitted schema so arm identity can be resolved; it constrains no value.
+    // A union that merely moves its declaration between two equally valid tag
+    // columns accepts and emits byte-identical JSON - so it is NOT a breaking
+    // change, and the major must still be rejected as "could have shipped as a
+    // minor". Compared raw, the stamp differs and would have justified a major
+    // on our own bookkeeping.
+    const stampV10 = defineRpcContract({
+      method: "stampOnly",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("a"), outcome: z.literal("x") }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const stampV20 = defineRpcContract({
+      method: "stampOnly",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        // Identical arms; only the DECLARED column moved. `outcome` is just as
+        // valid a tag here - each arm pins it to its own literal.
+        row: z.discriminatedUnion("outcome", [
+          z.object({ kind: z.literal("a"), outcome: z.literal("x") }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const stampUpgrade = defineUpgradePath<typeof stampV10, typeof stampV20>({
+      from: stampV10.schemaVersion,
+      to: stampV20.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({ row: response.row }),
+    });
+    const registry = {
+      stampOnly: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: stampV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: stampV20,
+              upgradeFromPreviousVersion: stampUpgrade,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Major bump 1 -> 2 for method 'stampOnly' is not a breaking change (could have shipped as a minor)",
+    );
+  });
+
   it("accepts a major bump that adds a newly required field", () => {
     const requiredV10 = defineRpcContract({
       method: "required",
@@ -1265,6 +1330,83 @@ describe("response-lane value-growth strictness", () => {
     // dropped FIELD by declaring it ahead of the moved tag.
     expect(() => validateVersionedRpcRegistry(registry)).toThrow(
       "Minor 1.1 for method 'declaredTagEdit' response drops enum value 'x' from 1.0",
+    );
+  });
+
+  it("honours a declared discriminator whose arm groups SEVERAL tag values", () => {
+    // A declared tag may legitimately group values in one arm - this repo does
+    // it with `kind: z.enum(["subagent", "monitor"])` in `agent/gui/subscribe`.
+    // INFERENCE has to reject such a column (nothing distinguishes a deliberate
+    // grouping from an ordinary enum field), so requiring the declared field to
+    // survive inference dropped every multi-value union back onto the
+    // incidental-tuple fallback - i.e. straight back into the defect the two
+    // arms above pin. Here `kind` is unchanged, a secondary literal moves, and
+    // a field is dropped: an EDIT, and its reduction must be reported rather
+    // than exempted as an arm replacement.
+    const groupedV10 = defineRpcContract({
+      method: "declaredTagGrouped",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            outcome: z.literal("x"),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("command"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const groupedV11 = defineRpcContract({
+      method: "declaredTagGrouped",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Same arm - the `kind` VALUE SET is untouched - with the secondary
+          // literal moved and `value` dropped.
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            outcome: z.literal("z"),
+          }),
+          z.object({ kind: z.literal("command"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const groupedUpgrade = defineUpgradePath<
+      typeof groupedV10,
+      typeof groupedV11
+    >({
+      from: groupedV10.schemaVersion,
+      to: groupedV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "command"
+            ? response.row
+            : { kind: response.row.kind, outcome: "z" as const },
+      }),
+    });
+    const registry = {
+      declaredTagGrouped: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: groupedV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: groupedV11,
+              upgradeFromPreviousVersion: groupedUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'declaredTagGrouped' response drops enum value 'x' from 1.0",
     );
   });
 
