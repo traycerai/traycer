@@ -168,19 +168,24 @@ function EmbeddedProviderRateLimitSettingsCard({
     providerId,
     profileId,
   );
+  const presentedIsError = isRateLimitQueryFailure({
+    isError: query.isError,
+    error: query.error,
+    queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
+    followUpExhausted,
+  });
+  const recoveringUnheardRead = isRecoveringUnheardRead({
+    isError: query.isError,
+    presentedIsError,
+  });
 
   return (
     <div className="flex flex-col gap-3 border-t border-border/60 pt-3">
       <div className="text-ui-sm font-medium text-foreground">Usage limits</div>
       <ProviderRateLimitBody
         isPending={query.isPending}
-        isFetching={query.isFetching}
-        isError={isRateLimitQueryFailure({
-          isError: query.isError,
-          error: query.error,
-          queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
-          followUpExhausted,
-        })}
+        isFetching={query.isFetching || recoveringUnheardRead}
+        isError={presentedIsError}
         envelope={query.data}
         codexResetAction={resolveCodexResetCreditAction(
           providerId,
@@ -191,6 +196,22 @@ function EmbeddedProviderRateLimitSettingsCard({
       />
     </div>
   );
+}
+
+/**
+ * Whether this read failed but is not being PRESENTED as a failure, because
+ * the queue scheduled a delayed collection for it.
+ *
+ * Folded into the body's `isFetching` so the section reads as loading for that
+ * window. Suppressing the error alone is not enough here: with no cached
+ * envelope the view resolver would fall through to `empty` and render a blank
+ * usage card until the collection landed.
+ */
+function isRecoveringUnheardRead(query: {
+  readonly isError: boolean;
+  readonly presentedIsError: boolean;
+}): boolean {
+  return query.isError && !query.presentedIsError;
 }
 
 function ProviderRateLimitSettingsCard({
@@ -228,6 +249,16 @@ function ProviderRateLimitSettingsCard({
     providerId,
     profileId,
   );
+  const presentedIsError = isRateLimitQueryFailure({
+    isError: query.isError,
+    error: query.error,
+    queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
+    followUpExhausted,
+  });
+  const recoveringUnheardRead = isRecoveringUnheardRead({
+    isError: query.isError,
+    presentedIsError,
+  });
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">
@@ -245,13 +276,8 @@ function ProviderRateLimitSettingsCard({
       </div>
       <ProviderRateLimitBody
         isPending={query.isPending}
-        isFetching={query.isFetching || isRefreshing}
-        isError={isRateLimitQueryFailure({
-          isError: query.isError,
-          error: query.error,
-          queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
-          followUpExhausted,
-        })}
+        isFetching={query.isFetching || isRefreshing || recoveringUnheardRead}
+        isError={presentedIsError}
         envelope={query.data}
         codexResetAction={resolveCodexResetCreditAction(
           providerId,

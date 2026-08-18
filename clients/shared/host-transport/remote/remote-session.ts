@@ -634,6 +634,19 @@ export class RemoteSession<
    *
    * Any failure AFTER the request frame is enqueued still surfaces as a plain
    * `HostRpcError` — the host may already have begun applying it.
+   *
+   * The RESPONSE TIMEOUT is the one carve-out, and it is not an exception to
+   * that reasoning but an expression of it: the request provably reached the
+   * wire and we merely stopped waiting, which is exactly what
+   * `HostTransportFailureError` means. It stays non-retryable (only
+   * `RetryableTransportError` asks for another attempt), so "may already have
+   * been applied" still holds — the class says dispatched-but-unheard, not
+   * safe-to-resend. `WsRpcClient` has always drawn the line here
+   * (`transientFailure` picks the transport failure once `requestSent`), so
+   * this is the two transports agreeing rather than a new semantic. A caller
+   * that can recover from an unheard read — `host.getRateLimitUsage` collects
+   * the host's gauge cache shortly after — can only do so if it can TELL, and
+   * a plain `HostRpcError` reads as a delivered answer.
    */
   async sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
@@ -2951,8 +2964,11 @@ function abortedRequestError(
   });
 }
 
-function unaryTimeoutError(requestId: string, method: string): HostRpcError {
-  return new HostRpcError({
+function unaryTimeoutError(
+  requestId: string,
+  method: string,
+): HostTransportFailureError {
+  return new HostTransportFailureError({
     code: "RPC_ERROR",
     message: `Remote unary '${method}' timed out awaiting a response`,
     requestId,

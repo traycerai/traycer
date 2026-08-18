@@ -184,6 +184,30 @@ describe("resolveProviderRateLimitViewState", () => {
       lastGoodAt: null,
     });
   });
+
+  // The Settings half of the still-running suppression. Suppressing `isError`
+  // alone left this resolver falling through to `empty`, so the usage card
+  // rendered BLANK for the whole collection window and then popped to data -
+  // the silent half of the transition the suppression exists to remove.
+  it("is loading, not empty, while a suppressed read is being collected", () => {
+    const state = resolveProviderRateLimitViewState({
+      isPending: false,
+      isFetching: true,
+      isError: false,
+      envelope: undefined,
+    });
+    expect(state.kind).toBe("loading");
+  });
+
+  it("is still empty when nothing is in flight and nothing failed", () => {
+    const state = resolveProviderRateLimitViewState({
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      envelope: undefined,
+    });
+    expect(state.kind).toBe("empty");
+  });
 });
 
 describe("resolvePopoverProviderRateLimitState", () => {

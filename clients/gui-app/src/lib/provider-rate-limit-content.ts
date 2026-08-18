@@ -86,6 +86,14 @@ export function resolveProviderRateLimitViewState(
     };
   }
   if (props.isError) return { kind: "error" };
+  // No reading and no failure to report, but work is in flight - which now
+  // includes a read whose failure was SUPPRESSED because the queue scheduled a
+  // delayed collection for it (callers fold that window into `isFetching`).
+  // Without this the section fell through to `empty` and rendered a blank card
+  // for the whole recovery window, then popped to data - the silent half of
+  // the visible-failure-then-silent-success pair. `empty` still covers the
+  // genuinely-nothing case, where nothing is fetching.
+  if (props.isFetching) return { kind: "loading" };
   return { kind: "empty" };
 }
 

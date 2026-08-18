@@ -2402,10 +2402,18 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           () => null,
           (reason: unknown) => reason,
         );
-        expect(error).toBeInstanceOf(HostRpcError);
         expect((error as HostRpcError).message).toContain(
           "timed out awaiting a response",
         );
+        // Dispatched-but-unheard, not a delivered answer. A caller that can
+        // recover from an unheard read (the rate-limit queue collects the
+        // host's gauge cache shortly after) can only do so if it can TELL, and
+        // a plain `HostRpcError` reads as an answer. Same line `WsRpcClient`
+        // draws once the request is on the wire.
+        expect(error).toBeInstanceOf(HostTransportFailureError);
+        // ...but still NOT retryable: the host may already have applied it, so
+        // nothing should resend on its own.
+        expect(error).not.toBeInstanceOf(RetryableTransportError);
         expect(defaultedSettled).toBe(false);
       } finally {
         session.close();
