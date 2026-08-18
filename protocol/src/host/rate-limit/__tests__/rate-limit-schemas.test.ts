@@ -1261,23 +1261,34 @@ describe("cursor rate-limit arm", () => {
   const CYCLE_START = 1786921855000;
   const CYCLE_END = 1789600255000;
 
+  const CYCLE_MINUTES = (CYCLE_END - CYCLE_START) / 60_000;
+
   const cursorAvailable = {
     provider: "cursor",
     available: true,
     cycleStart: CYCLE_START,
     cycleEnd: CYCLE_END,
-    cycle: {
-      usedPercent: 72.115,
+    // The two Spending-page buckets; the blended included-usage pool travels
+    // as the money fields below, never as a window.
+    cursorModels: {
+      usedPercent: 6.0925,
       resetsAt: CYCLE_END,
-      durationMinutes: (CYCLE_END - CYCLE_START) / 60_000,
+      durationMinutes: CYCLE_MINUTES,
+    },
+    otherModels: {
+      usedPercent: 38.446,
+      resetsAt: CYCLE_END,
+      durationMinutes: CYCLE_MINUTES,
     },
     includedLimitUsd: 400,
-    usedUsd: 288.46,
-    remainingUsd: 111.54,
-    spendLimitType: "user",
-    spendLimitUsd: 100,
-    spendLimitRemainingUsd: 100,
-    displayMessage: "You've used 72% of your included usage",
+    usedUsd: 314.08,
+    remainingUsd: 85.92,
+    onDemandLimitType: "user",
+    // Cents on the wire: a $1 on-demand limit arrives as individualLimit 100.
+    onDemandLimitUsd: 1,
+    onDemandUsedUsd: null,
+    onDemandRemainingUsd: 1,
+    displayMessage: "You've used 79% of your included usage",
   } as const;
 
   // The exact row a pre-Cursor host returns for cursor today.
@@ -1307,21 +1318,24 @@ describe("cursor rate-limit arm", () => {
     ).toThrow();
   });
 
-  // The wire-boundary invariant: the host synthesizes the window's reset FROM
-  // the cycle end, so the two can never disagree on the same payload.
-  it("rejects a measured cycle whose resetsAt disagrees with cycleEnd", () => {
-    expect(() =>
-      providerRateLimitsSchema.parse({
-        ...cursorAvailable,
-        cycle: { ...cursorAvailable.cycle, resetsAt: CYCLE_END + 1 },
-      }),
-    ).toThrow();
+  // The wire-boundary invariant: the host synthesizes each window's reset
+  // FROM the cycle end, so they can never disagree on the same payload.
+  it("rejects a measured bucket whose resetsAt disagrees with cycleEnd", () => {
+    for (const key of ["cursorModels", "otherModels"] as const) {
+      expect(() =>
+        providerRateLimitsSchema.parse({
+          ...cursorAvailable,
+          [key]: { ...cursorAvailable[key], resetsAt: CYCLE_END + 1 },
+        }),
+      ).toThrow();
+    }
   });
 
   it("accepts an unmeasured snapshot that keeps only the cycle bounds", () => {
     const unmeasured = {
       ...cursorAvailable,
-      cycle: null,
+      cursorModels: null,
+      otherModels: null,
       includedLimitUsd: null,
       usedUsd: null,
       remainingUsd: null,

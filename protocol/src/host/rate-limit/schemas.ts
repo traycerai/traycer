@@ -311,56 +311,73 @@ const grokRateLimitsSchema = z
 // session out of the OS keychain would report whichever account happened to
 // run `cursor-agent login`, which need not be the key's owner.
 //
-// Hybrid shape, like grok's: a synthesized `cycle` window (so severity
-// rollups, a2a `rateLimitStatus`, and GUI status logic reuse the shared window
-// primitive with no special-casing) plus the raw money fields.
+// Hybrid shape, like grok's: synthesized windows (so severity rollups, a2a
+// `rateLimitStatus`, and GUI status logic reuse the shared window primitive
+// with no special-casing) plus the raw money fields.
+//
+// TWO windows, mirroring the buckets Cursor's own Spending page renders -
+// "Cursor Models" (the payload's `autoPercentUsed`; Cursor Grok + Composer)
+// and "Other Models" (`apiPercentUsed`; named third-party models). The
+// payload ALSO carries a blended included-usage pool (`totalSpend`/`limit`,
+// the number `displayMessage` narrates), but that percentage appears nowhere
+// on Cursor's dashboard, and rendering it produced a rail (78%) that
+// contradicted the Spending page beside it (38%) - a confirmed live-account
+// mismatch. The blended pool therefore travels as MONEY only (`usedUsd` /
+// `includedLimitUsd` / `remainingUsd`), never as a window.
 //
 // Every payload-derived field is nullable because the endpoint speaks proto3
 // JSON, which OMITS zero-valued fields entirely - an account with no
-// usage-based spend simply has no `spendLimitUsage.totalSpend` key rather than
-// a `0`. Absent therefore cannot be distinguished from zero here, and the host
-// sends null rather than inventing either.
+// usage-based spend simply has no `spendLimitUsage.individualUsed` key rather
+// than a `0`. Absent therefore cannot be distinguished from zero here, and
+// the host sends null rather than inventing either.
 //
-// Money is USD. `planUsage`'s wire values are integer CENTS and the host
-// divides, so no consumer has to know the unit. The spend-limit fields are a
-// deliberate exception: they are reported in whole dollars on the same
-// payload (a `100` spend limit alongside a `40000` plan limit is $100 against
-// $400, not $1), so they are carried through as-is and named to say so.
+// ALL money is USD, and EVERY wire money value is integer CENTS the host
+// divides - including the on-demand (spend-limit) fields: a live account with
+// a $1 on-demand limit reports `individualLimit: 100`. (An earlier revision
+// read those as whole dollars and displayed $100; the cents rule has no
+// exceptions.) The on-demand fields carry the dashboard's "On-Demand
+// Spending" numbers and are named for it.
 const cursorRateLimitsSchema = z
   .object({
     provider: z.literal(rateLimitCapableProviderIdSchema.enum.cursor),
     available: z.literal(true),
     cycleStart: z.number().nullable(),
     cycleEnd: z.number().nullable(),
-    cycle: providerRateLimitWindowSchema.nullable(),
+    cursorModels: providerRateLimitWindowSchema.nullable(),
+    otherModels: providerRateLimitWindowSchema.nullable(),
     includedLimitUsd: z.number().nullable(),
     usedUsd: z.number().nullable(),
     remainingUsd: z.number().nullable(),
-    spendLimitType: z.string().nullable(),
-    spendLimitUsd: z.number().nullable(),
-    spendLimitRemainingUsd: z.number().nullable(),
-    // Cursor's own rendering of the headline number ("You've used 72% of your
-    // included usage"). Carried so the GUI can show the provider's wording
-    // rather than a second, subtly different sentence derived from `cycle`.
+    onDemandLimitType: z.string().nullable(),
+    onDemandLimitUsd: z.number().nullable(),
+    onDemandUsedUsd: z.number().nullable(),
+    onDemandRemainingUsd: z.number().nullable(),
+    // Cursor's own rendering of the blended headline ("You've used 79% of
+    // your included usage"). Carried so a consumer can show the provider's
+    // wording for the pool the money fields describe.
     displayMessage: z.string().nullable(),
   })
   .superRefine((value, ctx) => {
     // Same invariant grok's arm enforces, for the same reason: the host
-    // synthesizes the window's reset FROM the billing-cycle end, so the two
+    // synthesizes each window's reset FROM the billing-cycle end, so the two
     // denote one instant by construction. `cycleEnd` is kept as its own field
-    // so the cycle bounds survive a snapshot whose usage could not be measured
-    // (`cycle` null, `cycleEnd` still known). Enforce it at the wire boundary
-    // so a measured cycle can never omit or disagree with the known reset.
-    if (
-      value.cycleEnd !== null &&
-      value.cycle !== null &&
-      value.cycle.resetsAt !== value.cycleEnd
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "cursor cycle.resetsAt must equal cycleEnd when cycle is set",
-        path: ["cycle", "resetsAt"],
-      });
+    // so the cycle bounds survive a snapshot whose usage could not be
+    // measured (both windows null, `cycleEnd` still known). Enforce it at the
+    // wire boundary so a measured window can never omit or disagree with the
+    // known reset.
+    for (const key of ["cursorModels", "otherModels"] as const) {
+      const window = value[key];
+      if (
+        value.cycleEnd !== null &&
+        window !== null &&
+        window.resetsAt !== value.cycleEnd
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `cursor ${key}.resetsAt must equal cycleEnd when the window is set`,
+          path: [key, "resetsAt"],
+        });
+      }
     }
   });
 

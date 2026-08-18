@@ -195,21 +195,30 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
     ].join("\n");
   }
   if (rateLimits.provider === "cursor") {
+    const hasBucketWindow =
+      rateLimits.cursorModels !== null || rateLimits.otherModels !== null;
     return [
-      formatWindowLine("included usage", rateLimits.cycle),
+      // The two buckets Cursor's own Spending page renders; the blended pool
+      // travels as the money line below, never as a percentage.
+      rateLimits.cursorModels === null
+        ? null
+        : formatWindowLine("cursor models", rateLimits.cursorModels),
+      rateLimits.otherModels === null
+        ? null
+        : formatWindowLine("other models", rateLimits.otherModels),
       rateLimits.includedLimitUsd === null
         ? null
         : `included credits: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`,
-      // Only worth a line when the cycle window did not already carry the
-      // reset - otherwise it restates the instant `formatWindowLine` printed.
-      rateLimits.cycle !== null ||
+      // Only worth a line when no bucket window already carried the reset -
+      // otherwise it restates the instant `formatWindowLine` printed.
+      hasBucketWindow ||
       rateLimits.cycleStart === null ||
       rateLimits.cycleEnd === null
         ? null
         : `billing cycle: ${formatTimestamp(rateLimits.cycleStart)} - ${formatTimestamp(rateLimits.cycleEnd)}`,
-      rateLimits.spendLimitUsd === null
+      rateLimits.onDemandLimitUsd === null
         ? null
-        : `spend limit${rateLimits.spendLimitType === null ? "" : ` (${rateLimits.spendLimitType})`}: ${formatNumber(rateLimits.spendLimitRemainingUsd)}/${formatNumber(rateLimits.spendLimitUsd)} remaining`,
+        : `on-demand${rateLimits.onDemandLimitType === null ? "" : ` (${rateLimits.onDemandLimitType})`}: ${formatNumber(rateLimits.onDemandUsedUsd)}/${formatNumber(rateLimits.onDemandLimitUsd)} used`,
     ]
       .filter((line): line is string => line !== null)
       .join("\n");

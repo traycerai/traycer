@@ -71,10 +71,13 @@ export function providerRateLimitWindows(
       // usage percentage) carries no window.
       return rateLimits.period !== null ? [rateLimits.period] : [];
     case "cursor":
-      // Hybrid arm, like grok's: the synthesized billing-cycle window feeds the
+      // Hybrid arm, like grok's: the synthesized per-bucket windows ("Cursor
+      // Models" / "Other Models", mirroring Cursor's Spending page) feed the
       // shared severity/rollup path. A snapshot whose usage could not be
-      // measured (no plan limit reported) carries no window.
-      return rateLimits.cycle !== null ? [rateLimits.cycle] : [];
+      // measured (no bucket percentages reported) carries no windows.
+      return [rateLimits.cursorModels, rateLimits.otherModels].filter(
+        (window): window is ProviderRateLimitWindow => window !== null,
+      );
     case "opencode":
       return [rateLimits.fiveHour, rateLimits.weekly, rateLimits.monthly];
     case "openrouter":

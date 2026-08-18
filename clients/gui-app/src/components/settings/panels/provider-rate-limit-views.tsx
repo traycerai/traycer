@@ -1371,21 +1371,21 @@ export function GrokRateLimitView({
 }
 
 /**
- * Cursor's usage detail. Structurally grok's twin - a synthesized billing-cycle
- * window plus money rows - so it reuses the same `RateLimitWindowRow`, and its
- * "% used · Resets <date>" reads identically to codex/claude.
+ * Cursor's usage detail. Structurally grok's twin - synthesized billing-cycle
+ * windows plus money rows - so it reuses the same `RateLimitWindowRow`, and
+ * its "% used · Resets <date>" reads identically to codex/claude.
  *
- * Two shapes are handled:
+ * The two bars are the two buckets Cursor's own Spending page renders -
+ * "Cursor Models" (Cursor Grok + Composer) and "Other Models" (named
+ * third-party models) - deliberately NOT the blended included-usage
+ * percentage, which appears nowhere on that dashboard and contradicted it in
+ * a live comparison. When neither bucket was reported the cycle dates still
+ * render, keeping the card meaningful rather than blank - the same fallback
+ * grok uses.
  *
- * - `cycle` present -> the included-usage bar. Its label is the cycle cadence
- *   derived from the window duration ("Monthly"), not a provider token, since
- *   Cursor reports cycle bounds rather than a cadence name.
- * - `cycle` null -> an account whose plan limit wasn't reported, so no
- *   percentage is computable. The cycle dates still render, keeping the card
- *   meaningful rather than blank - the same fallback grok uses.
- *
- * Overview keeps the usage bar and the remaining included credits; the spend
- * limit is single-provider-tab detail, matching how grok/OpenRouter trim.
+ * Overview keeps the bars and the remaining included credits; the included
+ * total and on-demand rows are single-provider-tab detail, matching how
+ * grok/OpenRouter trim.
  */
 export function CursorRateLimitView({
   data,
@@ -1397,16 +1397,26 @@ export function CursorRateLimitView({
   const overview = isOverviewVariant(variant);
   return (
     <div className="flex flex-col gap-3">
-      {data.cycle !== null ? (
-        <RateLimitWindowRow
-          label={formatWindowDuration(data.cycle.durationMinutes)}
-          window={data.cycle}
-        />
-      ) : (
+      {data.cursorModels === null && data.otherModels === null ? (
         <ProviderTextRow
           label="Billing cycle"
           value={formatBillingRange(data.cycleStart, data.cycleEnd)}
         />
+      ) : (
+        <>
+          {data.cursorModels !== null ? (
+            <RateLimitWindowRow
+              label="Cursor Models"
+              window={data.cursorModels}
+            />
+          ) : null}
+          {data.otherModels !== null ? (
+            <RateLimitWindowRow
+              label="Other Models"
+              window={data.otherModels}
+            />
+          ) : null}
+        </>
       )}
       <ProviderNumberRow
         label="Included credits left"
@@ -1421,13 +1431,13 @@ export function CursorRateLimitView({
             format={formatProviderCurrency}
           />
           <ProviderNumberRow
-            label="Spend limit"
-            value={data.spendLimitUsd}
+            label="On-demand limit"
+            value={data.onDemandLimitUsd}
             format={formatProviderCurrency}
           />
           <ProviderNumberRow
-            label="Spend limit left"
-            value={data.spendLimitRemainingUsd}
+            label="On-demand used"
+            value={data.onDemandUsedUsd}
             format={formatProviderCurrency}
           />
         </>

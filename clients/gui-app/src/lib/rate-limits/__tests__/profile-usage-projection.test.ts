@@ -143,23 +143,26 @@ function grok(
 }
 
 function cursor(
-  cycle: ProviderRateLimitWindow | null,
+  otherModels: ProviderRateLimitWindow | null,
+  cursorModels: ProviderRateLimitWindow | null,
 ): Extract<ProviderRateLimits, { provider: "cursor"; available: true }> {
   const cycleEnd = NOW + 31 * 24 * 60 * 60 * 1000;
   return {
     provider: "cursor",
     available: true,
     cycleStart: NOW,
-    cycleEnd: cycle === null ? cycleEnd : cycle.resetsAt,
-    cycle,
-    // A reachable account that reported no plan allowance: proto3 JSON omits
-    // zero-valued fields, so these arrive absent rather than as 0.
+    cycleEnd: otherModels?.resetsAt ?? cursorModels?.resetsAt ?? cycleEnd,
+    cursorModels,
+    otherModels,
+    // A reachable account that reported no bucket percentages: proto3 JSON
+    // omits zero-valued fields, so these arrive absent rather than as 0.
     includedLimitUsd: null,
     usedUsd: null,
     remainingUsd: null,
-    spendLimitType: "user",
-    spendLimitUsd: null,
-    spendLimitRemainingUsd: null,
+    onDemandLimitType: "user",
+    onDemandLimitUsd: null,
+    onDemandUsedUsd: null,
+    onDemandRemainingUsd: null,
     displayMessage: null,
   };
 }
@@ -347,13 +350,16 @@ describe("projectProfileUsage", () => {
     });
   });
 
-  it("projects a cycle-less Cursor snapshot as unmeasured, not unavailable", () => {
-    // Cursor synthesizes its cycle window only when the payload reports a plan
-    // limit, and proto3 JSON omits zero-valued fields - so a reachable account
-    // can legitimately arrive with `cycle: null`. Without the unmeasured arm it
-    // renders as unavailable/`missing_windows`, reading as a fetch or account
-    // failure purely because Cursor reported no allowance to meter.
-    expect(project("ok", NOW, envelope(cursor(null), NOW), false)).toEqual({
+  it("projects a bucket-less Cursor snapshot as unmeasured, not unavailable", () => {
+    // Cursor synthesizes its bucket windows only when the payload reports the
+    // Spending-page percentages, and proto3 JSON omits zero-valued fields - so
+    // a reachable account can legitimately arrive with both windows null.
+    // Without the unmeasured arm it renders as unavailable/`missing_windows`,
+    // reading as a fetch or account failure purely because Cursor reported
+    // nothing to meter.
+    expect(
+      project("ok", NOW, envelope(cursor(null, null), NOW), false),
+    ).toEqual({
       kind: "not_checked",
       severity: "unknown",
       compactWindow: null,
@@ -362,18 +368,24 @@ describe("projectProfileUsage", () => {
     });
   });
 
-  it("still meters a Cursor snapshot that reports a cycle window", () => {
-    // Guards the arm above from over-reaching: a measured cycle must keep its
-    // percentage rather than being swallowed as unmeasured.
+  it("meters both Cursor buckets and headlines the most consumed one", () => {
+    // Guards the unmeasured arm from over-reaching, and pins the live-account
+    // regression: the compact bar must be a Spending-page bucket ("Other
+    // Models" 38%), never the blended included-usage pool (78%) that appears
+    // nowhere on Cursor's dashboard.
     const projection = project(
       "ok",
       NOW,
-      envelope(cursor(window(72, 44_640, NOW + 1)), NOW),
+      envelope(
+        cursor(window(38, 44_640, NOW + 1), window(6, 44_640, NOW + 1)),
+        NOW,
+      ),
       false,
     );
     expect(projection.kind).toBe("detail");
-    expect(projection.windows).toHaveLength(1);
-    expect(projection.compactWindow?.window.usedPercent).toBe(72);
+    expect(projection.windows).toHaveLength(2);
+    expect(projection.compactWindow?.name).toBe("Other Models");
+    expect(projection.compactWindow?.window.usedPercent).toBe(38);
   });
 
   it("selects the most consumed live window and ignores expired windows", () => {
