@@ -92,6 +92,60 @@ const testFileGlobs = [
   "**/*.{test,spec}.{ts,tsx}",
 ];
 
+// ── App-wide host reads that are RIGHT where they are, exempted per FILE. ──
+//
+// `readPath` (D12) bans the app-wide reads across the Epic canvas subtree and
+// `src/hooks/epic/**` (see the allowlist note in
+// `traycer-host-selection-layer-rules.mjs`). Each file below carries a reason
+// an app-wide read is the correct one THERE; a file without a reason does not
+// belong here, and a reason that stops being true retires its line. Single
+// files, never a directory: a directory glob would let the next file dropped
+// in inherit the exemption unread.
+const epicCanvasAppWideReadExemptions = [
+  // The canvas host hook's own documented FALLBACK for a surface rendered
+  // outside any Epic session (a Markdown reference outside a canvas); inside a
+  // session the fallback is unreachable. It is the mechanism the rest of the
+  // subtree resolves through, so it is the one place the read may live.
+  "src/components/epic-canvas/hooks/use-canvas-host-id.ts",
+  // Clone-not-migrate (D5/D7): the clone TARGET is, by design, the host the
+  // app is now pointed at - a dead tile's chat is cloned onto the effective
+  // host. Reading anything else here would clone onto a host nobody chose.
+  "src/components/epic-canvas/renderers/use-chat-clone-on-host-switch.ts",
+];
+
+// `src/hooks/epic/**` hooks that resolve the app-wide client BY CALLER: each is
+// mounted only from an app-wide surface (the epics list, the home page, the
+// tab strip, the epic route above its session), never from inside an Epic
+// session. A caller inside a session must use the session-scoped sibling or a
+// `…ForClient` variant - never add a session-mounted call site to one of these.
+const hooksEpicAppWideByCallerExemptions = [
+  // Home page history (`hooks/home/use-history-query.ts`).
+  "src/hooks/epic/use-epic-get-task-contexts-query.ts",
+  // Epics list panel.
+  "src/hooks/epic/use-task-delete-worktree-candidates-query.ts",
+  "src/hooks/epic/use-epic-title-mutation.ts",
+  "src/hooks/epic/use-epic-batch-delete-mutation.ts",
+  // Epics list panel + tab strip.
+  "src/hooks/epic/use-epic-set-pinned-mutation.ts",
+  // Tab strip.
+  "src/hooks/epic/use-epic-task-pinned-states-query.ts",
+  // Sweep-worktrees dialog (app-wide).
+  "src/hooks/epic/use-epic-sweep-worktree-candidates-query.ts",
+  // Mounted by the epic ROUTE, above the session provider; its reader (the
+  // home page's recents) is on the same app-wide client.
+  "src/hooks/epic/use-epic-record-viewed-mutation.ts",
+  // `useEpicCreateChat` is the composer PLACEMENT seam (ruled app-wide, with a
+  // pre-flight host fence); every session-scoped hook in this file already
+  // resolves `useEpicSessionHostClient` or takes a client.
+  "src/hooks/epic/use-epic-chat-mutations.ts",
+];
+
+// The dead-tile "open in editor" opener is a FOLLOWING surface with no picker
+// of its own (selection model §2), local-only by its own gate.
+const followingSurfaceAppWideReadExemptions = [
+  "src/components/worktree/open-in-editor-button.tsx",
+];
+
 const analyticsAdapterFiles = [
   "src/lib/analytics.ts",
   "src/lib/__tests__/analytics.test.ts",
@@ -421,6 +475,37 @@ export default tseslint.config(
       "@typescript-eslint/no-restricted-imports": importRestrictions(
         "posthog",
         "readPath",
+        "kernel",
+      ),
+    },
+  },
+  {
+    // `src/hooks/epic/**` is inside the read-path allowlist's `src/hooks/**`
+    // (the wrapper-hook layer legitimately resolves default clients), but the
+    // Epic hooks are mounted by Epic-session surfaces and were where three of
+    // PR #1243's per-push findings lived. Re-impose `readPath` there - the
+    // full partition, so nothing is dropped - minus the by-caller exemptions,
+    // each of which names its app-wide caller above.
+    files: ["src/hooks/epic/**/*.{ts,tsx}"],
+    ignores: [...testFileGlobs, ...hooksEpicAppWideByCallerExemptions],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
+        "readPath",
+        "kernel",
+      ),
+    },
+  },
+  {
+    // The reasoned app-wide reads, per FILE: their partition (boundary +
+    // posthog + kernel) minus `readPath`.
+    files: [
+      ...epicCanvasAppWideReadExemptions,
+      ...followingSurfaceAppWideReadExemptions,
+    ],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
         "kernel",
       ),
     },

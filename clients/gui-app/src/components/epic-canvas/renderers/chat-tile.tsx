@@ -99,8 +99,8 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostBinding } from "@/lib/host";
-import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   useHostReachability,
   resolvedHostLabel,
@@ -316,24 +316,30 @@ export function ChatTile(props: ChatTileProps) {
   // never a reactive active-host read - tabs are bound to a host for life
   // and must not change behavior when the active host swaps).
   const hostBinding = useHostBinding();
-  const effectiveHostId = useEffectiveHostId();
+  // The host whose PROJECTION this tile's record gate reads: the Epic
+  // session's (the canvas host), not the app-wide effective one this used to
+  // compare against. "Same host" here means "same as the projection", and
+  // that projection is the session's - which for the whole of a re-point in
+  // flight is not the effective host. The three record-gate readers
+  // (`tab-group-view`, the route sync, this) resolve the one identity.
+  const projectionHostId = useCanvasHostId();
   const [isCrossHostOpen] = useState(() => {
-    // A null active host id is ignorance (binding still resolving), not
-    // evidence of a cross-host open - exempting on it would reopen the
-    // subscribe-first race for every chat mounted during bootstrap. Only a
-    // KNOWN, different active host earns the exemption.
+    // A null host id is ignorance (binding still resolving), not evidence of
+    // a cross-host open - exempting on it would reopen the subscribe-first
+    // race for every chat mounted during bootstrap. Only a KNOWN, different
+    // host earns the exemption.
     //
     // RESOLVED against the directory, not the derived id alone, because that
-    // is what the active slot answered before P4.2 deleted it: an effective
-    // host whose row has not arrived was `null` here, and the ignorance arm
-    // above is written for exactly that state. Reading the bare
-    // `effectiveHostId` would promote "derived but unresolved" into KNOWN and
-    // start exempting chats a beat earlier than this gate was measured for.
-    const activeEntry =
-      hostBinding === null || effectiveHostId === null
+    // is what the active slot answered before P4.2 deleted it: a host whose
+    // row has not arrived was `null` here, and the ignorance arm above is
+    // written for exactly that state. Reading the bare id would promote
+    // "derived but unresolved" into KNOWN and start exempting chats a beat
+    // earlier than this gate was measured for.
+    const projectionEntry =
+      hostBinding === null || projectionHostId === null
         ? null
-        : hostBinding.hostClient.resolveHostById(effectiveHostId);
-    return activeEntry !== null && activeEntry.hostId !== tabHostId;
+        : hostBinding.hostClient.resolveHostById(projectionHostId);
+    return projectionEntry !== null && projectionEntry.hostId !== tabHostId;
   });
   // The record-less same-host case (ticket 49): a published cloud row is
   // existence evidence too, and it is the ONLY evidence a swept chat has
@@ -505,17 +511,14 @@ export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);
-  // APP-WIDE BY INTENT: the cloud lookup below runs against the app-wide host
-  // so it SHARES the list already fetched elsewhere in the app. Pointing it at
-  // this tile's host would be a cache miss per host for an answer that is the
-  // same everywhere. Not the spine either, which named no host once P4.2
-  // deleted the active slot.
-  const bannerBinding = useHostBinding();
-  const bannerEffectiveHostId = useEffectiveHostId();
-  const bannerAppHostClient = useMemo(
-    () => resolveAppWideHostClient(bannerBinding, bannerEffectiveHostId),
-    [bannerBinding, bannerEffectiveHostId],
-  );
+  // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
+  // list the sidebar tree already fetched for this epic, and that fetch rides
+  // the session's client - so this must too, or it is a cache miss per host
+  // for an answer that is the same everywhere. (It used to be the app-wide
+  // client for the same sharing reason, back when the sidebar read app-wide;
+  // the two moved together.) Not this tile's host either, for the same
+  // cache reason.
+  const bannerAppHostClient = useEpicSessionHostClient();
   const providedOwnerUserId =
     props.sourceOwnerUserId !== undefined && props.sourceOwnerUserId.length > 0
       ? props.sourceOwnerUserId

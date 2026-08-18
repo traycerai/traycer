@@ -769,6 +769,22 @@ async function fileHasReadPathImportRestriction(
   );
 }
 
+/**
+ * The derived-host read joined the `readPath` dimension in PR #1243; a file
+ * that carries the dimension carries all of it. Checked by its OWN name so a
+ * regression that drops only this pattern (the dimension is a hand-written
+ * list) reads as a red here, not as green-by-neighbour.
+ */
+async function fileHasEffectiveHostReadRestriction(
+  relativePath: string,
+): Promise<boolean> {
+  const rules = await calculatedRulesFor(relativePath);
+  return restrictedImportPatternsMention(
+    rules?.["@typescript-eslint/no-restricted-imports"],
+    "useEffectiveHostId",
+  );
+}
+
 describe("eslint config retains selectById across every no-restricted-syntax override block", () => {
   // One real file per block that rewrites `no-restricted-syntax`
   // (`eslint.config.mjs`, grep the rule name): the general base block, both
@@ -870,10 +886,8 @@ describe("eslint config gates the read-path import restriction to its allowlist"
   // Deliberately outside `hostSelectionReadAllowlist`: ordinary tab-content
   // trees under src/components/chat/ carry no directory-level exemption.
   const TAB_CONTENT_FILE = "src/components/chat/agent-stop-button.tsx";
-  // Inside the allowlist: `src/components/epic-canvas/panels/epic-sharing/**`
-  // is named explicitly.
-  const ALLOWLISTED_FILE =
-    "src/components/epic-canvas/panels/epic-sharing/panel.tsx";
+  // Inside the allowlist: app chrome under `src/components/layout/**`.
+  const ALLOWLISTED_FILE = "src/components/layout/host-ready-gate.tsx";
 
   it.each([TAB_CONTENT_FILE, ALLOWLISTED_FILE])(
     "anchors on %s, which must exist on disk",
@@ -890,6 +904,94 @@ describe("eslint config gates the read-path import restriction to its allowlist"
     expect(await fileHasReadPathImportRestriction(ALLOWLISTED_FILE)).toBe(
       false,
     );
+  });
+
+  it("the dimension bans the DERIVED host read too, by name", async () => {
+    expect(await fileHasEffectiveHostReadRestriction(TAB_CONTENT_FILE)).toBe(
+      true,
+    );
+  });
+});
+
+/**
+ * PR #1243: the Epic canvas subtree and `src/hooks/epic/**` were carved OUT
+ * of the read-path allowlist as "app chrome" - the two-role model the redesign
+ * replaced with three (D15). Those surfaces read the Epic SESSION's host, and
+ * exempting the directories let ~40 app-wide reads accumulate there and
+ * surface as one review finding per push, three rounds running. These anchors
+ * pin that the subtree now carries `readPath`, that the reasoned exceptions
+ * are lifted per FILE and only `readPath` is lifted (the file still carries
+ * `kernel`, proving the lift is selective), and that the real config flags the
+ * import at a sidebar path by rule name - the positive control for "clean".
+ */
+describe("eslint config fences the Epic canvas subtree and hooks/epic behind readPath (PR #1243)", () => {
+  const SIDEBAR_FILE = "src/components/epic-canvas/sidebar/epic-sidebar.tsx";
+  const SHARING_PANEL_FILE =
+    "src/components/epic-canvas/panels/epic-sharing/panel.tsx";
+  const RENDERER_FILE = "src/components/epic-canvas/renderers/chat-tile.tsx";
+  const SESSION_HOOK_FILE = "src/hooks/epic/use-epic-collaborator-mutations.ts";
+  // Exempt per FILE, with a reason: mounted only from the epics list.
+  const BY_CALLER_EXEMPT_HOOK =
+    "src/hooks/epic/use-epic-batch-delete-mutation.ts";
+  // Exempt per FILE, with a reason: the canvas host hook's own fallback.
+  const CANVAS_HOST_HOOK =
+    "src/components/epic-canvas/hooks/use-canvas-host-id.ts";
+  // NOT exempt, and a sibling of an exempt file - a directory glob would have
+  // covered it; a file list does not.
+  const SIBLING_OF_EXEMPT_HOOK =
+    "src/hooks/epic/use-epic-tui-agent-mutations.ts";
+
+  it.each([
+    SIDEBAR_FILE,
+    SHARING_PANEL_FILE,
+    RENDERER_FILE,
+    SESSION_HOOK_FILE,
+    BY_CALLER_EXEMPT_HOOK,
+    CANVAS_HOST_HOOK,
+    SIBLING_OF_EXEMPT_HOOK,
+  ])("anchors on %s, which must exist on disk", (file) => {
+    expect(existsSync(path.join(guiAppRoot, file))).toBe(true);
+  });
+
+  it.each([SIDEBAR_FILE, SHARING_PANEL_FILE, RENDERER_FILE])(
+    "restricts the app-wide reads at %s (was allowlisted as app chrome)",
+    async (file) => {
+      expect(await fileHasReadPathImportRestriction(file)).toBe(true);
+      expect(await fileHasEffectiveHostReadRestriction(file)).toBe(true);
+    },
+  );
+
+  it.each([SESSION_HOOK_FILE, SIBLING_OF_EXEMPT_HOOK])(
+    "restricts the app-wide reads at %s (hooks/epic re-imposes readPath)",
+    async (file) => {
+      expect(await fileHasReadPathImportRestriction(file)).toBe(true);
+    },
+  );
+
+  it.each([BY_CALLER_EXEMPT_HOOK, CANVAS_HOST_HOOK])(
+    "lifts readPath, and ONLY readPath, for the reasoned exemption %s",
+    async (file) => {
+      expect(await fileHasReadPathImportRestriction(file)).toBe(false);
+      expect(await fileHasEffectiveHostReadRestriction(file)).toBe(false);
+      // POSITIVE: the file still carries the rest of its partition.
+      expect(await fileHasKernelImportRestriction(file)).toBe(true);
+    },
+  );
+
+  it("POSITIVE CONTROL: the real config flags an app-wide read at a sidebar path, by rule name", async () => {
+    const eslint = new ESLint({ cwd: guiAppRoot });
+    const code =
+      'import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";\nvoid useEffectiveHostId;\n';
+    const results = await eslint.lintText(code, {
+      filePath: path.join(guiAppRoot, SIDEBAR_FILE),
+    });
+    const messages = results[0]?.messages ?? [];
+    expect(
+      messages.filter(
+        (message) =>
+          message.ruleId === "@typescript-eslint/no-restricted-imports",
+      ),
+    ).toHaveLength(1);
   });
 });
 
@@ -1051,7 +1153,22 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
     },
   );
 
-  it("CONTROL: the real config does not flag legitimate effective-host reads or type-only kernel imports", async () => {
+  // App chrome inside `hostSelectionReadAllowlist`: the one place a control
+  // for "a legitimate effective-host read is not flagged" can stand, now that
+  // the derived-host read is part of the `readPath` ban (PR #1243). It used to
+  // stand at `SELECTION_PRODUCTION_FILE_PATH`, outside the allowlist, which
+  // encoded the premise that `useEffectiveHostId` was not an app-wide read
+  // for lint purposes - the premise the ban retires; see the anchor below it.
+  const READ_ALLOWLISTED_PRODUCTION_FILE_PATH =
+    "src/components/layout/host-ready-gate.tsx";
+
+  it("anchors the control on the allowlisted production file, which must exist on disk", () => {
+    expect(
+      existsSync(path.join(guiAppRoot, READ_ALLOWLISTED_PRODUCTION_FILE_PATH)),
+    ).toBe(true);
+  });
+
+  it("CONTROL: the real config does not flag legitimate effective-host reads or type-only kernel imports where the read is allowlisted", async () => {
     const messages = await lintSelectionBypassAt(
       [
         'import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";',
@@ -1063,7 +1180,7 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
         "void describeKernel;",
         "",
       ].join("\n"),
-      SELECTION_PRODUCTION_FILE_PATH,
+      READ_ALLOWLISTED_PRODUCTION_FILE_PATH,
     );
     expect(selectByIdRestrictedSyntaxMessages(messages)).toHaveLength(0);
     expect(
@@ -1072,5 +1189,27 @@ describe("eslint config actually catches selectById bypass forms (lintText)", ()
           message.ruleId === "@typescript-eslint/no-restricted-imports",
       ),
     ).toHaveLength(0);
+  });
+
+  it("and DOES flag the effective-host read at an ordinary production file outside the allowlist", async () => {
+    // The old control's location, now an anchor for the opposite claim: the
+    // derived-host read is an app-wide read and is banned where the others
+    // are. Type-only kernel imports stay clean regardless.
+    const messages = await lintSelectionBypassAt(
+      [
+        'import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";',
+        'import type { SelectionEvidenceKernel } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";',
+        "void useEffectiveHostId;",
+        "export type Kernel = SelectionEvidenceKernel;",
+        "",
+      ].join("\n"),
+      SELECTION_PRODUCTION_FILE_PATH,
+    );
+    const importMessages = messages.filter(
+      (message) =>
+        message.ruleId === "@typescript-eslint/no-restricted-imports",
+    );
+    expect(importMessages).toHaveLength(1);
+    expect(importMessages[0]?.message).toContain("useEffectiveHostId");
   });
 });

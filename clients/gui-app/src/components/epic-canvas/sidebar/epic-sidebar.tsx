@@ -47,7 +47,7 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
@@ -508,7 +508,12 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
-  const hostId = useAddressableHostId();
+  // The SAME host the PR panel records presence under (`pr-panel-body.tsx`
+  // writes `recordPrPresence(useCanvasHostId(), …)`): a producer/consumer
+  // pair keyed by host must read one identity, or the PR icon vanishes for
+  // exactly the window a re-point is in flight - the panel writing under the
+  // session's host A while this rail read under the app-wide B.
+  const hostId = useCanvasHostId();
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
@@ -560,7 +565,10 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  const hostId = useAddressableHostId();
+  // Same key as the live host above. Before the session handle registers this
+  // resolves the effective host (`useCanvasHostId`'s documented fallback),
+  // which is where a fresh open's session is about to be established.
+  const hostId = useCanvasHostId();
   // The persisted PR baseline is readable before the epic's Y.doc resolves, so
   // the loading rail already shows the same set of panels the live one will -
   // no icon appears or disappears as the epic finishes opening.

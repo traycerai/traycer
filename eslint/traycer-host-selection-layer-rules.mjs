@@ -24,9 +24,9 @@ const SELECT_BY_ID_MESSAGE =
   " (selection model §5).";
 
 const ACTIVE_HOST_READ_MESSAGE =
-  "Do not import `useAddressableHostId` or default-client hooks (`useHostClient`, `useDefaultHostClient`) outside the allowlisted layer (feeds, landing, epic-session registry, app chrome). Tab content must use `useTabHostId` / `useTabHostClient` / `useSurfaceHostPin`. See " +
+  "Do not import the app-wide host reads (`useAddressableHostId`, `useEffectiveHostId`, `useHostClient`, `useDefaultHostClient`) outside the allowlisted layer (feeds, landing, epic-session registry, app chrome). A tile reads its tab's host (`useTabHostId` / `useTabHostClient`); a surface INSIDE an Epic session - the sidebar, the canvas, its panels, and any hook they mount - reads the session's (`useEpicSessionHostId` / `useEpicSessionHostClient` / `useCanvasHostId`); a picker surface reads its pin (`useSurfaceHostPin`). An app-wide read that is genuinely right where you are is exempted per FILE, with its reason, in the gui-app eslint config. See " +
   HOST_SELECTION_REDESIGN_PLAN +
-  " (selection model §5).";
+  " (selection model §5; D15 - the task tab has three host roles).";
 
 // Named individually so write-path allowlist overrides can recompose
 // `generalCustomSyntaxRestrictions` minus this set (`.includes` by reference).
@@ -165,17 +165,22 @@ export const hostSelectionReadAllowlist = [
   // Selector surface over OpenEpicStore — canvas-serving (D4), not tab-pinned.
   "src/lib/epic-selectors.ts",
 
-  // App chrome (layout, settings, providers, palette, sidebar lists, canvas shell)
+  // App chrome (layout, settings, providers, palette, sidebar lists)
   "src/components/layout/**/*.{ts,tsx}",
   "src/components/settings/**/*.{ts,tsx}",
   "src/providers/**/*.{ts,tsx}",
   "src/lib/commands/**/*.{ts,tsx}",
-  "src/components/epic-canvas/sidebar/**/*.{ts,tsx}",
-  "src/components/epic-canvas/hooks/**/*.{ts,tsx}",
-  "src/components/epic-canvas/canvas/**/*.{ts,tsx}",
-  "src/components/epic-canvas/panels/epic-sharing/**/*.{ts,tsx}",
   "src/components/migration/**/*.{ts,tsx}",
   "src/stores/settings/**/*.{ts,tsx}",
+  // NOT the Epic canvas subtree. `src/components/epic-canvas/{sidebar,hooks,
+  // canvas,panels}` used to be listed here as "canvas shell / app chrome" -
+  // the two-role model (tile or app-wide) that this redesign replaced with
+  // three (D15): those surfaces are INSIDE an Epic session and read the
+  // session's host. Listing them here let ~40 app-wide reads accumulate
+  // there and surface as one review finding per push (PR #1243, three
+  // rounds of the same class). They now carry `readPath`; the two files in
+  // that subtree with a reasoned app-wide read are exempted per FILE in the
+  // gui-app config (`epicCanvasAppWideReadExemptions`).
 
   // Cross-host fork (#1227): the dialog's cloud-owner read deliberately
   // shares the sidebar's cloud-chat query cache, which is keyed by the
@@ -236,6 +241,15 @@ export const hostSelectionReadImportRestrictions = {
     {
       group: ["**/use-addressable-host-id", "**/use-addressable-host-id.*"],
       importNames: ["useAddressableHostId"],
+      message: ACTIVE_HOST_READ_MESSAGE,
+    },
+    // The selection authority's DERIVED host is an app-wide read too - the
+    // one `useAddressableHostId` resolves to when no scoped binding is above
+    // it. Left out of this ban until PR #1243, which is how the Epic canvas
+    // grew `useEffectiveHostId()` reads the sidebar/canvas ban never saw.
+    {
+      group: ["**/use-effective-host-id", "**/use-effective-host-id.*"],
+      importNames: ["useEffectiveHostId"],
       message: ACTIVE_HOST_READ_MESSAGE,
     },
     {
