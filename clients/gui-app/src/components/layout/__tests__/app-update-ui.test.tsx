@@ -396,8 +396,12 @@ describe("desktop app update UI", () => {
 
     fireEvent.click(button);
 
-    // The click IS the confirmation - no modal is opened in between.
-    expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    // The click IS the confirmation - no modal is opened in between. AWAITED
+    // because the install door now asks MAIN for the unsyncable set across
+    // every window before it authorizes a restart that quits the whole app.
+    await waitFor(() => {
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
     // The event the deleted modal used to own now rides the gesture.
     expect(track).toHaveBeenCalledWith(AnalyticsEvent.UpdateRestartRequested, {
@@ -473,7 +477,9 @@ describe("desktop app update UI", () => {
     // Both restart affordances are on screen at once: the toast dismisses
     // itself on click, but the header tick does not - main has to disarm it.
     fireEvent.click(screen.getByRole("button", { name: "Restart" }));
-    expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    });
     act(() => {
       bridge.emit({ ...readySnapshot(2), installInFlight: true });
     });
@@ -767,7 +773,12 @@ describe("desktop app update UI", () => {
     fireEvent.click(restart);
     fireEvent.click(restart);
     // The toast button is the confirmation - it installs once, with no modal.
-    expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    // ONCE still holds now that the door is async, and not by luck: the
+    // content's `actionHandledRef` latch is set synchronously before
+    // `onAction()`, so the second click returns before any round trip starts.
+    await waitFor(() => {
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
     expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
     expect(track).toHaveBeenCalledWith(AnalyticsEvent.UpdateRestartRequested, {

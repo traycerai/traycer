@@ -93,38 +93,46 @@ export interface UnsyncedEditsEntry {
   readonly title: string;
   readonly queueSize: number;
   readonly isDirty: boolean;
-}
-
-/**
- * The walk's own row: an {@link UnsyncedEditsEntry} plus the one fact the
- * exported type deliberately does NOT carry.
- *
- * `unsyncable` is INTERNAL ON PURPOSE, and this is the reason rather than a
- * preference: `UnsyncedEditsEntry` crosses the desktop IPC boundary, and both
- * hops rebuild it as a fresh object literal from exactly four fields -
- * `ipc-parsers.ts` when main parses a renderer snapshot, and `lifecycle-ipc.ts`
- * again in its merge. An added field is dropped at both, silently, with no
- * parse error. `mergeEntries` in `quit-intercept-bridge.tsx` then unions a
- * main-originated snapshot with live rows, so a reader would get a different
- * answer per row depending on which side won, and nothing anywhere would say
- * why. Keeping the field off the wire type makes that unrepresentable instead
- * of documented - a warning at the definition does not reach the reader who
- * never looks at the definition.
- *
- * If a main-side consumer ever genuinely needs durability, that is the moment
- * to extend the wire contract deliberately, with the parser and the merge
- * updated together.
- */
-interface UnsyncedRow extends UnsyncedEditsEntry {
   /**
    * True when some part of this row's work can NEVER sync: a buffer retained
    * across a host re-point had `detachTransport()` called on it, so it is a
    * live `Y.Doc` with no socket and no local persistence, and its store is
    * frozen at retention time. A dirty LIVE session is not unsyncable - it
    * still holds a transport and drains when its host returns.
+   *
+   * ON THE WIRE DELIBERATELY, and this is the moment the note that used to sit
+   * on `UnsyncedRow` reserved for it: "if a main-side consumer ever genuinely
+   * needs durability, that is the moment to extend the wire contract
+   * deliberately, with the parser and the merge updated together." The
+   * consumer arrived - `requestAppUpdateInstall` has to know about work in
+   * ANOTHER WINDOW, because `installUpdate()` restarts the whole app and the
+   * update quit deliberately bypasses the unsynced-edits interception. A
+   * per-renderer registry cannot see it; only main's per-window map can.
+   *
+   * The three sites that rebuild this object literally therefore move
+   * together, and each drops the field silently if it does not:
+   * `ipc-parsers.ts` (main parsing a renderer push), `aggregateUnsyncedSnapshots`
+   * (main's cross-window merge), and `mergeEntries` (the renderer's union of
+   * a frozen snapshot with live rows).
    */
   readonly unsyncable: boolean;
 }
+
+/**
+ * The walk's own row.
+ *
+ * `unsyncable` used to be INTERNAL here, off the wire on purpose, because the
+ * hops that rebuild the entry as a fresh object literal would each have
+ * dropped an added field silently. Those hops are now enumerated on the field
+ * itself and moved with it; the reason the exclusion existed - no main-side
+ * consumer needed durability - stopped holding when `installUpdate()` had to
+ * ask about other windows.
+ *
+ * The row type stays distinct anyway, because the WALK still has facts the
+ * wire does not need, and because a name for "the row before it is narrowed"
+ * is what keeps `toWireEntry` an explicit projection rather than a spread.
+ */
+type UnsyncedRow = UnsyncedEditsEntry;
 
 function toWireEntry(row: UnsyncedRow): UnsyncedEditsEntry {
   return {
@@ -132,6 +140,7 @@ function toWireEntry(row: UnsyncedRow): UnsyncedEditsEntry {
     title: row.title,
     queueSize: row.queueSize,
     isDirty: row.isDirty,
+    unsyncable: row.unsyncable,
   };
 }
 

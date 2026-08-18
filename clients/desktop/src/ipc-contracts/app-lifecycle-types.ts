@@ -11,6 +11,17 @@ export interface UnsyncedEditsSnapshotEntry {
   readonly title: string;
   readonly queueSize: number;
   readonly isDirty: boolean;
+  /**
+   * Whether some part of this row can NEVER sync - a buffer retained across a
+   * host re-point, whose transport was detached and for which no local
+   * persistence exists.
+   *
+   * Distinct from `isDirty`, and the difference is the whole reason it is on
+   * the wire: dirty work DRAINS on the update-install quit, unsyncable work is
+   * DESTROYED by it. Main is the only process that can answer the question
+   * across windows, so it must be told per row rather than inferring it.
+   */
+  readonly unsyncable: boolean;
 }
 
 export type UnsyncedEditsSnapshot = ReadonlyArray<UnsyncedEditsSnapshotEntry>;
@@ -73,4 +84,13 @@ export interface AppLifecycleBridge {
   respondFreshUnsyncedSnapshot(
     reply: FreshUnsyncedSnapshotResponse,
   ): Promise<void>;
+  /**
+   * Every Epic holding work that can never sync, across ALL windows.
+   *
+   * On `appLifecycle` rather than on the app-update bridge because the fact is
+   * a lifecycle fact - it is the same per-window map the quit intercept reads,
+   * asked a different question. The caller that needs it is the update
+   * install, which restarts the whole app.
+   */
+  unsyncableWorkAcrossWindows(): Promise<UnsyncedEditsSnapshot>;
 }

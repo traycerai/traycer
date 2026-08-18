@@ -153,7 +153,7 @@ export function AppUpdateToastController(): null {
       // through.
       onRestart: () => {
         trackUpdateRestartRequested("direct_ui");
-        requestAppUpdateInstall(bridge);
+        void requestAppUpdateInstall(bridge);
       },
       onViewInstructions: () => {
         Analytics.getInstance().track(

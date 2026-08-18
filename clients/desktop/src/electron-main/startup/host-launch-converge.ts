@@ -223,6 +223,22 @@ export function armFirstInstallOnSignIn(
           dispose();
           return;
         }
+        if (!identity.isSignedIn()) {
+          // RE-READ AT THE MOMENT OF ACTING, because the precondition is
+          // consent and `getStatus()` above is a round trip. A sign-out
+          // landing inside that await reaches the subscription as
+          // `onChanged(false)`, which this arm ignores by design - it only
+          // acts on the rising edge - so without this line the continuation
+          // installs a background service for an account that just left.
+          // `removedByUser` is checked one step above for the same reason:
+          // both halves of consent are read here, not at arming time.
+          //
+          // Left ARMED, like every other non-terminal outcome below: the next
+          // sign-in edge attempts again, which is exactly the timing a signed
+          // -out launch already has.
+          log.info("[host-controller] first install deferred to a sign-in");
+          return;
+        }
         const outcome = await hostController.convergeReady(false);
         if (outcome.kind !== "ok") {
           // A RESOLVED non-ok is not an install. `busy`, `deferred` and

@@ -252,16 +252,62 @@ function assertRetainedPremise(
  * A gate that fired but raised nothing would be a worse bug than the one being
  * fixed: the user would click Restart and simply get nothing.
  */
-function expectPromptedInsteadOfInstalling(
+async function expectPromptedInsteadOfInstalling(
   bridge: FakeAppUpdatesBridge,
   epicId: string,
-): void {
+): Promise<void> {
+  // AWAITED because the check is now a round trip: the install door asks MAIN
+  // for the unsyncable set across every window, since `installUpdate()`
+  // restarts the whole app and one renderer can only see its own registry.
+  // The dialog therefore opens a microtask after the click rather than inside
+  // it.
+  await waitFor(() => {
+    expect(useDesktopDialogStore.getState().activeDialog).toBe(
+      "update-unsynced-confirm",
+    );
+  });
   expect(bridge.installUpdate).not.toHaveBeenCalled();
   const dialog = useDesktopDialogStore.getState();
-  expect(dialog.activeDialog).toBe("update-unsynced-confirm");
   expect(dialog.updateUnsyncedEpics.map((row) => row.epicId)).toEqual([epicId]);
   // And the work is still there to be decided about.
   expect(__getOpenEpicRegistryForTests().retainedCountForTests(epicId)).toBe(1);
+}
+
+/**
+ * Installs the desktop-only `appLifecycle` namespace this shell would carry,
+ * answering with work held by ANOTHER window. Returns the teardown.
+ *
+ * The namespace is read off `window`, not off the React host context, because
+ * that is how every gui-app consumer of a desktop-only namespace feature
+ * detects it - the renderer must run unchanged on shells that have no Electron
+ * preload at all.
+ */
+interface WindowWithRunnerHost {
+  runnerHost?: unknown;
+}
+
+function installOtherWindowUnsyncable(
+  entries: ReadonlyArray<{ readonly epicId: string; readonly title: string }>,
+): () => void {
+  const target = window as Window & WindowWithRunnerHost;
+  const previous = target.runnerHost;
+  target.runnerHost = {
+    appLifecycle: {
+      unsyncableWorkAcrossWindows: () =>
+        Promise.resolve(
+          entries.map((entry) => ({
+            epicId: entry.epicId,
+            title: entry.title,
+            queueSize: 2,
+            isDirty: true,
+            unsyncable: true,
+          })),
+        ),
+    },
+  };
+  return () => {
+    target.runnerHost = previous;
+  };
 }
 
 describe("app update install vs a retained unsynced buffer", () => {
@@ -281,7 +327,7 @@ describe("app update install vs a retained unsynced buffer", () => {
 
     fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
-    expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
+    await expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
   });
 
   it("the toast Restart prompts instead of installing when work cannot be saved", async () => {
@@ -304,7 +350,7 @@ describe("app update install vs a retained unsynced buffer", () => {
     render(<>{content}</>);
     fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
 
-    expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
+    await expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
   });
 
   /**
@@ -334,7 +380,53 @@ describe("app update install vs a retained unsynced buffer", () => {
 
     // Fires even though the live session is dirty: the predicate reads the
     // retention ALONE. `retained && !liveDirty` would drop exactly this case.
-    expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
+    await expectPromptedInsteadOfInstalling(bridge, EPIC_ID);
+  });
+
+  /**
+   * THE MULTI-WINDOW CASE, and the one every arm above is blind to.
+   *
+   * `installUpdate()` quits and relaunches the whole Electron app, and the
+   * update quit deliberately bypasses the unsynced-edits interception - so this
+   * prompt is the only thing standing between the restart and a retained
+   * buffer. But the check used to read a MODULE-SCOPED registry, which holds
+   * only the Epics open in the window that was clicked. A user with a retained
+   * buffer in window B who clicked Update in window A saw no prompt at all and
+   * lost it.
+   *
+   * This renderer's own registry is deliberately EMPTY here: every other arm
+   * would pass on a build that never asks main, and this one cannot.
+   */
+  it("prompts for a retained buffer held by ANOTHER window", async () => {
+    const restore = installOtherWindowUnsyncable([
+      { epicId: "epic-in-window-b", title: "Rewrite the onboarding" },
+    ]);
+    try {
+      // Premise: nothing local. The old predicate answers "nothing to lose"
+      // here, which is exactly the defect.
+      expect(__getOpenEpicRegistryForTests().getUnsyncedEdits().length).toBe(0);
+
+      const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
+      renderWithHost(<AppUpdateHeaderButton />, bridge);
+
+      fireEvent.click(await screen.findByTestId("app-update-header-button"));
+
+      await waitFor(() => {
+        expect(useDesktopDialogStore.getState().activeDialog).toBe(
+          "update-unsynced-confirm",
+        );
+      });
+      expect(bridge.installUpdate).not.toHaveBeenCalled();
+      // NAMED, not merely counted: main's answer has to reach the dialog, or
+      // the user gets a confirmation about nothing.
+      expect(
+        useDesktopDialogStore
+          .getState()
+          .updateUnsyncedEpics.map((row) => row.epicId),
+      ).toEqual(["epic-in-window-b"]);
+    } finally {
+      restore();
+    }
   });
 
   it("a syncable dirty session installs with NO prompt - b2a1097a is preserved", async () => {
@@ -363,7 +455,9 @@ describe("app update install vs a retained unsynced buffer", () => {
 
     fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
-    expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+    });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
   });
 });

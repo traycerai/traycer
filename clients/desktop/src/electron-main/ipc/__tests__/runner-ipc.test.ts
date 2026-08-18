@@ -663,6 +663,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.acknowledgeQuitRequest,
         RunnerHostInvoke.respondToQuitRequest,
         RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+        RunnerHostInvoke.unsyncableWorkAcrossWindows,
         RunnerHostInvoke.appUpdateCheck,
         RunnerHostInvoke.appUpdateDownload,
         RunnerHostInvoke.appUpdateGetSnapshot,
@@ -1781,15 +1782,39 @@ describe("RunnerIpcBridge", () => {
     }
 
     await setSnapshotHandler(sender(101), [
-      { epicId: "epic-a", title: "Alpha", queueSize: 0, isDirty: true },
+      {
+        epicId: "epic-a",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     await setSnapshotHandler(sender(202), [
-      { epicId: "epic-b", title: "Beta", queueSize: 2, isDirty: true },
+      {
+        epicId: "epic-b",
+        title: "Beta",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     expect(bridge.hasUnsyncedEdits()).toBe(true);
     expect(bridge.getUnsyncedEditsSnapshot()).toEqual([
-      { epicId: "epic-a", title: "Alpha", queueSize: 0, isDirty: true },
-      { epicId: "epic-b", title: "Beta", queueSize: 2, isDirty: true },
+      {
+        epicId: "epic-a",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
+      {
+        epicId: "epic-b",
+        title: "Beta",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
 
     windowA.sentMessages.length = 0;
@@ -1808,8 +1833,20 @@ describe("RunnerIpcBridge", () => {
         payload: {
           requestId: expect.any(String),
           snapshot: [
-            { epicId: "epic-a", title: "Alpha", queueSize: 0, isDirty: true },
-            { epicId: "epic-b", title: "Beta", queueSize: 2, isDirty: true },
+            {
+              epicId: "epic-a",
+              title: "Alpha",
+              queueSize: 0,
+              isDirty: true,
+              unsyncable: false,
+            },
+            {
+              epicId: "epic-b",
+              title: "Beta",
+              queueSize: 2,
+              isDirty: true,
+              unsyncable: false,
+            },
           ],
         },
       },
@@ -1817,6 +1854,82 @@ describe("RunnerIpcBridge", () => {
 
     await respondHandler(sender(202), "userConfirmedDiscard");
     await expect(decision).resolves.toBe("userConfirmedDiscard");
+    bridge.dispose();
+  });
+
+  it("answers the cross-window unsyncable question from every window's snapshot", async () => {
+    // Main is the only process that can answer this. A renderer holds one
+    // window's Epic session registry, while `appUpdateInstall` restarts the
+    // whole app - and its quit path deliberately skips the unsynced-edits
+    // interception, so the prompt this feeds is the only thing between the
+    // restart and a buffer that can never be saved.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    registry.add("window-b", 202, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const setSnapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.setUnsyncedEditsSnapshot,
+    );
+    const unsyncableHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.unsyncableWorkAcrossWindows,
+    );
+    if (setSnapshotHandler === undefined || unsyncableHandler === undefined) {
+      throw new Error("appLifecycle handlers missing");
+    }
+
+    // Window A: dirty, but SYNCABLE - it still holds a transport and drains
+    // through the restart. Window B: a retained buffer that cannot.
+    await setSnapshotHandler(sender(101), [
+      {
+        epicId: "epic-syncable",
+        title: "Draining",
+        queueSize: 4,
+        isDirty: true,
+        unsyncable: false,
+      },
+    ]);
+    await setSnapshotHandler(sender(202), [
+      {
+        epicId: "epic-retained",
+        title: "Rewrite the onboarding",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: true,
+      },
+    ]);
+
+    // Premise: both windows really did report, so the filter below is choosing
+    // between two rows rather than passing on an empty map.
+    expect(bridge.getUnsyncedEditsSnapshot()).toHaveLength(2);
+
+    // Asked BY window A, answered about window B: the whole point. (A real
+    // window sender rather than a bare event, because this channel sits behind
+    // the bridge's sender-trust guard like every other invoke.)
+    await expect(unsyncableHandler(sender(101))).resolves.toEqual([
+      {
+        epicId: "epic-retained",
+        title: "Rewrite the onboarding",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: true,
+      },
+    ]);
     bridge.dispose();
   });
 
@@ -1848,7 +1961,13 @@ describe("RunnerIpcBridge", () => {
       throw new Error("setUnsyncedEditsSnapshot handler missing");
     }
     await setSnapshotHandler(sender(101), [
-      { epicId: "epic-a", title: "Alpha", queueSize: 1, isDirty: true },
+      {
+        epicId: "epic-a",
+        title: "Alpha",
+        queueSize: 1,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     registry.focusById("window-b");
 
@@ -2422,7 +2541,13 @@ describe("RunnerIpcBridge", () => {
     }
     const { requestId } = freshRequest.payload as { requestId: string };
     const snapshot = [
-      { epicId: "e-1", title: "Alpha", queueSize: 2, isDirty: true },
+      {
+        epicId: "e-1",
+        title: "Alpha",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: false,
+      },
     ];
     await freshResponseHandler(bareEvent(), { requestId, snapshot });
     await expect(fresh).resolves.toEqual(snapshot);
@@ -2471,13 +2596,25 @@ describe("RunnerIpcBridge", () => {
       }
 
       await setSnapshotHandler(bareEvent(), [
-        { epicId: "e-1", title: "Alpha", queueSize: 1, isDirty: true },
+        {
+          epicId: "e-1",
+          title: "Alpha",
+          queueSize: 1,
+          isDirty: true,
+          unsyncable: false,
+        },
       ]);
 
       expect(sentMessages).toEqual([]);
       await expect(
         bridge.requestQuitDecision([
-          { epicId: "e-1", title: "Alpha", queueSize: 1, isDirty: true },
+          {
+            epicId: "e-1",
+            title: "Alpha",
+            queueSize: 1,
+            isDirty: true,
+            unsyncable: false,
+          },
         ]),
       ).rejects.toThrow(/cannot receive quit interception/);
       bridge.dispose();
@@ -2509,7 +2646,13 @@ describe("RunnerIpcBridge", () => {
         throw new Error("setUnsyncedEditsSnapshot handler missing");
       }
       const snapshot = [
-        { epicId: "e-1", title: "Alpha", queueSize: 1, isDirty: true },
+        {
+          epicId: "e-1",
+          title: "Alpha",
+          queueSize: 1,
+          isDirty: true,
+          unsyncable: false,
+        },
       ];
       await setSnapshotHandler(bareEvent(), snapshot);
       sentMessages.length = 0;
@@ -2568,7 +2711,13 @@ describe("RunnerIpcBridge", () => {
         throw new Error("appLifecycle handlers missing");
       }
       const snapshot = [
-        { epicId: "e-1", title: "Alpha", queueSize: 2, isDirty: true },
+        {
+          epicId: "e-1",
+          title: "Alpha",
+          queueSize: 2,
+          isDirty: true,
+          unsyncable: false,
+        },
       ];
       await setSnapshotHandler(bareEvent(), snapshot);
       sentMessages.length = 0;
@@ -2649,14 +2798,26 @@ describe("RunnerIpcBridge", () => {
     // An ambient `setUnsyncedEditsSnapshot` push arrives while the request is
     // in flight - it MUST NOT settle the in-flight fresh-snapshot promise.
     await setSnapshotHandler(bareEvent(), [
-      { epicId: "ambient", title: "Ambient", queueSize: 1, isDirty: true },
+      {
+        epicId: "ambient",
+        title: "Ambient",
+        queueSize: 1,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
 
     // A reply with a non-matching requestId also MUST NOT resolve the waiter.
     await freshResponseHandler(bareEvent(), {
       requestId: "mismatched-id",
       snapshot: [
-        { epicId: "wrong", title: "Wrong", queueSize: 9, isDirty: true },
+        {
+          epicId: "wrong",
+          title: "Wrong",
+          queueSize: 9,
+          isDirty: true,
+          unsyncable: false,
+        },
       ],
     });
 
@@ -2670,7 +2831,13 @@ describe("RunnerIpcBridge", () => {
 
     // The correct requestId resolves the waiter.
     const authoritative = [
-      { epicId: "authoritative", title: "Auth", queueSize: 3, isDirty: true },
+      {
+        epicId: "authoritative",
+        title: "Auth",
+        queueSize: 3,
+        isDirty: true,
+        unsyncable: false,
+      },
     ];
     await freshResponseHandler(bareEvent(), {
       requestId,
@@ -2705,7 +2872,13 @@ describe("RunnerIpcBridge", () => {
         throw new Error("setUnsyncedEditsSnapshot handler missing");
       }
       const cached = [
-        { epicId: "cached", title: "Cached", queueSize: 0, isDirty: true },
+        {
+          epicId: "cached",
+          title: "Cached",
+          queueSize: 0,
+          isDirty: true,
+          unsyncable: false,
+        },
       ];
       await setSnapshotHandler(bareEvent(), cached);
 
@@ -2745,13 +2918,25 @@ describe("RunnerIpcBridge", () => {
 
     // queueSize=0 but isDirty=true MUST intercept.
     await setSnapshotHandler(bareEvent(), [
-      { epicId: "e-1", title: "Alpha", queueSize: 0, isDirty: true },
+      {
+        epicId: "e-1",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
     expect(bridge.hasUnsyncedEdits()).toBe(true);
 
     // queueSize>0 but isDirty=false MUST NOT intercept.
     await setSnapshotHandler(bareEvent(), [
-      { epicId: "e-2", title: "Beta", queueSize: 5, isDirty: false },
+      {
+        epicId: "e-2",
+        title: "Beta",
+        queueSize: 5,
+        isDirty: false,
+        unsyncable: false,
+      },
     ]);
     expect(bridge.hasUnsyncedEdits()).toBe(false);
 

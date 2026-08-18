@@ -900,6 +900,84 @@ describe("response-lane value-growth strictness", () => {
     );
   });
 
+  it("rejects a projection-gated minor that REDUCES a surviving union arm", () => {
+    // The hole this closes: the survival loop can only answer "is any next
+    // variant compatible", and every NO used to be classified as an arm
+    // REPLACEMENT - exempt under `responseGrowthProjectionGated`. So a
+    // reduction made INSIDE an arm was found by the recursive comparison and
+    // then swallowed, and the gate accepted a breaking response change as
+    // long as it happened within a union.
+    //
+    // `found` here keeps its discriminant across the minor and loses a
+    // required field. Nothing about it was replaced: an old peer projecting a
+    // `{status:"found"}` payload still expects `value`, and does not get it.
+    const reduceArmV10 = defineRpcContract({
+      method: "reduceArm",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("status", [
+          z.object({ status: z.literal("found"), value: z.string() }),
+          z.object({ status: z.literal("absent") }),
+        ]),
+      }),
+    });
+    const reduceArmV11 = defineRpcContract({
+      method: "reduceArm",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("status", [
+          // Same arm, same tag, `value` gone - and one genuinely NEW arm
+          // beside it, so the minor's `responseGrowthProjectionGated`
+          // declaration is load-bearing (the framework rejects an annotation
+          // that is not) and the exemption really is live for this response.
+          z.object({ status: z.literal("found") }),
+          z.object({ status: z.literal("absent") }),
+          z.object({ status: z.literal("pending") }),
+        ]),
+      }),
+    });
+    const reduceArmUpgrade = defineUpgradePath<
+      typeof reduceArmV10,
+      typeof reduceArmV11
+    >({
+      from: reduceArmV10.schemaVersion,
+      to: reduceArmV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.status === "found"
+            ? { status: "found" as const }
+            : { status: "absent" as const },
+      }),
+    });
+    const registry = {
+      reduceArm: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: reduceArmV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: reduceArmV11,
+              upgradeFromPreviousVersion: reduceArmUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    // Named precisely, not just "throws": the point is that the ARM'S OWN
+    // reduction is what surfaces. A build that reported the blanket "drops
+    // union variant" instead would be describing a replacement that did not
+    // happen, and would go on hiding which field left.
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'reduceArm' response drops field 'row.value' from 1.0",
+    );
+  });
+
   it("rejects a projection-gated union replacement that also drops another response field", () => {
     const replaceAndDropV10 = defineRpcContract({
       method: "replaceAndDrop",

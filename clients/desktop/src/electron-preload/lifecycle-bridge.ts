@@ -55,6 +55,10 @@ export function buildLifecycleBridge(): LifecycleBridgeSurface {
           RunnerHostInvoke.freshUnsyncedSnapshotResponse,
           reply,
         ) as Promise<void>,
+      unsyncableWorkAcrossWindows: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.unsyncableWorkAcrossWindows,
+        ) as Promise<UnsyncedEditsSnapshot>,
     },
   };
 }

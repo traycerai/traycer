@@ -178,7 +178,7 @@ function AppUpdateReadyButton(props: {
               return;
             }
             trackUpdateRestartRequested("direct_ui");
-            requestAppUpdateInstall(props.bridge);
+            void requestAppUpdateInstall(props.bridge);
           }}
         >
           <AppUpdateReadyIcon

@@ -104,6 +104,17 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
+  bridge.handleInvoke(RunnerHostInvoke.unsyncableWorkAcrossWindows, () =>
+    // Reads the AMBIENT per-window map rather than issuing a fresh-snapshot
+    // round trip to every window. Deliberate: the renderers push on a 100ms
+    // debounce off their own registry, and the state being asked about -
+    // whether a buffer was RETAINED across a re-point - changes on a re-point,
+    // not on a keystroke. A fan-out with a per-window timeout would make a
+    // button that installs an update wait on the slowest renderer in the app,
+    // and time out into exactly the wrong answer.
+    bridge.getUnsyncedEditsSnapshot().filter((entry) => entry.unsyncable),
+  );
+
   bridge.handleInvoke(
     RunnerHostInvoke.freshUnsyncedSnapshotResponse,
     (event, payload: unknown) => {
@@ -160,6 +171,10 @@ export function aggregateUnsyncedSnapshots(
               title: entry.title,
               queueSize: Math.max(current.queueSize, entry.queueSize),
               isDirty: current.isDirty || entry.isDirty,
+              // OR, like `isDirty`: one window holding a retained buffer for
+              // this Epic makes the Epic unsyncable for the whole app, and the
+              // app is what an update install restarts.
+              unsyncable: current.unsyncable || entry.unsyncable,
             },
       );
     }

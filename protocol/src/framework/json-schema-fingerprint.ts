@@ -769,6 +769,70 @@ function unionArmReplacementViolation(
 }
 
 /**
+ * The single literal value a property pins, or `null` when it pins none.
+ *
+ * A discriminated union's tag is exactly this: `z.literal("ok")` renders as a
+ * one-value enum. Two or more values is a choice rather than a tag, and
+ * anything else - an object, an array, an open scalar - cannot identify an arm.
+ */
+function discriminantValue(
+  property: unknown,
+): string | number | boolean | null {
+  const classified = classifySchemaNode(property);
+  if (classified.kind !== "enum" || classified.values.length !== 1) {
+    return null;
+  }
+  return classified.values[0];
+}
+
+/**
+ * The index of the next variant that IS this previous variant - the same arm,
+ * edited - or `-1` when the arm genuinely has no successor.
+ *
+ * WHY THIS EXISTS. The survival loop above can only answer "is any next
+ * variant compatible with this previous one", and every NO used to fall into
+ * the same bucket: {@link unionArmReplacementViolation}, exempt whenever the
+ * minor declared `responseGrowthProjectionGated`. So under that declaration a
+ * REDUCTION inside an arm - dropping a required field from it, narrowing a
+ * leaf, removing an enum value it carries - was reported by the recursive
+ * comparison and then converted into an allowed "arm replacement" and dropped
+ * on the floor. That contradicts the exemption's own documented promise (see
+ * `findAdditivityViolationAllowingUnionArmReplacement`), which says the walk
+ * still reports every other reduction; the gate was quietly accepting breaking
+ * changes as long as they were made INSIDE a union.
+ *
+ * Arm identity is the discriminant, because that is what identity means for
+ * the unions the protocol actually registers: matching on shape cannot
+ * distinguish "this arm was edited" from "this arm was swapped for a similar
+ * one", while a shared tag says the newer schema still calls it the same
+ * thing. An arm with no discriminant - a bare `z.string() | z.number()` - has
+ * no identity to match on, so it keeps the old blanket treatment rather than
+ * being force-matched by position, which would report edits to unrelated arms
+ * as if they were the same one.
+ */
+function findDiscriminatedSuccessor(
+  previousVariant: unknown,
+  nextVariants: readonly unknown[],
+): number {
+  const previous = classifySchemaNode(previousVariant);
+  if (previous.kind !== "object") return -1;
+  const tags = new Map<string, string | number | boolean>();
+  for (const [field, property] of Object.entries(previous.properties)) {
+    const value = discriminantValue(property);
+    if (value !== null) tags.set(field, value);
+  }
+  if (tags.size === 0) return -1;
+  return nextVariants.findIndex((nextVariant) => {
+    const next = classifySchemaNode(nextVariant);
+    if (next.kind !== "object") return false;
+    for (const [field, value] of tags) {
+      if (discriminantValue(next.properties[field]) === value) return true;
+    }
+    return false;
+  });
+}
+
+/**
  * JSON Schema keywords that annotate a leaf without constraining the values
  * it accepts. Two leaves differing only in these describe the same accepted
  * value set, so a newer peer's payloads still project onto the older schema
@@ -1138,6 +1202,32 @@ function findNodeAdditivityViolation(
             allowUnionArmReplacement,
           );
         }
+      }
+      // An arm that still has a successor was EDITED, not replaced, so the
+      // exemption does not reach it: report what the edit actually broke.
+      // Probed only when the exemption is live - without it the blanket
+      // `union-variant` violation below is already the honest answer, and
+      // swapping it for a nested detail would change the error every
+      // non-gated minor reports.
+      const successorIndex = allowUnionArmReplacement
+        ? findDiscriminatedSuccessor(previousVariant, nextNode.variants)
+        : -1;
+      if (successorIndex !== -1) {
+        return findNodeAdditivityViolation(
+          previousVariant,
+          nextNode.variants[successorIndex],
+          path,
+          mode,
+          previousArmInput,
+          nextInputArms[successorIndex] ?? null,
+          // Passed through, NOT forced off: a union nested inside this arm may
+          // still have had one of ITS arms genuinely replaced under the same
+          // declaration, and that is what the exemption is for. What must not
+          // survive is this arm's own reduction, and that returns a
+          // `required-field` / `enum-value` / `schema-kind` violation, none of
+          // which consult the flag.
+          allowUnionArmReplacement,
+        );
       }
       return unionArmReplacementViolation(
         snippet(previousVariant),

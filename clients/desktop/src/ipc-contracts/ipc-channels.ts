@@ -105,6 +105,12 @@ export const RunnerHostInvoke = {
   respondToQuitRequest: "runnerHost:appLifecycle:respondToQuitRequest",
   freshUnsyncedSnapshotResponse:
     "runnerHost:appLifecycle:freshUnsyncedSnapshotResponse",
+  // The CROSS-WINDOW unsyncable set, which no renderer can compute: each one
+  // holds only its own Epic session registry, while `appUpdateInstall`
+  // restarts the whole app and its quit path deliberately skips the
+  // unsynced-edits interception. Asked before authorizing that install.
+  unsyncableWorkAcrossWindows:
+    "runnerHost:appLifecycle:unsyncableWorkAcrossWindows",
   windowsList: "runnerHost:windows:list",
   windowsRequestNew: "runnerHost:windows:requestNew",
   windowsRequestFocus: "runnerHost:windows:requestFocus",

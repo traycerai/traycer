@@ -478,9 +478,18 @@ export function useEpicUpdateChatProfile(): UseMutationResult<
 /**
  * Mutation hook for epic.renameChat.
  * Input enters pending (read-only) state; success is silent.
+ *
+ * Scoped to the Epic SESSION's host, like archive above and for the same
+ * reason: both call sites (the sidebar chat tree, the canvas tab rename) sit
+ * inside an Epic and outside every tile `TabHostProvider`. The ambient client
+ * this used to read is the effective host, which diverges from the session
+ * host for the whole of a re-point that is establishing and after one that
+ * failed - a window in which the sidebar stays interactive because only the
+ * canvas is made inert. A rename issued then addressed the machine the WINDOW
+ * had moved to rather than the one projecting the row being renamed.
  */
 export function useEpicRenameChat() {
-  const client = useHostClient();
+  const client = useEpicSessionHostClient();
   const queryClient = useQueryClient();
   return useHostMutation({
     client,
@@ -489,7 +498,7 @@ export function useEpicRenameChat() {
     options: {
       // Captured at mutate time, per the host-swap convention: a swap while the
       // rename is in flight must not invalidate a different machine's list.
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _variables, ctx) => {
         // The title now lives in the chat database. For a chat whose doc entry
         // the upgrade sweep removed there is no replicated write to re-project,
@@ -651,6 +660,12 @@ export function useEpicArchiveChats(): UseMutationResult<
  * Mutation hook for epic.deleteChat.
  * Caller opens a confirm dialog first; on Delete the button enters
  * pending state; success is silent.
+ *
+ * Session-scoped for the reason given on rename above, and the stakes are
+ * higher here because the request names no host: `epic.deleteChat` deletes
+ * whatever the RECEIVING machine holds under that chat id. Sent to the
+ * effective host during a re-point, it was a delete aimed at a row the sidebar
+ * was projecting from somewhere else.
  */
 export function useEpicDeleteChat(): UseMutationResult<
   DeleteChatResponse,
@@ -658,7 +673,7 @@ export function useEpicDeleteChat(): UseMutationResult<
   DeleteChatRequest,
   DeleteChatMutationContext
 > {
-  const client = useHostClient();
+  const client = useEpicSessionHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -676,7 +691,7 @@ export function useEpicDeleteChat(): UseMutationResult<
       // repo's host-swap convention) rather than re-read in `onSuccess`, so a
       // host swap while the delete is in flight cannot make us dispose a
       // same-id chat session belonging to a different machine.
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables, ctx) => {
         // No active host at mutate time means nothing could have acquired a
         // session under this chat's identity either, so there is nothing to

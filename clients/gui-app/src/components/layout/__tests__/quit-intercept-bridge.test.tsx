@@ -288,7 +288,13 @@ describe("QuitInterceptBridge", () => {
 
     expect(fake.setUnsyncedEditsSnapshot).toHaveBeenCalledTimes(1);
     expect(fake.setUnsyncedEditsSnapshot.mock.calls[0][0]).toEqual([
-      { epicId: "eA", title: "Alpha", queueSize: 0, isDirty: true },
+      {
+        epicId: "eA",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
 
     // A subsequent change triggers another debounced push.
@@ -302,8 +308,20 @@ describe("QuitInterceptBridge", () => {
     expect(fake.setUnsyncedEditsSnapshot).toHaveBeenCalledTimes(2);
     const latest = fake.setUnsyncedEditsSnapshot.mock.calls[1][0];
     expect(latest).toEqual([
-      { epicId: "eA", title: "Alpha", queueSize: 0, isDirty: true },
-      { epicId: "eB", title: "Beta", queueSize: 1, isDirty: true },
+      {
+        epicId: "eA",
+        title: "Alpha",
+        queueSize: 0,
+        isDirty: true,
+        unsyncable: false,
+      },
+      {
+        epicId: "eB",
+        title: "Beta",
+        queueSize: 1,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
   });
 
@@ -556,7 +574,13 @@ describe("QuitInterceptBridge", () => {
     const reply = fake.respondFreshUnsyncedSnapshot.mock.calls[0][0];
     expect(reply.requestId).toBe("req-42");
     expect(reply.snapshot).toEqual([
-      { epicId: "eA", title: "Alpha", queueSize: 4, isDirty: true },
+      {
+        epicId: "eA",
+        title: "Alpha",
+        queueSize: 4,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
 
     // The in-flight ambient debounce was cancelled - advancing past the
@@ -720,7 +744,13 @@ describe("QuitInterceptBridge", () => {
       vi.advanceTimersByTime(100);
     });
     expect(fake.setUnsyncedEditsSnapshot).toHaveBeenCalledWith([
-      { epicId: "eA", title: "Alpha", queueSize: 2, isDirty: true },
+      {
+        epicId: "eA",
+        title: "Alpha",
+        queueSize: 2,
+        isDirty: true,
+        unsyncable: false,
+      },
     ]);
 
     act(() => {

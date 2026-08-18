@@ -416,6 +416,22 @@ describe("useEpicRenameChat", () => {
     opts.onError(makeError("RPC_ERROR"));
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename agent.");
   });
+
+  it("addresses the Epic session's host, not the app-wide one", () => {
+    // Both call sites (the sidebar chat tree, the canvas tab rename) live
+    // inside an Epic and outside every tile `TabHostProvider`. The ambient
+    // client this used to read is the EFFECTIVE host, which diverges from the
+    // session host for the whole of a re-point - a window in which the sidebar
+    // stays interactive because only the canvas is made inert.
+    //
+    // Identity, not "a client was passed": `useHostClient()` is mocked to
+    // return a fresh object per call, so a regression fails here on the
+    // object rather than on an absence.
+    renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
+    expect(getCapturedMutation("epic.renameChat").client).toBe(
+      epicSessionHostClient,
+    );
+  });
 });
 
 describe("useEpicDeleteChat", () => {
@@ -475,6 +491,17 @@ describe("useEpicDeleteChat", () => {
     };
     opts.onError(makeError("RPC_ERROR"));
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
+  });
+
+  it("addresses the Epic session's host, not the app-wide one", () => {
+    // The stakes are higher here than on rename: `epic.deleteChat` names no
+    // host on the wire, so it deletes whatever the RECEIVING machine holds
+    // under that chat id. Sent to the effective host during a re-point, it is
+    // a delete aimed at a row the sidebar is projecting from elsewhere.
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    expect(getCapturedMutation("epic.deleteChat").client).toBe(
+      epicSessionHostClient,
+    );
   });
 });
 

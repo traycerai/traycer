@@ -37,6 +37,13 @@ interface AppLifecycleUnsyncedEditsEntry {
   readonly title: string;
   readonly queueSize: number;
   readonly isDirty?: boolean;
+  /**
+   * Optional for the same reason `isDirty` is: this is a STRUCTURAL mirror of
+   * what an Electron shell sends, feature-detected at runtime, so it describes
+   * what may arrive rather than what this build emits. The live registry rows
+   * merged against it always carry the field.
+   */
+  readonly unsyncable?: boolean;
 }
 
 interface FreshUnsyncedSnapshotRequest {

@@ -181,7 +181,8 @@ export function parseUnsyncedSnapshot(value: unknown): UnsyncedEditsSnapshot {
       typeof entry.title !== "string" ||
       typeof entry.queueSize !== "number" ||
       Number.isNaN(entry.queueSize) ||
-      typeof entry.isDirty !== "boolean"
+      typeof entry.isDirty !== "boolean" ||
+      typeof entry.unsyncable !== "boolean"
     ) {
       continue;
     }
@@ -190,6 +191,12 @@ export function parseUnsyncedSnapshot(value: unknown): UnsyncedEditsSnapshot {
       title: entry.title,
       queueSize: entry.queueSize,
       isDirty: entry.isDirty,
+      // Carried, not defaulted. A `?? false` here would read as tolerance and
+      // behave as a silent claim that another window's retained buffer is
+      // safe to destroy - the exact direction this field must never fail in.
+      // Renderer, preload and main ship in one binary, so a row without it is
+      // malformed rather than old, and the guard above drops it.
+      unsyncable: entry.unsyncable,
     });
   }
   return out;

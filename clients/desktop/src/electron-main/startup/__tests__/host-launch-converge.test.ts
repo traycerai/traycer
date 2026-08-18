@@ -68,6 +68,7 @@ const { __setDesktopStartupTestHooks, runDesktopStartup } =
  */
 function fakeSignedInGate(initial: boolean): SignedInGate & {
   signIn(): void;
+  signOut(): void;
   listenerCount(): number;
 } {
   let signedIn = initial;
@@ -81,6 +82,13 @@ function fakeSignedInGate(initial: boolean): SignedInGate & {
     signIn: () => {
       signedIn = true;
       for (const listener of Array.from(listeners)) listener(true);
+    },
+    // Notifies exactly like `signIn`, because the production gate does: the
+    // arm's handler is what ignores the falling edge, and a fake that stayed
+    // silent would hide whether that is safe.
+    signOut: () => {
+      signedIn = false;
+      for (const listener of Array.from(listeners)) listener(false);
     },
     listenerCount: () => listeners.size,
   };
@@ -864,6 +872,71 @@ describe("armFirstInstallOnSignIn", () => {
     });
     // One-shot: the subscription is released once it has acted.
     expect(gate.listenerCount()).toBe(0);
+  });
+
+  it("CONSENT: a sign-out landing inside the status round trip installs nothing", async () => {
+    // The window is real and not narrow in wall-clock terms: `getStatus()` is
+    // an IPC round trip to the host controller, and the arm's decision to act
+    // was taken BEFORE it. The falling edge reaches the subscription while
+    // that promise is pending and is ignored there by design (the handler only
+    // acts on `signedIn`), so nothing between the decision and the install
+    // re-reads consent unless this arm does.
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const gate = fakeSignedInGate(true);
+    const convergeCalls: boolean[] = [];
+    let statusCalls = 0;
+    // The sign-out is delivered FROM INSIDE the status read, which is what
+    // makes this deterministic rather than a race the scheduler might win: the
+    // continuation cannot run before its own await resolves.
+    const signsOutMidStatus: IpcHostController = {
+      ...base,
+      getStatus: () => {
+        statusCalls += 1;
+        if (statusCalls === 1) gate.signOut();
+        return Promise.resolve(neverInstalled(false));
+      },
+      convergeReady: (force: boolean) => {
+        convergeCalls.push(force);
+        return Promise.resolve({
+          kind: "ok" as const,
+          value: { running: true, version: "1.4.0" },
+        });
+      },
+    };
+
+    armFirstInstallOnSignIn(signsOutMidStatus, gate);
+
+    await vi.waitFor(() => {
+      expect(statusCalls).toBe(1);
+    });
+    // Premise, positively: the attempt really did start under a signed-in
+    // gate and really did reach the status read. Without this the assertion
+    // below is satisfied by an arm that never attempted anything at all.
+    expect(gate.isSignedIn()).toBe(false);
+    expect(convergeCalls).toEqual([]);
+
+    // WAITING, not declining - the same shape as a signed-out launch. An
+    // assertion on the empty call list alone would pass against an arm that
+    // gave up and left the machine hostless for the session.
+    expect(gate.listenerCount()).toBe(1);
+
+    // And the wait is live: a real sign-in still installs. This is the arm
+    // that fails if the re-read were implemented by settling instead of
+    // returning.
+    gate.signIn();
+    await vi.waitFor(() => {
+      expect(convergeCalls).toEqual([false]);
+    });
+    await vi.waitFor(() => {
+      expect(gate.listenerCount()).toBe(0);
+    });
   });
 
   it("CONSENT: a host the user removed is never reinstalled, even signed in", async () => {
