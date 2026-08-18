@@ -242,6 +242,57 @@ describe("ephemeral-fetch-queue", () => {
       expect(calls).toBe(2);
     });
 
+    it("does not let TanStack retry a queue-owned read into a second CLI probe", async () => {
+      // `newQueryClient()` sets `retry: false` as the DEFAULT, so every other
+      // test in this file is blind to what production actually does: the app
+      // QueryClient retries every non-`RetryableTransportError` once
+      // (`lib/query-client.ts`). This client mirrors THAT, so the assertion is
+      // about the queue's own `retry: false` on `fetchQuery` rather than about
+      // the fixture.
+      //
+      // Without it, the response budget elapsing on a read the host is still
+      // running makes TanStack re-send the SAME forced probe - a second codex
+      // subprocess while the first may still be completing - and holds the
+      // serial lane for up to another full budget before the catch schedules
+      // the one delayed gauge read that is supposed to own recovery.
+      vi.useFakeTimers();
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: (failureCount: number, error: unknown) =>
+              !(error instanceof RetryableTransportError) && failureCount < 1,
+          },
+        },
+      });
+      let calls = 0;
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        return Promise.reject(transportFailure());
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      // Give TanStack's own retry backoff room to fire if it were going to.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(calls).toBe(1);
+
+      // Recovery is the single delayed follow-up, and it is UNFORCED - a cache
+      // read, not another subprocess.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+    });
+
     it("does not follow up a read the host never dispatched", async () => {
       vi.useFakeTimers();
       const queryClient = newQueryClient();

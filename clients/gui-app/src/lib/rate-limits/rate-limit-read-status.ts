@@ -22,6 +22,19 @@ import {
  * and the retrying messenger already owns that case. `HostRequestAbortedError`
  * means the authority was disposed, so nothing is waiting for the answer.
  *
+ * `fatalDetails` excludes a THIRD pre-dispatch case the two subclasses miss.
+ * The transport has three states but only two classes for them: never
+ * dispatched and retryable is a `RetryableTransportError`; dispatched but
+ * unheard is the plain class; and never dispatched but TERMINAL is ALSO the
+ * plain class, precisely because it must not be retried.
+ * `RemoteSession.notReadyRejection` returns exactly that for a closed session,
+ * carrying the terminal `fatalDetails` verbatim - a revoked credential, a plan
+ * restriction, an incompatible protocol. Reading those as "still running" would
+ * suppress a failure nothing can ever resolve and arm a follow-up with nothing
+ * to collect, leaving a stale reading on screen looking healthy. `fatalDetails`
+ * is non-null only when the failure arrived via a fatal-error frame, so it
+ * names that case and nothing else.
+ *
  * A leaf module (no local imports) so both the queue - which schedules the
  * follow-up read - and the surfaces that decide whether to show a failure share
  * one definition instead of drifting apart.
@@ -30,7 +43,8 @@ export function isRateLimitReadStillRunningOnHost(error: unknown): boolean {
   return (
     error instanceof HostTransportFailureError &&
     !(error instanceof RetryableTransportError) &&
-    !(error instanceof HostRequestAbortedError)
+    !(error instanceof HostRequestAbortedError) &&
+    error.fatalDetails === null
   );
 }
 
@@ -42,10 +56,23 @@ export function isRateLimitReadStillRunningOnHost(error: unknown): boolean {
  * its last-known-good reading meanwhile. Reporting "couldn't fetch usage" there
  * would be the visible-failure-then-silent-success behaviour this layer is
  * meant to stop.
+ *
+ * `queueOwned` is what makes that reasoning true rather than assumed. The whole
+ * justification for hiding the failure is that SOMETHING will come back for the
+ * answer, and the only thing that does is the `ephemeralProcess` queue's
+ * follow-up. An `httpFetch` provider (openrouter, kilocode, cursor) never
+ * enters that queue - it refetches its own query directly - so nothing is
+ * scheduled, nothing collects, and suppressing there just hides a dropped
+ * connection behind cached usage that looks healthy, or an empty Settings card
+ * with no error, until some later poll happens along. Callers pass the lane
+ * rather than the provider id so this stays a leaf module.
  */
 export function isRateLimitQueryFailure(query: {
   readonly isError: boolean;
   readonly error: unknown;
+  readonly queueOwned: boolean;
 }): boolean {
-  return query.isError && !isRateLimitReadStillRunningOnHost(query.error);
+  if (!query.isError) return false;
+  if (!query.queueOwned) return true;
+  return !isRateLimitReadStillRunningOnHost(query.error);
 }

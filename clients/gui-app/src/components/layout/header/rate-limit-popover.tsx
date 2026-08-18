@@ -1540,10 +1540,12 @@ function SingleProfileRateLimitProviderBlock({
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
   const targetPhase = useRateLimitQueueTargetPhase(providerId, null);
-  const targetFetching =
-    rateLimitFetchLane(providerId) === "ephemeralProcess"
-      ? targetPhase === "fetching"
-      : query.isFetching;
+  // Only this lane's reads are owned by the serial queue, so only they have a
+  // follow-up standing behind a read we stopped waiting for.
+  const queueOwned = rateLimitFetchLane(providerId) === "ephemeralProcess";
+  const targetFetching = queueOwned
+    ? targetPhase === "fetching"
+    : query.isFetching;
   // Single source of truth for this provider's refresh action + spinner state
   // (fresh-on-open, queue routing, and this target's own queue-phase fold-in),
   // shared verbatim with the Settings card so they can't drift apart.
@@ -1559,7 +1561,11 @@ function SingleProfileRateLimitProviderBlock({
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: targetFetching,
-    isError: isRateLimitQueryFailure(query),
+    isError: isRateLimitQueryFailure({
+      isError: query.isError,
+      error: query.error,
+      queueOwned,
+    }),
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
@@ -1887,7 +1893,11 @@ function RateLimitProviderProfileRow({
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: query.isFetching,
-    isError: isRateLimitQueryFailure(query),
+    isError: isRateLimitQueryFailure({
+      isError: query.isError,
+      error: query.error,
+      queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
+    }),
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);

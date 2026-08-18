@@ -604,6 +604,16 @@ export function enqueueRateLimitFetchBatchForScope(
           // The registry owns freshness and force semantics. Once a target
           // reaches this point, TanStack must invoke queryFn.
           staleTime: 0,
+          // This queue owns recovery, so TanStack must not also attempt it.
+          // The app-wide default retries every non-`RetryableTransportError`
+          // once, and the failure this lane expects most - the response budget
+          // elapsing on a read the host is still running - is exactly that. A
+          // retry there re-sends the SAME forced CLI probe while the first may
+          // still be completing, holds the serial lane for up to another full
+          // budget, and only then reaches the catch that schedules the single
+          // delayed gauge read. One cheap cache read is the recovery; a second
+          // subprocess is the thing this lane exists to prevent.
+          retry: false,
           meta: stampHostRpcMethod(undefined, "host.getRateLimitUsage"),
           gcTime: Infinity,
         }),
