@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -7,6 +7,7 @@ import { useEpicOpenInNewWindowFlow } from "@/components/layout/hooks/use-epic-o
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { InstallGuidanceDialog } from "@/components/layout/dialogs/install-guidance-dialog";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { confirmAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
 import { AboutDetailsDialog } from "./desktop/about-details-dialog";
 import { LogsChooserDialog } from "./desktop/logs-chooser-dialog";
 import { OpenEpicInNewWindowDialog } from "./desktop/open-epic-in-new-window-dialog";
@@ -28,6 +29,12 @@ export function DesktopDialogHost(): ReactNode {
   );
   const close = useDesktopDialogStore((state) => state.close);
   const openEpicInNewWindowFlow = useEpicOpenInNewWindowFlow();
+  // Confirm re-runs the app-wide unsyncable check before installing (see
+  // `confirmAppUpdateInstall`); while it is in flight the dialog is pending so
+  // a second click cannot race two checks - and two installs - out of one
+  // consent.
+  const [updateInstallConfirmPending, setUpdateInstallConfirmPending] =
+    useState(false);
 
   // If guidance disappears while the dialog is open (defensive - there's no
   // normal flow that clears it mid-display), don't leave a stale dialog with no
@@ -88,6 +95,11 @@ export function DesktopDialogHost(): ReactNode {
         `appUpdates.bridge` is resolved here rather than carried through the
         store, so the confirm path calls the same bridge every other update
         action uses and no callback has to be parked in state to go stale.
+
+        Confirm does not install off the captured rows: it hands them to
+        `confirmAppUpdateInstall`, which re-checks every window and installs
+        only if nothing NEW would be lost - otherwise the rows below are
+        replaced with the fresh full set and the user confirms again.
       */}
       {activeDialog === "update-unsynced-confirm" &&
       appUpdates.bridge !== null ? (
@@ -108,12 +120,21 @@ export function DesktopDialogHost(): ReactNode {
           )}
           cascadeSummary={null}
           actionLabel="Install and discard"
-          isPending={false}
+          isPending={updateInstallConfirmPending}
           onConfirm={() => {
             const bridge = appUpdates.bridge;
-            if (bridge === null) return;
-            close();
-            void bridge.installUpdate();
+            if (bridge === null || updateInstallConfirmPending) return;
+            setUpdateInstallConfirmPending(true);
+            // The door closes the dialog itself on install, or replaces the
+            // rows with the fresh full set and leaves it open when the
+            // protected set changed under the user - so `close()` is not
+            // called here: on "reconfirm" the dialog must stay up.
+            void confirmAppUpdateInstall(bridge, {
+              epics: updateUnsyncedEpics,
+              otherWindowsUnknown: updateUnsyncedOtherWindowsUnknown,
+            }).finally(() => {
+              setUpdateInstallConfirmPending(false);
+            });
           }}
         />
       ) : null}

@@ -20,6 +20,15 @@ function unreadableStateReason(filePath: string): string {
   return `preferred-host state file exists but could not be read: ${filePath}`;
 }
 
+/**
+ * A NEWER writer's file is a different refusal from an unreadable one, and
+ * the reason says which: the user's fix is not "check permissions" but "you
+ * rolled back; the newer Traycer's host preferences are in this file".
+ */
+function newerVersionStateReason(filePath: string, version: number): string {
+  return `preferred-host state file was written by a newer Traycer (format v${version}, this build reads v${PREFERRED_HOST_STATE_VERSION}) and is left untouched: ${filePath}`;
+}
+
 interface PreferredHostStoreLogger {
   warn(message: string, meta: unknown): void;
 }
@@ -73,10 +82,18 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
    * handed back even while the disk lags behind the promise.
    */
   private readonly pendingWipes = new Set<string>();
+  /**
+   * Why the last `read()` answered `null`, for the refusal `save` returns.
+   * Two different files produce that answer - one this build cannot READ and
+   * one a NEWER build wrote - and the user's remedy differs, so the reason
+   * must too. Overwritten on every `null` read; meaningless otherwise.
+   */
+  private refusalReason: string;
 
   constructor(filePath: string, logger: PreferredHostStoreLogger) {
     this.filePath = filePath;
     this.logger = logger;
+    this.refusalReason = unreadableStateReason(filePath);
   }
 
   load(identityKey: string | null): string | null {
@@ -120,13 +137,14 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
     this.drainPendingWipes();
     const current = this.read();
     if (current === null) {
-      // The file exists and could not be read, so the durable set is UNKNOWN.
+      // The file exists and could not be read (or a newer build wrote it), so
+      // the durable set is UNKNOWN.
       // A wipe cannot be confirmed absent - hold it pending so `load` refuses
       // the bucket and the next call re-attempts against a real read. An
       // Activate cannot merge into a set it cannot see: writing would replace
       // every other identity's preference with this one entry.
       if (hostId === null) this.pendingWipes.add(identityKey);
-      return { ok: false, reason: unreadableStateReason(this.filePath) };
+      return { ok: false, reason: this.refusalReason };
     }
     const next = new Map(current);
     if (hostId === null) {
@@ -158,7 +176,8 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
   private drainPendingWipes(): void {
     if (this.pendingWipes.size === 0) return;
     const current = this.read();
-    // Still unreadable: "absent from the durable set" cannot be claimed off a
+    // Still refused (unreadable, or a newer build's file): "absent from the
+    // durable set" cannot be claimed off a
     // set we did not read, so the wipes stay pending rather than being cleared
     // as honoured.
     if (current === null) return;
@@ -178,7 +197,9 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
   }
 
   /**
-   * The durable set, or `null` when the file EXISTS but could not be read.
+   * The durable set, or `null` when the file EXISTS but could not be read -
+   * or was written by a NEWER build (see the version check below), which is
+   * refused the same way for the same reason.
    *
    * Absent and unreadable are different answers and used to be one. An absent
    * file is a legitimate state (first run; derivation defaults to local) and
@@ -208,14 +229,47 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
       this.logger.warn("[selection-preferred] state file unreadable", {
         error: String(error),
       });
+      this.refusalReason = unreadableStateReason(this.filePath);
       return null;
     }
-    this.byIdentity = entries;
+    // Cached only AFTER the format check below has passed or failed as
+    // corrupt: a file this build must not overwrite (a newer version's) must
+    // not be cached either, for the same reason an unreadable one is not.
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (parsed === null || typeof parsed !== "object") return entries;
+      if (parsed === null || typeof parsed !== "object") {
+        this.byIdentity = entries;
+        return entries;
+      }
       const record: Record<string, unknown> = { ...parsed };
-      if (record["version"] !== PREFERRED_HOST_STATE_VERSION) return entries;
+      const version = record["version"];
+      if (
+        typeof version === "number" &&
+        version > PREFERRED_HOST_STATE_VERSION
+      ) {
+        // Written by a NEWER Traycer, then rolled back to this one. The file
+        // is valid - it is just in a shape this build does not read - and it
+        // holds every identity's preference for the newer build. Reading it
+        // as empty and caching that would make a sign-out here report its
+        // wipe honoured without touching the file, and an Activate here
+        // REPLACE the file with one in THIS build's format holding a single
+        // identity, deleting every other preference the newer build kept.
+        // So it is refused exactly like an unreadable file: not cached, no
+        // write built on it, derivation falls back to its local default, and
+        // the reason names the file and both versions.
+        this.logger.warn(
+          "[selection-preferred] state file written by a newer version",
+          { version, supported: PREFERRED_HOST_STATE_VERSION },
+        );
+        this.refusalReason = newerVersionStateReason(this.filePath, version);
+        return null;
+      }
+      this.byIdentity = entries;
+      // An OLDER or MISSING `version` degrades to empty, cached and
+      // overwritable, silently: only this build has ever written the file, so
+      // anything below v1 is malformed, not a format to preserve - and
+      // refusing it would strand the user with no way to set a preference.
+      if (version !== PREFERRED_HOST_STATE_VERSION) return entries;
       const byIdentity = record["byIdentity"];
       if (byIdentity === null || typeof byIdentity !== "object") return entries;
       for (const [key, value] of Object.entries({ ...byIdentity })) {
@@ -228,6 +282,7 @@ export class DesktopPreferredHostStore implements PreferredHostStore {
       // whole point of this value is that losing it is survivable. Unlike an
       // UNREADABLE file this IS cached and IS overwritten by the next save -
       // there is nothing left in it to protect.
+      this.byIdentity = entries;
       this.logger.warn("[selection-preferred] corrupt state file", {
         error: String(error),
       });

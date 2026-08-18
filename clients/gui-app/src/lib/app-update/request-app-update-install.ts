@@ -53,6 +53,67 @@ export async function requestAppUpdateInstall(
 }
 
 /**
+ * What the confirmation's Confirm did: installed, or re-asked because the
+ * protected set is no longer the one the user was shown.
+ */
+export type ConfirmAppUpdateInstallOutcome = "installed" | "reconfirm";
+
+/**
+ * The confirmation's Confirm - the SECOND half of the door, and the half that
+ * actually installs after a prompt.
+ *
+ * `shown` is what the user consented to discard: the rows the dialog listed
+ * and whether it said other windows were unaccounted for. Between the dialog
+ * opening and Confirm, another window (or this one) can retain a NEW Epic -
+ * a host re-point mid-dialog is exactly the kind of event that produces
+ * unsyncable work - and installing off the captured list would destroy a
+ * buffer the confirmation never named. The update quit skips the
+ * unsynced-edits interception on purpose (`update-install-quit.ts`), so this
+ * prompt is the ONLY thing standing in front of that buffer; a Confirm that
+ * does not re-check leaves it standing in front of a stale list.
+ *
+ * So Confirm re-runs the app-wide check and installs only if the answer is
+ * still COVERED by what was shown: no epic the user was not shown, and no
+ * flip from "other windows checked" to "other windows unknown". A set that
+ * SHRANK is fine - a retention reclaimed while the dialog was up means less
+ * to lose than consented to, and re-asking about less would be noise. A set
+ * that GREW (or lost its coverage) replaces the confirmation's rows with the
+ * fresh FULL set and does NOT install: the user reads the current list and
+ * confirms again, or cancels. (No delta is highlighted - the rows are the
+ * whole set, re-listed.) The dialog holds its rows in the store rather than re-deriving
+ * (`desktop-dialog-store.ts` says why), and this is the one place they are
+ * replaced - by a check, never by a passive re-query.
+ */
+export async function confirmAppUpdateInstall(
+  bridge: DesktopAppUpdatesBridge,
+  shown: UpdateUnsyncedConfirmation,
+): Promise<ConfirmAppUpdateInstallOutcome> {
+  const fresh = await unsyncableWorkAcrossWindows();
+  if (!coveredByShown(fresh, shown)) {
+    useDesktopDialogStore.getState().openUpdateUnsyncedConfirm(fresh);
+    return "reconfirm";
+  }
+  useDesktopDialogStore.getState().close();
+  void bridge.installUpdate();
+  return "installed";
+}
+
+/**
+ * True when everything `fresh` would destroy was already on the table when
+ * the user confirmed. Keyed on `epicId`, not row identity: the rows are
+ * rebuilt on every check, and a row whose title or queue size moved is still
+ * the same consented-to buffer.
+ */
+function coveredByShown(
+  fresh: UpdateUnsyncedConfirmation,
+  shown: UpdateUnsyncedConfirmation,
+): boolean {
+  if (fresh.otherWindowsUnknown && !shown.otherWindowsUnknown) return false;
+  const shownIds = new Set(shown.epics.map((epic) => epic.epicId));
+  return fresh.epics.every((epic) => shownIds.has(epic.epicId));
+}
+
+/**
  * The unsyncable set for the WHOLE APP, not this renderer.
  *
  * `unsyncableWork()` reads a module-scoped registry, so it can only ever see

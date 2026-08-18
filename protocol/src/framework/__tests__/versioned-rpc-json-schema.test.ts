@@ -1062,6 +1062,130 @@ describe("response-lane value-growth strictness", () => {
     expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
   });
 
+  it("accepts the same incidental-literal replacement in a MIXED union (one object arm beside a non-object arm)", () => {
+    // Raised against the fix above: with a primitive arm in the union, only
+    // ONE object arm feeds `discriminatorFields`, so every one-value literal
+    // on it qualifies trivially - and the worry was that the shared, incidental
+    // `outcome:"done"` would then match "failure" as "success" EDITED. It does
+    // not, and this arm is the proof: identity is the WHOLE tuple of fields
+    // that discriminate on BOTH sides, `kind` is pinned on both, and
+    // ("success","done") is not ("failure","done"). The mixed union changes
+    // how many arms vote; it does not drop `kind` from the tuple.
+    const mixedV10 = defineRpcContract({
+      method: "replaceIncidentalMixed",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.union([
+          z.object({
+            kind: z.literal("success"),
+            outcome: z.literal("done"),
+            value: z.string(),
+          }),
+          z.string(),
+        ]),
+      }),
+    });
+    const mixedV11 = defineRpcContract({
+      method: "replaceIncidentalMixed",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.union([
+          z.object({ kind: z.literal("failure"), outcome: z.literal("done") }),
+          z.string(),
+        ]),
+      }),
+    });
+    const mixedUpgrade = defineUpgradePath<typeof mixedV10, typeof mixedV11>({
+      from: mixedV10.schemaVersion,
+      to: mixedV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          typeof response.row === "string" ? response.row : response.row.value,
+      }),
+    });
+    const registry = {
+      replaceIncidentalMixed: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: mixedV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: mixedV11,
+              upgradeFromPreviousVersion: mixedUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
+  it("still rejects a REDUCTION of the lone object arm of a mixed union under the exemption", () => {
+    // The other half of the mixed-union question, and the reason the answer
+    // is not "return no discriminator when any arm is non-object": with no
+    // discriminator the lone object arm would have no successor, its edit
+    // would read as a permitted replacement, and dropping `value` from it
+    // would sail through a projection-gated minor. `kind` is pinned to the
+    // same literal on both sides, so the arm has a successor and the dropped
+    // field is reported.
+    const mixedV10 = defineRpcContract({
+      method: "reduceLoneArmMixed",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.union([
+          z.object({ kind: z.literal("success"), value: z.string() }),
+          z.string(),
+        ]),
+      }),
+    });
+    const mixedV11 = defineRpcContract({
+      method: "reduceLoneArmMixed",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.union([z.object({ kind: z.literal("success") }), z.string()]),
+      }),
+    });
+    const mixedUpgrade = defineUpgradePath<typeof mixedV10, typeof mixedV11>({
+      from: mixedV10.schemaVersion,
+      to: mixedV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          typeof response.row === "string"
+            ? response.row
+            : { kind: "success" as const },
+      }),
+    });
+    const registry = {
+      reduceLoneArmMixed: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: mixedV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: mixedV11,
+              upgradeFromPreviousVersion: mixedUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'reduceLoneArmMixed' response drops field 'row.value' from 1.0",
+    );
+  });
+
   it("rejects a projection-gated minor whose reduced surviving arm comes AFTER a replaced arm", () => {
     // Order independence on top of the "REDUCES a surviving union arm" test
     // above: that test's reduced arm happens to come FIRST, so it would still

@@ -287,4 +287,125 @@ describe("DesktopPreferredHostStore", () => {
       expect(store.load("user-b")).toBeNull();
     });
   });
+
+  describe("a state file written by a NEWER Traycer (rollback)", () => {
+    // Not a read-failure seam: the file is perfectly readable and perfectly
+    // valid - it is just in a format version this build does not know. That
+    // used to fall through `version !== PREFERRED_HOST_STATE_VERSION` into an
+    // authoritative, CACHED empty map, so after a rollback a sign-out found
+    // the identity "already absent" and reported the wipe honoured without
+    // touching the file, and an Activate wrote a v1 file holding ONE identity
+    // over the newer build's file - deleting every other identity's
+    // preference the user would get back on the next upgrade.
+    const newerFile = JSON.stringify({
+      version: 2,
+      byIdentity: { "user-a": "host-1", "user-b": "host-2" },
+      // Something a v2 writer might carry that v1 has no idea about.
+      lastActivatedAt: { "user-a": 1 },
+    });
+
+    it("an Activate refuses - naming the newer format - and the newer file survives byte-for-byte", () => {
+      const dir = makeTempDir();
+      const filePath = join(dir, "prefs", "desktop-preferred-host.json");
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, newerFile, "utf8");
+      const calls: string[] = [];
+      const store = new DesktopPreferredHostStore(filePath, {
+        warn: (message: string): void => {
+          calls.push(message);
+        },
+      });
+
+      // Reads as "no preference" - derivation's local default is the safe
+      // answer for a shape this build cannot interpret.
+      expect(store.load("user-a")).toBeNull();
+
+      const activate = store.save("user-c", "host-3");
+      expect(activate.ok).toBe(false);
+      if (activate.ok) throw new Error("unreachable");
+      expect(activate.reason).toContain("newer Traycer");
+      expect(activate.reason).toContain("v2");
+      expect(activate.reason).toContain(filePath);
+      expect(calls).toContain(
+        "[selection-preferred] state file written by a newer version",
+      );
+      // The refusal is the READ's, not a write's: nothing was attempted.
+      expect(calls).not.toContain("[selection-preferred] state write failed");
+      // The one assertion that matters: the newer build's file is untouched.
+      expect(readFileSync(filePath, "utf8")).toBe(newerFile);
+    });
+
+    it("a sign-out wipe is held pending rather than reported done, and the identity is refused meanwhile", () => {
+      const dir = makeTempDir();
+      const filePath = join(dir, "prefs", "desktop-preferred-host.json");
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, newerFile, "utf8");
+      const store = new DesktopPreferredHostStore(filePath, silentLog);
+
+      const wipe = store.save("user-a", null);
+      // OLD code: {ok:true} off the cached false-empty map, file untouched,
+      // "host-1" back on the next upgrade as if the sign-out never happened.
+      expect(wipe).toEqual({ ok: false, reason: expect.any(String) });
+      expect(store.load("user-a")).toBeNull();
+      expect(readFileSync(filePath, "utf8")).toBe(newerFile);
+    });
+
+    it("the newer-version read is NOT cached: once the file is back in this build's format, the same instance reads it", () => {
+      const dir = makeTempDir();
+      const filePath = join(dir, "prefs", "desktop-preferred-host.json");
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, newerFile, "utf8");
+      const store = new DesktopPreferredHostStore(filePath, silentLog);
+      expect(store.save("user-c", "host-3").ok).toBe(false);
+
+      // The user upgrades-and-migrates (or hand-fixes) the file back to v1.
+      writeFileSync(
+        filePath,
+        JSON.stringify({ version: 1, byIdentity: { "user-a": "host-1" } }),
+        "utf8",
+      );
+      // OLD code cached {} at the first read, so this stayed null and the
+      // pending Activate went on to write "user-c" alone.
+      expect(store.load("user-a")).toBe("host-1");
+      expect(store.save("user-c", "host-3")).toEqual({ ok: true });
+      expect(store.load("user-a")).toBe("host-1");
+      expect(store.load("user-c")).toBe("host-3");
+    });
+
+    it("an OLDER or missing version is malformed, not a format to preserve: it degrades to empty and IS overwritable", () => {
+      // Only this build has ever written the file, so nothing below v1 can be
+      // a real writer's format - refusing it would strand the user with no
+      // way to ever set a preference again.
+      const dir = makeTempDir();
+      const filePath = join(dir, "prefs", "desktop-preferred-host.json");
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(
+        filePath,
+        JSON.stringify({ version: 0, byIdentity: { "user-a": "host-1" } }),
+        "utf8",
+      );
+      const store = new DesktopPreferredHostStore(filePath, silentLog);
+      expect(store.load("user-a")).toBeNull();
+      expect(store.save("user-c", "host-3")).toEqual({ ok: true });
+      const written: unknown = JSON.parse(readFileSync(filePath, "utf8"));
+      expect(written).toEqual({
+        version: 1,
+        byIdentity: { "user-c": "host-3" },
+      });
+
+      // And with no `version` key at all - the same verdict.
+      writeFileSync(
+        filePath,
+        JSON.stringify({ byIdentity: { "user-a": "host-1" } }),
+        "utf8",
+      );
+      const unversioned = new DesktopPreferredHostStore(filePath, silentLog);
+      expect(unversioned.load("user-a")).toBeNull();
+      expect(unversioned.save("user-d", "host-4")).toEqual({ ok: true });
+      expect(JSON.parse(readFileSync(filePath, "utf8"))).toEqual({
+        version: 1,
+        byIdentity: { "user-d": "host-4" },
+      });
+    });
+  });
 });

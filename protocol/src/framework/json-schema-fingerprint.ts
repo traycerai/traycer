@@ -852,10 +852,21 @@ function findDiscriminatedSuccessor(
 
 /**
  * The properties that tell this union's arms apart: pinned to one literal in
- * every object arm, with no value shared between two arms. Empty when the
- * union has no object arm or no such property - including a mixed union
- * where some arm leaves the field open, which is exactly the case where a
- * literal on one arm says nothing about identity.
+ * every OBJECT arm, with no value shared between two of them. Empty when the
+ * union has no object arm or no such property - including the case where one
+ * object arm pins the field and another leaves it open, which is exactly the
+ * case where a literal on one arm says nothing about identity.
+ *
+ * Non-object arms (a primitive or array beside the objects) are NOT voters
+ * and do NOT veto: they carry no properties to discriminate on, and refusing
+ * to infer for the whole union because of them would leave a lone object arm
+ * with no successor - so an EDIT to it (a dropped field) would read as a
+ * permitted replacement under `responseGrowthProjectionGated`. With a single
+ * object arm every pinned literal qualifies, and that is safe because
+ * `findDiscriminatedSuccessor` matches on the WHOLE tuple of fields pinned
+ * on BOTH sides: an arm whose `kind` changed is a different arm however many
+ * incidental literals it shares. `versioned-rpc-json-schema.test.ts` pins
+ * both halves ("MIXED union" / "lone object arm").
  */
 function discriminatorFields(variants: readonly unknown[]): readonly string[] {
   const arms: Array<Readonly<Record<string, unknown>>> = [];
