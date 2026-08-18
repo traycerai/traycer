@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createWorktreeBranchSearchIndex,
   filterWorktreeBranchRows,
@@ -151,6 +151,9 @@ describe("worktree branch search", () => {
     const longBranch = "feature-integration-with-payments-flow-long";
     const rows = [searchRow("one", longBranch, "/repo/worktrees/alpha")];
     const index = createWorktreeBranchSearchIndex(rows);
+    // The gate is about the CALL, not just the result: spy on the index so a
+    // silent fuzzy pass cannot hide behind an empty result set.
+    const search = vi.spyOn(index, "search");
 
     // Exact (long) substring hit still returns.
     expect(longBranch.length).toBeGreaterThan(32);
@@ -164,5 +167,14 @@ describe("worktree branch search", () => {
     const typoQuery = "feature-integration-with-paymentz-flow-long";
     expect(typoQuery.length).toBeGreaterThan(32);
     expect(filterWorktreeBranchRows(rows, index, typoQuery)).toEqual([]);
+    expect(search).not.toHaveBeenCalled();
+
+    // Control: the same spy DOES record a call once the query is short enough
+    // to earn the fuzzy fallback, so the zero-call assertion above is evidence
+    // of the length gate rather than of a spy that can never fire.
+    const shortTypo = "paymentz";
+    expect(shortTypo.length).toBeLessThanOrEqual(32);
+    filterWorktreeBranchRows(rows, index, shortTypo);
+    expect(search).toHaveBeenCalledWith(shortTypo);
   });
 });
