@@ -22,6 +22,7 @@ import {
   useHeaderStripItemIds,
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
+import { useProjectScopedHeaderStripItemIds } from "@/hooks/workspace/use-project-scoped-header-strip";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -62,6 +63,11 @@ export function TabStrip() {
 
 function TabStripBody() {
   const headerItemIds = useHeaderStripItemIds();
+  const visibleHeaderItemIds = useProjectScopedHeaderStripItemIds();
+  const visibleHeaderItemIdSet = useMemo(
+    () => new Set(visibleHeaderItemIds),
+    [visibleHeaderItemIds],
+  );
   const layoutItems = useTabsStore((state) => state.items);
   const allTabs = useHeaderTabs();
   const navigate = useNavigate();
@@ -79,6 +85,12 @@ function TabStripBody() {
   const dropIndicatorIndex = useHeaderStripDropIndex();
 
   const isLandingPage = activePathname === "/";
+  useEffect(() => {
+    if (isLandingPage) return;
+    if (activeItemId === null) return;
+    if (visibleHeaderItemIdSet.has(activeItemId)) return;
+    void navigate({ to: "/" });
+  }, [activeItemId, isLandingPage, navigate, visibleHeaderItemIdSet]);
   const indicatorEpicIds = useMemo(
     () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
     [allTabs],
@@ -250,7 +262,7 @@ function TabStripBody() {
     return null;
   }
 
-  const canCloseOtherTabs = headerItemIds.length > 1;
+  const canCloseOtherTabs = visibleHeaderItemIds.length > 1;
 
   return (
     <NotificationIndicatorsProvider indicators={notificationIndicators}>
@@ -268,20 +280,29 @@ function TabStripBody() {
               onWheel={handleWheel}
               className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
             >
-              {headerItemIds.map((itemId, index) => (
+              {headerItemIds.map((itemId, index) => {
+                if (!visibleHeaderItemIdSet.has(itemId)) return null;
+                const visibleIndex = visibleHeaderItemIds.indexOf(itemId);
+                const nextVisibleId = visibleHeaderItemIds[visibleIndex + 1];
+                return (
                 <HeaderStripItemRenderer
                   key={itemId}
                   itemId={itemId}
                   stripIndex={index}
                   memberOffset={memberOffsetBefore(layoutItems, index)}
                   isActive={itemId === activeItemId}
-                  isNextActive={headerItemIds[index + 1] === activeItemId}
-                  nextIsSplit={layoutItems[index + 1]?.kind === "split"}
-                  isLastItem={index === headerItemIds.length - 1}
+                  isNextActive={nextVisibleId === activeItemId}
+                  nextIsSplit={
+                    nextVisibleId === undefined
+                      ? false
+                      : layoutItems.find((item) => item.id === nextVisibleId)
+                          ?.kind === "split"
+                  }
+                  isLastItem={visibleIndex === visibleHeaderItemIds.length - 1}
                   showDropIndicatorBefore={dropIndicatorIndex === index}
                   showDropIndicatorAfter={
                     dropIndicatorIndex === index + 1 &&
-                    index === headerItemIds.length - 1
+                    visibleIndex === visibleHeaderItemIds.length - 1
                   }
                   onClose={closeTabFlow.requestCloseTab}
                   onCloseOtherTabs={closeTabFlow.closeOtherTabs}
@@ -294,7 +315,8 @@ function TabStripBody() {
                   pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
                   onSetTaskPinned={handleSetTaskPinned}
                 />
-              ))}
+                );
+              })}
             </div>
           </LayoutGroup>
           <TabStripNewButton onNewTab={handleNewTab} />

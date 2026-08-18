@@ -1,6 +1,7 @@
 import { Check, ChevronDown, FolderKanban, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +37,7 @@ export function ProjectProfileSwitcher() {
     selectActiveProjectProfile(state, hostId),
   );
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const disabled = hostId === null;
   const label = active === null ? "All projects" : active.name;
 
@@ -123,7 +125,7 @@ export function ProjectProfileSwitcher() {
             <DropdownMenuItem
               variant="destructive"
               data-testid="project-profile-delete"
-              onSelect={() => deleteActiveProfile(hostId, active.id)}
+              onSelect={() => setDeleteOpen(true)}
             >
               <Trash2 className="size-3.5" />
               <span className="min-w-0 truncate">Delete {active.name}</span>
@@ -136,6 +138,21 @@ export function ProjectProfileSwitcher() {
           hostId={hostId}
           open={createOpen}
           onOpenChange={setCreateOpen}
+        />
+      ) : null}
+      {active !== null ? (
+        <ConfirmDestructiveDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          title={`Delete ${active.name}?`}
+          description="This only removes the project shortcut. Chats and folders stay. If another project exists, Traycer switches to it instead of All projects."
+          cascadeSummary={null}
+          actionLabel="Delete project"
+          isPending={false}
+          onConfirm={() => {
+            deleteActiveProfile(hostId, active.id);
+            setDeleteOpen(false);
+          }}
         />
       ) : null}
     </>

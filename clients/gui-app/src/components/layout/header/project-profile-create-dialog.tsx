@@ -61,6 +61,7 @@ export function ProjectProfileCreateDialog(props: {
   const [color, setColor] = useState<ProjectProfileColor>("orange");
   const [seed, setSeed] = useState<ProjectProfileSeed>("folder");
   const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // A folder picked via the native/remote picker that is NOT in the host
   // catalog yet. Dialog-local only: it reaches the catalog on Create (the
   // profile seed reads the catalog), never on pick - Cancel must leave the
@@ -79,6 +80,7 @@ export function ProjectProfileCreateDialog(props: {
     setSeed("folder");
     setPickedFolder(null);
     setPendingFolder(null);
+    setAdvancedOpen(false);
   };
 
   const submit = () => {
@@ -256,33 +258,47 @@ export function ProjectProfileCreateDialog(props: {
               {isPreparing ? "Opening…" : "Choose folder"}
             </Button>
           </fieldset>
-          <fieldset className="flex flex-col gap-1.5">
-            <legend className="text-ui-sm font-medium text-muted-foreground">
-              Or
-            </legend>
-            <div className="flex flex-col gap-1">
-              {EXTRA_SEEDS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  data-testid={`project-profile-seed-${option.id}`}
-                  aria-pressed={seed === option.id}
-                  onClick={() => setSeed(option.id)}
-                  className={cn(
-                    "flex flex-col items-start rounded-md px-2.5 py-1.5 text-left",
-                    seed === option.id
-                      ? "bg-foreground/8"
-                      : "hover:bg-foreground/5",
-                  )}
-                >
-                  <span className="text-ui-sm font-medium">{option.label}</span>
-                  <span className="text-ui-xs text-muted-foreground">
-                    {option.hint}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          <details className="flex flex-col gap-1.5" open={advancedOpen}>
+            <summary
+              className="cursor-pointer text-ui-sm font-medium text-muted-foreground"
+              data-testid="project-profile-advanced"
+              onClick={(event) => {
+                event.preventDefault();
+                setAdvancedOpen((open) => !open);
+              }}
+            >
+              Advanced
+            </summary>
+            {advancedOpen ? (
+              <fieldset className="flex flex-col gap-1.5">
+                <legend className="sr-only">More ways to start</legend>
+                <div className="flex flex-col gap-1">
+                  {EXTRA_SEEDS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      data-testid={`project-profile-seed-${option.id}`}
+                      aria-pressed={seed === option.id}
+                      onClick={() => setSeed(option.id)}
+                      className={cn(
+                        "flex flex-col items-start rounded-md px-2.5 py-1.5 text-left",
+                        seed === option.id
+                          ? "bg-foreground/8"
+                          : "hover:bg-foreground/5",
+                      )}
+                    >
+                      <span className="text-ui-sm font-medium">
+                        {option.label}
+                      </span>
+                      <span className="text-ui-xs text-muted-foreground">
+                        {option.hint}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            ) : null}
+          </details>
         </div>
         <DialogFooter>
           <Button

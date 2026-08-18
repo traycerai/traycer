@@ -99,6 +99,7 @@ import {
   type HistoryFetchResult,
 } from "@/hooks/home/use-history-query";
 import { historyListEmptyState } from "@/lib/workspace/history-item-matches-project";
+import { claimEpicOnActiveProfile } from "@/lib/workspace/claim-epic-on-active-profile";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   useAmbientHistorySearchState,
@@ -621,6 +622,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             chatHostFilterUnsupported={chatHostFilterUnsupported}
             projectFilterActive={projectFilterActive}
             preProjectFilterCount={preProjectFilterCount}
+            hostId={hostId}
             items={items}
             onRetry={handleRetry}
             selectionMode={selectionMode}
@@ -1062,6 +1064,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         chatHostFilterUnsupported={props.chatHostFilterUnsupported}
         projectFilterActive={props.projectFilterActive}
         preProjectFilterCount={props.preProjectFilterCount}
+        hostId={props.hostId}
         items={props.items}
         onRetry={props.onRetry}
         selectionMode={props.selectionMode}
@@ -1096,6 +1099,7 @@ interface EpicsListBodyProps {
   readonly chatHostFilterUnsupported: boolean;
   readonly projectFilterActive: boolean;
   readonly preProjectFilterCount: number;
+  readonly hostId: string | null;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -1132,6 +1136,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     chatHostFilterUnsupported,
     projectFilterActive,
     preProjectFilterCount,
+    hostId,
     items,
     onRetry,
     selectionMode,
@@ -1225,6 +1230,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
               isOpen={openEpicIds.has(item.epicId)}
               onRowKeyDown={onRowKeyDown}
+              hostId={hostId}
+              projectFilterActive={projectFilterActive}
             />
           ))}
         </ul>
@@ -1275,6 +1282,8 @@ interface EpicsListRowProps {
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isOpen: boolean;
+  readonly hostId: string | null;
+  readonly projectFilterActive: boolean;
   /** Arrow-key traversal, bound to whichever control covers the whole card. */
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
@@ -1351,6 +1360,8 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     worktrees,
     isOpen,
     onRowKeyDown,
+    hostId,
+    projectFilterActive,
   } = props;
   const isPhase = item.taskType === "phase";
   const rowSweep = useHistoryRowSweep({
@@ -1427,7 +1438,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   );
   const openEpic = useCallback(() => {
     openHistoryItem(item);
-  }, [item, openHistoryItem]);
+    if (projectFilterActive) {
+      claimEpicOnActiveProfile(hostId, item.epicId);
+    }
+  }, [hostId, item, openHistoryItem, projectFilterActive]);
   const toggleEpicSelection = () => {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
