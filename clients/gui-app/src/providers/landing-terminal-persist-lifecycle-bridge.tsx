@@ -26,7 +26,9 @@ export function LandingTerminalPersistLifecycleBridge(
   props: LandingTerminalPersistLifecycleBridgeProps,
 ): ReactNode {
   const status = useAuthStore((state) => state.status);
-  const email = useAuthStore((state) => state.profile?.email ?? null);
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  // Only to name the pre-userId key for one-time adoption; NOT an identity.
+  const legacyEmail = useAuthStore((state) => state.profile?.email ?? null);
   const defaultClient = useHostClient();
   const directory = useHostDirectory();
   const drainTombstones = useCallback(() => {
@@ -54,7 +56,8 @@ export function LandingTerminalPersistLifecycleBridge(
       ) {
         retargetPersistedStore({
           store: useLandingTerminalStore,
-          name: landingTerminalsKey(transition.email),
+          name: landingTerminalsKey(transition.userId),
+          legacyName: landingTerminalsKey(legacyEmail),
         });
         return;
       }
@@ -64,10 +67,10 @@ export function LandingTerminalPersistLifecycleBridge(
         anonymousName: landingTerminalsKey(null),
       });
     },
-    [drainTombstones],
+    [drainTombstones, legacyEmail],
   );
 
-  useAuthIdentityTransition(status, email, onTransition);
+  useAuthIdentityTransition(status, userId, onTransition);
 
   return <>{props.children}</>;
 }

@@ -140,15 +140,33 @@ export function installHostConnectionRegistrySource(
   if (next.leases !== null) {
     sourceSubscriptions.push(next.leases.onLeasesChanged(reconcileAllRows));
   }
-  // Adopt the installed source's current answers WITHOUT notifying: a
-  // subscriber that mounted before the source did reads through
-  // `useSyncExternalStore`'s own getSnapshot on its next render anyway, and
-  // announcing "changed" for values nobody had yet observed would report a
-  // transition that never happened.
-  for (const record of records.values()) {
-    record.entry = readEntry(record.hostId);
-    record.lease = readLease(record.hostId);
-  }
+  // Installing a source IS a change event, so it goes through the same
+  // reconciler every other change event does.
+  //
+  // This used to adopt each record's answers in a private loop that
+  // deliberately notified nobody, reasoning that "a subscriber that mounted
+  // before the source did reads through `useSyncExternalStore`'s own
+  // getSnapshot on its next render anyway". That holds only for a subscriber
+  // which has never observed anything, and it contradicts the invariant
+  // `resetHostConnectionRegistry` states directly below: subscribers
+  // deliberately SURVIVE a dispose/reinstall, because dropping them is a
+  // StrictMode bug. A survivor HAS observed the previous source's values, and
+  // `useSyncExternalStore` does not poll while idle - so with no notification
+  // here and no later change from the new source, it keeps the old snapshot
+  // indefinitely, and `useReactiveHostReadiness` /
+  // `useReactiveOwnerIdentityKey` keep answering for a source that is gone.
+  //
+  // Reusing `reconcileAllRows` rather than repairing that loop in place is the
+  // point: a second copy of "compare, adopt, notify" is what allowed this one
+  // to drift from the real one in the first place. It also inherits both rules
+  // that copy had lost - structural comparison via
+  // `hostDirectoryEntryEquals` / `hostLeaseSnapshotEquals` (the rows are
+  // rebuilt per read, so reference equality would report every record as
+  // changed), and the UNCONDITIONAL coarse arm, whose own comment records that
+  // gating it on `changed.length` reintroduces the P4.2 defect for consumers
+  // waiting on a host that has no record yet - which is exactly the state a
+  // freshly installed source is in.
+  reconcileAllRows();
 }
 
 /**

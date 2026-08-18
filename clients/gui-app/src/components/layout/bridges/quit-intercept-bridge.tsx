@@ -145,6 +145,17 @@ export function QuitInterceptBridge(): null | React.ReactElement {
   // main; the recovery flush resolves only after the latest editor draft is in
   // IndexedDB. Reply even if either rejects so main does not wait out its fresh
   // snapshot timeout and fall back to stale state.
+  //
+  // The registry is read INSIDE `reply`, after those flushes have settled,
+  // rather than when the request arrives. Reading it up front opened a window
+  // with the same shape as the ambient-cache staleness this whole round trip
+  // exists to close, only narrower: a re-point in this window that retains a
+  // buffer while the flushes are in flight would be absent from a reply main
+  // then treats as CURRENT - and the update door, which reads that reply to
+  // decide whether destroying work is authorized, would install over it. The
+  // captured-early value was never load-bearing; nothing between here and the
+  // reply depends on the two agreeing, so the later read is strictly more
+  // current and answers the question actually being asked.
   useEffect(() => {
     if (appLifecycle === null) return;
     const onGet = appLifecycle.onGetFreshUnsyncedSnapshot;
@@ -153,9 +164,11 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     const subscription = onGet((request) => {
       cancelAmbientPushRef.current();
       flushLiveReadingPositions(null);
-      const snapshot = registry.getUnsyncedEdits();
       const reply = (): Promise<void> =>
-        respond({ requestId: request.requestId, snapshot });
+        respond({
+          requestId: request.requestId,
+          snapshot: registry.getUnsyncedEdits(),
+        });
       void Promise.allSettled([
         flushActiveDesktopPerWindowProjection(),
         drainDesktopTabsPersistence(),

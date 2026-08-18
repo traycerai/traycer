@@ -624,16 +624,17 @@ describe("resetHostConnectionRegistry — production StrictMode-remount semantic
     // must survive. If the reset instead dropped listeners (the bug being
     // fixed), this would see zero calls no matter what the new source says.
     //
-    // NOTE on the "cached answer dropped" half of reset's contract: it is
-    // NOT independently observable through this notify path, because
-    // `installHostConnectionRegistrySource`'s post-install adopt loop
-    // (`record.entry = readEntry(...)`) unconditionally overwrites every
-    // record's cached entry/lease on EVERY install, with no equality check
-    // and no notify either way - so whether `resetHostConnectionRegistry`
-    // itself nulled the cache first makes no difference to what a
-    // subsequent `emitChanged()` sees; the adopt step already resynced it
-    // silently. Asserted here is the part that IS observable and is the
-    // actual fix: the subscription itself outlives the reset.
+    // The NOTE that stood here recorded the OLD install behaviour - a silent
+    // adopt loop that overwrote every cached answer with no equality check and
+    // no notification - and concluded the cache half of reset's contract was
+    // not observable through this path. That silence was itself the defect
+    // (Codex #1243 T-59): a subscriber surviving the remount, which is exactly
+    // what this test establishes, holds its pre-reset snapshot forever when
+    // the new source's answer differs and no later change happens to arrive.
+    // `installHostConnectionRegistrySource` now reconciles like any other
+    // change event, so the install IS observable, and this test asserts both
+    // halves: the adopt notifies for a row that moved, and the subscription
+    // still receives an ordinary later change.
     const hostId = freshHostId();
     const oldDirectory = stubDirectory();
     oldDirectory.setEntry(hostId, localEntry(hostId, {}));
@@ -655,16 +656,21 @@ describe("resetHostConnectionRegistry — production StrictMode-remount semantic
       directory: newDirectory.source,
       leases: null,
     });
-    // The install's own silent adopt does not notify (by design), so drive
-    // an actual subsequent change through the new source to prove the
-    // listener is still attached and reachable.
+    // The install itself now reports: `resetHostConnectionRegistry` nulled the
+    // cached answer and the new source has a row, so this record's answer
+    // genuinely moved and a survivor has to hear about it. This is the arm
+    // that was silent before the fix.
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // ...and the subscription is still attached for ordinary later changes,
+    // which is the original subject of this test.
     newDirectory.setEntry(
       hostId,
       localEntry(hostId, { label: "renamed-again" }),
     );
     newDirectory.emitChanged();
 
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("drops a record that has neither a subscriber nor a holder", () => {

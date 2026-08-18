@@ -24,23 +24,32 @@ export function SurfaceHostSelectionPersistLifecycleBridge(
   props: SurfaceHostSelectionPersistLifecycleBridgeProps,
 ): ReactNode {
   const status = useAuthStore((state) => state.status);
-  const email = useAuthStore((state) => state.profile?.email ?? null);
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  // Only to name the pre-userId key for one-time adoption; NOT an identity.
+  const legacyEmail = useAuthStore((state) => state.profile?.email ?? null);
 
-  const onTransition = useCallback((transition: AuthIdentityTransition) => {
-    if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
-      retargetPersistedStore({
+  const onTransition = useCallback(
+    (transition: AuthIdentityTransition) => {
+      if (
+        transition.kind === "signedIn" ||
+        transition.kind === "userSwitched"
+      ) {
+        retargetPersistedStore({
+          store: useSurfaceHostSelectionStore,
+          name: surfaceHostSelectionKey(transition.userId),
+          legacyName: surfaceHostSelectionKey(legacyEmail),
+        });
+        return;
+      }
+      clearAndResetPersistedStore({
         store: useSurfaceHostSelectionStore,
-        name: surfaceHostSelectionKey(transition.email),
+        anonymousName: surfaceHostSelectionKey(null),
       });
-      return;
-    }
-    clearAndResetPersistedStore({
-      store: useSurfaceHostSelectionStore,
-      anonymousName: surfaceHostSelectionKey(null),
-    });
-  }, []);
+    },
+    [legacyEmail],
+  );
 
-  useAuthIdentityTransition(status, email, onTransition);
+  useAuthIdentityTransition(status, userId, onTransition);
 
   return <>{props.children}</>;
 }
