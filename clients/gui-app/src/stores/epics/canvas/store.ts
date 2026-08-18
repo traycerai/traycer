@@ -28,6 +28,7 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { UNTITLED_EPIC_TITLE } from "@/lib/display-title";
+import type { EpicWorkspaceHint } from "@/lib/workspace/header-tab-matches-project";
 import { createEpicName } from "@/lib/epic-name";
 import {
   Analytics,
@@ -110,6 +111,7 @@ import {
   type EpicCanvasTileRef,
   type EpicCanvasState,
   type CommGraphTileViewState,
+  type EpicTabProjectWorkspace,
   type EpicViewTab,
   type GitDiffTileViewState,
   type PrDiffTileViewState,
@@ -376,6 +378,14 @@ export interface EpicCanvasStore {
    */
   setActiveTab: (tabId: string) => void;
   renameTab: (tabId: string, name: string) => void;
+  /**
+   * Stamp owner folders on every tab of this epic so project-profile filtering
+   * survives a cold session / app restart.
+   */
+  stampEpicWorkspaceHint: (
+    epicId: string,
+    hint: EpicWorkspaceHint,
+  ) => void;
   /**
    * Permanently delete a tab record and its canvas state. This is for true
    * discard flows such as moving a tab to another desktop window or rejecting
@@ -832,8 +842,50 @@ export function resolveTabIdForPhaseMigration(
 function createEpicViewTab(
   epicId: string,
   name: string | undefined,
+  tabsById: Readonly<Record<string, EpicViewTab | undefined>>,
 ): EpicViewTab {
-  return { tabId: uuidv4(), epicId, name: name ?? UNTITLED_EPIC_TITLE };
+  return withEpicWorkspaceStamp(
+    { tabId: uuidv4(), epicId, name: name ?? UNTITLED_EPIC_TITLE },
+    tabsById,
+  );
+}
+
+const pendingEpicWorkspaceHints = new Map<string, EpicTabProjectWorkspace>();
+
+function withEpicWorkspaceStamp(
+  tab: EpicViewTab,
+  tabsById: Readonly<Record<string, EpicViewTab | undefined>>,
+): EpicViewTab {
+  if (tab.projectWorkspace !== undefined) return tab;
+  const pending = pendingEpicWorkspaceHints.get(tab.epicId);
+  if (pending !== undefined) return { ...tab, projectWorkspace: pending };
+  for (const existing of Object.values(tabsById)) {
+    if (existing === undefined || existing.epicId !== tab.epicId) continue;
+    if (existing.projectWorkspace === undefined) continue;
+    return { ...tab, projectWorkspace: existing.projectWorkspace };
+  }
+  return tab;
+}
+
+function toProjectWorkspaceStamp(
+  hint: EpicWorkspaceHint,
+): EpicTabProjectWorkspace {
+  return {
+    primaryPath:
+      hint.primaryPath ??
+      hint.linkedWorkspaces[0]?.workspacePath ??
+      hint.worktreePaths[0] ??
+      null,
+    linkedWorkspaces: hint.linkedWorkspaces,
+    worktreePaths: hint.worktreePaths,
+  };
+}
+
+function workspaceStampsMatch(
+  left: EpicTabProjectWorkspace | undefined,
+  right: EpicTabProjectWorkspace,
+): boolean {
+  return (left?.primaryPath ?? null) === (right.primaryPath ?? null);
 }
 
 /**
@@ -1313,7 +1365,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         pendingChatTitles: {},
 
         openEpicTab: (epicId, name) => {
-          const tab = createEpicViewTab(epicId, name);
+          const tab = createEpicViewTab(epicId, name, get().tabsById);
           set((state) => ({
             ...appendedEpicTabState(state, tab),
             activeTabId: tab.tabId,
@@ -1332,11 +1384,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             get().setActiveTab(tabId);
             return tabId;
           }
-          const tab: EpicViewTab = {
-            tabId,
-            epicId,
-            name: name ?? UNTITLED_EPIC_TITLE,
-          };
+          const tab = withEpicWorkspaceStamp(
+            {
+              tabId,
+              epicId,
+              name: name ?? UNTITLED_EPIC_TITLE,
+            },
+            get().tabsById,
+          );
           set((state) => ({
             ...appendedEpicTabState(state, tab),
             activeTabId: tab.tabId,
@@ -1379,7 +1434,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             );
             return existing;
           }
-          const tab = createEpicViewTab(epicId, name);
+          const tab = createEpicViewTab(epicId, name, get().tabsById);
           // activeTabId is intentionally left untouched - the tab opens behind
           // the current surface and never steals focus.
           set((current) => appendedEpicTabState(current, tab));
@@ -1511,11 +1566,17 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const siblingNames = epicTabNames(state.tabsById, source.epicId);
           const sourceCanvas =
             state.canvasByTabId[tabId] ?? createEmptyCanvas();
-          const newTab: EpicViewTab = {
-            tabId: newId,
-            epicId: source.epicId,
-            name: nextCopyName(source.name, siblingNames),
-          };
+          const newTab = withEpicWorkspaceStamp(
+            {
+              tabId: newId,
+              epicId: source.epicId,
+              name: nextCopyName(source.name, siblingNames),
+              ...(source.projectWorkspace === undefined
+                ? {}
+                : { projectWorkspace: source.projectWorkspace }),
+            },
+            state.tabsById,
+          );
           set((current) => {
             const insertAt = current.openTabOrder.indexOf(tabId) + 1;
             return {
@@ -1550,11 +1611,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             sourceTab === null
               ? node.name
               : nextCopyName(sourceTab.name, siblingNames);
-          const tab: EpicViewTab = {
-            tabId,
-            epicId,
-            name: tabName,
-          };
+          const tab = withEpicWorkspaceStamp(
+            {
+              tabId,
+              epicId,
+              name: tabName,
+            },
+            state.tabsById,
+          );
           set((current) => {
             const insertAt =
               insertIndex === null
@@ -1704,6 +1768,24 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
                 [tabId]: { ...tab, name: trimmed },
               },
             };
+          });
+        },
+
+        stampEpicWorkspaceHint: (epicId, hint) => {
+          const stamp = toProjectWorkspaceStamp(hint);
+          pendingEpicWorkspaceHints.set(epicId, stamp);
+          set((state) => {
+            let changed = false;
+            const tabsById: Record<string, EpicViewTab | undefined> = {
+              ...state.tabsById,
+            };
+            for (const [tabId, tab] of Object.entries(state.tabsById)) {
+              if (tab === undefined || tab.epicId !== epicId) continue;
+              if (workspaceStampsMatch(tab.projectWorkspace, stamp)) continue;
+              tabsById[tabId] = { ...tab, projectWorkspace: stamp };
+              changed = true;
+            }
+            return changed ? { tabsById } : state;
           });
         },
 

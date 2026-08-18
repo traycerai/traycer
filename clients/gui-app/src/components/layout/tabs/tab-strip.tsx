@@ -22,7 +22,10 @@ import {
   useHeaderStripItemIds,
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
-import { useProjectScopedHeaderStripItemIds } from "@/hooks/workspace/use-project-scoped-header-strip";
+import {
+  usePersistOpenEpicWorkspaceStamps,
+  useProjectScopedHeaderStripItemIds,
+} from "@/hooks/workspace/use-project-scoped-header-strip";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -62,6 +65,7 @@ export function TabStrip() {
 }
 
 function TabStripBody() {
+  usePersistOpenEpicWorkspaceStamps();
   const headerItemIds = useHeaderStripItemIds();
   const visibleHeaderItemIds = useProjectScopedHeaderStripItemIds();
   const visibleHeaderItemIdSet = useMemo(

@@ -118,12 +118,62 @@ function parsePersistedEpicViewTab(value: unknown): EpicViewTab | null {
   // `lastSeenAt` in persisted data is ignored - the field was removed (it was
   // write-only; restore ordering uses `mostRecentTabIdByEpicId`).
   const surfaceMode = parsePersistedSurfaceMode(value.surfaceMode);
+  const projectWorkspace = parsePersistedProjectWorkspace(
+    value.projectWorkspace,
+  );
   return {
     tabId: value.tabId,
     epicId: value.epicId,
     name: value.name,
     ...(surfaceMode === undefined ? {} : { surfaceMode }),
+    ...(projectWorkspace === undefined ? {} : { projectWorkspace }),
   };
+}
+
+function parsePersistedProjectWorkspace(
+  value: unknown,
+): EpicViewTab["projectWorkspace"] {
+  if (!isRecord(value)) return undefined;
+  const primaryPath =
+    typeof value.primaryPath === "string" && value.primaryPath.length > 0
+      ? value.primaryPath
+      : null;
+  const linkedWorkspaces = parsePersistedLinkedWorkspaces(
+    value.linkedWorkspaces,
+  );
+  const worktreePaths = parsePersistedPathList(value.worktreePaths);
+  if (
+    primaryPath === null &&
+    linkedWorkspaces.length === 0 &&
+    worktreePaths.length === 0
+  ) {
+    return undefined;
+  }
+  return { primaryPath, linkedWorkspaces, worktreePaths };
+}
+
+function parsePersistedLinkedWorkspaces(
+  value: unknown,
+): NonNullable<EpicViewTab["projectWorkspace"]>["linkedWorkspaces"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    if (
+      typeof entry.hostId !== "string" ||
+      typeof entry.workspacePath !== "string" ||
+      entry.workspacePath.length === 0
+    ) {
+      return [];
+    }
+    return [{ hostId: entry.hostId, workspacePath: entry.workspacePath }];
+  });
+}
+
+function parsePersistedPathList(value: unknown): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) =>
+    typeof entry === "string" && entry.length > 0 ? [entry] : [],
+  );
 }
 
 function parsePersistedSurfaceMode(value: unknown): EpicViewTab["surfaceMode"] {

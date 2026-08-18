@@ -51,7 +51,7 @@ export interface AppHeaderProps {
 /**
  * App navigation chrome. Frameless desktop shells use this row as the native
  * title bar: tabs and controls stay interactive, while the empty spacer after
- * the project switcher remains available for window dragging.
+ * the tab strip remains available for window dragging.
  */
 export function AppHeader(props: AppHeaderProps): ReactNode {
   const { variant } = props;
@@ -96,28 +96,10 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
         enabled={!navDisabled}
         framelessDesktop={framelessDesktop}
       />
-      {/* Left drag handle: breathing room beside the traffic lights +
-          back/forward arrows so the window can be grabbed from the left end
-          too. Desktop-only (the browser app has neither traffic lights nor
-          arrows, so a left gap there would be stray).
-
-          IMPORTANT: this must be a DIRECT child of <header> (a top-level
-          title-bar element), mirroring the right-side spacer below. An
-          otherwise-identical drag spacer nested inside the flex tab-strip
-          section was NOT honored as a draggable region (only the right
-          spacer, a direct header child, dragged). Electron registers
-          `-webkit-app-region: drag` reliably only on top-level title-bar
-          elements. */}
-      {showTabStrip && framelessDesktop ? (
-        <div
-          aria-hidden
-          className="relative z-10 hidden h-full shrink-0 basis-[clamp(1rem,3vw,3rem)] md:block"
-          style={spacerDragStyle}
-        />
-      ) : null}
       <div
         className={cn(
           "relative z-10 flex min-w-0 flex-1 items-center",
+          showTabStrip && "pl-1",
           draggable && "[-webkit-app-region:drag]",
         )}
       >

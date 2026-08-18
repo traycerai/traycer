@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   filterHeaderStripItemIdsForProject,
   headerTabMatchesProject,
+  headerTabProjectBadge,
+  resolveEpicWorkspaceHint,
+  resolveOwningProjectProfile,
+  stampedWorkspaceHintForEpic,
 } from "../header-tab-matches-project";
 import type { ProjectProfile } from "@/stores/workspace/project-profiles-store";
 import type { StripItem } from "@/stores/tabs/layout";
@@ -13,6 +17,15 @@ const TITANOS: ProjectProfile = {
   folderPaths: ["/Users/g/work/Titanos"],
   primaryPath: "/Users/g/work/Titanos",
   epicIds: ["claimed-titanos"],
+};
+
+const CRM: ProjectProfile = {
+  id: "p-crm",
+  name: "CRM",
+  color: "blue",
+  folderPaths: ["/Users/g/work/CRM"],
+  primaryPath: "/Users/g/work/CRM",
+  epicIds: ["claimed-crm"],
 };
 
 describe("headerTabMatchesProject", () => {
@@ -69,6 +82,79 @@ describe("headerTabMatchesProject", () => {
       headerTabMatchesProject({ kind: "epic", epicId: "unknown" }, TITANOS, null),
     ).toBe(false);
   });
+
+  it("hides a fan-out epic whose primary folder is not this project", () => {
+    expect(
+      headerTabMatchesProject({ kind: "epic", epicId: "issue-1180" }, TITANOS, {
+        worktreePaths: [],
+        linkedWorkspaces: [
+          { hostId: "host-a", workspacePath: "/Users/g/work/Traycer" },
+          { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("hides a claimed epic whose primary folder belongs to another project", () => {
+    expect(
+      headerTabMatchesProject(
+        { kind: "epic", epicId: "claimed-titanos" },
+        TITANOS,
+        {
+          worktreePaths: [],
+          linkedWorkspaces: [
+            { hostId: "host-a", workspacePath: "/Users/g/work/CRM" },
+          ],
+        },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("resolveOwningProjectProfile", () => {
+  const profiles = [TITANOS, CRM];
+
+  it("returns the profile whose folder is the epic primary workspace", () => {
+    expect(
+      resolveOwningProjectProfile(profiles, "any-epic", {
+        worktreePaths: [],
+        linkedWorkspaces: [
+          { hostId: "host-a", workspacePath: "/Users/g/work/CRM" },
+          { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+        ],
+      }),
+    ).toEqual(CRM);
+  });
+
+  it("returns the claimed profile when the epic has no workspace", () => {
+    expect(resolveOwningProjectProfile(profiles, "claimed-titanos", null)).toEqual(
+      TITANOS,
+    );
+  });
+
+  it("returns null when no profile owns the epic", () => {
+    expect(
+      resolveOwningProjectProfile(profiles, "orphan", {
+        worktreePaths: [],
+        linkedWorkspaces: [
+          { hostId: "host-a", workspacePath: "/Users/g/work/Traycer" },
+        ],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("headerTabProjectBadge", () => {
+  it("hides the color while a project is active", () => {
+    expect(headerTabProjectBadge(TITANOS, CRM)).toBeNull();
+  });
+
+  it("shows the owning color only on All projects", () => {
+    expect(headerTabProjectBadge(null, CRM)).toEqual({
+      color: "blue",
+      name: "CRM",
+    });
+  });
 });
 
 describe("filterHeaderStripItemIdsForProject", () => {
@@ -119,5 +205,126 @@ describe("filterHeaderStripItemIdsForProject", () => {
         workspaceHintForEpic: () => null,
       }),
     ).toEqual([]);
+  });
+
+  it("keeps a path-owned tab when only the persisted stamp is present", () => {
+    expect(
+      filterHeaderStripItemIdsForProject({
+        itemIds: items.map((item) => item.id),
+        items,
+        profile: TITANOS,
+        epicIdForTabId: (tabId) => {
+          if (tabId === "tab-t") return "old-titanos";
+          if (tabId === "tab-c") return "crm";
+          return null;
+        },
+        workspaceHintForEpic: (epicId) =>
+          resolveEpicWorkspaceHint({
+            live: null,
+            stamped: stampedWorkspaceHintForEpic(
+              {
+                "tab-t": {
+                  epicId: "old-titanos",
+                  projectWorkspace: {
+                    worktreePaths: [],
+                    linkedWorkspaces: [
+                      {
+                        hostId: "host-a",
+                        workspacePath: "/Users/g/work/Titanos",
+                      },
+                    ],
+                    primaryPath: "/Users/g/work/Titanos",
+                  },
+                },
+                "tab-c": {
+                  epicId: "crm",
+                  projectWorkspace: {
+                    worktreePaths: [],
+                    linkedWorkspaces: [
+                      {
+                        hostId: "host-a",
+                        workspacePath: "/Users/g/work/CRM",
+                      },
+                    ],
+                    primaryPath: "/Users/g/work/CRM",
+                  },
+                },
+              },
+              epicId,
+            ),
+          }),
+      }),
+    ).toEqual(["tab:epic:titanos", "tab:draft:home"]);
+  });
+});
+
+describe("resolveEpicWorkspaceHint", () => {
+  const stamped = {
+    worktreePaths: [],
+    linkedWorkspaces: [
+      { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+    ],
+    primaryPath: "/Users/g/work/Titanos",
+  };
+  const live = {
+    worktreePaths: [],
+    linkedWorkspaces: [
+      { hostId: "host-a", workspacePath: "/Users/g/work/CRM" },
+    ],
+    primaryPath: "/Users/g/work/CRM",
+  };
+
+  it("uses the live session folders when they exist", () => {
+    expect(resolveEpicWorkspaceHint({ live, stamped })).toEqual(live);
+  });
+
+  it("uses the stamped folders when the session is cold", () => {
+    expect(resolveEpicWorkspaceHint({ live: null, stamped })).toEqual(stamped);
+  });
+
+  it("ignores an empty live peek instead of wiping the stamp", () => {
+    expect(
+      resolveEpicWorkspaceHint({
+        live: { worktreePaths: [], linkedWorkspaces: [] },
+        stamped,
+      }),
+    ).toEqual(stamped);
+  });
+});
+
+describe("stampedWorkspaceHintForEpic", () => {
+  it("reads the stamp from any tab of that epic", () => {
+    expect(
+      stampedWorkspaceHintForEpic(
+        {
+          "tab-a": {
+            epicId: "old-titanos",
+            projectWorkspace: {
+              worktreePaths: [],
+              linkedWorkspaces: [
+                { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+              ],
+              primaryPath: "/Users/g/work/Titanos",
+            },
+          },
+        },
+        "old-titanos",
+      ),
+    ).toEqual({
+      worktreePaths: [],
+      linkedWorkspaces: [
+        { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+      ],
+      primaryPath: "/Users/g/work/Titanos",
+    });
+  });
+
+  it("returns null when no tab of that epic has a stamp", () => {
+    expect(
+      stampedWorkspaceHintForEpic(
+        { "tab-a": { epicId: "old-titanos" } },
+        "old-titanos",
+      ),
+    ).toBeNull();
   });
 });

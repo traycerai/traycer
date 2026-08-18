@@ -91,6 +91,7 @@ import {
 } from "@/hooks/home/use-history-query";
 import { historyListEmptyState } from "@/lib/workspace/history-item-matches-project";
 import { claimEpicOnActiveProfile } from "@/lib/workspace/claim-epic-on-active-profile";
+import { workspaceHintFromHistoryItem } from "@/lib/workspace/header-tab-matches-project";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
@@ -1367,6 +1368,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     // Passing the row's title threads it through tab creation so the
     // cold-open canvas skeleton can render the real epic title at +0ms,
     // not "Untitled task" until the snapshot arrives.
+    useEpicCanvasStore
+      .getState()
+      .stampEpicWorkspaceHint(
+        item.epicId,
+        workspaceHintFromHistoryItem(item),
+      );
     openEpicFromCommand(navigate, item.epicId, pathname, {
       title: item.title,
       source: "direct_ui",
