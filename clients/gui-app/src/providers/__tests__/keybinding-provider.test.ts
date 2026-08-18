@@ -250,6 +250,13 @@ describe("dispatchAction", () => {
     expect(findActionForChord("mod+shift+u")).toBe("app.rate-limits.open");
   });
 
+  it("registers a default binding for the notification center", () => {
+    const defaults = getDefaultBindings();
+
+    expect(defaults["app.notifications.open"]).toBe("mod+shift+n");
+    expect(findActionForChord("mod+shift+n")).toBe("app.notifications.open");
+  });
+
   it("app.sidebar.toggle no-ops when no bridge is registered", () => {
     const { router } = buildRouter("/epics/e1");
     const fired = dispatchAction("app.sidebar.toggle", router);
