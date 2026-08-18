@@ -189,7 +189,7 @@ describe("LegendList estimate recovery", () => {
       .spyOn(globalThis, "clearTimeout")
       .mockImplementation(function receiverCheckedClearTimeout(
         this: unknown,
-        handle: ReturnType<typeof setTimeout> | undefined,
+        handle: NodeJS.Timeout | string | number | undefined,
       ): void {
         if (this !== undefined && this !== globalThis) {
           throw new TypeError("Illegal invocation");
