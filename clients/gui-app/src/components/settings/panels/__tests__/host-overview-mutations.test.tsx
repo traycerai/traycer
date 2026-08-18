@@ -379,7 +379,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });
@@ -411,7 +411,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
         "Host not restarted",
         expect.objectContaining({
           description:
-            "2 sessions are still working on this host. Nothing was interrupted; try again when they finish.",
+            "2 sessions are still keeping this host busy. Nothing was interrupted; try again when the work finishes.",
         }),
       );
     });
@@ -489,7 +489,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
           transitionIds.push(req.transitionId);
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           });
         },
       },
@@ -554,7 +554,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });
@@ -612,7 +612,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3 },
+            verdict: { busySessionCount: 3, blockers: null },
           }),
       },
     });
@@ -660,7 +660,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });
@@ -704,7 +704,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     // The count the force is sized from is stated where the decision is made,
     // in the same words the Help-menu flow uses for the same verdict.
     expect(busyDialog.textContent).toContain(
-      "2 sessions are still working on this host. Nothing was interrupted; try again when they finish. Force restart ends them immediately.",
+      "2 sessions are still keeping this host busy. Nothing was interrupted; try again when the work finishes. Force restart ends it immediately.",
     );
     // Nothing has been killed yet: reaching the dialog is not consenting to it.
     expect(restartHost).not.toHaveBeenCalled();
@@ -740,7 +740,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3 },
+            verdict: { busySessionCount: 3, blockers: null },
           }),
       },
     });
@@ -806,7 +806,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           }),
       },
     });
@@ -866,7 +866,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
           attempt += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: attempt },
+            verdict: { busySessionCount: attempt, blockers: null },
           });
         },
       },
@@ -915,7 +915,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       await screen.findByRole("button", { name: "Restart host" }),
     );
     const reopened = await screen.findByTestId("host-busy-force-defer-dialog");
-    expect(reopened.textContent).toContain("2 sessions are still working");
+    expect(reopened.textContent).toContain(
+      "2 sessions are still keeping this host busy",
+    );
     expect(restartHost).not.toHaveBeenCalled();
   });
 
@@ -927,7 +929,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 4 },
+            verdict: { busySessionCount: 4, blockers: null },
           }),
       },
     });
@@ -1014,7 +1016,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           }),
       },
     });
@@ -1109,7 +1111,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           }),
       },
     });
@@ -1197,7 +1199,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2 },
+            verdict: { busySessionCount: 2, blockers: null },
           }),
       },
     });
