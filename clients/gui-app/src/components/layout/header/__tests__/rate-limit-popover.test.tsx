@@ -174,10 +174,12 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
     providerId: string,
     profileId: string | null,
   ) => mocks.targetPhases[resultKey(providerId, profileId)] ?? null,
-  // Folded from the same fixture the single-target hook reads, so a test that
-  // marks one target queued drives the row copy AND the button state
-  // consistently - and a target NOT in this list can never disable a control.
-  useAnyRateLimitQueueTargetPending: (
+  // Folded from the same fixture the single-target hook reads, so one test
+  // fixture drives the row copy AND the button state consistently. Only
+  // "fetching" counts - a merely QUEUED target must stay clickable so the
+  // click can promote it - and a target NOT in this list can never affect a
+  // control.
+  useAnyRateLimitQueueTargetFetching: (
     targets: ReadonlyArray<{
       readonly providerId: string;
       readonly profileId: string | null;
@@ -185,7 +187,8 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
   ) =>
     targets.some(
       (target) =>
-        resultKey(target.providerId, target.profileId) in mocks.targetPhases,
+        mocks.targetPhases[resultKey(target.providerId, target.profileId)] ===
+        "fetching",
     ),
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
@@ -2184,7 +2187,23 @@ describe("<RateLimitPopover /> per-provider states", () => {
 });
 
 describe("<RateLimitPopover /> Refresh all", () => {
-  it("is disabled while one of its OWN ephemeral targets is queued", () => {
+  it("is disabled while one of its OWN ephemeral targets is fetching", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.targetPhases = { codex: "fetching" };
+    renderPopover();
+    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
+    expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("stays clickable while its target is merely QUEUED, so the click can promote it", () => {
+    // An enqueue for an already-queued target sets `pending.force = true`.
+    // That promotion is the only thing stopping the pull being skipped by its
+    // second freshness/cool-down check, or reaching the host as `force: false`
+    // and being answered from the gauge cache - so disabling here would make
+    // the click that does that work impossible.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
@@ -2192,7 +2211,7 @@ describe("<RateLimitPopover /> Refresh all", () => {
     mocks.targetPhases = { codex: "queued" };
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
-    expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
+    expect((refreshAll as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("stays enabled while the lane drains for a target this button does not refresh", () => {
@@ -2280,12 +2299,12 @@ describe("<RateLimitPopover /> Refresh all", () => {
     ]);
   });
 
-  it("keeps a single ephemeralProcess provider's own refresh button disabled while ITS target is queued, even though its own isFetching has already settled", () => {
+  it("keeps a single ephemeralProcess provider's own refresh button disabled while ITS target is fetching, even though its own isFetching has already settled", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    mocks.targetPhases = { codex: "queued" };
+    mocks.targetPhases = { codex: "fetching" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
@@ -2650,7 +2669,8 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
       codex: readyResult(codexReady()),
       [resultKey("codex", "work-profile")]: readyResult(codexReady()),
     };
-    mocks.targetPhases = { codex: "queued" };
+    // Only the ambient target is fetching; the managed sibling is idle.
+    mocks.targetPhases = { codex: "fetching" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
 
@@ -2659,7 +2679,9 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
         .getByRole("button", { name: "Refresh Codex" })
         .getAttribute("disabled"),
     ).not.toBeNull();
-    expect(screen.queryByText("Refreshing")).toBeNull();
+    // Exactly one card reports Refreshing - the one actually fetching. The
+    // shared lane must not put the sibling profile into a loading state too.
+    expect(screen.getAllByText("Refreshing")).toHaveLength(1);
   });
 
   // REPLACES a pin that asserted the opposite - that the lane-wide `draining`

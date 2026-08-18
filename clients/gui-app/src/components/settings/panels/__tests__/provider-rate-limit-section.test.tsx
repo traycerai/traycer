@@ -614,7 +614,27 @@ describe("ProviderRateLimitForProvider", () => {
     );
   });
 
-  it("keeps the refresh button disabled while THIS target sits in the queue, even once its own isFetching has settled", () => {
+  it("keeps the refresh button disabled while THIS target is fetching, even once its own isFetching has settled", () => {
+    mocks.data = envelope(CODEX_RATE_LIMITS);
+    mocks.isFetching = false;
+    mocks.targetPhase = "fetching";
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Refresh usage limits" }),
+    ).toHaveProperty("disabled", true);
+  });
+
+  it("leaves the refresh button live while this target is merely QUEUED, so the click can promote it", () => {
+    // An enqueue for an already-queued target sets `pending.force = true`;
+    // disabling here would make that click impossible.
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isFetching = false;
     mocks.targetPhase = "queued";
@@ -629,7 +649,7 @@ describe("ProviderRateLimitForProvider", () => {
 
     expect(
       screen.getByRole("button", { name: "Refresh usage limits" }),
-    ).toHaveProperty("disabled", true);
+    ).toHaveProperty("disabled", false);
   });
 
   it("leaves the refresh button live when this target is NOT in the queue, however busy the lane is", () => {

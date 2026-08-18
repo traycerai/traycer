@@ -4,26 +4,45 @@
  * popover's `RateLimitProviderBlock` and the Settings card. The consumers'
  * own tests exercise this logic only through their full component trees;
  * these pin the lane routing and the per-target queue-phase fold-in directly,
- * so a
- * regression is caught even if a consumer's test setup masks it.
+ * so a regression is caught even if a consumer's test setup masks it.
  *
  * `rateLimitFetchLane` stays REAL (it is a pure provider-id classifier):
  * codex exercises the ephemeralProcess lane and openrouter the httpFetch
  * lane, so the routing under test is the true production mapping rather than
  * a mocked one.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 
-const mocks = vi.hoisted(() => ({
-  targetPhase: null as "queued" | "fetching" | null,
-  scope: { hostId: "host-b" },
-  enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
-}));
+const mocks = vi.hoisted(
+  (): {
+    targetPhases: Record<string, "queued" | "fetching">;
+    scope: { hostId: string };
+    enqueue: Mock<(...args: unknown[]) => Promise<unknown>>;
+  } => ({
+    targetPhases: {},
+    scope: { hostId: "host-b" },
+    enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  }),
+);
 
+// Keyed on the exact target, not a single flag: a mock that ignored
+// `providerId`/`profileId` would still pass if the hook asked the registry
+// about a DIFFERENT target, which is the whole property under test here.
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
-  useRateLimitQueueTargetPhase: () => mocks.targetPhase,
+  useRateLimitQueueTargetPhase: (
+    providerId: string,
+    profileId: string | null,
+  ) => mocks.targetPhases[`${providerId}:${profileId ?? ""}`] ?? null,
 }));
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy.
@@ -41,7 +60,7 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 
 beforeEach(() => {
-  mocks.targetPhase = null;
+  mocks.targetPhases = {};
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
 });
 
@@ -130,8 +149,8 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
     expect(openrouter.result.current.isRefreshing).toBe(true);
   });
 
-  it("folds THIS target's own queue phase in for an ephemeralProcess provider whose own fetch has settled", () => {
-    mocks.targetPhase = "queued";
+  it("folds THIS target's own FETCHING phase in for an ephemeralProcess provider whose own fetch has settled", () => {
+    mocks.targetPhases = { "codex:": "fetching" };
     const { result } = renderHook(() =>
       useProviderRateLimitRefresh({
         providerId: "codex",
@@ -146,8 +165,48 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
     expect(result.current.isRefreshing).toBe(true);
   });
 
+  it("stays NOT refreshing while this target is merely queued, so the control can still promote it", () => {
+    // `RefreshIconButton` disables on `isRefreshing` and no-ops its trigger.
+    // An enqueue for an already-queued target promotes it
+    // (`pending.force = true`), which is the only thing that stops the pull
+    // being skipped by its second freshness/cool-down check or answered from
+    // the host gauge cache - so a queued target must stay clickable.
+    mocks.targetPhases = { "codex:": "queued" };
+    const { result } = renderHook(() =>
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
+        fetchEligible: true,
+        isFetching: false,
+        refetch,
+      }),
+    );
+    expect(result.current.isRefreshing).toBe(false);
+  });
+
+  it("reads only ITS OWN target - a sibling profile fetching on the same provider does not mark this one refreshing", () => {
+    // Guards the identity the mock above is keyed on: were the hook to ask the
+    // registry about the provider without its profile (or about any other
+    // target), this would go green on a borrowed phase.
+    mocks.targetPhases = { "codex:work-profile": "fetching" };
+    const { result } = renderHook(() =>
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: "personal-profile",
+        usageUpdatedAt: null,
+        hasCachedValue: false,
+        fetchEligible: true,
+        isFetching: false,
+        refetch,
+      }),
+    );
+    expect(result.current.isRefreshing).toBe(false);
+  });
+
   it("ignores the queue phase for an httpFetch provider - its own isFetching is the complete signal", () => {
-    mocks.targetPhase = "fetching";
+    mocks.targetPhases = { "openrouter:": "fetching" };
     const { result } = renderHook(() =>
       useProviderRateLimitRefresh({
         providerId: "openrouter",

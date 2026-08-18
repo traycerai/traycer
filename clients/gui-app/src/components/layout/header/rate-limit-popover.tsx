@@ -57,7 +57,7 @@ import {
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
-  useAnyRateLimitQueueTargetPending,
+  useAnyRateLimitQueueTargetFetching,
   useRateLimitQueueTargetPhase,
 } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
@@ -1389,14 +1389,14 @@ function RateLimitRefreshAllButton({
   // The ephemeral half of "Refresh all" is scoped to the targets this button
   // actually enqueues, not the whole lane, so a background sweep of a provider
   // this popover isn't showing can no longer disable it.
-  const ephemeralProcessPending = useAnyRateLimitQueueTargetPending(
+  const ephemeralProcessFetching = useAnyRateLimitQueueTargetFetching(
     ephemeralProcessRequests,
   );
   const traycerRefreshing =
     traycerRefreshTarget.enabled &&
     (traycerRefreshTarget.isFetching || traycerRateLimitUsageState.isFetching);
   const refreshing =
-    ephemeralProcessPending ||
+    ephemeralProcessFetching ||
     httpFetchQueries.some((query) => query.isFetching) ||
     traycerRefreshing;
   const hasRefreshTarget =
@@ -1738,7 +1738,7 @@ function ProfileRateLimitProviderBlock({
   // This provider's OWN queue entries, never the lane-wide draining flag: the
   // button both disables and no-ops on this value, so a lane-wide gate made an
   // unrelated provider's background sweep turn this control off.
-  const anyOwnTargetPending = useAnyRateLimitQueueTargetPending(
+  const anyOwnTargetFetching = useAnyRateLimitQueueTargetFetching(
     refreshEligibleTargets.map((target) => ({
       providerId,
       profileId: target.profileId,
@@ -1746,7 +1746,7 @@ function ProfileRateLimitProviderBlock({
   );
   const isRefreshing =
     lane === "ephemeralProcess"
-      ? anyOwnTargetPending ||
+      ? anyOwnTargetFetching ||
         fetchEligibleQueries.some((query) => query.isFetching)
       : fetchEligibleQueries.some((query) => query.isFetching);
 

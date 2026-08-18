@@ -42,20 +42,26 @@ export interface RateLimitQueueTargetRef {
 const TARGET_KEY_SEPARATOR = "\u0000";
 
 /**
- * Whether ANY of `targets` currently sits in the queue (queued or fetching),
- * folded over the same registry as {@link useRateLimitQueueTargetPhase}.
+ * Whether ANY of `targets` is currently FETCHING, folded over the same registry
+ * as {@link useRateLimitQueueTargetPhase}.
  *
  * This is what a refresh BUTTON should gate on, rather than the lane-wide
  * draining flag. `RefreshIconButton` disables on its `refreshing` value and its
  * trigger no-ops while set, with no timeout cap on the external half - so a
  * lane-wide gate turned every ephemeral control off whenever anything was
- * queued anywhere, including a background sweep of an unrelated provider. It
- * also made the queue's force promotion unreachable from the UI: a queued pull
- * is promoted by a click, but the click was blocked in exactly the state where
- * promoting matters. The fold returns a primitive, so `useSyncExternalStore`
- * needs no snapshot cache.
+ * queued anywhere, including a background sweep of an unrelated provider.
+ *
+ * `"queued"` deliberately does NOT count. An enqueue for an already-queued
+ * target promotes it (`pending.force = true`), and that promotion is the only
+ * thing that stops the pull being skipped by its second freshness/cool-down
+ * check or reaching the host as `force: false` and being served from the gauge
+ * cache - so disabling the control while queued would make the click that does
+ * that work impossible. The queued row still renders its own "Queued…" label.
+ *
+ * The fold returns a primitive, so `useSyncExternalStore` needs no snapshot
+ * cache.
  */
-export function useAnyRateLimitQueueTargetPending(
+export function useAnyRateLimitQueueTargetFetching(
   targets: ReadonlyArray<RateLimitQueueTargetRef>,
 ): boolean {
   const queueScope = useRateLimitQueueScope();
@@ -91,7 +97,7 @@ export function useAnyRateLimitQueueTargetPending(
           hostId,
           target.providerId,
           target.profileId,
-        ) !== null,
+        ) === "fetching",
     );
   }, [hostId, stableTargets]);
 

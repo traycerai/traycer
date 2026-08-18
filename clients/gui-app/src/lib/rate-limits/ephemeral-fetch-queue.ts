@@ -392,8 +392,19 @@ export function enqueueRateLimitFetchBatchForScope(
     );
     const pending = pendingTargets.get(targetKey);
     if (pending !== undefined) {
-      // Manual intent upgrades queued automatic work in place. Once a fetch is
-      // already running, joining it is sufficient: its result will be fresh.
+      // Manual intent upgrades queued automatic work in place.
+      //
+      // Joining an ALREADY-FETCHING item is weaker than it used to be. The
+      // original reasoning was "its result will be fresh", which held while
+      // every request forced a probe. Now that `force` rides the wire, an
+      // in-flight automatic pull travels as `force: false` and a v4 host may
+      // answer it from its gauge cache - so a forced enqueue that joins it can
+      // receive a reading up to the host's read floor old instead of the probe
+      // it asked for. Reissuing rather than joining needs this key's pending
+      // slot to hold two items and is left as a follow-up; the exposure is
+      // bounded because every refresh control disables while its own target is
+      // `"fetching"` (see `useAnyRateLimitQueueTargetFetching`), so reaching
+      // this branch takes a non-button caller.
       if (opts.force && pending.phase === "queued") pending.force = true;
       joinedPromises.push(pending.promise);
       continue;

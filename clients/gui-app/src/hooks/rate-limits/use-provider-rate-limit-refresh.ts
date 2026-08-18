@@ -91,17 +91,24 @@ export function useProviderRateLimitRefresh({
   }, [fetchEligible, lane, profileId, providerId, queueScope, refetch]);
 
   // Scoped to THIS provider/profile's own queue entry, never the lane-wide
-  // draining flag. `RefreshIconButton` DISABLES on this value and its trigger
-  // no-ops while set, and the external half of `useRefreshSpinner` has no
-  // timeout cap - so gating on the whole lane turned every ephemeral refresh
-  // control off whenever anything was queued anywhere (a background sweep of an
-  // unrelated provider, one wedged probe holding the lane for its full response
-  // budget). It also made the queue's force promotion unreachable from the UI:
-  // a queued pull is promoted to forced by a click, but the click was blocked
-  // in exactly the state where promoting matters.
+  // draining flag, and only while that entry is actually FETCHING.
+  //
+  // `RefreshIconButton` DISABLES on this value and its trigger no-ops while
+  // set. Two consequences drive both halves of this rule. Gating on the whole
+  // lane turned every ephemeral control off whenever anything was queued
+  // anywhere (a background sweep of an unrelated provider, one wedged probe
+  // holding the lane for its full response budget). And counting `"queued"`
+  // here would disable the control in precisely the state where a click still
+  // does real work: an enqueue for an already-queued target promotes it
+  // (`pending.force = true`), which is the only thing that stops that pull
+  // being skipped by its second freshness/cool-down check or reaching the host
+  // as `force: false` and being served from the gauge cache.
+  //
+  // A queued target is not left silent - its row renders #1268's "Queued…"
+  // label - so the spinner is not the only feedback the user has.
   const isRefreshing =
     fetchEligible &&
-    (isFetching || (lane === "ephemeralProcess" && targetPhase !== null));
+    (isFetching || (lane === "ephemeralProcess" && targetPhase === "fetching"));
 
   return { refresh, isRefreshing };
 }

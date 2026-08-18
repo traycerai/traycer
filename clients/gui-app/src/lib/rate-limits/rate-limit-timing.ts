@@ -25,5 +25,15 @@ export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 15 * 60 * 1000;
  * while still bounding how long one wedged probe can hold the serial lane.
  * Must equal the `joinResponseTimeoutMs` declared for `host.getRateLimitUsage`
  * in `host-method-policy-table.ts` - the host client rejects any other value.
+ *
+ * The custodian wait above is deliberately NOT inside this budget. Adding it
+ * would mean sizing for ~270s, and a refresh control that can legitimately spin
+ * for four and a half minutes is worse UX than the failure it prevents. What
+ * makes the overflow acceptable is that it is now self-healing rather than
+ * lost: the host captures a completed probe into its gauge cache regardless of
+ * whether this client was still waiting for the frame, so the reading survives
+ * and the next pull - the 15-minute sweep, a reopen, or another click - is
+ * answered from that cache immediately. Before the gauge cache existed, giving
+ * up on the frame really did discard the work.
  */
 export const RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS = 3 * 60 * 1000;

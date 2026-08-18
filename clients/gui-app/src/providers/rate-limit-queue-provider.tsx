@@ -114,10 +114,18 @@ export function RateLimitQueueProvider(): null {
     }
   });
 
+  // Gated on `client`, not just `hostId`, and re-runs when it recovers. The
+  // pinned `useHostClientForHostId` can be null while the selected host has no
+  // resolved entry yet, and the effect above unbinds the queue in that window -
+  // so an immediate sweep fired here would silently no-op on every enqueue. The
+  // app-wide client this replaced was never null once mounted, which is why the
+  // dependency did not matter before. Without `client` in the list, a recovery
+  // whose provider list is structurally unchanged would leave usage stale until
+  // the next 15-minute tick instead of sweeping straight away.
   useEffect(() => {
-    if (hostId === null) return;
+    if (hostId === null || client === null) return;
     enqueuePollingWindow();
-  }, [hostId, membershipKey]);
+  }, [hostId, client, membershipKey]);
 
   // The single shared interval timer, gated on host presence and paused while
   // the window is hidden. Initial per-provider data still populates through the
