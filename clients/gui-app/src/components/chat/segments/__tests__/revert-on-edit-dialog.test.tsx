@@ -14,6 +14,7 @@ function renderDialog(open: boolean) {
       onRevert={onRevert}
       onDontRevert={onDontRevert}
       artifactCount={2}
+      queuedCount={0}
     />
   );
 }
@@ -39,5 +40,34 @@ describe("<RevertOnEditDialog /> opt-out reset", () => {
     rerender(renderDialog(false));
     rerender(renderDialog(true));
     expect(checkbox().getAttribute("aria-checked")).toBe("true");
+  });
+});
+
+describe("<RevertOnEditDialog /> queued-messages note", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("names parked queue items so the edit doesn't silently carry them", () => {
+    render(
+      <RevertOnEditDialog
+        open
+        onOpenChange={onOpenChange}
+        onRevert={onRevert}
+        onDontRevert={onDontRevert}
+        artifactCount={0}
+        queuedCount={2}
+      />,
+    );
+    expect(
+      screen.getByText(
+        /2 queued messages stay queued and send after the edited message/i,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("omits the note when the queue is empty", () => {
+    render(renderDialog(true));
+    expect(screen.queryByText(/queued message/i)).toBeNull();
   });
 });

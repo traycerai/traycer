@@ -831,7 +831,7 @@ describe("canModifyChatMessages", () => {
     ).toBe(false);
   });
 
-  it("denies while a queued item is pending, even with no turn in progress", () => {
+  it("allows while queued items are parked with no turn in progress - they survive the rewrite and send against the new head", () => {
     expect(
       canModifyChatMessages({
         canAct: true,
@@ -841,7 +841,18 @@ describe("canModifyChatMessages", () => {
           queue: runnableQueue(1),
         }),
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("allows while the queue is paused after an errored turn", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          queue: { status: "paused", items: runnableQueue(1).items },
+        }),
+      }),
+    ).toBe(true);
   });
 
   it("denies while an optimistic user message is still unconfirmed", () => {

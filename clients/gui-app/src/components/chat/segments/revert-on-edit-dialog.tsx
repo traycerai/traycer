@@ -16,6 +16,12 @@ interface RevertOnEditDialogProps {
   readonly onRevert: (revertArtifacts: boolean) => void;
   readonly onDontRevert: () => void;
   readonly artifactCount: number;
+  /**
+   * Items parked in the message queue. They are not cleared by the edit -
+   * they send after the edited message's turn - so the dialog names them to
+   * avoid surprise.
+   */
+  readonly queuedCount: number;
 }
 
 /**
@@ -37,7 +43,14 @@ export function RevertOnEditDialog(props: RevertOnEditDialogProps) {
 }
 
 function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
-  const { artifactCount, onDontRevert, onOpenChange, onRevert, open } = props;
+  const {
+    artifactCount,
+    onDontRevert,
+    onOpenChange,
+    onRevert,
+    open,
+    queuedCount,
+  } = props;
   const [revertArtifacts, setRevertArtifacts] = useState(true);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -63,6 +76,9 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
           <DialogDescription>
             Submitting from a previous message will revert file changes to
             before this message and clear the messages after this one.
+            {queuedCount > 0
+              ? ` ${queuedCount} queued ${queuedCount === 1 ? "message stays" : "messages stay"} queued and ${queuedCount === 1 ? "sends" : "send"} after the edited message.`
+              : null}
           </DialogDescription>
         </DialogHeader>
 
