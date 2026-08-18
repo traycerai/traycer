@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
   CHAT_PUBLICATION_WAIT_POLL_LANE,
   GIT_DIRTY_SUBMODULE_POLL_LANE,
@@ -182,17 +181,6 @@ describe("host method poll policy table", () => {
     const fixed = HOST_METHOD_POLL_TABLE["host.getRateLimitUsage"].poll;
     const intervalMs: number = fixed.intervalMs;
     expect(intervalMs).toBe(15 * 60 * 1_000);
-  });
-
-  // The ephemeral fetch queue requests this extended response budget so a
-  // slow-but-successful CLI probe (Claude's refresh-safe path can legitimately
-  // run past the transport's 30s default) is not discarded client-side while
-  // the host is still finishing it. Declared once in `rate-limit-timing.ts`
-  // and must match exactly here.
-  it("joins rate-limit usage pulls under the extended response budget", () => {
-    expect(
-      hostRpcSchedulingPolicy.joinResponseTimeoutMs("host.getRateLimitUsage"),
-    ).toBe(RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS);
   });
 
   // `host.status` used to be un-polled entirely. It is now opted in

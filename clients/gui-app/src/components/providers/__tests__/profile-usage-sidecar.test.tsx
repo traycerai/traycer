@@ -175,29 +175,24 @@ describe("ProfileUsageSidecar states", () => {
     ).toBeDefined();
   });
 
-  // One refreshing state, not two: a pull that is merely queued behind another
-  // item is no longer a distinct status - it reads as "Refreshing" from the
-  // moment it is enqueued, which is the whole point of the per-profile pending
-  // signal (a click used to look ignored until its own fetch reached the front
-  // of the lane).
-  it.each([{ refreshStatus: "refreshing" as const, copy: "Refreshing" }])(
-    "keeps cached detail visible while $refreshStatus",
-    async (state) => {
-      const retained = staleEntry();
-      render(
-        <ProfileUsageSidecar
-          anchor={anchor}
-          profile={PROFILE}
-          entry={{ ...retained, refreshStatus: state.refreshStatus }}
-          isHostReady
-        />,
-      );
-      expect(await screen.findByText(state.copy)).toBeDefined();
-      expect(screen.getByText("Current session")).toBeDefined();
-      expect(screen.getByTestId("profile-usage-refresh-spinner")).toBeDefined();
-      expectDisabledButton("Retry usage for Work");
-    },
-  );
+  it.each([
+    { refreshStatus: "queued" as const, copy: "Queued" },
+    { refreshStatus: "refreshing" as const, copy: "Refreshing" },
+  ])("keeps cached detail visible while $refreshStatus", async (state) => {
+    const retained = staleEntry();
+    render(
+      <ProfileUsageSidecar
+        anchor={anchor}
+        profile={PROFILE}
+        entry={{ ...retained, refreshStatus: state.refreshStatus }}
+        isHostReady
+      />,
+    );
+    expect(await screen.findByText(state.copy)).toBeDefined();
+    expect(screen.getByText("Current session")).toBeDefined();
+    expect(screen.getByTestId("profile-usage-refresh-spinner")).toBeDefined();
+    expectDisabledButton("Retry usage for Work");
+  });
 
   it("disables refresh but preserves cached evidence when the run host is unavailable", async () => {
     render(

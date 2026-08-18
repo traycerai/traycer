@@ -1,4 +1,5 @@
 import { EpicMigrationModal } from "@/components/epic-canvas/dialogs/epic-migration-modal";
+import { EpicPlainTerminalTombstoneReconciler } from "@/components/epic-canvas/epic-plain-terminal-tombstone-reconciler";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { useInitialChatHandoff } from "@/components/epic-canvas/hooks/use-initial-chat-handoff";
 import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
@@ -28,6 +29,7 @@ export function EpicRouteSessionBody(props: EpicRouteSessionBodyProps) {
         tabId={props.tabId}
         active={props.active}
       />
+      <EpicPlainTerminalTombstoneReconciler epicId={props.epicId} />
       <EpicSessionGate fallback={null}>
         <EpicRouteSessionEffects {...props} />
       </EpicSessionGate>

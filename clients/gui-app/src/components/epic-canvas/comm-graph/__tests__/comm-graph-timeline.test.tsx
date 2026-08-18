@@ -433,6 +433,21 @@ describe("CommGraphTile projection", () => {
     });
   });
 
+  it("keeps a held playback cursor static while paused", async () => {
+    await renderTile();
+    deliverSnapshot([
+      halfEdge({ id: 1, timestamp: 100 }),
+      message({ id: 2, timestamp: 200 }),
+    ]);
+
+    await seekToIndex(0);
+
+    await waitFor(() => {
+      expect(pulsingOf(CHAT_ID)).toBe("false");
+    });
+    expect(screen.getByRole("button", { name: "Play timeline" })).toBeDefined();
+  });
+
   it("pulses a row that ARRIVES while live, without flashing the initial snapshot", async () => {
     await renderTile();
     // The snapshot draws this host's initialization line; it is history this

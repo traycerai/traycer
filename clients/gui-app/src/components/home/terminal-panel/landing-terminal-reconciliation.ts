@@ -2,8 +2,11 @@ import type {
   CanonicalTerminalSessionInfo,
   CanonicalTerminalSessionInfoWithCurrentCwd,
 } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 import {
+  hostAcknowledgedTab,
   terminalSessionKey,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
@@ -26,6 +29,15 @@ export interface LandingTerminalReconciliationResult {
   readonly adoptedTabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly exitedInstanceIds: ReadonlyArray<string>;
   readonly collapseWhenEmpty: boolean;
+}
+
+export interface HostAuthoritativeLandingTerminalReconciliationInput {
+  readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly activeInstanceId: string | null;
+  readonly hostId: string;
+  readonly terminals: readonly PlainTerminalProjection[];
+  readonly excludedTerminalKeys: ReadonlySet<string>;
+  readonly mintInstanceId: () => string;
 }
 
 export function resolveLandingTerminalTitleCwd(input: {
@@ -132,6 +144,103 @@ export function reconcileLandingTerminalTabs(
       (exitedInstanceIds.length > 0 ||
         survivingTabs.length !== input.tabs.length),
   };
+}
+
+/**
+ * Reconciles one host's local presentation pointers against a fresh durable
+ * independent-terminal snapshot. Only acknowledged refs may be classified as
+ * authoritatively deleted; unacknowledged legacy refs remain available to the
+ * migration coordinator.
+ */
+export function reconcileHostAuthoritativeLandingTerminalTabs(
+  input: HostAuthoritativeLandingTerminalReconciliationInput,
+): LandingTerminalReconciliationResult {
+  const projectionById = new Map(
+    input.terminals.map((terminal) => [terminal.record.terminalId, terminal]),
+  );
+  const matchedTerminalIds = new Set<string>();
+  const removedInstanceIds: string[] = [];
+
+  const tabs = input.tabs.flatMap((tab) => {
+    if (tab.hostId !== input.hostId) return [tab];
+    const terminalKey = terminalSessionKey(tab.hostId, tab.sessionId);
+    if (input.excludedTerminalKeys.has(terminalKey)) {
+      removedInstanceIds.push(tab.instanceId);
+      return [];
+    }
+    const projection = projectionById.get(tab.sessionId);
+    if (projection === undefined) {
+      if (tab.hostAuthorityAcknowledged === true) {
+        removedInstanceIds.push(tab.instanceId);
+        return [];
+      }
+      return [tab];
+    }
+    matchedTerminalIds.add(projection.record.terminalId);
+    const acknowledged = hostAcknowledgedTab(tab, projection);
+    // Reuse the existing reference when nothing derived actually moved, the
+    // same way the legacy pass above reuses `tab` on an unchanged name. Stream
+    // frames bump `projectionSequence` constantly, and every new object here
+    // becomes a fresh `tabs` array in the store - re-rendering every tab
+    // consumer and re-serializing the persisted slot for identical data.
+    return [landingTerminalTabsEqual(tab, acknowledged) ? tab : acknowledged];
+  });
+
+  const adoptedTabs = input.terminals.flatMap((terminal) => {
+    const terminalId = terminal.record.terminalId;
+    if (
+      matchedTerminalIds.has(terminalId) ||
+      input.excludedTerminalKeys.has(
+        terminalSessionKey(input.hostId, terminalId),
+      )
+    ) {
+      return [];
+    }
+    const view = selectPlainTerminalViewModel(terminal);
+    const tab: LandingTerminalTabRef = {
+      instanceId: input.mintInstanceId(),
+      sessionId: terminalId,
+      hostId: terminal.record.hostId,
+      cwd: terminal.record.launch.cwd,
+      name: view.displayTitle,
+      titleSource: terminal.record.manualTitle === null ? "default" : "manual",
+      hostAuthorityAcknowledged: true,
+      pendingCreate: false,
+    };
+    return [tab];
+  });
+  const nextTabs = [...tabs, ...adoptedTabs];
+
+  return {
+    tabs: nextTabs,
+    activeInstanceId: resolveActiveInstanceId(input.activeInstanceId, nextTabs),
+    adoptedTabs,
+    exitedInstanceIds: removedInstanceIds,
+    collapseWhenEmpty: nextTabs.length === 0 && removedInstanceIds.length > 0,
+  };
+}
+
+/**
+ * Every field `hostAcknowledgedTab` writes, plus the identity it preserves.
+ * Extend this together with that helper: a field compared here but not written
+ * there is harmless, one written there but missed here silently re-pins the
+ * stale value by reusing the old reference.
+ */
+function landingTerminalTabsEqual(
+  left: LandingTerminalTabRef,
+  right: LandingTerminalTabRef,
+): boolean {
+  return (
+    left.instanceId === right.instanceId &&
+    left.sessionId === right.sessionId &&
+    left.hostId === right.hostId &&
+    left.cwd === right.cwd &&
+    left.name === right.name &&
+    left.titleSource === right.titleSource &&
+    left.hostAuthorityAcknowledged === right.hostAuthorityAcknowledged &&
+    left.pendingCreate === right.pendingCreate &&
+    left.sourceStoreVersion === right.sourceStoreVersion
+  );
 }
 
 function defaultLandingTerminalTitle(

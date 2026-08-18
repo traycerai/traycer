@@ -26,6 +26,7 @@ import {
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
   providerRateLimitsSchema,
@@ -668,10 +669,17 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV30 =
       // unrepresentable, and this response carries exactly one provider - so
       // fail closed rather than mis-decode. The message names no provider so
       // it stays honest as the enum grows.
+      //
+      // Cursor DOES degrade rather than fail closed: `"cursor"` is in the
+      // frozen v6.0 provider enum, so the unavailable row is representable
+      // here, and an older client is better served by an honest "usage isn't
+      // available" than by an error it cannot act on.
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse({
           ...response,
-          rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          rateLimits: mapCursorAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          ),
         });
       if (!parsed.success) {
         return {
@@ -698,11 +706,14 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV20 =
     downgradeResponse: (response) => {
       // Same rule as the v4->v3 bridge against the narrower v2.0 enum: the
       // frozen v2.0 union keeps grok, so only post-v5.0 providers (omp,
-      // huggingface) fail closed here.
+      // huggingface) fail closed here. Cursor degrades for the same reason it
+      // does there - `"cursor"` is in the frozen v5.0 provider enum too.
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse({
           ...response,
-          rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          rateLimits: mapCursorAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          ),
         });
       if (!parsed.success) {
         return {
@@ -731,9 +742,12 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV10 =
       // frozen v1.0 union predates the grok available arm, so a grok-available
       // snapshot becomes the `unsupported_provider` row a v1.0 host returns for
       // grok today (shared map). Post-v4.0 providers (Hermes, omp, huggingface)
-      // stay unrepresentable and still fail closed.
+      // stay unrepresentable and still fail closed. Cursor degrades here too:
+      // `"cursor"` is in the frozen v4.0 provider enum.
       const rateLimits = mapGrokAvailableToUnavailable(
-        mapOpenCodeAvailableToUnavailable(response.rateLimits),
+        mapCursorAvailableToUnavailable(
+          mapOpenCodeAvailableToUnavailable(response.rateLimits),
+        ),
       );
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({

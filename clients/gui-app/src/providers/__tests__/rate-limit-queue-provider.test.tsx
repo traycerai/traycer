@@ -2,59 +2,88 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import type {
-  ProviderAuthStatus,
-  ProviderProfile,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ReactNode } from "react";
 import type { RateLimitFetchEligibility } from "@/lib/rate-limit-providers";
+import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
 
-type MockConfiguredProvider = {
+type ConfiguredFixture = {
   readonly providerId: string;
-  readonly lane: "ephemeralProcess" | "httpFetch";
-  readonly profiles: ReadonlyArray<ProviderProfile>;
-  readonly fetchEligibility: RateLimitFetchEligibility;
+  readonly lane: string;
+  readonly profiles?: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility?: RateLimitFetchEligibility;
 };
 
 type MockState = {
   hostId: string | null;
-  client: {
-    request: () => Promise<unknown>;
-    requestWithResponseTimeout: (...args: unknown[]) => Promise<unknown>;
-  } | null;
-  configured: ReadonlyArray<MockConfiguredProvider>;
+  client: { request: () => Promise<unknown> } | null;
+  configured: ReadonlyArray<ConfiguredFixture>;
+  profileSelection: {
+    activeChatSettings: null;
+    lastProfileByHarness: Readonly<Record<string, string | null>>;
+  };
 };
 
 const mocks = vi.hoisted<MockState>(() => ({
   hostId: "host-a",
-  client: {
-    request: () => Promise.resolve({}),
-    requestWithResponseTimeout: () => Promise.resolve({}),
-  },
+  client: { request: () => Promise.resolve({}) },
   configured: [],
+  profileSelection: { activeChatSettings: null, lastProfileByHarness: {} },
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => mocks.hostId,
 }));
-// The provider now resolves its client through `useHostClientForHostId` (a
-// requester PINNED to the given host id), not the mutable app-wide
-// `useHostClient()`. This mock mirrors that pinned-per-host resolution: a
-// `null` hostId (host loss) resolves to `null`, and a non-null hostId
-// resolves to `mocks.client` - which is itself nullable, so a test can also
-// simulate a pinned client that fails to resolve while a host id is still
-// active (see "unbinds the queue when the pinned client cannot resolve"
-// below).
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => mocks.client,
+}));
+// The provider resolves its requester through the PINNED hook, not the mutable
+// app-wide client. Stubbed here so this file stays about queue binding and the
+// polling scheduler; the pinning semantics themselves are covered against a
+// real `HostClient` in `use-rate-limit-queue-scope.test.tsx`, where stubbing
+// this hook would have made the assertion vacuous.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? null : mocks.client,
 }));
+// Normalizes each fixture with the defaults a real `ConfiguredRateLimitProvider`
+// always carries (`profiles`, `fetchEligibility`), so most existing test bodies
+// below - written against the pre-profile-aware polling scheduler - keep
+// passing unchanged: an empty `profiles` array + ambient-eligible is exactly
+// the single-ambient-candidate shape `selectBackgroundRateLimitTargets`
+// resolves a profile-less provider to.
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
-  useConfiguredRateLimitProviders: () => mocks.configured,
+  useConfiguredRateLimitProviders: () =>
+    mocks.configured.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles ?? [],
+      fetchEligibility: provider.fetchEligibility ?? {
+        ambient: true,
+        managedProfiles: true,
+      },
+    })),
 }));
+// Only the HOOK is stubbed (its real implementation depends on the epic
+// canvas store, chat session registry, etc., none of which is mounted here).
+// `resolveRateLimitProfileId` stays real: `background-rate-limit-targets.ts`
+// imports it directly to resolve each provider's selected profile id, and a
+// bare mock here would drop that export out from under it.
+vi.mock(
+  "@/hooks/rate-limits/use-rate-limit-profile-selection",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/rate-limits/use-rate-limit-profile-selection")
+      >();
+    return {
+      ...actual,
+      useRateLimitProfileSelection: () => mocks.profileSelection,
+    };
+  },
+);
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   configureRateLimitQueue: vi.fn(),
-  enqueueRateLimitFetchBatch: vi.fn(() => Promise.resolve()),
+  enqueueRateLimitFetch: vi.fn(() => Promise.resolve()),
 }));
 
 import {
@@ -63,64 +92,11 @@ import {
 } from "@/providers/rate-limit-queue-provider";
 import {
   configureRateLimitQueue,
-  enqueueRateLimitFetchBatch,
+  enqueueRateLimitFetch,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
-import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 const configureSpy = vi.mocked(configureRateLimitQueue);
-const enqueueBatchSpy = vi.mocked(enqueueRateLimitFetchBatch);
-
-function auth(status: ProviderAuthStatus): ProviderProfile["auth"] {
-  return { status, badgeText: null, label: null, detail: null };
-}
-
-function profileFixture(
-  kind: "ambient" | "managed",
-  profileId: string,
-  status: ProviderAuthStatus,
-): ProviderProfile {
-  return {
-    profileId,
-    kind,
-    authType: "oauth",
-    label: kind === "ambient" ? "Terminal" : profileId,
-    auth: auth(status),
-    identity: null,
-    usageUpdatedAt: null,
-    rateLimitStatus: "unknown",
-    rateLimitLimitedScopes: null,
-    duplicateOfProfileId: null,
-    accentColor: null,
-    ambientDriftNotice: null,
-  };
-}
-
-/** A minimal ephemeralProcess provider with only its ambient login eligible
- * and no profile metadata - the shape most of these tests exercised before
- * the queue learned to fan out over every fetch-eligible profile. */
-function ephemeralAmbientOnlyProvider(
-  providerId: string,
-): MockConfiguredProvider {
-  return {
-    providerId,
-    lane: "ephemeralProcess",
-    profiles: [],
-    fetchEligibility: { ambient: true, managedProfiles: false },
-  };
-}
-
-function httpFetchProvider(providerId: string): MockConfiguredProvider {
-  return {
-    providerId,
-    lane: "httpFetch",
-    profiles: [],
-    fetchEligibility: { ambient: true, managedProfiles: false },
-  };
-}
-
-function target(providerId: string, profileId: string | null) {
-  return { providerId, accountContext: DEFAULT_ACCOUNT_CONTEXT, profileId };
-}
+const enqueueSpy = vi.mocked(enqueueRateLimitFetch);
 
 function defineVisibility(state: "visible" | "hidden"): void {
   Object.defineProperty(document, "visibilityState", {
@@ -142,17 +118,58 @@ function tree(): ReactNode {
   );
 }
 
+function profile(input: {
+  readonly profileId: string;
+  readonly kind: ProviderProfile["kind"];
+  readonly usageUpdatedAt: number | null;
+}): ProviderProfile {
+  return {
+    profileId: input.profileId,
+    kind: input.kind,
+    authType: "oauth",
+    label: input.profileId,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: {
+      email: `${input.profileId}@example.com`,
+      tier: "Pro",
+      accountUuid: `${input.profileId}-uuid`,
+    },
+    usageUpdatedAt: input.usageUpdatedAt,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
+
+function calledTargets(): ReadonlyArray<{
+  readonly providerId: unknown;
+  readonly profileId: unknown;
+}> {
+  return enqueueSpy.mock.calls.map((call) => ({
+    providerId: call[0],
+    profileId: (call[2] as { profileId: unknown }).profileId,
+  }));
+}
+
 describe("<RateLimitQueueProvider />", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.hostId = "host-a";
-    mocks.client = {
-      request: vi.fn(() => Promise.resolve({})),
-      requestWithResponseTimeout: vi.fn(() => Promise.resolve({})),
-    };
+    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
     mocks.configured = [];
+    mocks.profileSelection = {
+      activeChatSettings: null,
+      lastProfileByHarness: {},
+    };
     configureSpy.mockClear();
-    enqueueBatchSpy.mockClear();
+    enqueueSpy.mockClear();
     defineVisibility("visible");
   });
 
@@ -161,7 +178,7 @@ describe("<RateLimitQueueProvider />", () => {
     vi.useRealTimers();
   });
 
-  it("polls the ephemeralProcess lane every 15 minutes, matching the httpFetch lane's own steady cadence", () => {
+  it("polls the ephemeralProcess lane every 5 minutes, matching the httpFetch lane's own refetchInterval", () => {
     expect(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS).toBe(15 * 60 * 1000);
   });
 
@@ -171,32 +188,6 @@ describe("<RateLimitQueueProvider />", () => {
     expect(config).not.toBeNull();
     expect(config?.hostId).toBe("host-a");
     expect(typeof config?.request).toBe("function");
-  });
-
-  it("configures the queue with a request fn that forwards to client.requestWithResponseTimeout, never client.request", async () => {
-    render(tree());
-    const config = configureSpy.mock.calls.at(-1)?.[0] ?? null;
-    expect(config).not.toBeNull();
-    if (config === null) throw new Error("expected a queue config");
-
-    const params = {
-      accountContext: DEFAULT_ACCOUNT_CONTEXT,
-      providerId: "codex" as const,
-      profileId: null,
-    };
-    await config.request(
-      "host-a",
-      "host.getRateLimitUsage",
-      params,
-      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
-    );
-
-    expect(mocks.client?.requestWithResponseTimeout).toHaveBeenCalledWith(
-      "host.getRateLimitUsage",
-      params,
-      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
-    );
-    expect(mocks.client?.request).not.toHaveBeenCalled();
   });
 
   it("unbinds the queue when the host is lost", () => {
@@ -209,42 +200,27 @@ describe("<RateLimitQueueProvider />", () => {
     expect(configureSpy).toHaveBeenLastCalledWith(null);
   });
 
-  it("unbinds the queue when the pinned client fails to resolve, even though a host id is still active", () => {
-    // `useHostClientForHostId` yields `null` when the id it is pinned to no
-    // longer resolves anywhere (not the live directory, not the client's own
-    // active host) - distinct from host LOSS (`hostId` itself going `null`,
-    // covered above). Both must clear the binding: a queue configured with a
-    // client that can't route anywhere is exactly as unusable as one with no
-    // host at all.
-    const { rerender } = render(tree());
-    configureSpy.mockClear();
-    act(() => {
-      mocks.client = null;
-      rerender(tree());
-    });
-    expect(configureSpy).toHaveBeenLastCalledWith(null);
-  });
-
   it("enqueues only ephemeralProcess providers immediately when they are configured", () => {
     mocks.configured = [
-      ephemeralAmbientOnlyProvider("codex"),
-      httpFetchProvider("openrouter"),
+      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "openrouter", lane: "httpFetch" },
     ];
     render(tree());
 
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith([target("codex", null)], {
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
   });
 
   it("polls only ephemeralProcess providers each interval after the immediate enqueue", () => {
     mocks.configured = [
-      ephemeralAmbientOnlyProvider("codex"),
-      httpFetchProvider("openrouter"),
+      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "openrouter", lane: "httpFetch" },
     ];
     render(tree());
-    enqueueBatchSpy.mockClear();
+    enqueueSpy.mockClear();
 
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
@@ -252,16 +228,17 @@ describe("<RateLimitQueueProvider />", () => {
 
     // Only the ephemeralProcess provider is enqueued; the httpFetch one never
     // touches the queue.
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith([target("codex", null)], {
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
   });
 
   it("pauses the interval while the document is hidden and resumes when visible again (guardrail 2)", () => {
-    mocks.configured = [ephemeralAmbientOnlyProvider("codex")];
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     render(tree());
-    enqueueBatchSpy.mockClear();
+    enqueueSpy.mockClear();
 
     act(() => {
       changeVisibility("hidden");
@@ -270,7 +247,7 @@ describe("<RateLimitQueueProvider />", () => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS * 3);
     });
     // Minimized/backgrounded: no subprocess-spawning enqueues at all.
-    expect(enqueueBatchSpy).not.toHaveBeenCalled();
+    expect(enqueueSpy).not.toHaveBeenCalled();
 
     act(() => {
       changeVisibility("visible");
@@ -279,13 +256,13 @@ describe("<RateLimitQueueProvider />", () => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
     });
     // Brought back: polling resumes.
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps polling when the window loses focus but stays visible - never keys off blur (guardrail 4)", () => {
-    mocks.configured = [ephemeralAmbientOnlyProvider("codex")];
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     render(tree());
-    enqueueBatchSpy.mockClear();
+    enqueueSpy.mockClear();
 
     // OS focus moves elsewhere (e.g. Traycer visible on a second monitor). The
     // document stays "visible", so nothing must pause.
@@ -295,125 +272,264 @@ describe("<RateLimitQueueProvider />", () => {
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
     });
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
   });
 
   it("re-gates on the next tick when a credential is removed mid-session, without resetting the timer", () => {
     mocks.configured = [
-      ephemeralAmbientOnlyProvider("codex"),
-      ephemeralAmbientOnlyProvider("claude-code"),
+      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "claude-code", lane: "ephemeralProcess" },
     ];
     const { rerender } = render(tree());
-    enqueueBatchSpy.mockClear();
+    enqueueSpy.mockClear();
 
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
     });
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(2);
-    enqueueBatchSpy.mockClear();
+    expect(enqueueSpy).toHaveBeenCalledTimes(2);
+    enqueueSpy.mockClear();
 
     // claude-code's credential is removed mid-session -> it drops out of the
     // configured set. The ref updates on re-render; the interval keeps running.
     act(() => {
-      mocks.configured = [ephemeralAmbientOnlyProvider("codex")];
+      mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
       rerender(tree());
     });
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith([target("codex", null)], {
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
-    enqueueBatchSpy.mockClear();
+    enqueueSpy.mockClear();
 
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
     });
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith([target("codex", null)], {
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
   });
 
   it("does not run the interval while there is no host", () => {
     mocks.hostId = null;
-    mocks.configured = [ephemeralAmbientOnlyProvider("codex")];
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     render(tree());
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS * 2);
     });
-    expect(enqueueBatchSpy).not.toHaveBeenCalled();
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+});
+
+// Background target selection over MANAGED PROFILES: each polling window
+// walks `selectBackgroundRateLimitTargets` (selected-stale-first, then
+// oldest, budget-capped) rather than one ambient pull per provider. See
+// `background-rate-limit-targets.test.ts` for the selection function's own
+// unit coverage; this suite proves the provider actually wires the live
+// configured-providers + profile-selection snapshot into it on every window.
+describe("<RateLimitQueueProvider /> background profile polling", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.hostId = "host-a";
+    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
+    mocks.configured = [];
+    mocks.profileSelection = {
+      activeChatSettings: null,
+      lastProfileByHarness: {},
+    };
+    configureSpy.mockClear();
+    enqueueSpy.mockClear();
+    defineVisibility("visible");
   });
 
-  it("sweeps an ambient login plus every fetch-eligible managed profile in a single batch call", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("enqueues each stale profile with its own profileId and the target's account context", () => {
     mocks.configured = [
       {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: [
-          profileFixture("ambient", "ambient", "authenticated"),
-          profileFixture("managed", "p1", "authenticated"),
-          profileFixture("managed", "p2", "authenticated"),
+          profile({
+            profileId: "personal",
+            kind: "managed",
+            usageUpdatedAt: null,
+          }),
+          profile({ profileId: "work", kind: "managed", usageUpdatedAt: null }),
+        ],
+      },
+    ];
+    render(tree());
+
+    expect(calledTargets()).toEqual(
+      expect.arrayContaining([
+        { providerId: "codex", profileId: "personal" },
+        { providerId: "codex", profileId: "work" },
+      ]),
+    );
+    for (const call of enqueueSpy.mock.calls) {
+      expect(call[1]).toEqual(DEFAULT_ACCOUNT_CONTEXT);
+      expect(call[2]).toMatchObject({ force: false });
+    }
+  });
+
+  it("enqueues the selected profile ahead of an unselected, older one", () => {
+    const now = Date.now();
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          profile({
+            profileId: "oldest",
+            kind: "managed",
+            usageUpdatedAt: now - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 100_000,
+          }),
+          profile({
+            profileId: "selected",
+            kind: "managed",
+            usageUpdatedAt: now - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 1_000,
+          }),
+        ],
+      },
+    ];
+    mocks.profileSelection = {
+      activeChatSettings: null,
+      lastProfileByHarness: { codex: "selected" },
+    };
+    render(tree());
+
+    expect(calledTargets().map((t) => t.profileId)).toEqual([
+      "selected",
+      "oldest",
+    ]);
+  });
+
+  it("caps one polling window at the background target budget across providers", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          profile({ profileId: "p1", kind: "managed", usageUpdatedAt: null }),
+          profile({ profileId: "p2", kind: "managed", usageUpdatedAt: null }),
+        ],
+      },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [
+          profile({ profileId: "p3", kind: "managed", usageUpdatedAt: null }),
+          profile({ profileId: "p4", kind: "managed", usageUpdatedAt: null }),
+        ],
+      },
+    ];
+    render(tree());
+
+    // 4 stale eligible targets exist, but the window budget is 3.
+    expect(enqueueSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("excludes a signed-out managed profile from the polled set", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          {
+            ...profile({
+              profileId: "signed-out",
+              kind: "managed",
+              usageUpdatedAt: null,
+            }),
+            auth: {
+              status: "unauthenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+          },
         ],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
     ];
     render(tree());
-
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith(
-      [target("codex", null), target("codex", "p1"), target("codex", "p2")],
-      { force: false },
-    );
+    expect(enqueueSpy).not.toHaveBeenCalled();
   });
 
-  it("sweeps only the eligible managed profile when the ambient login itself is not eligible", () => {
+  it("does not re-trigger the immediate enqueue when only a profile's usage timestamp changes across a re-render", () => {
+    const buildConfigured = (
+      usageUpdatedAt: number | null,
+    ): ReadonlyArray<ConfiguredFixture> => [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          profile({ profileId: "work", kind: "managed", usageUpdatedAt }),
+        ],
+      },
+    ];
+    mocks.configured = buildConfigured(null);
+    const { rerender } = render(tree());
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    enqueueSpy.mockClear();
+
+    // A sibling read (a different provider/profile) landed and bumped this
+    // profile's persisted `usageUpdatedAt` - membership (who's eligible, who's
+    // selected) is unchanged, so the immediate-enqueue effect must not refire.
+    act(() => {
+      mocks.configured = buildConfigured(Date.now() - 1_000);
+      rerender(tree());
+    });
+    expect(enqueueSpy).not.toHaveBeenCalled();
+
+    // The next scheduled window still runs on its own cadence regardless.
+    act(() => {
+      vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
+    });
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-triggers the immediate enqueue when eligibility actually changes", () => {
     mocks.configured = [
       {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: [
-          profileFixture("ambient", "ambient", "unauthenticated"),
-          profileFixture("managed", "p1", "authenticated"),
+          profile({ profileId: "work", kind: "managed", usageUpdatedAt: null }),
         ],
-        fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
-    render(tree());
+    const { rerender } = render(tree());
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    enqueueSpy.mockClear();
 
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith([target("codex", "p1")], {
-      force: false,
+    act(() => {
+      mocks.configured = [
+        {
+          providerId: "codex",
+          lane: "ephemeralProcess",
+          profiles: [
+            profile({
+              profileId: "work",
+              kind: "managed",
+              usageUpdatedAt: null,
+            }),
+            profile({
+              profileId: "second",
+              kind: "managed",
+              usageUpdatedAt: null,
+            }),
+          ],
+        },
+      ];
+      rerender(tree());
     });
-  });
-
-  it("excludes a managed profile whose own credential is not fetch-eligible", () => {
-    mocks.configured = [
-      {
-        providerId: "codex",
-        lane: "ephemeralProcess",
-        profiles: [
-          profileFixture("ambient", "ambient", "authenticated"),
-          profileFixture("managed", "p1", "authenticated"),
-          profileFixture("managed", "p2", "unauthenticated"),
-        ],
-        fetchEligibility: { ambient: true, managedProfiles: true },
-      },
-    ];
-    render(tree());
-
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith(
-      [target("codex", null), target("codex", "p1")],
-      { force: false },
-    );
-  });
-
-  it("falls back to a single ambient target when a provider reports no profile metadata", () => {
-    mocks.configured = [ephemeralAmbientOnlyProvider("codex")];
-    render(tree());
-
-    expect(enqueueBatchSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueBatchSpy).toHaveBeenCalledWith([target("codex", null)], {
-      force: false,
-    });
+    expect(enqueueSpy).toHaveBeenCalledTimes(2);
   });
 });

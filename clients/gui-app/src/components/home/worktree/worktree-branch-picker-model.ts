@@ -113,6 +113,15 @@ export function pickerEntryId(kind: PickerEntry["kind"], id: string): string {
   return `${kind}:${id}`;
 }
 
+/** Empty-list copy shared by every branch-picker surface: a live query means
+ * the branches exist but none matched; otherwise the surface's own idle copy. */
+export function pickerEmptyStateLabel(
+  hasQuery: boolean,
+  emptyLabel: string,
+): string {
+  return hasQuery ? "No matching branches" : emptyLabel;
+}
+
 export function pickerElementId(idPrefix: string, entryId: string): string {
   return `${idPrefix}-entry-${entryId.replace(/[^a-zA-Z0-9_-]/gu, "_")}`;
 }

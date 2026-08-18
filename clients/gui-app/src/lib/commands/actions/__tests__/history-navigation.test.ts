@@ -28,6 +28,8 @@ import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { queryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { commitPlainTerminalDeletion } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 
 const VIEWER_USER_ID = "viewer-a";
 
@@ -886,6 +888,124 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("cannot restore a closed durable terminal while a retained tombstone is still in Query", () => {
+    const hostId = bindActiveHost();
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("e1", "Task");
+    const ref: EpicCanvasTileRef = {
+      id: "durable-terminal",
+      instanceId: "durable-terminal-instance",
+      type: "terminal",
+      name: "Durable terminal",
+      hostId,
+      authority: "host",
+      legacyFallback: {
+        name: "Durable terminal",
+        titleSource: "manual",
+        cwd: "/repo",
+      },
+    };
+    store.openTileInTab(tabId, ref);
+    const paneId = requirePaneId(tabId);
+    // The tombstone lands under the real epic-scoped plain-terminal key, which
+    // is what `rejectClosedPlainTerminalRestore` reads. Its presentation fanout
+    // is key-independent, so the closed payload is seeded AFTER the commit -
+    // otherwise the fanout prunes it first and `goBack` has nothing to reject.
+    expect(
+      commitPlainTerminalDeletion({
+        queryClient,
+        queryKey: hostQueryKeys.plainTerminals(hostId, {
+          kind: "epic",
+          epicId: "e1",
+        }),
+        hostId,
+        terminalId: ref.id,
+        evidence: { kind: "stream", revision: 1 },
+        deferPresentation: false,
+      }),
+    ).toBe(true);
+    useEpicCanvasStore.setState((state) => ({
+      closedTilePayloadsByTabId: {
+        ...state.closedTilePayloadsByTabId,
+        [tabId]: {
+          [ref.instanceId]: { node: ref, pendingCreate: false },
+        },
+      },
+    }));
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        ref.instanceId
+      ],
+    ).toBeDefined();
+
+    const landing = nestedHref("e1", tabId, paneId, ref.instanceId);
+    const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+    vi.spyOn(history, "go").mockImplementation(() => {});
+    goBack({ history });
+
+    expect(tileByContentId(tabId, ref.id)).toBeUndefined();
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        ref.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("cannot restore a closed legacy terminal when a retained tombstone is still in Query", () => {
+    const hostId = bindActiveHost();
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("e1", "Task");
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requirePaneId(tabId);
+    const ref: EpicCanvasTileRef = {
+      id: "durable-terminal",
+      instanceId: "durable-terminal-instance",
+      type: "terminal",
+      name: "Legacy terminal",
+      hostId,
+      titleSource: "manual",
+      cwd: "/repo",
+    };
+    expect(
+      commitPlainTerminalDeletion({
+        queryClient,
+        queryKey: hostQueryKeys.plainTerminals(hostId, {
+          kind: "epic",
+          epicId: "e1",
+        }),
+        hostId,
+        terminalId: ref.id,
+        evidence: { kind: "stream", revision: 2 },
+        deferPresentation: false,
+      }),
+    ).toBe(true);
+    useEpicCanvasStore.setState((state) => ({
+      closedTilePayloadsByTabId: {
+        ...state.closedTilePayloadsByTabId,
+        [tabId]: {
+          [ref.instanceId]: { node: ref, pendingCreate: false },
+        },
+      },
+    }));
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        ref.instanceId
+      ],
+    ).toBeDefined();
+
+    const landing = nestedHref("e1", tabId, paneId, ref.instanceId);
+    const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+    vi.spyOn(history, "go").mockImplementation(() => {});
+    goBack({ history });
+
+    expect(tileByContentId(tabId, ref.id)).toBeUndefined();
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        ref.instanceId
       ],
     ).toBeUndefined();
   });

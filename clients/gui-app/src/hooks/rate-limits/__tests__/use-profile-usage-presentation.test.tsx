@@ -326,14 +326,10 @@ describe("useProfileUsagePresentation", () => {
     const refreshA = result.current.entries.get("p-a")?.refresh();
     await waitFor(() => expect(order).toEqual(["start:p-a"]));
 
-    // p-a's own query is fetching, so the underlying comparison already
-    // reports p-a as "refreshing" (`deriveProfileUsageRefreshStatus` reads
-    // only that profile's own `isFetching`). p-b's raw status is unaffected -
-    // there is no shared queue-wide state left to leak from - but this
-    // presentation hook layers its OWN local pending flag on top
-    // (`pendingRefreshKeys`, set the moment ITS `refresh()` is called for a
-    // given profile key): guard that layer too, since a click on p-a's key
-    // must not mark p-b's key pending.
+    // The shared ephemeralProcess queue is now draining, so the raw
+    // comparison would mark p-b "queued" too - but p-b's own refresh was
+    // never invoked through this presentation hook, so its entry must stay
+    // "idle" while only p-a reads as pending.
     expect(result.current.entries.get("p-a")?.refreshStatus).toBe("refreshing");
     expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle");
 

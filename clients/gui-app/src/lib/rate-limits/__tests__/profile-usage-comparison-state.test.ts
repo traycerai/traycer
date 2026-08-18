@@ -200,23 +200,57 @@ describe("deriveProfileUsageDetailState", () => {
 });
 
 describe("deriveProfileUsageRefreshStatus", () => {
-  // `deriveProfileUsageRefreshStatus` was simplified to take no `lane` and no
-  // queue-wide `draining` flag - see its own doc comment: "this used to fold
-  // in the shared lane's process-wide `draining` state... which made every
-  // profile read as busy whenever any unrelated background probe was in
-  // flight". `ProfileUsageRefreshStatus` itself dropped its `queued` member
-  // for the same reason (`ephemeral-fetch-queue`'s forced pulls no longer
-  // wait, so "asked for, not started yet" is not a state to describe). The
-  // function's only remaining input is this profile's own fetch flag.
-  it("is refreshing whenever this profile's own query is fetching", () => {
+  it("is refreshing whenever this profile's own query is fetching, regardless of lane", () => {
     expect(
-      deriveProfileUsageRefreshStatus({ isFetchingThisProfile: true }),
+      deriveProfileUsageRefreshStatus({
+        isFetchingThisProfile: true,
+        queueDraining: false,
+        lane: "httpFetch",
+      }),
+    ).toBe("refreshing");
+    expect(
+      deriveProfileUsageRefreshStatus({
+        isFetchingThisProfile: true,
+        queueDraining: false,
+        lane: "ephemeralProcess",
+      }),
     ).toBe("refreshing");
   });
 
-  it("is idle when this profile's own query is not fetching", () => {
+  it("is queued for the ephemeralProcess lane when the shared queue is draining but this profile's own fetch has not started", () => {
     expect(
-      deriveProfileUsageRefreshStatus({ isFetchingThisProfile: false }),
+      deriveProfileUsageRefreshStatus({
+        isFetchingThisProfile: false,
+        queueDraining: true,
+        lane: "ephemeralProcess",
+      }),
+    ).toBe("queued");
+  });
+
+  it("is never queued for the httpFetch lane, which has no shared queue", () => {
+    expect(
+      deriveProfileUsageRefreshStatus({
+        isFetchingThisProfile: false,
+        queueDraining: true,
+        lane: "httpFetch",
+      }),
+    ).toBe("idle");
+  });
+
+  it("is idle when nothing is fetching or draining", () => {
+    expect(
+      deriveProfileUsageRefreshStatus({
+        isFetchingThisProfile: false,
+        queueDraining: false,
+        lane: "ephemeralProcess",
+      }),
+    ).toBe("idle");
+    expect(
+      deriveProfileUsageRefreshStatus({
+        isFetchingThisProfile: false,
+        queueDraining: false,
+        lane: null,
+      }),
     ).toBe("idle");
   });
 });

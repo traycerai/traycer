@@ -66,6 +66,18 @@ function hasProviderRateLimitCacheState(
   return envelope.latest !== null || envelope.lastGood !== null;
 }
 
+/** True when at least one ambient or managed target can safely pull usage. */
+function hasEligibleFetchTarget(
+  provider: ConfiguredRateLimitProvider,
+): boolean {
+  return (
+    provider.fetchEligibility.ambient ||
+    provider.profiles.some((profile) =>
+      isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+    )
+  );
+}
+
 function rateLimitProviderCandidates(
   providers: readonly ProviderCliState[],
 ): ReadonlyArray<ConfiguredRateLimitProvider> {
@@ -85,36 +97,16 @@ function rateLimitProviderCandidates(
 }
 
 /**
- * Whether `provider` currently has at least one target a usage pull may run
- * against: its ambient login, or - independently, since managed profiles
- * authenticate on their own and deliberately do not inherit an ambient
- * sign-out - any fetch-eligible managed profile. A provider that reports no
- * profile metadata (older hosts) is judged on its ambient credential alone.
- */
-function hasRateLimitRefreshTarget(
-  provider: ConfiguredRateLimitProvider,
-): boolean {
-  if (provider.fetchEligibility.ambient) return true;
-  return provider.profiles.some((profile) =>
-    isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
-  );
-}
-
-/**
  * The currently-configured rate-limit-capable providers on the default host,
- * each tagged with its fetch lane. Drives the interval timer, which walks every
- * fetch-eligible profile of each `ephemeralProcess` entry (see
- * `refreshTargetsForProvider`) - not just the ambient login, so a managed
- * profile the header glyph or a popover row shows is kept as fresh as the
- * terminal login. A provider whose ambient login is signed out therefore still
- * belongs here while any managed profile of it can fetch.
+ * each tagged with its fetch lane. Drives both the interval timer (walks the
+ * `ephemeralProcess` entries) and, later, the popover rail.
  *
  * Mounted persistently at the app-shell level (via `RateLimitQueueProvider`),
  * so `providers.list` is subscribed for the window's lifetime rather than
  * lazily on Settings open. `subscribed: true` keeps it refreshing so a
  * credential change (login/logout invalidates `providers.list`) re-gates the
- * set - a removed credential drops its provider here immediately, and the next
- * timer tick reads the shortened list.
+ * set - a removed credential drops that target immediately; the provider
+ * remains only when another ambient/managed target is still authenticated.
  *
  * TanStack's structural sharing keeps `data.providers` referentially stable
  * across identical polls, so the memoized projection only recomputes on a real
@@ -125,8 +117,8 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
   const providers = providersQuery.data?.providers;
   return useMemo(() => {
     if (providers === undefined) return [];
-    return rateLimitProviderCandidates(providers).filter(
-      hasRateLimitRefreshTarget,
+    return rateLimitProviderCandidates(providers).flatMap((provider) =>
+      hasEligibleFetchTarget(provider) ? [provider] : [],
     );
   }, [providers]);
 }
@@ -134,8 +126,8 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
 /**
  * Rate-limit providers that should be displayed in user-facing surfaces
  * (header glyph / popover). This deliberately has a wider gate than
- * `useConfiguredRateLimitProviders()`: the queue still polls only providers
- * whose account probe currently says a usage pull is safe, but display also
+ * `useConfiguredRateLimitProviders()`: the queue polls only providers with at
+ * least one target whose account probe says a usage pull is safe, while display also
  * includes a provider once the shared provider-usage query cache has data or an
  * error for it. Candidate construction deliberately includes signed-out
  * providers: auth still makes `configured` false (so the polling hook above
@@ -206,10 +198,7 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimi
             );
           });
         if (hideOpenCode) return [];
-        return provider.fetchEligibility.ambient ||
-          provider.profiles.some((profile) =>
-            isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
-          ) ||
+        return hasEligibleFetchTarget(provider) ||
           cacheTargets.some(
             (target, targetIndex) =>
               target.providerId === provider.providerId &&

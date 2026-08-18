@@ -3,7 +3,8 @@
  * of truth for a provider's refresh action + spinner state, shared by the
  * popover's `RateLimitProviderBlock` and the Settings card. The consumers'
  * own tests exercise this logic only through their full component trees;
- * these pin the lane routing and the fetch-pending fold-in directly, so a
+ * these pin the lane routing and the per-target queue-phase fold-in directly,
+ * so a
  * regression is caught even if a consumer's test setup masks it.
  *
  * `rateLimitFetchLane` stays REAL (it is a pure provider-id classifier):
@@ -16,17 +17,13 @@ import { cleanup, renderHook } from "@testing-library/react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 
 const mocks = vi.hoisted(() => ({
-  // Backs `useIsRateLimitFetchPending(providerId, profileId)` - THIS
-  // provider/profile's own queue-pending flag. `isRefreshing` no longer folds
-  // in a lane-wide draining flag at all, so no such hook is mocked/exercised
-  // here anymore. Defaults to "nothing pending".
-  pending: vi.fn((..._args: unknown[]) => false),
+  targetPhase: null as "queued" | "fetching" | null,
   scope: { hostId: "host-b" },
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
 }));
 
-vi.mock("@/hooks/rate-limits/use-is-rate-limit-fetch-pending", () => ({
-  useIsRateLimitFetchPending: (...args: unknown[]) => mocks.pending(...args),
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
+  useRateLimitQueueTargetPhase: () => mocks.targetPhase,
 }));
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy.
@@ -44,7 +41,7 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 
 beforeEach(() => {
-  mocks.pending = vi.fn((..._args: unknown[]) => false);
+  mocks.targetPhase = null;
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
 });
 
@@ -59,7 +56,8 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
       useProviderRateLimitRefresh({
         providerId: "codex",
         profileId: null,
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: true,
         isFetching: false,
         refetch,
@@ -86,7 +84,8 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
       useProviderRateLimitRefresh({
         providerId: "openrouter",
         profileId: null,
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: true,
         isFetching: false,
         refetch,
@@ -108,7 +107,8 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
       useProviderRateLimitRefresh({
         providerId: "codex",
         profileId: null,
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: true,
         isFetching: true,
         refetch,
@@ -120,7 +120,8 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
       useProviderRateLimitRefresh({
         providerId: "openrouter",
         profileId: null,
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: true,
         isFetching: true,
         refetch,
@@ -129,61 +130,14 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
     expect(openrouter.result.current.isRefreshing).toBe(true);
   });
 
-  it("turns on for an ephemeralProcess provider whose own pull is pending in the queue, even though its own fetch has settled", () => {
-    mocks.pending = vi.fn(
-      (...args: unknown[]) => args[0] === "codex" && args[1] === null,
-    );
+  it("folds THIS target's own queue phase in for an ephemeralProcess provider whose own fetch has settled", () => {
+    mocks.targetPhase = "queued";
     const { result } = renderHook(() =>
       useProviderRateLimitRefresh({
         providerId: "codex",
         profileId: null,
-        dataUpdatedAt: 0,
-        fetchEligible: true,
-        isFetching: false,
-        refetch,
-      }),
-    );
-    expect(result.current.isRefreshing).toBe(true);
-    expect(mocks.pending).toHaveBeenCalledWith("codex", null);
-  });
-
-  // Regression guard for the fix: `isRefreshing` used to OR in a lane-wide
-  // draining flag, so ANY queued work anywhere (a background sweep of an
-  // unrelated provider, one wedged probe holding the lane for its full
-  // response budget) disabled every rate-limit refresh control - including
-  // the very forced click that exists to jump the queue ahead of that
-  // waiting work. Scoping to this exact provider/profile's own pending flag
-  // is what makes the priority scheduler reachable again. If this regresses
-  // to a lane-wide flag, provider/profile X's `isRefreshing` would flip true
-  // here even though only Y is queued.
-  it("stays false for provider/profile X while an unrelated provider/profile Y is pending in the lane, not merely a lane-wide flag", () => {
-    mocks.pending = vi.fn(
-      (...args: unknown[]) =>
-        args[0] === "claude-code" && args[1] === "other-profile",
-    );
-    const { result } = renderHook(() =>
-      useProviderRateLimitRefresh({
-        providerId: "codex",
-        profileId: "work-profile",
-        dataUpdatedAt: 0,
-        fetchEligible: true,
-        isFetching: false,
-        refetch,
-      }),
-    );
-    expect(result.current.isRefreshing).toBe(false);
-    expect(mocks.pending).toHaveBeenCalledWith("codex", "work-profile");
-  });
-
-  it("turns true for provider/profile X once X's own pull (not Y's) is pending in the lane", () => {
-    mocks.pending = vi.fn(
-      (...args: unknown[]) => args[0] === "codex" && args[1] === "work-profile",
-    );
-    const { result } = renderHook(() =>
-      useProviderRateLimitRefresh({
-        providerId: "codex",
-        profileId: "work-profile",
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: true,
         isFetching: false,
         refetch,
@@ -192,13 +146,14 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
     expect(result.current.isRefreshing).toBe(true);
   });
 
-  it("ignores the fetch-pending flag for an httpFetch provider - its own isFetching is the complete signal", () => {
-    mocks.pending = vi.fn(() => true);
+  it("ignores the queue phase for an httpFetch provider - its own isFetching is the complete signal", () => {
+    mocks.targetPhase = "fetching";
     const { result } = renderHook(() =>
       useProviderRateLimitRefresh({
         providerId: "openrouter",
         profileId: null,
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: true,
         isFetching: false,
         refetch,
@@ -212,7 +167,8 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
       useProviderRateLimitRefresh({
         providerId: "codex",
         profileId: null,
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: true,
         isFetching: false,
         refetch,
@@ -227,7 +183,8 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
       useProviderRateLimitRefresh({
         providerId: "codex",
         profileId: null,
-        dataUpdatedAt: 0,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
         fetchEligible: false,
         isFetching: true,
         refetch,

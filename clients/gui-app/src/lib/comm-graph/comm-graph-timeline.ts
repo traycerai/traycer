@@ -225,7 +225,12 @@ export type CommGraphPulse =
       readonly fromAgentId: string;
       readonly toAgentId: string;
     }
-  | { readonly kind: "agent"; readonly agentId: string };
+  | {
+      readonly kind: "agent";
+      readonly agentId: string;
+      /** Who sent the message — may differ from `agentId` on half-edges. */
+      readonly senderAgentId: string;
+    };
 
 function a2aPulseKind(event: CommGraphEvent): CommGraphPulseKind {
   if (event.kind === "a2a_notice") return "notice";
@@ -258,10 +263,14 @@ export function commGraphPulseForEvent(
     };
   }
   if (receiver !== null && visibleAgentIds.has(receiver)) {
-    return { kind: "agent", agentId: receiver };
+    return {
+      kind: "agent",
+      agentId: receiver,
+      senderAgentId: sender ?? receiver,
+    };
   }
   if (sender !== null && visibleAgentIds.has(sender)) {
-    return { kind: "agent", agentId: sender };
+    return { kind: "agent", agentId: sender, senderAgentId: sender };
   }
   return null;
 }

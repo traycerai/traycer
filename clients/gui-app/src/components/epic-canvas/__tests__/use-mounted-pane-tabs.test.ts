@@ -342,9 +342,17 @@ describe("useMountedPaneTabs", () => {
   });
 
   it("keeps retained chats in a hidden pane, where the spec LRU collapses", () => {
-    // Retention must NOT collapse with pane visibility: membership computes
-    // the same set from a store snapshot and cannot observe it, so collapsing
-    // here alone would leave a member with no slot to publish its geometry.
+    // Retention deliberately does NOT collapse with pane visibility. This is a
+    // TRADEOFF, not a constraint - membership COULD observe pane visibility
+    // (`computeRetainedTopLevelRefKeys` already derives the same active-ref set
+    // `TopLevelTabHost` turns into `usePaneVisible()`). Collapsing is refused
+    // because the retained chat would be dropped while hidden and have to
+    // rebuild on the way back. Moving BOTH layers together would remount it
+    // hidden on top-level return, so it can often converge before it is ever
+    // selected - the exposure is a quick first switch, not every return. Still
+    // a reintroduced churn risk for no benefit here. If you are here to revisit
+    // that call (the module doc prices it in unreclaimable `chat.subscribe`
+    // sockets), this is the test that pins it, and membership must move with it.
     const tabs = [chatTab(1), chatTab(2), specTab(1), specTab(2)];
     const { result, rerender } = renderMounted({
       activeTabId: "inst-spec-1",

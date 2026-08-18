@@ -88,6 +88,10 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("provider-login-terminals")).toBe(
       "traycer-gui-app:provider-login-terminals",
     );
+    // Source: src/stores/worktree/setup-terminals.ts
+    expect(persistKey("setup-terminals")).toBe(
+      "traycer-gui-app:setup-terminals",
+    );
     // Source: src/stores/settings/settings-store.ts
     expect(persistKey("settings")).toBe("traycer-gui-app:settings");
     // Source: src/stores/tabs/settings-section-store.ts (NOT a divergence)

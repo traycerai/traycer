@@ -20,19 +20,35 @@ const enqueueSpy = vi.mocked(enqueueRateLimitFetchForScope);
 
 function setup(
   providerId: RateLimitProviderId,
-  dataUpdatedAt: number,
-  refetch: (() => Promise<unknown>) | null,
+  usageUpdatedAt: number | null,
+  hasCachedValue: boolean,
 ) {
+  const refetch = vi.fn(() => Promise.resolve({}));
   return renderHook(
-    ({ id, updatedAt }: { id: RateLimitProviderId; updatedAt: number }) =>
+    ({
+      id,
+      updatedAt,
+      cached,
+    }: {
+      id: RateLimitProviderId;
+      updatedAt: number | null;
+      cached: boolean;
+    }) =>
       useRefreshProviderRateLimitsOnMount({
         providerId: id,
         profileId: null,
-        dataUpdatedAt: updatedAt,
+        usageUpdatedAt: updatedAt,
+        hasCachedValue: cached,
         fetchEligible: true,
         refetch,
       }),
-    { initialProps: { id: providerId, updatedAt: dataUpdatedAt } },
+    {
+      initialProps: {
+        id: providerId,
+        updatedAt: usageUpdatedAt,
+        cached: hasCachedValue,
+      },
+    },
   );
 }
 
@@ -44,8 +60,8 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
     cleanup();
   });
 
-  it("enqueues a force:false pull for an ephemeralProcess provider on mount with no cached data", () => {
-    setup("codex", 0, null);
+  it("enqueues a force:false pull for an ephemeralProcess provider on mount", () => {
+    setup("codex", null, false);
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith(
       mocks.scope,
@@ -58,41 +74,125 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
     );
   });
 
-  // The queue owns freshness (its own `PROVIDER_RATE_LIMITS_STALE_TIME_MS`
-  // floor and cool-down), so this hook enqueues unconditionally for the
-  // ephemeralProcess lane - even when this surface's own cached reading is
-  // still fresh.
-  it("enqueues an ephemeralProcess pull even when the surface's own cached data is fresh", () => {
-    setup("codex", Date.now(), null);
-    expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy).toHaveBeenCalledWith(
-      mocks.scope,
-      "codex",
-      DEFAULT_ACCOUNT_CONTEXT,
-      {
-        force: false,
-        profileId: null,
-      },
-    );
-  });
-
-  it("does not enqueue an ephemeralProcess provider when fetching is ineligible", () => {
-    renderHook(() =>
-      useRefreshProviderRateLimitsOnMount({
-        providerId: "codex",
-        profileId: null,
-        dataUpdatedAt: 0,
-        fetchEligible: false,
-        refetch: null,
-      }),
-    );
+  it("does not enqueue an httpFetch provider", () => {
+    setup("openrouter", null, false);
     expect(enqueueSpy).not.toHaveBeenCalled();
   });
 
-  it("enqueues again when the provider id changes to a different ephemeralProcess provider", () => {
-    const { rerender } = setup("codex", 0, null);
+  it("refetches an httpFetch provider when no successful value exists", () => {
+    const refetch = vi.fn(() => Promise.resolve({}));
+    renderHook(() =>
+      useRefreshProviderRateLimitsOnMount({
+        providerId: "openrouter",
+        profileId: null,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
+        fetchEligible: true,
+        refetch,
+      }),
+    );
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refetch an httpFetch provider with a fresh summary and a cached successful value", () => {
+    const refetch = vi.fn(() => Promise.resolve({}));
+    renderHook(() =>
+      useRefreshProviderRateLimitsOnMount({
+        providerId: "openrouter",
+        profileId: null,
+        usageUpdatedAt: Date.now(),
+        hasCachedValue: true,
+        fetchEligible: true,
+        refetch,
+      }),
+    );
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
+  // --- The skip-vs-enqueue matrix -------------------------------------
+  //
+  // The hook now skips ONLY when BOTH the host-persisted summary
+  // (`usageUpdatedAt`) is within the freshness window AND a successful
+  // detailed value is already cached in this renderer. Either condition
+  // failing on its own must still enqueue: a stale/absent summary (managed
+  // profiles the app-shell interval cannot assume are already represented
+  // in this renderer's cache) and a cold detailed cache (a fresh popover
+  // mount that has never observed this exact provider/profile key) are each
+  // independently sufficient to trigger a pull.
+
+  it("skips when the summary is fresh AND a detailed value is already cached", () => {
+    setup("codex", Date.now(), true);
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+
+  it("enqueues when the summary is stale (null) even though a detailed value is cached", () => {
+    setup("codex", null, true);
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    rerender({ id: "claude-code", updatedAt: 0 });
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      mocks.scope,
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      { force: false, profileId: null },
+    );
+  });
+
+  it("enqueues when the summary is past the freshness window even though a detailed value is cached", () => {
+    setup(
+      "codex",
+      Date.now() - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 1_000,
+      true,
+    );
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a summary exactly at the freshness boundary as stale (fresh is a strict less-than)", () => {
+    vi.useFakeTimers();
+    const now = 1_700_000_000_000;
+    vi.setSystemTime(now);
+    setup("codex", now - PROVIDER_RATE_LIMITS_STALE_TIME_MS, true);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("enqueues when the summary is fresh but no detailed value is cached yet (cold detailed cache)", () => {
+    setup("codex", Date.now(), false);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      mocks.scope,
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      { force: false, profileId: null },
+    );
+  });
+
+  it("enqueues when neither the summary is fresh nor a detailed value is cached", () => {
+    setup("codex", null, false);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-enqueues on a re-render where the summary transitions from stale to fresh but the cache is still cold", () => {
+    const { rerender } = setup("codex", null, false);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    rerender({ id: "codex", updatedAt: Date.now(), cached: false });
+    // Still cold on the detailed cache, so still eligible - not skipped just
+    // because the summary caught up.
+    expect(enqueueSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops re-enqueuing once a re-render lands on both fresh summary and cached value", () => {
+    const { rerender } = setup("codex", null, false);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    // The re-render's dependencies changed (so the effect re-runs), but this
+    // time it lands squarely on the skip condition - both fresh and cached -
+    // so the re-run's own body must not call through.
+    rerender({ id: "codex", updatedAt: Date.now(), cached: true });
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("enqueues again when the provider id changes to a different ephemeralProcess provider", () => {
+    const { rerender } = setup("codex", null, false);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    rerender({ id: "claude-code", updatedAt: null, cached: false });
     expect(enqueueSpy).toHaveBeenCalledTimes(2);
     expect(enqueueSpy).toHaveBeenLastCalledWith(
       mocks.scope,
@@ -102,74 +202,41 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
     );
   });
 
-  it("does not re-enqueue on a re-render with the same provider id and dataUpdatedAt", () => {
-    const { rerender } = setup("codex", 0, null);
+  it("does not re-enqueue on a re-render with the same provider id, summary, and cache state", () => {
+    const { rerender } = setup("codex", null, false);
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    rerender({ id: "codex", updatedAt: 0 });
+    rerender({ id: "codex", updatedAt: null, cached: false });
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("refetches an httpFetch provider when dataUpdatedAt is 0 (nothing has ever landed)", () => {
-    const refetch = vi.fn(() => Promise.resolve({}));
+  it("does not enqueue an ephemeralProcess provider when fetching is ineligible", () => {
     renderHook(() =>
       useRefreshProviderRateLimitsOnMount({
-        providerId: "openrouter",
+        providerId: "codex",
         profileId: null,
-        dataUpdatedAt: 0,
-        fetchEligible: true,
-        refetch,
-      }),
-    );
-    expect(refetch).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy).not.toHaveBeenCalled();
-  });
-
-  it("refetches an httpFetch provider whose cached data is older than the freshness floor", () => {
-    const refetch = vi.fn(() => Promise.resolve({}));
-    renderHook(() =>
-      useRefreshProviderRateLimitsOnMount({
-        providerId: "openrouter",
-        profileId: null,
-        dataUpdatedAt: Date.now() - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 1,
-        fetchEligible: true,
-        refetch,
-      }),
-    );
-    expect(refetch).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not refetch an httpFetch provider whose cached data is still fresh", () => {
-    const refetch = vi.fn(() => Promise.resolve({}));
-    renderHook(() =>
-      useRefreshProviderRateLimitsOnMount({
-        providerId: "openrouter",
-        profileId: null,
-        dataUpdatedAt: Date.now(),
-        fetchEligible: true,
-        refetch,
-      }),
-    );
-    expect(refetch).not.toHaveBeenCalled();
-    expect(enqueueSpy).not.toHaveBeenCalled();
-  });
-
-  it("no-ops for an httpFetch provider with no observer handle (refetch: null)", () => {
-    renderHook(() =>
-      useRefreshProviderRateLimitsOnMount({
-        providerId: "openrouter",
-        profileId: null,
-        dataUpdatedAt: 0,
-        fetchEligible: true,
+        usageUpdatedAt: null,
+        hasCachedValue: false,
+        fetchEligible: false,
         refetch: null,
       }),
     );
     expect(enqueueSpy).not.toHaveBeenCalled();
   });
 
-  it("does not enqueue an httpFetch provider on the ephemeralProcess lane's queue", () => {
-    const refetch = vi.fn(() => Promise.resolve({}));
-    setup("openrouter", 0, refetch);
+  it("does not enqueue an eligible-but-fresh-and-cached ephemeralProcess provider when fetching is ineligible", () => {
+    // Belt-and-suspenders: `fetchEligible` gates before the freshness/cache
+    // check runs at all, so an ineligible target never enqueues regardless
+    // of what the skip matrix above would otherwise decide.
+    renderHook(() =>
+      useRefreshProviderRateLimitsOnMount({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        hasCachedValue: true,
+        fetchEligible: false,
+        refetch: null,
+      }),
+    );
     expect(enqueueSpy).not.toHaveBeenCalled();
   });
 });

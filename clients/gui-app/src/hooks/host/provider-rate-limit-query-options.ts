@@ -37,24 +37,14 @@ export interface ProviderRateLimitQueryOptions {
  * consumer builds its query from - split out so a future host-scoped variant
  * (e.g. tab-scoped) can reuse the same shape without duplicating it.
  *
- * `params` carries no `force`, which does double duty. These params are the
- * cache key for BOTH lanes, and the `ephemeralProcess` queue writes this exact
- * key with a per-trigger `force` on the request only - so leaving it out here
- * is what keeps an automatic sweep and a click addressing one entry. And for
- * the `httpFetch` lane, whose observer's params ARE its request, omitting it
- * means force (the released behavior): those pulls are cheap credential GETs
- * with no subprocess to save, so there is nothing to trade for a cached gauge.
- *
  * Branches on the fetch lane for background polling:
  * - `httpFetch` (openrouter, kilocode, huggingface, opencode): when credentials are
  *   fetch-eligible,
  *   opts in to the table's fixed cadence.
  *   The builder fixes its background setting to false, so persistent app-shell
  *   subscriptions do not poll while the window is hidden. `refetchOnMount` is
- *   disabled here so both lanes share ONE visible open-time policy: the shared
- *   mount-refresh hook (`useRefreshProviderRateLimitsOnMount`) refetches when
- *   the surface's own cached reading is missing or older than `staleTime`,
- *   and otherwise leaves freshness to the fixed cadence and manual refresh.
+ *   disabled; the shared mount-refresh hook fetches only while no successful
+ *   value exists, then the fixed cadence and manual refresh own freshness.
  * - `ephemeralProcess` (codex, claude-code): opts out of observer polling. Its
  *   background refresh is driven entirely by the serial queue's interval timer
  *   writing fresh data into this exact query key. For the exact same reason,

@@ -76,6 +76,11 @@ type MockState = {
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
+  draining: boolean;
+  // Keyed the same way as `mocks.results` (`resultKey`) - the per-target
+  // queued/fetching registry snapshot `useRateLimitQueueTargetPhase` reads.
+  // Defaults to `null` (not tracked) for any key not present.
+  targetPhases: Record<string, "queued" | "fetching">;
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -88,9 +93,6 @@ type MockState = {
     ) => void
   >;
   authUser: MockAuthUser;
-  // Backs `useIsRateLimitFetchPending` - default `() => false` so an
-  // untouched row never renders as refreshing.
-  pending: Mock<(...args: unknown[]) => boolean>;
   // Last `options` object `RateLimitRefreshAllButton` passed to
   // `useHostQueries`, so a test can assert it reused the real lane options
   // (e.g. `retry: false`) instead of dropping them.
@@ -119,13 +121,14 @@ function coldAuthUser(): MockAuthUser {
 const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
+  draining: false,
+  targetPhases: {},
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   enqueueBatch: vi.fn((..._args: unknown[]) => Promise.resolve()),
   consumeReset: vi.fn(),
-  pending: vi.fn(() => false),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
   profileSelection: {
@@ -163,21 +166,26 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
       profiles: provider.profiles ?? [],
     })),
 }));
-vi.mock("@/hooks/rate-limits/use-is-rate-limit-fetch-pending", () => ({
-  useIsRateLimitFetchPending: (...args: unknown[]) => mocks.pending(...args),
-  // The multi-profile block's heading control (`ProfileRateLimitProviderBlock`)
-  // folds pending state over its own batch of targets rather than a single
-  // provider/profile pair - reuse the same per-args `mocks.pending` fixture so
-  // every existing test that sets it up by (providerId, profileId) keeps
-  // working unchanged for both the single- and multi-profile code paths.
-  useIsAnyRateLimitFetchPending: (
+vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
+  useIsRateLimitQueueDraining: () => mocks.draining,
+}));
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
+  useRateLimitQueueTargetPhase: (
+    providerId: string,
+    profileId: string | null,
+  ) => mocks.targetPhases[resultKey(providerId, profileId)] ?? null,
+  // Folded from the same fixture the single-target hook reads, so a test that
+  // marks one target queued drives the row copy AND the button state
+  // consistently - and a target NOT in this list can never disable a control.
+  useAnyRateLimitQueueTargetPending: (
     targets: ReadonlyArray<{
       readonly providerId: string;
       readonly profileId: string | null;
     }>,
   ) =>
-    targets.some((target) =>
-      mocks.pending(target.providerId, target.profileId),
+    targets.some(
+      (target) =>
+        resultKey(target.providerId, target.profileId) in mocks.targetPhases,
     ),
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
@@ -793,13 +801,14 @@ function renderCodexPopover(): HTMLElement {
 beforeEach(() => {
   mocks.configured = [];
   mocks.results = {};
+  mocks.draining = false;
+  mocks.targetPhases = {};
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.enqueueBatch = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.consumeReset = vi.fn();
-  mocks.pending = vi.fn(() => false);
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
   mocks.profileSelection = {
@@ -1370,26 +1379,77 @@ describe("<RateLimitPopover /> rail", () => {
     );
   });
 
-  it("enqueues an open-time force:false pull for every fetch-eligible profile row, leaving freshness to the queue", () => {
-    // A third, non-eligible profile alongside the two eligible ones so this
-    // also proves exclusion: the block's open-time batch must only name the
-    // fetch-eligible targets, whether the underlying reading is stale or not
-    // (the queue itself is what decides freshness once the batch reaches it).
-    const ineligible: ProviderProfile = {
-      ...providerProfile({
-        profileId: "locked-out",
-        kind: "managed",
-        label: "Locked out",
-        tier: "Pro 5x",
-        usageUpdatedAt: NOW - 1_000,
-      }),
-      auth: {
-        status: "unauthenticated",
-        badgeText: null,
-        label: null,
-        detail: null,
+  it("shows a signed-out message and label for an unauthenticated ambient profile with no cached usage at all", () => {
+    // Distinct from "keeps an unauthenticated ambient row with cached
+    // lastGood data visible" above: here there is no `mocks.results` entry
+    // whatsoever for the ambient key, so `query.data` is `undefined` rather
+    // than a retained `lastGood` reading.
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [unauthenticatedAmbientProfile()],
+        fetchEligibility: { ambient: false, managedProfiles: true },
       },
+    ];
+
+    renderPopover();
+
+    expect(screen.getByText("Terminal")).toBeTruthy();
+    expect(screen.getByText("signed out")).toBeTruthy();
+    expect(
+      screen.getByText("Signed out — sign in to refresh usage."),
+    ).toBeTruthy();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("shows Queued… copy for one profile row whose target is queued, without affecting a sibling profile's row", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
     };
+    mocks.targetPhases = {
+      [resultKey("codex", "work-profile")]: "queued",
+    };
+
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    expect(screen.getByText("Queued…")).toBeTruthy();
+    // Only one "Queued…" - the ambient row (untracked) still shows its
+    // ordinary relative-time copy, not a second "Queued…".
+    expect(screen.getAllByText("Queued…")).toHaveLength(1);
+  });
+
+  it("skips open-time refresh only for a row whose summary is fresh AND cached; a stale-summary cached row still enqueues", () => {
+    // The mount hook (`useRefreshProviderRateLimitsOnMount`) now skips ONLY
+    // when the host-persisted summary (`usageUpdatedAt`) is fresh AND a
+    // detailed value is cached - see its own suite's skip matrix. The ambient
+    // row here has both, so it stays passive on open; the work-profile row's
+    // summary is past the freshness window despite carrying a cached value,
+    // so opening the popover still enqueues a pull for it.
     mocks.configured = [
       {
         providerId: "codex",
@@ -1409,54 +1469,22 @@ describe("<RateLimitPopover /> rail", () => {
             tier: "Pro 5x",
             usageUpdatedAt: NOW - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 1_000,
           }),
-          ineligible,
         ],
       },
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
       [resultKey("codex", "work-profile")]: readyResult(codexReady()),
-      [resultKey("codex", "locked-out")]: readyResult(codexReady()),
     };
 
     renderPopover();
 
-    // The row-level `enqueueRateLimitFetchForScope` is never called for the
-    // ephemeralProcess lane - the parent block owns the open-time refresh as
-    // one parallel batch.
-    expect(mocks.enqueue).not.toHaveBeenCalled();
-    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
-      [
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: null,
-        },
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: "work-profile",
-        },
-      ],
-      { force: false },
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: false, profileId: "work-profile" },
     );
-  });
-
-  it("enqueues no open-time batch for a provider with zero fetch-eligible profiles", () => {
-    mocks.configured = [
-      {
-        providerId: "codex",
-        lane: "ephemeralProcess",
-        profiles: [unauthenticatedAmbientProfile()],
-        fetchEligibility: { ambient: false, managedProfiles: true },
-      },
-    ];
-    mocks.results = { codex: readyResult(codexReady()) };
-
-    renderPopover();
-
-    expect(mocks.enqueue).not.toHaveBeenCalled();
-    expect(mocks.enqueueBatch).not.toHaveBeenCalled();
   });
 
   it("draws a divider only between consecutive condensed blocks (no header row)", () => {
@@ -1696,7 +1724,12 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(screen.queryByText("4% used")).toBeNull();
   });
 
-  it("reveals an uncached signed-out provider instead of leaving Overview loading forever", async () => {
+  it("reveals an uncached signed-out provider with its signed-out message instead of leaving Overview loading forever", async () => {
+    // A signed-out, never-cached provider now renders `SignedOutRateLimitMessage`
+    // rather than the cold-state skeleton (production: `signedOutWithoutUsage`
+    // short-circuits before `RateLimitProviderBody`) - the point either way is
+    // that Overview reveals it instead of leaving it stuck behind the combined
+    // "Fetching usage limits" loader forever.
     mocks.configured = [
       {
         providerId: "codex",
@@ -1724,7 +1757,10 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(
       screen.getByText("Codex").closest('[class*="gap-4"]')?.className,
     ).not.toContain("hidden");
-    expect(screen.getByTestId("rate-limit-detail-skeleton")).toBeTruthy();
+    expect(
+      screen.getByText("Signed out — sign in to refresh usage."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("rate-limit-detail-skeleton")).toBeNull();
   });
 
   it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
@@ -1967,18 +2003,16 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
-  it("shows Refreshing instead of an updated timestamp while a refresh is in progress", () => {
+  it("shows Refreshing instead of an updated timestamp while this target is fetching", () => {
+    // The label's `refreshing` state is now driven by this exact target's own
+    // queue-registry phase (`useRateLimitQueueTargetPhase`), not the
+    // lane-wide `draining` flag - see the "queued/fetching" describe block
+    // below for the row-level truthful-copy coverage this replaces.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    // This ambient-only (profile-less) block routes through
-    // `useProviderRateLimitRefresh`, whose `isRefreshing` is now this exact
-    // provider/profile's own queue-pending flag - never the lane-wide
-    // `draining` flag.
-    mocks.pending = vi.fn(
-      (...args: unknown[]) => args[0] === "codex" && args[1] === null,
-    );
+    mocks.targetPhases = { codex: "fetching" };
     renderPopover();
 
     const label = screen.getByText("Refreshing");
@@ -1988,90 +2022,52 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(screen.queryByText(/^Updated /)).toBeNull();
   });
 
-  it("shows a queued (not yet fetching) profile row as Refreshing", () => {
+  it("does not show Refreshing from the lane-wide draining flag alone - only this target's own phase drives it", () => {
     mocks.configured = [
-      {
-        providerId: "codex",
-        lane: "ephemeralProcess",
-        profiles: [
-          providerProfile({
-            profileId: "ambient",
-            kind: "ambient",
-            label: "Terminal",
-            tier: "Pro",
-            usageUpdatedAt: NOW - 1_000,
-          }),
-          providerProfile({
-            profileId: "work-profile",
-            kind: "managed",
-            label: "Work",
-            tier: "Pro 5x",
-            usageUpdatedAt: NOW - 1_000,
-          }),
-        ],
-      },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
-    mocks.results = {
-      codex: readyResult(codexReady()),
-      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
-    };
-    // Only the work-profile pull is queued; neither row's own query is
-    // fetching.
-    mocks.pending = vi.fn(
-      (...args: unknown[]) => args[0] === "codex" && args[1] === "work-profile",
-    );
-
-    renderPopover();
-
-    // Exactly one row is queued, so exactly one Refreshing indicator renders.
-    expect(screen.getAllByTestId("usage-limit-refreshing-dots")).toHaveLength(
-      1,
-    );
-    const workRow = screen.getByText("Work").closest("div.flex.flex-col.gap-2");
-    expect(workRow).not.toBeNull();
-    expect(
-      (workRow as HTMLElement).querySelector(
-        '[data-testid="usage-limit-refreshing-dots"]',
-      ),
-    ).not.toBeNull();
-  });
-
-  it("ignores the pending flag for a row that is not fetch-eligible", () => {
-    mocks.configured = [
-      {
-        providerId: "codex",
-        lane: "ephemeralProcess",
-        profiles: [unauthenticatedAmbientProfile()],
-        fetchEligibility: { ambient: false, managedProfiles: true },
-      },
-    ];
-    // Deliberately stale so the row would show "stale" absent any refresh
-    // signal - the assertion below proves the pending flag is ignored, not
-    // that some other freshness path happens to also render "stale".
-    mocks.results = {
-      codex: {
-        data: {
-          latest: codexReady(),
-          lastGood: codexReady(),
-          lastGoodAt: NOW - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 60_000,
-          lastFailureAt: null,
-        },
-        isPending: false,
-        isFetching: false,
-        isError: false,
-        dataUpdatedAt: NOW - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 60_000,
-        refetch: vi.fn(() => Promise.resolve({})),
-      },
-    };
-    // The queue says this pull is pending, but the row is not fetch-eligible
-    // (ambient signed out) - `refreshing` must stay gated on eligibility.
-    mocks.pending = vi.fn(() => true);
-
+    mocks.results = { codex: readyResult(codexReady()) };
+    // A DIFFERENT target occupies the shared lane; this provider's own target
+    // is untracked (not queued, not fetching).
+    mocks.draining = true;
     renderPopover();
 
     expect(screen.queryByText("Refreshing")).toBeNull();
-    expect(screen.queryByTestId("usage-limit-refreshing-dots")).toBeNull();
-    expect(screen.getByText("stale")).toBeTruthy();
+    expect(screen.getByText(/^Updated /)).toBeTruthy();
+  });
+
+  it("shows Queued… copy instead of an updated timestamp while this target waits behind another", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.targetPhases = { codex: "queued" };
+    renderPopover();
+
+    expect(screen.getByText("Queued…")).toBeTruthy();
+    expect(screen.queryByText("Refreshing")).toBeNull();
+    expect(screen.queryByText(/^Updated /)).toBeNull();
+  });
+
+  it("shows a signed-out message instead of the usage body for an ambient provider that is signed out with no cached usage", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+    // No `mocks.results` entry at all - `query.data` resolves `undefined`,
+    // the "never even a cached reading" case distinct from the retained
+    // `lastGood` case covered by the rail's own suite above.
+    renderPopover();
+
+    expect(
+      screen.getByText("Signed out — sign in to refresh usage."),
+    ).toBeTruthy();
+    expect(screen.queryByText("4% used")).toBeNull();
+    expect(screen.queryByText("Queued…")).toBeNull();
   });
 
   it("shows a plain error message with no inline retry control when a fetch never succeeded", () => {
@@ -2188,47 +2184,39 @@ describe("<RateLimitPopover /> per-provider states", () => {
 });
 
 describe("<RateLimitPopover /> Refresh all", () => {
-  it("is disabled while its own ephemeralProcess target is pending in the queue", () => {
+  it("is disabled while one of its OWN ephemeral targets is queued", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    mocks.pending = vi.fn(
-      (...args: unknown[]) => args[0] === "codex" && args[1] === null,
-    );
+    mocks.targetPhases = { codex: "queued" };
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
   });
 
-  // Regression guard for the fix: this button's `refreshing` used to OR in a
-  // lane-wide draining flag, so a wedged background probe for a profile this
-  // button doesn't even target - not one of its own ephemeral targets - used
-  // to disable it too. That is the "my click does nothing" report the fix
-  // exists to end: scoping to `ephemeralProcessRequests`
-  // (`useIsAnyRateLimitFetchPending`) leaves the control enabled unless one of
-  // ITS OWN targets is the one pending.
-  it("stays enabled while an unrelated background pull for a profile it does not target is in flight", () => {
+  it("stays enabled while the lane drains for a target this button does not refresh", () => {
+    // The dead-control regression: `RefreshIconButton` DISABLES on `refreshing`
+    // and its trigger no-ops while set, with no timeout cap on the external
+    // half - so gating on the lane-wide draining flag meant a background sweep
+    // of a provider this popover isn't even showing turned "Refresh all" off
+    // for that sweep's full response budget.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    // Some OTHER provider/profile entirely is mid-pull - never one of this
-    // button's own ephemeral targets (codex/null).
-    mocks.pending = vi.fn(
-      (...args: unknown[]) =>
-        args[0] === "claude-code" && args[1] === "other-profile",
-    );
+    mocks.draining = true;
+    mocks.targetPhases = { "claude-code": "fetching" };
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect((refreshAll as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("is disabled while an httpFetch provider is fetching, even though nothing of its own ephemeralProcess targets is pending", () => {
+  it("is disabled while an httpFetch provider is fetching, even though the ephemeralProcess queue isn't draining", () => {
     // Regression: "Refresh all" used to read only the ephemeralProcess queue's
-    // lane-wide draining flag, so an all-httpFetch popover (or one
-    // mid-invalidation on just its httpFetch providers) never visibly spun
-    // despite actively refreshing.
+    // draining flag, so an all-httpFetch popover (or one mid-invalidation on
+    // just its httpFetch providers) never visibly spun despite actively
+    // refreshing.
     mocks.configured = [
       { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
     ];
@@ -2243,6 +2231,7 @@ describe("<RateLimitPopover /> Refresh all", () => {
         isFetching: true,
       },
     };
+    mocks.draining = false;
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
@@ -2291,33 +2280,33 @@ describe("<RateLimitPopover /> Refresh all", () => {
     ]);
   });
 
-  it("keeps a single ephemeralProcess provider's own refresh button disabled while its own pull is pending in the queue, even though its own isFetching has already settled", () => {
+  it("keeps a single ephemeralProcess provider's own refresh button disabled while ITS target is queued, even though its own isFetching has already settled", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    mocks.pending = vi.fn(
-      (...args: unknown[]) => args[0] === "codex" && args[1] === null,
-    );
+    mocks.targetPhases = { codex: "queued" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
     expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
   });
 
-  // Regression guard for the fix: this button's `isRefreshing` used to OR in
-  // a lane-wide draining flag, so any queued work anywhere disabled it -
-  // including the forced click that exists to jump this exact item ahead of
-  // that waiting work. An unrelated pending target (nothing of THIS
-  // provider's own) must leave the control enabled.
-  it("does not disable a single-profile provider's own refresh button merely because an unrelated target is pending in the queue", () => {
+  it("leaves a provider's own refresh button live while a DIFFERENT provider's target holds the lane", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    mocks.pending = vi.fn(
-      (...args: unknown[]) => args[0] === "claude-code" && args[1] === null,
-    );
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+    };
+    mocks.draining = true;
+    mocks.targetPhases = { "claude-code": "fetching" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
@@ -2570,8 +2559,13 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     // The per-provider refresh only lives in the single-provider detail tab now
     // (item 2 feedback: Overview keeps only the rail's "Refresh all").
     fireEvent.click(screen.getByRole("tab", { name: "Kilo Code" }));
+    // The mount-refresh hook's own cold-start reads (Overview's block plus the
+    // now-mounted detail tab's own instance) already exercise `refetch` before
+    // the click - see its own suite's skip matrix. Isolate the CLICK's effect
+    // by diffing from here, rather than asserting a brittle absolute count.
+    const callsBeforeClick = refetch.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh Kilo Code" }));
-    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(refetch.mock.calls.length).toBe(callsBeforeClick + 1);
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
@@ -2629,13 +2623,7 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
-  // Regression guard for the fix: this heading control's `isRefreshing` used
-  // to fold in a lane-wide draining flag, so a refresh anywhere in the
-  // ephemeralProcess lane disabled it even with nothing of its OWN pending -
-  // and left the row-level state untouched either way
-  // (`RateLimitProviderProfileRow` reads its own per-row pending flag
-  // directly, never a lane-wide one).
-  it("does not disable the provider's heading refresh control, or show its rows as refreshing, merely because an unrelated target is pending in the queue", () => {
+  it("keeps profile cards out of a shared loading state while the provider refresh queue drains", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -2662,8 +2650,7 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
       codex: readyResult(codexReady()),
       [resultKey("codex", "work-profile")]: readyResult(codexReady()),
     };
-    // Some OTHER, unrelated target is pending, but nothing of codex's own is.
-    mocks.pending = vi.fn((...args: unknown[]) => args[0] === "claude-code");
+    mocks.targetPhases = { codex: "queued" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
 
@@ -2671,19 +2658,30 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
       screen
         .getByRole("button", { name: "Refresh Codex" })
         .getAttribute("disabled"),
-    ).toBeNull();
+    ).not.toBeNull();
     expect(screen.queryByText("Refreshing")).toBeNull();
   });
 
-  // Regression guard for the fix: this heading control's `isRefreshing` used
-  // to fold in a lane-wide draining flag, so a refresh on ANY ephemeralProcess
-  // provider disabled every OTHER provider's control too - including the
-  // forced click that exists to jump that other provider's own item ahead of
-  // the one already running. Scoping to each block's own batch of targets
-  // (`useIsAnyRateLimitFetchPending`) is what makes that click reachable
-  // again. If this regresses to a lane-wide flag, Claude Code's control would
-  // show disabled here even though only Codex is pending.
-  it("disables only the provider whose own profiles are pending in the queue, leaving an unrelated provider's control enabled", () => {
+  // REPLACES a pin that asserted the opposite - that the lane-wide `draining`
+  // flag SHOULD disable every ephemeralProcess control, on the reasoning that
+  // "queue items run one at a time (each provider click is one parallel profile
+  // batch), so this matches a 'refresh round is in progress' mental model".
+  //
+  // That reasoning rested on a premise that no longer holds: draining used to
+  // imply a round the USER started. Background target polling
+  // (`selectBackgroundRateLimitTargets`) now drains the lane on a timer with no
+  // user action at all, so the lane-wide rule silently disabled every control
+  // for a sweep nobody asked for. Combined with `RefreshIconButton` both
+  // disabling AND no-opping its trigger, and no timeout cap on the external
+  // half of `useRefreshSpinner`, one wedged probe held every control dead for
+  // its full response budget - and made the queue's force promotion
+  // unreachable, since the click that promotes a queued pull was blocked in
+  // exactly the state where promoting matters.
+  //
+  // Pinned in the new direction: a control reflects ONLY its own targets. Do
+  // not restore the lane-wide gate without also removing the no-op-while-
+  // disabled behaviour of the trigger.
+  it("leaves each ephemeralProcess provider's control live while only the OTHER provider's targets are in the queue", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -2732,19 +2730,29 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
       "claude-code": readyResult(claudeReady()),
       [resultKey("claude-code", "team-profile")]: readyResult(claudeReady()),
     };
-    // Only codex's own targets are pending; claude-code has nothing pending.
-    mocks.pending = vi.fn((...args: unknown[]) => args[0] === "codex");
+    // The lane is draining, but only claude-code's targets are actually in it.
+    mocks.draining = true;
+    mocks.targetPhases = {
+      "claude-code": "fetching",
+      [resultKey("claude-code", "team-profile")]: "queued",
+    };
     renderPopover();
 
+    // Codex has nothing of its own in the lane: its control stays live, and no
+    // card of its borrows the other provider's loading state.
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
-    expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
+    expect((refreshCodex as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("Refreshing")).toBeNull();
 
+    // Claude Code owns the queued work, so its own control is the one gated -
+    // and its fetching row is the only place "Refreshing" appears.
     fireEvent.click(screen.getByRole("tab", { name: "Claude Code" }));
     const refreshClaude = screen.getByRole("button", {
       name: "Refresh Claude Code",
     });
-    expect((refreshClaude as HTMLButtonElement).disabled).toBe(false);
+    expect((refreshClaude as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText("Refreshing").length).toBeGreaterThan(0);
   });
 });
 
