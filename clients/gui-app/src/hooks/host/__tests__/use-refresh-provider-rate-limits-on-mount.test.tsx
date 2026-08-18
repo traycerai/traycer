@@ -146,8 +146,12 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
   });
 
   it("treats a summary exactly at the freshness boundary as stale (fresh is a strict less-than)", () => {
-    setup("codex", Date.now() - PROVIDER_RATE_LIMITS_STALE_TIME_MS, true);
+    vi.useFakeTimers();
+    const now = 1_700_000_000_000;
+    vi.setSystemTime(now);
+    setup("codex", now - PROVIDER_RATE_LIMITS_STALE_TIME_MS, true);
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it("enqueues when the summary is fresh but no detailed value is cached yet (cold detailed cache)", () => {

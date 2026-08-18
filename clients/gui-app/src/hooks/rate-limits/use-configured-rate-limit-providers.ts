@@ -66,6 +66,18 @@ function hasProviderRateLimitCacheState(
   return envelope.latest !== null || envelope.lastGood !== null;
 }
 
+/** True when at least one ambient or managed target can safely pull usage. */
+function hasEligibleFetchTarget(
+  provider: ConfiguredRateLimitProvider,
+): boolean {
+  return (
+    provider.fetchEligibility.ambient ||
+    provider.profiles.some((profile) =>
+      isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+    )
+  );
+}
+
 function rateLimitProviderCandidates(
   providers: readonly ProviderCliState[],
 ): ReadonlyArray<ConfiguredRateLimitProvider> {
@@ -106,12 +118,7 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
   return useMemo(() => {
     if (providers === undefined) return [];
     return rateLimitProviderCandidates(providers).flatMap((provider) =>
-      provider.fetchEligibility.ambient ||
-      provider.profiles.some((profile) =>
-        isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
-      )
-        ? [provider]
-        : [],
+      hasEligibleFetchTarget(provider) ? [provider] : [],
     );
   }, [providers]);
 }
@@ -191,10 +198,7 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimi
             );
           });
         if (hideOpenCode) return [];
-        return provider.fetchEligibility.ambient ||
-          provider.profiles.some((profile) =>
-            isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
-          ) ||
+        return hasEligibleFetchTarget(provider) ||
           cacheTargets.some(
             (target, targetIndex) =>
               target.providerId === provider.providerId &&

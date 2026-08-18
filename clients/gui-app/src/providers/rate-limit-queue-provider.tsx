@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -90,16 +90,11 @@ export function RateLimitQueueProvider(): null {
       backgroundRateLimitMembershipKey(configuredProviders, profileSelection),
     [configuredProviders, profileSelection],
   );
-  const pollingInputRef = useRef({ configuredProviders, profileSelection });
-  useEffect(() => {
-    pollingInputRef.current = { configuredProviders, profileSelection };
-  }, [configuredProviders, profileSelection]);
 
-  const enqueuePollingWindow = useCallback((): void => {
-    const latest = pollingInputRef.current;
+  const enqueuePollingWindow = useEffectEvent((): void => {
     const targets = selectBackgroundRateLimitTargets(
-      latest.configuredProviders,
-      latest.profileSelection,
+      configuredProviders,
+      profileSelection,
       Date.now(),
       BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
     );
@@ -109,12 +104,12 @@ export function RateLimitQueueProvider(): null {
         profileId: target.profileId,
       });
     }
-  }, []);
+  });
 
   useEffect(() => {
     if (hostId === null) return;
     enqueuePollingWindow();
-  }, [enqueuePollingWindow, hostId, membershipKey]);
+  }, [hostId, membershipKey]);
 
   // The single shared interval timer, gated on host presence and paused while
   // the window is hidden. Initial per-provider data still populates through the
@@ -156,7 +151,7 @@ export function RateLimitQueueProvider(): null {
       document.removeEventListener("visibilitychange", syncToVisibility);
       stop();
     };
-  }, [enqueuePollingWindow, hostId]);
+  }, [hostId]);
 
   return null;
 }
