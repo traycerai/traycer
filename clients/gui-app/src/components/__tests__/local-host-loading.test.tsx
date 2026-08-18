@@ -14,6 +14,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useHostBootDetailsStore } from "@/stores/host/host-boot-details-store";
 
 /** Lane identity is irrelevant to the copy under test; fixed so it cannot drift. */
 const LANE_STARTED_AT = "2026-01-01T00:00:00.000Z";
@@ -50,6 +51,7 @@ function mountLoadingContent(
           <LocalHostLoadingContent
             progress={progress}
             onConfigureShell={() => undefined}
+            footerTrailing={null}
           />
         </TooltipProvider>
       </RunnerHostProvider>
@@ -62,6 +64,53 @@ describe("<LocalHostLoadingContent />", () => {
   afterEach(() => {
     cleanup();
     useAuthStore.getState().setSignedOut();
+    useHostBootDetailsStore.getState().reset();
+  });
+
+  it("keeps an OPEN details disclosure across a surface hand-off", () => {
+    // A launch draws this disclosure from three different surfaces, and each
+    // hand-off unmounts the one before it. While the open flag was component
+    // state, a user who opened the log to watch a slow start had it snap shut
+    // under them at every phase change - reported from a real launch.
+    //
+    // Modelled as what actually happens: mount, open, UNMOUNT ENTIRELY, mount
+    // again. A test that only re-rendered would pass on component state too,
+    // which is the vacuity this arm exists to avoid.
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: new MockTraycerCli(),
+    });
+
+    mountLoadingContent(host, null);
+    fireEvent.click(screen.getByTestId("local-host-loading-toggle-details"));
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details").textContent,
+    ).toContain("Hide details");
+
+    cleanup();
+    mountLoadingContent(host, null);
+
+    // Still expanded on the surface that took over.
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details").textContent,
+    ).toContain("Hide details");
+    expect(
+      screen
+        .getByTestId("local-host-loading-toggle-details")
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("does NOT carry an open disclosure into a fresh launch", () => {
+    // The other side of the same decision: the flag is session state, not a
+    // preference. Nothing persists it, so a store that started life expanded
+    // would be greeting every cold start with a log tail nobody opened.
+    expect(useHostBootDetailsStore.getState().open).toBe(false);
   });
 
   it("renders spinner, heading, and no Retry or [host] logs hint", () => {
@@ -75,7 +124,7 @@ describe("<LocalHostLoadingContent />", () => {
     expect(screen.queryByTestId("local-host-loading-spinner")).not.toBeNull();
 
     // Primary heading.
-    expect(container.textContent).toContain("Starting local Traycer Host…");
+    expect(container.textContent).toContain("Starting Traycer…");
 
     expect(screen.queryByTestId("local-host-loading-slow-copy")).toBeNull();
     expect(screen.queryByTestId("local-host-retry")).toBeNull();

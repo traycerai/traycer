@@ -57,8 +57,17 @@ const DOWNLOAD_STAGE = "download";
  * because it is the same event ("we are waiting on this machine's host") the
  * lane headings continue - and it is the string a user stares at longest on a
  * launch that goes wrong.
+ *
+ * DELIBERATELY IDENTICAL to what the two boot surfaces BEFORE this one say
+ * (the runtime-binding fallback in `traycer-app.tsx` and the gate's attach
+ * cover). Those three are different React trees that a launch crosses in
+ * sequence, and while a lane is idle they are all reporting the same fact:
+ * Traycer is starting. This used to read "Starting local Traycer Host…" while
+ * its predecessor read "Initializing Traycer Host…", so a single uninterrupted
+ * wait looked like one modal being replaced by another. The moment a lane DOES
+ * report, the headings below take over and say something genuinely new.
  */
-export const HOST_PROGRESS_IDLE_HEADING = "Starting local Traycer Host…";
+export const HOST_PROGRESS_IDLE_HEADING = "Starting Traycer…";
 
 export function hostProgressHeading(
   kind: MutationKind,

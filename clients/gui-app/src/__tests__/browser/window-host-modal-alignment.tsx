@@ -184,6 +184,7 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
               <LocalHostLoadingContent
                 progress={progress}
                 onConfigureShell={() => undefined}
+                footerTrailing={null}
               />
             }
             onRetry={null}
@@ -192,6 +193,7 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
             onOpenSettings={() => undefined}
             showReportIssue={false}
             settingsEmphasis="link"
+            settingsOnly={false}
           />
         </TooltipProvider>
       </RunnerHostProvider>

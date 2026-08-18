@@ -477,6 +477,29 @@ function flushIo(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 10));
 }
 
+/**
+ * The registry-fetch count once the module's OWN seed refresh has actually
+ * reached the fetcher.
+ *
+ * `flushIo()` is a fixed 10ms sleep, and the seed's path to the fetcher runs a
+ * real `readLastKnownLocalHostId` fs read first. On a loaded runner that does
+ * not finish inside 10ms, so a baseline taken after `flushIo()` read ZERO and
+ * the seed's late call then landed inside the window under test - the delta
+ * came out one too high and the suite failed in CI while passing everywhere
+ * else. Waiting on the observable rather than on a clock is what makes the
+ * baseline mean "the seed is done".
+ *
+ * Deliberately asserts the seed HAPPENED: if registration ever stops seeding,
+ * this times out loudly instead of silently handing back a zero that makes the
+ * delta assertions look satisfied.
+ */
+async function settledSeedFetchCount(): Promise<number> {
+  await vi.waitFor(() => {
+    expect(fetchRegisteredHostsMock.mock.calls.length).toBeGreaterThan(0);
+  });
+  return fetchRegisteredHostsMock.mock.calls.length;
+}
+
 interface Snapshot {
   readonly contractVersion: number;
   readonly revision: number;
@@ -1463,11 +1486,11 @@ describe("selection authority IPC binding", () => {
       const windowA = buildWindow();
       registry.add("window-a", 101, windowA);
       bridge.install();
-      await flushIo();
 
       // Baseline absorbs the seed refresh() the module already fires on
-      // registration (module header: "Seed real membership").
-      const baselineCalls = fetchRegisteredHostsMock.mock.calls.length;
+      // registration (module header: "Seed real membership") - and it WAITS
+      // for it rather than sleeping past it.
+      const baselineCalls = await settledSeedFetchCount();
 
       const refreshFleet = refreshFleetHandler();
       await refreshFleet(sender(101));
@@ -1490,9 +1513,8 @@ describe("selection authority IPC binding", () => {
       const windowA = buildWindow();
       registry.add("window-a", 101, windowA);
       bridge.install();
-      await flushIo();
 
-      const baselineCalls = fetchRegisteredHostsMock.mock.calls.length;
+      const baselineCalls = await settledSeedFetchCount();
 
       const refreshFleet = refreshFleetHandler();
       await refreshFleet(sender(101));

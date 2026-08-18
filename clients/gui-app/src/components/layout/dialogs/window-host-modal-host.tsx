@@ -18,6 +18,7 @@ import {
   LocalHostBodyShell,
   LocalHostLoadingContent,
 } from "@/components/local-host-loading";
+import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
@@ -211,15 +212,26 @@ function NarratingWindowHostModal(props: {
   if (gateDrawn !== null) {
     return null;
   }
+  const updateHost = resolveUpdateHost(narration.variant, presentation);
+  // WHETHER `Open settings` IS THE ONLY ACTION. Computed once, read twice - by
+  // the body (which hosts it inline on the footer row) and by the card (which
+  // then draws no action row of its own). Two derivations of this would let a
+  // card render the settings link in both places or in neither.
+  const settingsOnly =
+    !blocking || retry.onRetry !== null || updateHost !== null
+      ? false
+      : !settled.failed;
   const narrationProps: WindowHostModalProps = {
     cause: narration.cause,
     variant: narration.variant,
     progress,
+    settingsOnly,
     localBootstrapBody: buildLocalBootstrapBody({
       variant: narration.variant,
       presentation,
       localLifecycle,
       progress,
+      settingsOnly,
       // The same `settled.failed` the action row reads, deliberately: the body
       // and the actions must agree about whether this attempt is over. Two
       // derivations of that is how the modal ended up offering Retry beside a
@@ -228,7 +240,7 @@ function NarratingWindowHostModal(props: {
     }),
     onRetry: retry.onRetry,
     retryPending: retry.pending,
-    onUpdateHost: resolveUpdateHost(narration.variant, presentation),
+    onUpdateHost: updateHost,
     onOpenSettings: presentation.openSettings,
     // Report issue is offered only once something has actually failed. It is
     // the affordance that converts a false impression of breakage into
@@ -398,6 +410,8 @@ function buildLocalBootstrapBody(args: {
    * This used to be the `cause`, and that was the bug. See below.
    */
   readonly settledFailure: boolean;
+  /** Whether `Open settings` is the only action, so the body hosts it inline. */
+  readonly settingsOnly: boolean;
 }): ReactNode | null {
   if (args.variant.kind !== "offline") return null;
   if (!args.localLifecycle) return null;
@@ -437,8 +451,12 @@ function buildLocalBootstrapBody(args: {
     return (
       <LocalHostBodyShell>
         <LocalBootstrapAttempts />
+        {/* No trailing peer: this arm HAS a real action row (Retry, Report
+            issue, Open settings), so the toggle keeps its own line rather
+            than borrowing a control that already appears below it. */}
         <BootstrapLogDisclosure
           onConfigureShell={args.presentation.configureShell}
+          trailing={null}
         />
       </LocalHostBodyShell>
     );
@@ -446,6 +464,18 @@ function buildLocalBootstrapBody(args: {
   return (
     <LocalHostLoadingContent
       progress={args.progress}
+      // THE HEALTHY START's whole footer, inline with the toggle: this is the
+      // one arm where `Open settings` is the only action, and giving it a row
+      // of its own is what made the card a four-line column of stray links.
+      // It also makes this phase identical to the two boot surfaces before it,
+      // which compose exactly the same pair (`HostBootSurface`).
+      footerTrailing={
+        args.settingsOnly ? (
+          <BootOpenSettingsButton
+            onOpenSettings={args.presentation.openSettings}
+          />
+        ) : null
+      }
       onConfigureShell={args.presentation.configureShell}
     />
   );

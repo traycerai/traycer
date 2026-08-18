@@ -308,7 +308,7 @@ describe("<WindowHostModalHost />", () => {
 
     // Nothing is starting, so nothing narrates a start.
     expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
-    expect(screen.queryByText("Starting local Traycer Host…")).toBeNull();
+    expect(screen.queryByText("Starting Traycer…")).toBeNull();
 
     // The attempt panel is what explains this state, and it is present...
     expect(
@@ -389,18 +389,21 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
     ).toBe("cold-start");
-    const openSettings = screen.getByTestId("window-host-modal-open-settings");
+    // `Open settings` lives INLINE on the footer row beside `Show details`
+    // here, not in an action row of its own - the same pair, in the same
+    // place, as the two boot surfaces that precede this one. A row of its own
+    // is what made the healthy card a four-line column of stray links.
+    const openSettings = screen.getByTestId("host-boot-open-settings");
     expect(openSettings).toBeTruthy();
+    expect(screen.queryByTestId("window-host-modal-open-settings")).toBeNull();
 
     expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
     expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
 
     // This is the reported defect's own state: a start with no failure of any
-    // kind. Retry and Report issue must both be absent, and Open settings
-    // must be the quiet link rather than an equal-weight button.
+    // kind. Retry and Report issue must both be absent.
     expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
-    expect(openSettings.getAttribute("data-emphasis")).toBe("link");
 
     // ONE VOICE FOR THE EVENT. The card draws no title or description on a
     // healthy start, so the lane's own heading is the only line - the
@@ -527,9 +530,7 @@ describe("<WindowHostModalHost />", () => {
     // The copy itself, not just the node: the stage line's fallback is the exact
     // sentence this arm must not say, and asserting the testid alone would pass
     // if the same string were reintroduced anywhere else in the card.
-    expect(document.body.textContent).not.toContain(
-      "Starting local Traycer Host…",
-    );
+    expect(document.body.textContent).not.toContain("Starting Traycer…");
   });
 
   it("bypassed: true renders nothing at all", () => {

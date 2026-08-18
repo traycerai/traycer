@@ -1,12 +1,13 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   HOST_PROGRESS_IDLE_HEADING,
   type HostProgressView,
 } from "@/lib/host/host-progress-copy";
 import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { HostBootHeadline } from "@/components/centered-card";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useHostBootDetailsStore } from "@/stores/host/host-boot-details-store";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
 
 /**
@@ -18,6 +19,18 @@ const BOOTSTRAP_TAIL_POLL_MS = 1500;
 
 export interface BootstrapLogDisclosureProps {
   readonly onConfigureShell: () => void;
+  /**
+   * A second control to sit BESIDE the toggle on its row, or `null`.
+   *
+   * The boot card's footer is one row, not a stack: `Show details` and
+   * `Open settings` on separate centred lines turned a two-line card into a
+   * four-line square with a column of unrelated-looking links down the middle.
+   * Required rather than optional so every call site states whether it has a
+   * neighbour - a defaulted slot is how one surface silently grows a footer
+   * the others do not have, which is the inconsistency this family keeps
+   * regrowing.
+   */
+  readonly trailing: ReactNode | null;
 }
 
 /**
@@ -37,19 +50,35 @@ export function BootstrapLogDisclosure(
   props: BootstrapLogDisclosureProps,
 ): ReactNode {
   const runnerHost = useRunnerHost();
-  const [showDetails, setShowDetails] = useState<boolean>(false);
+  // STORE-BACKED, not component state: this disclosure is drawn by three
+  // different surfaces across one launch, and each hand-off unmounts it - so a
+  // local flag closed the log every time the boot moved on. See
+  // `useHostBootDetailsStore`.
+  const showDetails = useHostBootDetailsStore((state) => state.open);
+  const setShowDetails = useHostBootDetailsStore((state) => state.setOpen);
   // Only poll while the disclosure is open. Cache stays warm if the user
   // toggles closed-then-open quickly.
   const status = useRunnerTraycerHostStatusQuery({
     pollIntervalMs: showDetails ? BOOTSTRAP_TAIL_POLL_MS : null,
   });
-  if (runnerHost.traycerCli === null) return null;
+  // No CLI, no bootstrap log - but a neighbour control still has to render, or
+  // the footer disappears entirely on shells that never had a log to offer.
+  if (runnerHost.traycerCli === null) {
+    return props.trailing === null ? null : (
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+        {props.trailing}
+      </div>
+    );
+  }
   return (
     <DetailsDisclosure
       open={showDetails}
-      onToggle={() => setShowDetails((v) => !v)}
+      onToggle={() => {
+        setShowDetails(!showDetails);
+      }}
       tail={status.data?.bootstrapLogTail ?? ""}
       onConfigureShell={props.onConfigureShell}
+      trailing={props.trailing}
     />
   );
 }
@@ -94,7 +123,9 @@ export function LocalHostBodyShell(props: {
   return (
     <div
       data-testid="local-host-body"
-      className="flex w-full flex-col gap-4 text-left"
+      // align-ok: the boot card is centred (see `HostBootCard`) - this column
+      // inherits that decision rather than fighting it from one level down.
+      className="flex w-full flex-col items-center gap-4 text-center"
     >
       {props.children}
     </div>
@@ -110,6 +141,8 @@ export interface LocalHostLoadingContentProps {
    */
   readonly progress: HostProgressView | null;
   readonly onConfigureShell: () => void;
+  /** A peer control for the footer row - see {@link BootstrapLogDisclosureProps}. */
+  readonly footerTrailing: ReactNode | null;
 }
 
 /**
@@ -134,30 +167,29 @@ export function LocalHostLoadingContent(
 
   return (
     <LocalHostBodyShell>
-      <AgentSpinningDots
-        testId="local-host-loading-spinner"
-        variant="pulse"
-        className="h-8 min-w-8 text-title-md text-foreground"
-      />
-      {/* THE ONE HEADING this surface has. The healthy startup card renders
-          no dialog title above this body anymore - the old modal put
-          "Setting up Traycer" 2px above this line's "Setting up Traycer
-          Host…" above the bar's "Setting up…", one event announced three
-          times by three layers - so this line is back to the released card's
-          own styling as the primary line.
+      {/* THE ONE HEADING this surface has, and the spinner belongs TO it.
+          The healthy startup card renders no dialog title above this body
+          anymore - the old modal put "Setting up Traycer" 2px above this
+          line's "Setting up Traycer Host…" above the bar's "Setting up…", one
+          event announced three times by three layers.
 
-          The COPY is untouched on purpose. `hostProgressHeading` is D10's
-          shared one-wording-per-event table, read by Settings ▸ Host as well;
-          rewording it here would break the across-surface rule that table
-          exists to enforce. */}
-      <p
-        data-testid="local-host-loading-stage"
-        className="text-ui font-medium text-foreground"
-      >
-        {progressView?.heading ?? HOST_PROGRESS_IDLE_HEADING}
-      </p>
+          Drawn through the SHARED boot headline so this phase is
+          pixel-identical to the two boot surfaces before it (see
+          `HostBootCard`): a launch crosses three React trees, and the spinner
+          used to jump from small-and-muted-and-centred to
+          large-and-foreground-on-its-own-line as it did. The COPY still comes
+          from D10's shared table. */}
+      <HostBootHeadline
+        message={progressView?.heading ?? HOST_PROGRESS_IDLE_HEADING}
+        spinnerVariant="sparkle"
+        spinnerTestId="local-host-loading-spinner"
+        messageTestId="local-host-loading-stage"
+      />
       <ProgressLines view={progressView} />
-      <BootstrapLogDisclosure onConfigureShell={props.onConfigureShell} />
+      <BootstrapLogDisclosure
+        onConfigureShell={props.onConfigureShell}
+        trailing={props.footerTrailing}
+      />
     </LocalHostBodyShell>
   );
 }
@@ -279,6 +311,7 @@ interface DetailsDisclosureProps {
   readonly onToggle: () => void;
   readonly tail: string;
   readonly onConfigureShell: () => void;
+  readonly trailing: ReactNode | null;
 }
 
 /**
@@ -296,35 +329,29 @@ function DetailsDisclosure(props: DetailsDisclosureProps) {
   // region contributes no gap to the column either.
   const regionId = useId();
   return (
-    <div className="flex w-full flex-col items-stretch gap-3">
-      <button
-        type="button"
-        onClick={props.onToggle}
-        aria-expanded={props.open}
-        aria-controls={regionId}
-        data-testid="local-host-loading-toggle-details"
-        // No `self-center` and no `justify-center`: alignment is the shell's,
-        // and this control centring itself is what made the card read as three
-        // alignments (see the shell's doc for which three).
-        //
-        // NOT `self-start` either, and not because it is untried - it was
-        // rendered. Because it shrink-wraps this button, which makes a stray
-        // `justify-center` a NO-OP: one rendered variant looked fixed while
-        // still carrying the class. `self-start` hides this defect where
-        // dropping both removes it.
-        //
-        // The consequence, accepted deliberately: with `items-stretch` on the
-        // parent, this button's box spans the card while its label sits left, so
-        // the hit area is wider than the text. Harmless here - it is a lone
-        // control on its row, with nothing adjacent to mis-hit - and the wide box
-        // is what keeps a re-added `justify-center` VISIBLE instead of masked.
-        // Shrink-wrapping it (`w-fit` as much as `self-start`) would buy a
-        // tidier target and reintroduce the blind spot.
-        className="inline-flex items-center gap-1 text-ui-xs text-muted-foreground hover:text-foreground"
-      >
-        <span>{props.open ? "Hide details" : "Show details"}</span>
-        <Icon className="size-3" />
-      </button>
+    <div className="flex w-full flex-col items-center gap-3">
+      {/* ONE footer row. The toggle and whatever sits beside it are peers of
+          equal weight, so they read as a footer rather than as a column of
+          stray links - which is what two centred lines produced. */}
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+        <button
+          type="button"
+          onClick={props.onToggle}
+          aria-expanded={props.open}
+          aria-controls={regionId}
+          data-testid="local-host-loading-toggle-details"
+          // Shrink-wrapped and centred by the parent's `items-center`, so the hit
+          // area matches the text. The card is centred now (see `HostBootCard`),
+          // which retires the older `items-stretch` arrangement: that existed to
+          // keep a stray `justify-center` VISIBLE while the column was
+          // left-aligned, and there is no longer a left edge for it to violate.
+          className="inline-flex items-center gap-1 text-ui-xs text-muted-foreground hover:text-foreground"
+        >
+          <span>{props.open ? "Hide details" : "Show details"}</span>
+          <Icon className="size-3" />
+        </button>
+        {props.trailing}
+      </div>
       <div
         id={regionId}
         hidden={!props.open}
@@ -333,7 +360,8 @@ function DetailsDisclosure(props: DetailsDisclosureProps) {
         {props.open ? (
           <>
             <BootstrapLogTail tail={props.tail} />
-            <div className="flex">
+            {/* align-ok: a lone control centred under the log it belongs to. */}
+            <div className="flex justify-center">
               <Button
                 type="button"
                 size="sm"
@@ -401,6 +429,9 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
         // the two silently orphans it. That is what happened here - the comment
         // above was added later and pushed the marker out of range. Kept in force
         // for the day this file does come into scope.
+        // align-ok: a log slot reads left-to-right inside its own bordered
+        // box - and it must match the <pre> that replaces it, or the two
+        // states of one region would start their text in different places.
         // muted-fill-ok: weak tint delimited by its own border-border/60
         className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       >
@@ -415,6 +446,8 @@ function BootstrapLogTail(props: BootstrapLogTailProps) {
       data-testid="local-host-loading-log-tail"
       // The second of this file's two unevaluated waivers - see the note on the
       // empty-tail branch above for why nothing in CI reads either of them.
+      // align-ok: log output is left-to-right by nature; centring a tail
+      // would make every line start at a different column.
       // muted-fill-ok: weak tint delimited by its own border-border/60
       className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground"
     >

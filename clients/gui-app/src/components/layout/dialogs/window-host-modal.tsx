@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
+import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
@@ -93,6 +94,16 @@ export interface WindowHostModalProps {
    * signal, so on a start that has not failed this is the quiet form.
    */
   readonly settingsEmphasis: "button" | "link";
+  /**
+   * Whether `Open settings` is the ONLY action this state offers, in which
+   * case the body already carries it inline on the footer row beside
+   * `Show details` and the startup card draws no action row of its own.
+   *
+   * Decided above like every other action question - see the module doc. The
+   * dialog ignores it: it keeps a conventional right-aligned footer under its
+   * own title and description.
+   */
+  readonly settingsOnly: boolean;
 }
 
 export function WindowHostModal(props: WindowHostModalProps): ReactNode {
@@ -143,7 +154,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
             progress={props.progress}
             localBootstrapBody={props.localBootstrapBody}
           />
-          <NarrationActions {...props} copy={copy} />
+          <NarrationActions {...props} copy={copy} align="end" />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -224,7 +235,9 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
             progress={props.progress}
             localBootstrapBody={props.localBootstrapBody}
           />
-          <NarrationActions {...props} copy={copy} />
+          {props.settingsOnly ? null : (
+            <NarrationActions {...props} copy={copy} align="center" />
+          )}
         </CardContent>
       </Card>
     </div>
@@ -238,10 +251,25 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
  * handed.
  */
 function NarrationActions(
-  props: WindowHostModalProps & { readonly copy: WindowHostModalCopy },
+  props: WindowHostModalProps & {
+    readonly copy: WindowHostModalCopy;
+    /**
+     * `center` for the startup card, whose whole column is centred; `end` for
+     * the dialog, which keeps the conventional right-aligned footer under its
+     * left-aligned title and description. The row must follow the surface it
+     * sits in - a right-aligned row inside a centred card is the mismatch the
+     * user reported as "this alignment is bad".
+     */
+    readonly align: "center" | "end";
+  },
 ): ReactNode {
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-2",
+        props.align === "center" ? "justify-center" : "justify-end",
+      )}
+    >
       {props.variant.kind === "plan-restricted" ? (
         <PlanRestrictedUpgradeAction />
       ) : null}
@@ -383,6 +411,8 @@ function IncompatibleDetail(props: {
   const { detail } = props.variant;
   return (
     <div
+      // align-ok: a labelled version list inside its own fill - the labels
+      // line up only if the block keeps one left edge.
       className="flex flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       data-testid="window-host-modal-incompatible-detail"
     >

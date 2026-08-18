@@ -393,7 +393,7 @@ describe("local-boot intent", () => {
     expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
     // …and it must never claim this machine's host is starting, nor offer any
     // action against it.
-    expect(screen.queryByText("Starting local Traycer Host…")).toBeNull();
+    expect(screen.queryByText("Starting Traycer…")).toBeNull();
     expect(screen.queryByTestId("local-host-retry")).toBeNull();
     // The two calls the blocker was about: both belong to a machine the user
     // is not pointed at, and neither may run.

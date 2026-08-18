@@ -57,17 +57,25 @@ const BODY_FAMILY: readonly string[] = [
 ];
 
 /**
- * The centring utilities that broke this surface.
+ * The LEFT-alignment utilities that would break this surface now.
  *
- * `items-center` is deliberately absent: on a ROW it is correct and ubiquitous
- * (the progress bar's label/percent row, the spinner beside its text), and
- * banning it would produce a waiver on nearly every line and teach the next
- * person that the marker is noise. The three below have no legitimate use in a
- * left-aligned column body, which is why the family currently contains ZERO of
- * them - measured before this guard was written, so it starts at zero rather
- * than starting with a backlog.
+ * INVERTED, deliberately, and the history matters. This guard used to ban
+ * CENTRING, because the body was left-aligned to sit under a dialog's own
+ * left-aligned title and description. The healthy boot card has neither any
+ * more - the user ruled against the titled dialog on rendered screenshots
+ * ("the centered one was better looking") - so the body is centred, and the
+ * classes that now produce a ragged card are the left-aligning ones.
+ *
+ * The MECHANISM is unchanged on purpose: same family, same waiver marker, same
+ * positive controls. What flipped is which side of the axis is the offence.
+ *
+ * `items-start` is deliberately absent from the list for the same reason
+ * `items-center` was absent before: on a ROW it is ordinary and correct (a
+ * multi-line label beside a fixed-height control), and banning it would
+ * produce a waiver on nearly every line and teach the next reader that the
+ * marker is noise.
  */
-const CENTRING = /\bself-center\b|\bjustify-center\b|\btext-center\b/;
+const OFF_AXIS = /\bself-start\b|\bjustify-start\b|\btext-left\b/;
 
 /**
  * Opt-out, which must carry a reason. Same shape and rationale as
@@ -122,10 +130,10 @@ interface Offence {
 }
 
 /** Every unannotated centring utility in `source`, as `label:line` strings. */
-function findCentring(source: string, label: string): readonly Offence[] {
+function findOffAxis(source: string, label: string): readonly Offence[] {
   const lines = source.split("\n");
   return lines.flatMap((line, index) => {
-    if (isCommentLine(line) || !CENTRING.test(line)) return [];
+    if (isCommentLine(line) || !OFF_AXIS.test(line)) return [];
     const window = lines.slice(
       Math.max(0, index - MARKER_LOOKBEHIND),
       index + 1,
@@ -140,9 +148,9 @@ function readFamilyFile(relative: string): string {
 }
 
 describe("the local-bootstrap body's one alignment", () => {
-  it("carries no centring utility anywhere in the body family", () => {
+  it("carries no LEFT-aligning utility anywhere in the body family", () => {
     const offences = BODY_FAMILY.flatMap((relative) =>
-      findCentring(readFamilyFile(relative), relative),
+      findOffAxis(readFamilyFile(relative), relative),
     );
 
     expect(offences.map((offence) => offence.location)).toEqual([]);
@@ -158,45 +166,45 @@ describe("the local-bootstrap body's one alignment", () => {
    * and it was a planted violation that caught it.
    */
   it.each([
-    ["self-center", '  <button className="inline-flex self-center gap-1" />'],
+    ["self-start", '  <button className="inline-flex self-start gap-1" />'],
     [
-      "justify-center",
-      '  <div className="flex w-full justify-center">{action}</div>',
+      "justify-start",
+      '  <div className="flex w-full justify-start">{action}</div>',
     ],
-    ["text-center", '  <p className="text-center text-ui-xs">Waiting…</p>'],
+    ["text-left", '  <p className="text-left text-ui-xs">Waiting…</p>'],
   ])("flags a planted %s", (_label, planted) => {
-    expect(findCentring(planted, "planted.tsx")).toHaveLength(1);
+    expect(findOffAxis(planted, "planted.tsx")).toHaveLength(1);
   });
 
-  it("does NOT flag items-center, which is correct on a row", () => {
+  it("does NOT flag items-start, which is correct on a row", () => {
     // The negative half of the control: a guard that flagged this would be
     // waived onto nearly every line in the family and stop meaning anything.
-    const row = '  <div className="flex items-center justify-between" />';
-    expect(findCentring(row, "row.tsx")).toEqual([]);
+    const row = '  <div className="flex items-start justify-between" />';
+    expect(findOffAxis(row, "row.tsx")).toEqual([]);
   });
 
   it("does NOT flag a comment that discusses the banned classes", () => {
     // `local-host-loading.tsx` really does contain these words in prose - it is
     // where the `self-start` rejection is explained - so this is a live
     // requirement, not a hypothetical.
-    const prose = "  // NOT `self-start`: it hides a stray `justify-center`.";
-    expect(findCentring(prose, "prose.tsx")).toEqual([]);
+    const prose = "  // NOT `self-start` here: alignment is the shell's.";
+    expect(findOffAxis(prose, "prose.tsx")).toEqual([]);
   });
 
   it("honours an align-ok annotation, and only with a reason", () => {
     const excused = [
-      "  {/* align-ok: a row - the icon is centred inside its own square box */}",
-      '  <span className="flex size-6 justify-center" />',
+      "  {/* align-ok: a log block reads left-to-right whatever the card does */}",
+      '  <pre className="text-left font-mono" />',
     ].join("\n");
-    expect(findCentring(excused, "excused.tsx")).toEqual([]);
+    expect(findOffAxis(excused, "excused.tsx")).toEqual([]);
 
     // A bare marker with no reason must NOT excuse anything: an unexplained
     // waiver is the file-level allowlist this mechanism exists to avoid.
     const bare = [
       "  {/* align-ok: */}",
-      '  <span className="flex size-6 justify-center" />',
+      '  <pre className="text-left font-mono" />',
     ].join("\n");
-    expect(findCentring(bare, "bare.tsx")).toHaveLength(1);
+    expect(findOffAxis(bare, "bare.tsx")).toHaveLength(1);
 
     // ...but a reason that does not begin with a LETTER is still a reason. The
     // first fix for the bare-marker hole was `[A-Za-z]`, which rejected this
@@ -204,10 +212,10 @@ describe("the local-bootstrap body's one alignment", () => {
     // with a slash. Pinned here so neither copy narrows back to the shape of
     // whatever reasons happen to exist today.
     const punctuationLed = [
-      "  {/* align-ok: /2 of a row - the icon centres in its own box */}",
-      '  <span className="flex size-6 justify-center" />',
+      "  {/* align-ok: /2 of the log block, still left-to-right */}",
+      '  <pre className="text-left font-mono" />',
     ].join("\n");
-    expect(findCentring(punctuationLed, "punctuation.tsx")).toEqual([]);
+    expect(findOffAxis(punctuationLed, "punctuation.tsx")).toEqual([]);
   });
 });
 
@@ -236,13 +244,16 @@ describe("the local-bootstrap body's one alignment", () => {
  * title/description absence in `window-host-modal-host.test.tsx`.
  */
 describe("the host-boot stage line is the card's one heading", () => {
-  const STAGE_TESTID = 'data-testid="local-host-loading-stage"';
+  // THE CLASSES MOVED, and the guard follows them rather than being deleted.
+  // The stage line is now drawn by the SHARED boot headline
+  // (`HostBootHeadline`), which is the whole point: the three boot surfaces a
+  // launch crosses render one geometry instead of three, so there is exactly
+  // one place left where this styling can regress.
+  const HEADLINE_TESTID = "data-testid={props.messageTestId}";
 
   function stageElementLines(): readonly string[] {
-    const lines = readFamilyFile("components/local-host-loading.tsx").split(
-      "\n",
-    );
-    const anchor = lines.findIndex((line) => line.includes(STAGE_TESTID));
+    const lines = readFamilyFile("components/centered-card.tsx").split("\n");
+    const anchor = lines.findIndex((line) => line.includes(HEADLINE_TESTID));
     // Existence first: every assertion below is about this element, so a rename
     // that lost the testid would make them all pass against nothing.
     expect(anchor).toBeGreaterThan(-1);
@@ -261,5 +272,17 @@ describe("the host-boot stage line is the card's one heading", () => {
     // dialog title that no longer renders on this arm.
     expect(/\btext-ui\b(?!-)/.test(element)).toBe(true);
     expect(element).toContain("font-medium");
+  });
+
+  it("keeps the spinner and its label in ONE centred stack", () => {
+    // The other half of "this alignment is bad" as reported: the spinner used
+    // to be a separate child of the card's own column, so it sat at the LEFT
+    // edge with the full column gap beneath it while the card around it was
+    // centred. Owning both in one centred stack is what anchors the pair.
+    const source = readFamilyFile("components/centered-card.tsx");
+    const headline = source.slice(
+      source.indexOf("export function HostBootHeadline"),
+    );
+    expect(headline).toContain("flex flex-col items-center gap-3");
   });
 });

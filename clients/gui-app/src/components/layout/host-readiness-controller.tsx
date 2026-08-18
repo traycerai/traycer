@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { HostBootSurface } from "@/components/host/host-boot-surface";
+import { HOST_PROGRESS_IDLE_HEADING } from "@/lib/host/host-progress-copy";
 import { hostFailureReportIssueAction } from "@/components/layout/host-failure-report";
 import { compatibilityPresentation } from "@/components/layout/host-compatibility-presentation";
 import {
@@ -490,7 +492,8 @@ export function DefaultHostReadyGate(props: {
   // controller so the window modal can read it too. See
   // `HostReadinessController.hasBeenDefaultHostReady`, which carries the reason
   // it stays render-adjusted rather than becoming an effect.
-  const { hasBeenDefaultHostReady } = useHostReadinessController();
+  const { hasBeenDefaultHostReady, defaultHostPresentation } =
+    useHostReadinessController();
   // Both questions come from ONE place, shared with the window modal. They are
   // genuinely different questions: for a narrator-owned kind this gate still
   // BLOCKS - the app must not mount against a host that cannot serve it - while
@@ -521,7 +524,7 @@ export function DefaultHostReadyGate(props: {
     >
       <AppHeader variant="host-loading" />
       {cardReadiness === null ? (
-        <AttachPendingCard />
+        <AttachPendingCard presentation={defaultHostPresentation} />
       ) : (
         <SurfaceReadinessFallback readiness={cardReadiness} />
       )}
@@ -543,28 +546,23 @@ export function DefaultHostReadyGate(props: {
  * "Starting local Traycer Host…" here would name a machine nothing has
  * resolved.
  */
-function AttachPendingCard(): ReactNode {
+function AttachPendingCard(props: {
+  readonly presentation: DefaultHostReadinessPresentation;
+}): ReactNode {
   const attached = useSelectionAuthorityAttached();
   if (attached) return null;
   return (
     <div className="flex flex-1 items-center justify-center p-6">
-      <Card
-        role="status"
-        aria-live="polite"
-        data-testid="host-gate-attach-pending"
-        className="w-full max-w-md shadow-sm"
-      >
-        <CardContent className="flex flex-col gap-4 py-6">
-          <AgentSpinningDots
-            testId={undefined}
-            variant="pulse"
-            className="h-8 min-w-8 text-title-md text-foreground"
-          />
-          <p className="text-ui font-medium text-foreground">
-            Starting Traycer…
-          </p>
-        </CardContent>
-      </Card>
+      {/* The shared boot SURFACE, not a card of its own: this sits between the
+          runtime fallback and the narrator's startup card in one launch, and a
+          third shape - or a card missing the controls its neighbours have -
+          is what made the sequence read as unrelated modals. */}
+      <HostBootSurface
+        testId="host-gate-attach-pending"
+        message={HOST_PROGRESS_IDLE_HEADING}
+        onConfigureShell={props.presentation.configureShell}
+        onOpenSettings={props.presentation.openSettings}
+      />
     </div>
   );
 }
