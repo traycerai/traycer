@@ -262,6 +262,13 @@ export interface IRemoteSession<
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
     abortSignal: AbortSignal | null,
+    /**
+     * Per-request response budget, overriding `UNARY_RESPONSE_TIMEOUT_MS`.
+     * `undefined` keeps the shared default, so only a caller that has a reason
+     * to wait longer changes anything - the extension is scoped to that call
+     * rather than re-scoring every unary this session carries.
+     */
+    responseTimeoutMs: number | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -632,6 +639,7 @@ export class RemoteSession<
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
     abortSignal: AbortSignal | null,
+    responseTimeoutMs: number | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
@@ -714,6 +722,7 @@ export class RemoteSession<
         connection.hostRpcMerged ?? {},
         params,
         requestId,
+        responseTimeoutMs,
       );
     }
 
@@ -725,6 +734,7 @@ export class RemoteSession<
       hostCanonical,
       params,
       requestId,
+      responseTimeoutMs,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -853,6 +863,7 @@ export class RemoteSession<
     hostCanonical: SchemaVersion,
     params: unknown,
     requestId: string,
+    responseTimeoutMs: number | undefined,
   ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
@@ -873,7 +884,7 @@ export class RemoteSession<
       {
         const timer = setTimeout(() => {
           this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
-        }, UNARY_RESPONSE_TIMEOUT_MS);
+        }, responseTimeoutMs ?? UNARY_RESPONSE_TIMEOUT_MS);
         this.pendingUnary.set(streamId, {
           requestId,
           method,
@@ -1652,6 +1663,7 @@ export class RemoteSession<
     hostRpcMerged: ConnectionManifest,
     params: RequestOfMethod<RpcRegistry, Method>,
     requestId: string,
+    responseTimeoutMs: number | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return resolveUnavailableMethodDegrade({
       registry: this.options.rpcRegistry,
@@ -1677,6 +1689,10 @@ export class RemoteSession<
           input.hostCanonical,
           input.params,
           requestId,
+          // The degraded retry is the SAME caller request on an older
+          // contract, so it keeps that caller's budget rather than silently
+          // reverting to the shared default.
+          responseTimeoutMs,
         ),
     }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
