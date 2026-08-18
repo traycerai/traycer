@@ -275,7 +275,7 @@ describe("useVisibleRateLimitProviders", () => {
     expect(configured.result.current).toEqual([]);
   });
 
-  it("keeps an authenticated managed profile visible without cache under aggregate authPending while excluding the unauthenticated ambient target from the queue", () => {
+  it("keeps an authenticated managed profile visible and queue-eligible while excluding its unauthenticated ambient target", () => {
     const ambient: ProviderProfile = {
       profileId: "ambient",
       kind: "ambient",
@@ -321,7 +321,7 @@ describe("useVisibleRateLimitProviders", () => {
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ]);
-    expect(configured.result.current).toEqual([]);
+    expect(configured.result.current).toEqual(visible.result.current);
   });
 
   it("hides OpenCode when the latest snapshot is rate_limits_not_available", () => {
