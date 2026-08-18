@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import {
   AlertTriangle,
   ChevronRight,
@@ -534,6 +535,16 @@ function profileEditDialogCopy(
   };
 }
 
+/** Carries the confirmation the suppressed identity card used to. Redacted to
+ *  match every other Providers surface that prints a profile's email - the
+ *  card behind it offered a reveal toggle, a toast cannot, so the redacted
+ *  form is the only honest one here. */
+function signedInMessage(profile: ProviderProfile): string {
+  const email = profile.identity?.email ?? null;
+  if (email !== null) return `Signed in as ${redactEmail(email)}`;
+  return `Signed in to ${profileDisplayLabel(profile)}`;
+}
+
 function ProfileEditDialog({
   state,
   profile,
@@ -629,6 +640,19 @@ function ProfileEditDialog({
     setSwitchingAccount(true);
   };
 
+  /** Sign-in intent opened this dialog *for* the sign-in, so a reconnect of
+   *  the same account leaves nothing to save - close the whole thing instead
+   *  of handing back an edit form whose only exit is Cancel.
+   *
+   *  `switchingAccount` deliberately stays true: clearing it here would swap
+   *  the edit form (and its footer) back in for the length of the dialog's
+   *  exit animation. Nothing leaks, because the section keys this dialog by
+   *  edit session - reopening remounts it with a fresh `switchingAccount`. */
+  const finishSignIn = (signedIn: ProviderProfile): void => {
+    onOpenChange(false);
+    toast.success(signedInMessage(signedIn));
+  };
+
   const requestRemove = (): void => {
     onOpenChange(false);
     setConfirmRemoveOpen(true);
@@ -672,6 +696,7 @@ function ProfileEditDialog({
               <ProviderProfileReauthPanel
                 state={state}
                 profile={profile}
+                onSameAccountReconnected={startInReauth ? finishSignIn : null}
                 onCancel={() => setSwitchingAccount(false)}
                 onDone={() => setSwitchingAccount(false)}
               />
