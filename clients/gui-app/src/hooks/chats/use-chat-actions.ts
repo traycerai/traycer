@@ -51,6 +51,7 @@ export interface ChatActions {
   readonly stopTurn: () => string | null;
   readonly stopBackgroundItem: (taskId: string) => string | null;
   readonly stopAllBackgroundItems: () => string | null;
+  readonly stopBackgroundSession: () => string | null;
   readonly pauseQueue: () => string | null;
   readonly resumeQueue: () => string | null;
   readonly queueEdit: (
@@ -178,6 +179,13 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
           Analytics.getInstance().track(
             AnalyticsEvent.ChatBackgroundItemStopped,
             { scope: "all" },
+          );
+        }),
+      stopBackgroundSession: () =>
+        tracked(handle.store.getState().stopBackgroundSession(), () => {
+          Analytics.getInstance().track(
+            AnalyticsEvent.ChatBackgroundItemStopped,
+            { scope: "session" },
           );
         }),
       pauseQueue: () =>

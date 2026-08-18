@@ -123,6 +123,7 @@ function props(
       onCancelEdit: () => undefined,
       onStopBackgroundItem: () => null,
       onStopAllBackgroundItems: () => null,
+      onStopBackgroundSession: () => null,
       onReorder: () => undefined,
       onSteerNow: () => undefined,
     },
@@ -144,6 +145,7 @@ function props(
     backgroundItems: undefined,
     backgroundStopPendingTaskIds: EMPTY_BACKGROUND_STOP_TASK_IDS,
     backgroundStopAllPending: false,
+    backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
   };
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { m, useReducedMotion } from "motion/react";
 import {
   Bell,
@@ -196,6 +196,21 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
     shouldReduceMotion,
   });
 
+  // Same condition the navigable body button renders under, so keyboard
+  // activation of a focused row and a click on that button are the same act.
+  const canActivate =
+    packPresentation.isNavigable && originUnavailability === null;
+  // Only the row's OWN key events - a keydown bubbling up from one of its
+  // controls has already been handled by that control (Enter on the trailing
+  // tick acknowledges; it must not also activate the row).
+  const onRowKeyDown = (event: KeyboardEvent<HTMLLIElement>): void => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (!canActivate) return;
+    event.preventDefault();
+    props.onActivate(row);
+  };
+
   return (
     <m.li
       layout={motionProps.layout}
@@ -214,8 +229,14 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       // Remote pack-store entries stay fully listed (needs_action evidence)
       // but are visually de-emphasised so this machine's actionable items
       // lead — de-emphasis, not filter-out (D7).
+      //
+      // `tabIndex={-1}` makes the row itself the arrow-key landing spot
+      // (see `notification-feed-keyboard-navigation.ts`) without adding a Tab
+      // stop: Tab order still runs through the row's controls only.
+      tabIndex={-1}
+      onKeyDown={onRowKeyDown}
       className={cn(
-        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 last:border-b-0 hover:bg-foreground/6 has-[:focus-visible]:bg-foreground/6",
+        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6",
         packPresentation.packRemote && "opacity-60",
       )}
       data-testid="notification-entry"

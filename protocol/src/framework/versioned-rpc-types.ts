@@ -45,6 +45,9 @@ export const RPC_ERROR_CODES = [
   // FORBIDDEN whose "check Task access" guidance would mislead here.
   "E_ROLE_FORBIDDEN",
   "TERMINAL_ID_TAKEN",
+  // A durable terminal is mid-delete. 409, not 500: the caller can retry
+  // after the marker settles. Additive and degrade-safe like E_INVALID_ARGUMENT.
+  "TERMINAL_DELETING",
   // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
   // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
   "MESSAGE_TOO_LARGE",

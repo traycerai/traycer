@@ -4,6 +4,7 @@ import type { ResolveArtifactByPathRequest } from "@traycer/protocol/host/epic/u
 import type { WorkspaceReadFileRequest } from "@traycer/protocol/host/workspace/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework";
+import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-schemas";
 
 const EPIC_TASK_CONTEXTS_METHOD = "epic.getTaskContexts" as const;
 
@@ -23,6 +24,12 @@ export const hostQueryKeys = {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ) => [...hostQueryKeys.scope(hostId), method, params] as const,
+  plainTerminals: (hostId: string, scope: PlainTerminalScope) =>
+    hostQueryKeys.method<HostRpcRegistry, "terminal.plain.list">(
+      hostId,
+      "terminal.plain.list",
+      { scope },
+    ),
   /**
    * Named alias for the imperative `epic.resolveArtifactByPath` read so the key
    * stays discoverable at the call site. A click resolving an artifact-shaped

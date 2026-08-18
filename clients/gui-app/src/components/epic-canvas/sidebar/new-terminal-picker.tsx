@@ -23,7 +23,7 @@ import {
 import { NewTerminalPickerBody } from "@/components/epic-canvas/sidebar/new-terminal-picker-body";
 import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import {
-  buildTerminalTileRef,
+  mintNewEpicTerminalTile,
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
@@ -80,7 +80,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
       navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, buildTerminalTileRef(target)),
+        prepareOpenTileInTabFocusTarget(tabId, mintNewEpicTerminalTile(target)),
       );
       setIsOpen(false);
     },

@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { buildTerminalTileRef } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -38,7 +38,9 @@ import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-f
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
+import { existingSessionOriginFields } from "@/stores/epics/canvas/types";
 import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
+import { isSetupTerminal } from "@/stores/worktree/setup-terminals";
 import {
   deriveTitleSourceFromSessionTitle,
   terminalSessionTitle,
@@ -87,7 +89,7 @@ function terminalWorkspaceLeaf(
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
-        ref: buildTerminalTileRef(target),
+        ref: mintNewEpicTerminalTile(target),
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       });
     },
@@ -422,6 +424,7 @@ export function useTerminalsOpenerItems(
         defaultHostId,
         session.sessionId,
       );
+      const setupSession = isSetupTerminal(defaultHostId, session.sessionId);
       return openerExistingLeaf(
         "terminals",
         ctx,
@@ -439,12 +442,7 @@ export function useTerminalsOpenerItems(
           // Recorded so an eviction-recreate lands back in the session's
           // directory - same as the sidebar's open-existing path.
           cwd: session.cwd,
-          ...(signInProviderId === null
-            ? {}
-            : {
-                origin: "provider-login" as const,
-                originProviderId: signInProviderId,
-              }),
+          ...existingSessionOriginFields(signInProviderId, setupSession),
         },
         // `terminal.list` is always issued against the active host's client
         // (`useHostClient()` above) - there is no cross-host terminal listing

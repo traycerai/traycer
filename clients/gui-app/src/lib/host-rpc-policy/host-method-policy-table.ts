@@ -1101,6 +1101,36 @@ export const HOST_METHOD_POLL_TABLE = {
   "terminal.readOutput": { ...LATEST_SCHEDULING, poll: null },
   // Renaming a terminal persists its display name.
   "terminal.rename": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Durable plain-terminal authority. The list is snapshot seeding only; the
+  // stream owns subsequent convergence. Every write is FIFO so rapid user
+  // actions reach the host in order, while revision guards still protect the
+  // client cache from independently delayed stream frames.
+  "terminal.plain.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.list": { ...LATEST_SCHEDULING, poll: null },
+  "terminal.plain.rename": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.ensureRunning": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.close": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.importLegacy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "worktree.listByWorkspacePaths": { ...LATEST_SCHEDULING, poll: null },
   "worktree.listBranches": { ...LATEST_SCHEDULING, poll: null },
   // Creating a worktree starts a host-side setup operation.

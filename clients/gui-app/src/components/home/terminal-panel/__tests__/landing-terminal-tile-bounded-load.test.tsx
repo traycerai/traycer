@@ -89,6 +89,10 @@ describe("<LandingTerminalTile /> S5 bounded pre-bootstrap wait", () => {
           tab={TAB}
           active
           createEnabled={false}
+          // This suite is about the bounded pre-bootstrap wait, not
+          // authority; `null` matches the no-authority tile pattern used
+          // elsewhere (landing-terminal-error-retry.test.tsx).
+          authorityEntry={null}
         />,
       );
 

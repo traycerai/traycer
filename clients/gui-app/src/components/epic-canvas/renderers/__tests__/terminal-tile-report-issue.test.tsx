@@ -69,6 +69,22 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
   }),
 }));
 
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: "legacy",
+    projection: undefined,
+    viewModel: null,
+    canMutate: false,
+    migrationPending: false,
+    migrationError: null,
+    retryMigration: () => undefined,
+    create: {},
+    ensureRunning: {},
+    rename: {},
+    close: {},
+  }),
+}));
+
 vi.mock("@/lib/perf/terminal-load-perf", () => ({
   beginTerminalLoad: vi.fn(),
 }));

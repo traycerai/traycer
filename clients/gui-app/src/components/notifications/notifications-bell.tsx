@@ -18,6 +18,12 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import {
+  chordMatchesEvent,
+  formatChordForDisplay,
+} from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { cn } from "@/lib/utils";
 import {
   Analytics,
@@ -25,6 +31,9 @@ import {
   analyticsCountBucket,
   type AnalyticsNotificationEntryPoint,
 } from "@/lib/analytics";
+
+/** The center's own surface, marked by `NotificationsPopover`. */
+const NOTIFICATION_CENTER_SELECTOR = "[data-notification-center]";
 
 /**
  * Top-level notifications trigger in the app header. Shows an unread-count
@@ -95,6 +104,51 @@ export function NotificationsBell() {
     [lifecycle],
   );
 
+  const chord = useBindingForAction("app.notifications.open");
+  const markKeyboardDismiss = lifecycle.markKeyboardDismiss;
+  // Opening goes through the normal dispatch path. A chord open is a
+  // deliberate interaction with the app, so it is attributed to `direct_ui`
+  // like a bell click - `notification` means "arrived from a native
+  // notification", which would be a false claim here.
+  useEffect(
+    () =>
+      registerDynamicActionHandler("app.notifications.open", () => {
+        openEntryPointRef.current = "direct_ui";
+        useNotificationsPopoverStore.getState().setOpen(true);
+      }),
+    [],
+  );
+
+  // Closing does NOT: an open Radix popover is a `role="dialog"`, and the
+  // keybinding provider deliberately stops dispatching chords behind one
+  // (`isAnyDialogOpen`), so the dynamic handler above can never see the
+  // second press. This window listener is mounted only while the center is
+  // open and matches the live binding itself, which also keeps the toggle
+  // working when the center was opened by pointer or by a native-notification
+  // click (focus outside the surface, so no in-surface handler would fire).
+  //
+  // Focus returns to the bell only when the center's own surface still holds
+  // it: a pointer-opened center leaves focus wherever the user was typing,
+  // and yanking that into the header would be the worse bug. That question is
+  // asked of the focused element itself (`data-notification-center`, set by
+  // the popover) rather than of the shell ref, which belongs to the geometry
+  // lock and must not be read from render.
+  useEffect(() => {
+    if (!open || chord === null) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (!chordMatchesEvent(chord, event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const active = document.activeElement;
+      if (active !== null && active.closest(NOTIFICATION_CENTER_SELECTOR)) {
+        markKeyboardDismiss();
+      }
+      useNotificationsPopoverStore.getState().setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [chord, markKeyboardDismiss, open]);
+
   // Fires exactly once per open cycle - edge-triggered on the `open`
   // boolean's false -> true transition, so it covers every way the center
   // can open (bell click/keyboard AND a native-notification-driven
@@ -123,10 +177,14 @@ export function NotificationsBell() {
   }, [open, bellState, hostState.isPartial, unreadCount]);
 
   const ariaLabel = notificationBellAccessibleLabel(bellState);
+  const tooltip =
+    chord === null
+      ? "Notifications"
+      : `Notifications (${formatChordForDisplay(chord)})`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
-        label={open ? null : "Notifications"}
+        label={open ? null : tooltip}
         side="top"
         sideOffset={6}
         align={undefined}

@@ -10,6 +10,7 @@ import {
   type ActionId,
 } from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
+import { isMac } from "@/lib/keybindings/platform";
 
 /**
  * User-configured keyboard shortcuts. `bindings[id] === null` means the
@@ -28,6 +29,14 @@ export interface KeybindingState {
 
 const LEGACY_SPLIT_RIGHT_CHORD = "mod+shift+d";
 const LEGACY_SPLIT_DOWN_CHORD = "mod+d";
+const LEGACY_NAV_BACK_CHORD: ChordString = isMac()
+  ? "mod+arrowleft"
+  : "alt+arrowleft";
+const LEGACY_NAV_FORWARD_CHORD: ChordString = isMac()
+  ? "mod+arrowright"
+  : "alt+arrowright";
+const NAV_BACK_CHORD: ChordString = "mod+shift+,";
+const NAV_FORWARD_CHORD: ChordString = "mod+shift+.";
 
 const KEYBINDING_STORE_KEY = persistKey(STORE_KEYS.keybinding);
 
@@ -100,17 +109,29 @@ function normalizePersistedBindings(
   bindings: Readonly<Partial<Record<ActionId, ChordString | null>>>,
 ): Readonly<Record<ActionId, ChordString | null>> {
   const merged = { ...getDefaultBindings(), ...bindings };
+  let normalized = merged;
   if (
-    merged["group.split.horizontal"] === LEGACY_SPLIT_RIGHT_CHORD &&
-    merged["group.split.vertical"] === LEGACY_SPLIT_DOWN_CHORD
+    normalized["group.split.horizontal"] === LEGACY_SPLIT_RIGHT_CHORD &&
+    normalized["group.split.vertical"] === LEGACY_SPLIT_DOWN_CHORD
   ) {
-    return {
-      ...merged,
+    normalized = {
+      ...normalized,
       "group.split.horizontal": "mod+d",
       "group.split.vertical": "mod+shift+d",
     };
   }
-  return merged;
+  const back = normalized["nav.back"];
+  const forward = normalized["nav.forward"];
+  const migrateBack = back === LEGACY_NAV_BACK_CHORD;
+  const migrateForward = forward === LEGACY_NAV_FORWARD_CHORD;
+  if (migrateBack || migrateForward) {
+    normalized = {
+      ...normalized,
+      ...(migrateBack ? { "nav.back": NAV_BACK_CHORD } : {}),
+      ...(migrateForward ? { "nav.forward": NAV_FORWARD_CHORD } : {}),
+    };
+  }
+  return normalized;
 }
 
 function mergePersistedKeybindings(

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-session-body";
 
 const useInitialChatHandoffMock = vi.hoisted(() => vi.fn());
@@ -61,6 +62,19 @@ const BODY_PROPS = {
   focusTileInstanceId: "tile-a",
 };
 
+function renderBody(props: Parameters<typeof EpicRouteSessionBody>[0]): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const Wrapper = (wrapperProps: { readonly children: ReactNode }): ReactNode =>
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      wrapperProps.children,
+    );
+  render(<EpicRouteSessionBody {...props} />, { wrapper: Wrapper });
+}
+
 describe("<EpicRouteSessionBody />", () => {
   afterEach(() => {
     cleanup();
@@ -70,7 +84,7 @@ describe("<EpicRouteSessionBody />", () => {
   });
 
   it("keeps visual state mounted but suppresses route-global effects when inactive", () => {
-    render(<EpicRouteSessionBody {...BODY_PROPS} active={false} />);
+    renderBody({ ...BODY_PROPS, active: false });
 
     expect(screen.getByTestId("epic-shell").dataset.active).toBe("false");
     expect(useInitialChatHandoffMock).toHaveBeenCalledWith("epic-a", "tab-a");
@@ -83,7 +97,7 @@ describe("<EpicRouteSessionBody />", () => {
   });
 
   it("runs route synchronization and migration modal only for the active pane", () => {
-    render(<EpicRouteSessionBody {...BODY_PROPS} active />);
+    renderBody({ ...BODY_PROPS, active: true });
 
     expect(screen.getByTestId("epic-shell").dataset.active).toBe("true");
     expect(useEpicRouteSynchronizationMock).toHaveBeenCalledWith(BODY_PROPS);

@@ -42,6 +42,7 @@ import {
   type NotificationCategory,
 } from "@/lib/notifications/notification-category";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
+import { useNotificationFeedKeyboardNavigation } from "@/hooks/notifications/use-notification-feed-keyboard-navigation";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { cn } from "@/lib/utils";
 import {
@@ -270,6 +271,10 @@ export function NotificationsPopover(
     isAtTop,
     scrollToTop,
   } = useNotificationCenterScrollAnchor({ orderedFeedIds });
+  // Feed traversal is bound to the shell, not the scrollport, so Up/Down also
+  // enter the list from the header - including the heading a keyboard or chord
+  // open focuses.
+  useNotificationFeedKeyboardNavigation(shellRef);
 
   // Full, unfiltered occurrence order is the identity source for live-arrival
   // detection, so a Recent filter can never blind the arrival set to a row it
@@ -421,10 +426,15 @@ export function NotificationsPopover(
 
   return (
     <TooltipProvider delayDuration={300}>
+      {/* `data-notification-center` marks this surface for code that must ask
+          "is focus inside the center right now?" without reaching for the
+          shell ref (the keybinding chord's toggle-close, in
+          `notifications-bell.tsx`). */}
       <div
         ref={shellRef}
         style={shellStyle}
         className="flex w-[min(90vw,34rem)] min-w-0 flex-col gap-0 overflow-hidden"
+        data-notification-center=""
         data-testid="notifications-popover"
       >
         <NotificationsPopoverHeader

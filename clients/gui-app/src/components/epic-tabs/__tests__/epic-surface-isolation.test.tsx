@@ -84,8 +84,22 @@ const activeHostClient = vi.hoisted(() => {
 const refuseDurableTransport = vi.hoisted(() => () => {
   throw new Error("the Epic stream override must prevent socket creation");
 });
+const hostDirectory = vi.hoisted(() => ({
+  findById: (hostId: string) =>
+    hostId === activeHostEntry.hostId ? activeHostEntry : null,
+  onChange: () => ({ dispose: () => undefined }),
+}));
+
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => refuseDurableTransport,
+}));
+
+vi.mock("@/hooks/host/use-host-stream-client-for", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-stream-client-for")
+  >()),
+  useHostStreamClientFor: () => null,
+  useHostStreamClientBindingFor: () => null,
 }));
 
 // Spread the real module rather than enumerate the three exports this suite
@@ -104,6 +118,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     }),
     useHostBinding: () => ({ hostClient: activeHostClient }),
     useHostClient: () => activeHostClient,
+    useHostDirectory: () => hostDirectory,
   };
 });
 
@@ -121,6 +136,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     // outside a provider; `useHostRuntimeClient` is a separate export since
     // redesign P2.1 and must be overridden explicitly.
     useHostRuntimeClient: () => activeHostClient,
+    useHostDirectory: () => hostDirectory,
   };
 });
 

@@ -613,7 +613,7 @@ export interface AnalyticsEventProperties {
     readonly scope: "current" | "with_children";
   };
   readonly [AnalyticsEvent.ChatBackgroundItemStopped]: {
-    readonly scope: "one" | "all";
+    readonly scope: "one" | "all" | "session";
   };
   readonly [AnalyticsEvent.ChatQueuePaused]: null;
   readonly [AnalyticsEvent.ChatQueueResumed]: null;
@@ -2150,6 +2150,7 @@ const RPC_ERROR_BLOCKERS: Readonly<Record<string, AnalyticsBlocker>> = {
   RPC_ERROR: "host_unavailable",
   SENDER_TUI_UNSUPPORTED: "unsupported",
   TERMINAL_ID_TAKEN: "conflict",
+  TERMINAL_DELETING: "conflict",
   UNAUTHORIZED: "authentication",
   WORKSPACE_BINDING_REQUIRED: "invalid_input",
   WORKTREE_BUSY: "conflict",
