@@ -17,6 +17,7 @@ import {
 } from "@tanstack/react-router";
 import {
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -1439,5 +1440,63 @@ describe("<EpicsListPanel />", () => {
       await screen.findByTestId("epics-list-filtered-empty"),
     ).not.toBeNull();
     expect(screen.queryByTestId("epics-list-filter-loading")).toBeNull();
+  });
+
+  it("cycles the matches with the arrow keys and returns to the query", async () => {
+    testState.items = [
+      historyItem({}),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-second",
+        title: "Second match",
+      }),
+    ];
+
+    renderPanel("page", "/");
+    const input = await screen.findByRole("searchbox", {
+      name: "Search tasks",
+    });
+    const first = screen.getByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const second = screen.getByRole("link", { name: "Open task Second match" });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(first);
+
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+
+    // The last row is the floor - Down there holds rather than wrapping around
+    // to the top, so a held key settles on the end of the list.
+    fireEvent.keyDown(second, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+
+    fireEvent.keyDown(second, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(first);
+
+    // Up off the first row is the way back to refining the query.
+    fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("leaves ArrowDown to the caret when the query matches nothing", async () => {
+    testState.items = [];
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "no-such-task" },
+    });
+
+    renderPanel("page", "/");
+    const input = await screen.findByRole("searchbox", {
+      name: "Search tasks",
+    });
+    input.focus();
+
+    const event = createEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent(input, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(input);
   });
 });
