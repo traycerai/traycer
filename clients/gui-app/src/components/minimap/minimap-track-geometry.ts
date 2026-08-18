@@ -2,16 +2,62 @@
  * Track geometry shared by every edge minimap rail (the chat transcript's turn
  * rail and the artifact editor's heading rail).
  *
- * Deliberately small. The two rails share how an evenly spaced track is laid
- * out and how a pointer Y maps back to an item - and nothing else. Their item
- * models, card bodies, active-item semantics and measurement lifecycles differ,
- * so no behaviour lives here; see the reuse-boundary review in the epic's
- * `artifact-heading-minimap-review` artifact for why a common shell was
- * rejected.
+ * Deliberately small. The rails share evenly spaced track math. Their item
+ * models and measurement lifecycles stay local; their list card is shared by
+ * `minimap-list-card.tsx`.
  *
  * Dependency-free (no DOM reads) so it stays unit-testable without a jsdom
  * harness.
  */
+
+export const MINIMAP_TRACK_ITEM_SPACING = 8;
+export const MINIMAP_TRACK_END_HIT_PADDING = 12;
+
+/** The collapsed rail may use up to half of its tile's usable height. */
+export function resolveMinimapVisibleItemCapacity(
+  availableHeight: number,
+): number {
+  if (!Number.isFinite(availableHeight) || availableHeight <= 0) return 2;
+  const usableTrackHeight =
+    availableHeight / 2 - MINIMAP_TRACK_END_HIT_PADDING * 2;
+  return Math.max(
+    2,
+    Math.floor(usableTrackHeight / MINIMAP_TRACK_ITEM_SPACING) + 1,
+  );
+}
+
+export interface MinimapWindow {
+  readonly endIndex: number;
+  readonly hasAfter: boolean;
+  readonly hasBefore: boolean;
+  readonly startIndex: number;
+}
+
+export function resolveMinimapWindow(input: {
+  readonly currentIndex: number;
+  readonly itemCount: number;
+  readonly maxItems: number;
+}): MinimapWindow {
+  if (input.itemCount <= 0 || input.maxItems <= 0) {
+    return { startIndex: 0, endIndex: 0, hasBefore: false, hasAfter: false };
+  }
+  const size = Math.min(input.itemCount, input.maxItems);
+  const current = Math.max(
+    0,
+    Math.min(input.currentIndex, input.itemCount - 1),
+  );
+  const startIndex = Math.max(
+    0,
+    Math.min(current - Math.floor(size / 2), input.itemCount - size),
+  );
+  const endIndex = startIndex + size;
+  return {
+    startIndex,
+    endIndex,
+    hasBefore: startIndex > 0,
+    hasAfter: endIndex < input.itemCount,
+  };
+}
 
 export interface MinimapTrackMetrics {
   readonly itemCount: number;
@@ -61,34 +107,4 @@ export function resolveMinimapTrackTopStyle(
   if (pixelOffset === 0) return `${percent}%`;
   const operator = pixelOffset > 0 ? "+" : "-";
   return `calc(${percent}% ${operator} ${Math.abs(pixelOffset)}px)`;
-}
-
-export function resolveMinimapTrackIndexFromPointer(input: {
-  readonly itemCount: number;
-  readonly endHitPadding: number;
-  readonly railTop: number;
-  readonly railHeight: number;
-  readonly pointerY: number;
-}): number | null {
-  if (input.itemCount <= 0 || input.railHeight <= 0) {
-    return null;
-  }
-  if (input.itemCount === 1) {
-    return 0;
-  }
-
-  const endPadding = Math.min(
-    input.endHitPadding,
-    Math.max(0, (input.railHeight - 1) / 2),
-  );
-  const trackTop = input.railTop + endPadding;
-  const trackHeight = input.railHeight - endPadding * 2;
-  const progress = Math.max(
-    0,
-    Math.min(1, (input.pointerY - trackTop) / trackHeight),
-  );
-  return Math.max(
-    0,
-    Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))),
-  );
 }

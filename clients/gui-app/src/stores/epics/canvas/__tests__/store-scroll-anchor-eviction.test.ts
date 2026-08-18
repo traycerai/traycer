@@ -49,12 +49,6 @@ import {
   resetPendingHydrationRestoreForTesting,
 } from "@/stores/chats/chat-tab-pending-hydration-restore";
 import { evictTileFindUiForEpic } from "@/stores/tile-find/tile-find-store";
-import {
-  evictChatTurnMinimapActiveEntries,
-  evictChatTurnMinimapActiveEntriesForEpic,
-  restoreChatTurnMinimapActiveEntry,
-  saveChatTurnMinimapActiveEntry,
-} from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { CHAT_A, SPEC_A } from "./canvas-test-fixtures";
@@ -138,7 +132,6 @@ function seedTicket5PerTabState(epicId: string): void {
   toolOpenInitializedScopes.add(CHAT_A.instanceId);
   useSubagentOpenStore.getState().setOpen(CHAT_A.instanceId, "sub-1", true);
   subagentOpenInitializedScopes.add(CHAT_A.instanceId);
-  saveChatTurnMinimapActiveEntry(identity, "msg-seed");
   // F4: models a chat tile whose find bar was open when it switched away
   // (unregistered while live, so scheduleUiReclaim left this `ui` entry in
   // place) - the sweep below is the ONLY thing that can ever reclaim it now.
@@ -175,7 +168,6 @@ function expectTicket5PerTabStatePresent(epicId: string): void {
   expect(
     useTileFindStore.getState().uiByTileInstanceId[CHAT_A.instanceId],
   ).toEqual(SEEDED_TILE_FIND_UI);
-  expect(restoreChatTurnMinimapActiveEntry(identity)).toBe("msg-seed");
   expect(pendingHydrationRestore(identity)?.anchorMessageId).toBe(
     "msg-pending",
   );
@@ -184,7 +176,7 @@ function expectTicket5PerTabStatePresent(epicId: string): void {
 function expectTicket5TabKeysEvicted(epicId: string): void {
   const identity = identityFor(epicId);
   // Tab-key half is gone (canvas close sweep). Durable chat-key half of the
-  // dual-key registries still has the scroll/minimap/A2A/activity-group/
+  // dual-key registries still has the scroll/A2A/activity-group/
   // tool/subagent entries (ticket 15) - the SWEEP ITSELF promoted them
   // (round 3), not a separate component/hook commit - so a reopen via
   // getOrCreate re-seeds from durable.
@@ -201,10 +193,9 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   expect(
     useTileFindStore.getState().uiByTileInstanceId[CHAT_A.instanceId],
   ).toBeUndefined();
-  // Durable scroll + minimap still restore via chat-key after tab-key eviction.
+  // Durable scroll still restores via chat-key after tab-key eviction.
   expect(peekSavedChatTabState(identity) !== null).toBe(true);
   expect(restoreChatTabState(identity, []).mode).toBe("free-scrolling");
-  expect(restoreChatTurnMinimapActiveEntry(identity)).toBe("msg-seed");
   expect(pendingHydrationRestore(identity)).toBeNull();
   // A2A / activity-group registries: getOrCreate after tab-key eviction
   // builds a fresh store seeded from the durable snapshot the sweep wrote.
@@ -234,7 +225,6 @@ function clearTicket5PerTabState(instanceId: string, epicId: string): void {
   evictChatTabState([instanceId]);
   evictActivityGroupOpenStores([instanceId]);
   evictA2AOpenStores([instanceId]);
-  evictChatTurnMinimapActiveEntries([instanceId]);
   toolOpenInitializedScopes.delete(instanceId);
   subagentOpenInitializedScopes.delete(instanceId);
   evictChatTabStateForEpic(epicId);
@@ -243,7 +233,6 @@ function clearTicket5PerTabState(instanceId: string, epicId: string): void {
   evictToolOpenStoresForEpic(epicId);
   evictSubagentOpenStoresForEpic(epicId);
   evictTileFindUiForEpic(epicId);
-  evictChatTurnMinimapActiveEntriesForEpic(epicId);
 }
 
 beforeEach(() => {
@@ -256,7 +245,6 @@ beforeEach(() => {
   evictChatTabState([SPEC_A.instanceId]);
   evictActivityGroupOpenStores([SPEC_A.instanceId]);
   evictA2AOpenStores([SPEC_A.instanceId]);
-  evictChatTurnMinimapActiveEntries([SPEC_A.instanceId]);
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
   useTileFindStore.getState().resetForTests();
@@ -272,7 +260,6 @@ afterEach(() => {
   evictChatTabState([SPEC_A.instanceId]);
   evictActivityGroupOpenStores([SPEC_A.instanceId]);
   evictA2AOpenStores([SPEC_A.instanceId]);
-  evictChatTurnMinimapActiveEntries([SPEC_A.instanceId]);
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
   useTileFindStore.getState().resetForTests();

@@ -4,7 +4,6 @@ import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
 import {
-  ARTIFACT_HEADING_ACTIVATION_OFFSET,
   ARTIFACT_HEADING_HIT_STRIP_MAX_WIDTH,
   ARTIFACT_HEADING_LABEL_MAX_CHARS,
   ARTIFACT_HEADING_RAIL_EDGE_INSET,
@@ -13,7 +12,6 @@ import {
   measureArtifactHeadingTops,
   resolveArtifactHeadingActiveIndex,
   resolveArtifactHeadingHitStripWidth,
-  resolveArtifactHeadingTickWidth,
   sameArtifactHeadingOutline,
   toArtifactHeadingOutline,
   type ArtifactHeadingOutlineEntry,
@@ -231,8 +229,7 @@ describe("resolveArtifactHeadingActiveIndex", () => {
     ).toBe(0);
   });
 
-  it("does not hand over to the next section while its heading top is still below the activation line", () => {
-    // activationLine = 100 + 96 = 196; heading 1's top (200) has not crossed it yet.
+  it("uses the section at the top of the viewport", () => {
     const tops = [0, 200, 400];
     expect(
       resolveArtifactHeadingActiveIndex({
@@ -244,36 +241,32 @@ describe("resolveArtifactHeadingActiveIndex", () => {
     ).toBe(0);
   });
 
-  it("hands over to the next section once its heading crosses the activation line", () => {
-    // activationLine = 105 + 96 = 201; heading 1's top (200) has now crossed it.
+  it("keeps the earlier section on an exact visibility tie", () => {
     const tops = [0, 200, 400];
     expect(
       resolveArtifactHeadingActiveIndex({
         tops,
-        scrollTop: 105,
+        scrollTop: 0,
         clientHeight: 400,
         scrollHeight: 2000,
       }),
-    ).toBe(1);
+    ).toBe(0);
   });
 
-  it("uses ARTIFACT_HEADING_ACTIVATION_OFFSET as the exact hand-over boundary", () => {
-    const tops = [0, 200];
-    const justBelow = 200 - ARTIFACT_HEADING_ACTIVATION_OFFSET - 1;
-    const atLine = 200 - ARTIFACT_HEADING_ACTIVATION_OFFSET;
+  it("hands over when the next heading reaches the top", () => {
     expect(
       resolveArtifactHeadingActiveIndex({
-        tops,
-        scrollTop: justBelow,
-        clientHeight: 100,
+        tops: [0, 200, 400],
+        scrollTop: 1,
+        clientHeight: 400,
         scrollHeight: 2000,
       }),
     ).toBe(0);
     expect(
       resolveArtifactHeadingActiveIndex({
-        tops,
-        scrollTop: atLine,
-        clientHeight: 100,
+        tops: [0, 200, 400],
+        scrollTop: 200,
+        clientHeight: 400,
         scrollHeight: 2000,
       }),
     ).toBe(1);
@@ -294,73 +287,31 @@ describe("resolveArtifactHeadingActiveIndex", () => {
 
 describe("resolveArtifactHeadingHitStripWidth", () => {
   it("returns the floored gutter minus the rail edge inset when under the cap", () => {
-    const contentLeft = 20;
-    const scrollerLeft = 0;
-    expect(
-      resolveArtifactHeadingHitStripWidth({ contentLeft, scrollerLeft }),
-    ).toBe(
-      Math.floor(contentLeft - scrollerLeft - ARTIFACT_HEADING_RAIL_EDGE_INSET),
+    const gutter = 20;
+    expect(resolveArtifactHeadingHitStripWidth(gutter)).toBe(
+      Math.floor(gutter - ARTIFACT_HEADING_RAIL_EDGE_INSET),
     );
   });
 
   it("caps the width at ARTIFACT_HEADING_HIT_STRIP_MAX_WIDTH for a wide gutter", () => {
-    expect(
-      resolveArtifactHeadingHitStripWidth({
-        contentLeft: 1000,
-        scrollerLeft: 0,
-      }),
-    ).toBe(ARTIFACT_HEADING_HIT_STRIP_MAX_WIDTH);
+    expect(resolveArtifactHeadingHitStripWidth(1000)).toBe(
+      ARTIFACT_HEADING_HIT_STRIP_MAX_WIDTH,
+    );
   });
 
   it("returns 0 for a zero gutter", () => {
-    expect(
-      resolveArtifactHeadingHitStripWidth({
-        contentLeft: 40,
-        scrollerLeft: 40,
-      }),
-    ).toBe(0);
+    expect(resolveArtifactHeadingHitStripWidth(0)).toBe(0);
   });
 
   it("returns 0 for a negative gutter", () => {
-    expect(
-      resolveArtifactHeadingHitStripWidth({
-        contentLeft: 10,
-        scrollerLeft: 40,
-      }),
-    ).toBe(0);
+    expect(resolveArtifactHeadingHitStripWidth(-30)).toBe(0);
   });
 
   it("returns 0 for a non-finite gutter", () => {
-    expect(
-      resolveArtifactHeadingHitStripWidth({
-        contentLeft: Number.NaN,
-        scrollerLeft: 0,
-      }),
-    ).toBe(0);
-    expect(
-      resolveArtifactHeadingHitStripWidth({
-        contentLeft: Number.POSITIVE_INFINITY,
-        scrollerLeft: 0,
-      }),
-    ).toBe(0);
-  });
-});
-
-describe("resolveArtifactHeadingTickWidth", () => {
-  it("uses the full 24px/12px hierarchy when the gutter is wide enough", () => {
-    expect(resolveArtifactHeadingTickWidth(40, 1)).toBe(24);
-    expect(resolveArtifactHeadingTickWidth(40, 2)).toBe(12);
-  });
-
-  it("scales both heading levels into a narrow gutter", () => {
-    expect(resolveArtifactHeadingTickWidth(12, 1)).toBe(12);
-    expect(resolveArtifactHeadingTickWidth(12, 2)).toBe(6);
-  });
-
-  it("hides ticks when no finite positive gutter remains", () => {
-    expect(resolveArtifactHeadingTickWidth(0, 1)).toBe(0);
-    expect(resolveArtifactHeadingTickWidth(-1, 2)).toBe(0);
-    expect(resolveArtifactHeadingTickWidth(Number.NaN, 1)).toBe(0);
+    expect(resolveArtifactHeadingHitStripWidth(Number.NaN)).toBe(0);
+    expect(resolveArtifactHeadingHitStripWidth(Number.POSITIVE_INFINITY)).toBe(
+      0,
+    );
   });
 });
 

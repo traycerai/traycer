@@ -46,6 +46,7 @@ import {
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
@@ -592,7 +593,12 @@ function ArtifactHeadingMinimapMount(props: {
   readonly refreshRef: RefObject<() => void>;
   readonly scroller: HTMLElement | null;
 }) {
-  if (props.editor === null || !isEpicArtifactKind(props.node.type)) {
+  const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  if (
+    props.editor === null ||
+    !isEpicArtifactKind(props.node.type) ||
+    side === "hide"
+  ) {
     return null;
   }
   return (
@@ -600,6 +606,7 @@ function ArtifactHeadingMinimapMount(props: {
       editor={props.editor}
       refreshRef={props.refreshRef}
       scroller={props.scroller}
+      side={side}
     />
   );
 }

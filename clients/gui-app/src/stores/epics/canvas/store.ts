@@ -56,7 +56,6 @@ import {
   useSubagentOpenStore,
 } from "@/stores/chats/subagent-open-store";
 import { evictTileFindUi } from "@/stores/tile-find/tile-find-store";
-import { evictChatTurnMinimapActiveEntries } from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import { promoteChatTabPersistenceToDurable } from "@/stores/chats/chat-tab-persistence-eviction";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import {
@@ -3243,10 +3242,6 @@ useEpicCanvasStore.subscribe((state) => {
     // revisited if it is later closed without remounting. This sweep is that
     // revisit.
     evictTileFindUi(removed);
-    // Ticket 15: the minimap active entry is the 7th per-tab registry -
-    // same tab-key sweep, same "durable chat-key entry survives" contract as
-    // the others above.
-    evictChatTurnMinimapActiveEntries(removed);
     removed.forEach((instanceId) => {
       useToolOpenStore.getState().reset(instanceId);
       useSubagentOpenStore.getState().reset(instanceId);
