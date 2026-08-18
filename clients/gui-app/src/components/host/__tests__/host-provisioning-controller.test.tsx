@@ -1346,6 +1346,60 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
     expect(readLifecycle()?.slowStartStage).toBe("slow");
   });
 
+  it("DEMOTES back to loading when a promoted install starts advancing again", () => {
+    // `slow` used to be ABSORBING: the timer effect returns early on
+    // `stage === "slow"`, so once the wait promoted, no later event could take
+    // it back down - only reaching `ready` ever cleared it. An install that
+    // went quiet for eleven seconds and then resumed kept Retry and the
+    // emphasized recovery controls on screen for the rest of a healthy run.
+    //
+    // Reachable in production, and by the ordinary path: `verify` hashes ~800MB
+    // emitting one constant position, so a first launch crosses the threshold
+    // before extraction's per-entry heartbeat starts moving at all.
+    vi.useFakeTimers();
+    const { queryClient, management, readLifecycle } = mountWithLane();
+
+    // A pushed position is not an OBSERVED one: the query notifies on its own
+    // schedule, so without settling here the first advance would still be
+    // arriving on the render the promotion timer triggers - and this arm would
+    // then be measuring that coincidence rather than the demotion. Measured,
+    // not assumed: instrumenting the controller showed the first advance and
+    // `stage === "slow"` reaching the same render.
+    const settleObservation = (): void => {
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+    };
+
+    pushEnsureProgress(
+      queryClient,
+      management,
+      DOWNLOAD_AT(10, 25_000_000),
+      "2026-05-15T00:00:01Z",
+    );
+    settleObservation();
+    advancePastSlowStartThreshold();
+    // Premise: it really did promote, on a position the wait had already seen.
+    // Without this the demotion below is satisfied by a build that never
+    // promoted in the first place.
+    expect(readLifecycle()?.slowStartStage).toBe("slow");
+
+    pushEnsureProgress(
+      queryClient,
+      management,
+      DOWNLOAD_AT(35, 90_000_000),
+      "2026-05-15T00:00:01Z",
+    );
+    settleObservation();
+    expect(readLifecycle()?.slowStartStage).toBe("loading");
+
+    // And the detection is UNWEAKENED - the demotion re-arms the timer from
+    // the new position rather than disabling it. Without this arm, "never
+    // promote again" would pass just as happily as the fix.
+    advancePastSlowStartThreshold();
+    expect(readLifecycle()?.slowStartStage).toBe("slow");
+  });
+
   it("STILL promotes to slow for a lane accepted but silent", () => {
     // `useHostProvisioningProgress` is explicit that a null `progress` on a
     // RUNNING lane means "accepted but has not pushed an event" rather than "no

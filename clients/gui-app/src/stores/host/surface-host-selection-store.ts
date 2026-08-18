@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import {
+  createJSONStorage,
+  persist,
+  type PersistStorage,
+} from "zustand/middleware";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { basePersistOptions, surfaceHostSelectionKey } from "@/lib/persist";
 
@@ -226,6 +230,86 @@ function persistedSelections(
   return next;
 }
 
+type SurfaceSelectionMap = Readonly<Partial<Record<string, string>>>;
+
+interface PersistedSurfaceSelections {
+  readonly selections: SurfaceSelectionMap;
+}
+
+/**
+ * A `localStorage` view that MERGES every write against what is already
+ * stored, instead of replacing it.
+ *
+ * WHY. Every window runs its own instance of this store, and they all persist
+ * to one account-scoped key - the whole `selections` map, every time. A window
+ * only knows the pins it hydrated with, so the second window to write erased
+ * the first window's newer pin, and the loss only became visible after the
+ * first window reloaded and its composer or sidebar silently followed
+ * `effective` instead of the host the user had chosen. Per-window surface keys
+ * do not help: distinct keys still share one stored object.
+ *
+ * A UNION IS NOT THE FIX, and this is the part worth reading before
+ * simplifying. Unpin and `clearPinsForHost` are expressed as ABSENCE - the key
+ * is gone from the writer's map - so merging by union alone would resurrect
+ * every pin the user just cleared, turning a lost-write bug into an
+ * undeletable one.
+ *
+ * So the merge is three-way, with this instance's PREVIOUS map as the base:
+ * keys it dropped since that base are deletions and are applied; every other
+ * stored key is another window's business and is carried through untouched.
+ * Same-key conflicts resolve to the writer, which is correct because the
+ * writer is the window that just acted.
+ *
+ * Ownership is deliberately not inferred from the key. Sidebar surfaces are
+ * keyed by TAB id precisely so a tab keeps its pins when it moves windows, so
+ * no key prefix identifies the window that owns it - the base map does.
+ *
+ * Reads are not merged and do not need to be: hydration reads the stored map
+ * whole, which is already the union of every window's writes.
+ */
+function crossWindowSafeStorage(): PersistStorage<PersistedSurfaceSelections> {
+  const inner = createJSONStorage<PersistedSurfaceSelections>(
+    () => window.localStorage,
+  );
+  if (inner === undefined) {
+    throw new Error("surface host selection store needs a JSON storage");
+  }
+  // This instance's last known map - the base of the three-way merge. Seeded
+  // on hydration, replaced on every write.
+  let base: SurfaceSelectionMap = {};
+  return {
+    getItem: (name) => {
+      const stored = inner.getItem(name);
+      if (stored instanceof Promise) {
+        throw new Error("surface host selection storage must be synchronous");
+      }
+      if (stored !== null) base = { ...stored.state.selections };
+      return stored;
+    },
+    setItem: (name, value) => {
+      const current = inner.getItem(name);
+      if (current instanceof Promise) {
+        throw new Error("surface host selection storage must be synchronous");
+      }
+      const own = value.state.selections;
+      const merged: Partial<Record<string, string>> =
+        current === null ? { ...own } : { ...current.state.selections, ...own };
+      for (const surfaceKey of Object.keys(base)) {
+        if (!(surfaceKey in own)) delete merged[surfaceKey];
+      }
+      base = { ...own };
+      return inner.setItem(name, {
+        ...value,
+        state: { selections: merged },
+      });
+    },
+    removeItem: (name) => {
+      base = {};
+      return inner.removeItem(name);
+    },
+  };
+}
+
 export const useSurfaceHostSelectionStore =
   create<SurfaceHostSelectionStoreState>()(
     persist(
@@ -274,7 +358,7 @@ export const useSurfaceHostSelectionStore =
       }),
       {
         ...basePersistOptions(surfaceHostSelectionKey(null)),
-        storage: createJSONStorage(() => window.localStorage),
+        storage: crossWindowSafeStorage(),
         merge: (persistedState, currentState) => ({
           ...currentState,
           selections: persistedSelections(persistedState),

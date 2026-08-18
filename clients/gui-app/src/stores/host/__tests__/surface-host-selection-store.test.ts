@@ -16,6 +16,24 @@ const PERSIST_KEY = surfaceHostSelectionKey(null);
 const GIT_KEY = gitDiffPanelSurfaceKey("tab-1");
 const TREE_KEY = "file-tree-test";
 
+/** The persist middleware writes on a microtask. */
+function flushPersist(): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function storedSelections(): unknown {
+  const raw = window.localStorage.getItem(PERSIST_KEY);
+  const parsed: unknown = JSON.parse(raw ?? "{}");
+  if (typeof parsed !== "object" || parsed === null || !("state" in parsed)) {
+    return null;
+  }
+  const state = parsed.state;
+  if (typeof state !== "object" || state === null || !("selections" in state)) {
+    return null;
+  }
+  return state.selections;
+}
+
 function resetStore(): void {
   window.localStorage.clear();
   useSurfaceHostSelectionStore.persist.setOptions({ name: PERSIST_KEY });
@@ -102,6 +120,72 @@ describe("useSurfaceHostSelectionStore", () => {
   it("reserves a composer window key without requiring a consumer", () => {
     expect(composerSurfaceKey("window-1")).toBe("composer\u001fwindow-1");
     expect(composerSurfaceKey(null)).toBe("composer\u001fbrowser");
+  });
+
+  /**
+   * TWO WINDOWS, ONE STORED MAP.
+   *
+   * Every window runs its own instance of this store and persists the WHOLE
+   * `selections` map to one account-scoped key, so the second writer used to
+   * erase the first writer's newer pin - visible only after that window
+   * reloaded and its surface silently followed `effective` instead of the host
+   * the user picked. Per-window surface keys do not help: distinct keys still
+   * share one stored object.
+   *
+   * The other window is simulated by writing storage DIRECTLY, which is
+   * exactly what it is from this instance's point of view: a change to the
+   * shared key that this instance never saw.
+   */
+  it("preserves a pin another window wrote after this instance hydrated", async () => {
+    useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, "host-b");
+    await flushPersist();
+
+    // Window B lands its own pin under a key this instance has never held.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          selections: { [GIT_KEY]: "host-b", [TREE_KEY]: "host-c" },
+        },
+        version: CURRENT_PERSIST_VERSION,
+      }),
+    );
+
+    // This instance writes again, from a map that knows nothing about B's pin.
+    useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, "host-d");
+    await flushPersist();
+
+    expect(storedSelections()).toEqual({
+      [GIT_KEY]: "host-d",
+      [TREE_KEY]: "host-c",
+    });
+  });
+
+  /**
+   * The direction a plain union would break, and the reason the merge is
+   * three-way. Unpin is expressed as ABSENCE, so a writer that only ever
+   * merged keys IN would resurrect every pin the user just cleared - trading a
+   * lost write for a pin that cannot be removed.
+   */
+  it("still applies this window's own unpin through the merge", async () => {
+    useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, "host-b");
+    await flushPersist();
+
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          selections: { [GIT_KEY]: "host-b", [TREE_KEY]: "host-c" },
+        },
+        version: CURRENT_PERSIST_VERSION,
+      }),
+    );
+
+    useSurfaceHostSelectionStore.getState().setSelection(GIT_KEY, null);
+    await flushPersist();
+
+    // Own key gone, foreign key untouched.
+    expect(storedSelections()).toEqual({ [TREE_KEY]: "host-c" });
   });
 
   it("persists pins and drops invalid rehydrated entries", async () => {

@@ -656,6 +656,22 @@ function useLocalHostStartupState(
   // what lets it promote on schedule.
   if (advanceKey !== null && advanceKey !== lastAdvance) {
     setLastAdvance(advanceKey);
+    // AND DEMOTE, because `slow` was otherwise ABSORBING. The effect below
+    // returns early on `stage === "slow"`, so once the wait promoted, no later
+    // event could re-arm the timer or take the state back down - only reaching
+    // `ready`, or a ready -> not-ready transition, ever cleared it. A user
+    // whose install went quiet for eleven seconds and then resumed kept Retry
+    // and the emphasized recovery controls in front of them for the rest of a
+    // healthy install, which is the same false alarm the staged wait exists to
+    // avoid, just arrived at from the other side.
+    //
+    // A NEW POSITION IS THE EVIDENCE. It is the same fact the wait already
+    // trusts in the other direction - `lastAdvance` changing is what restarts
+    // the timer - so treating it as proof of life here is not a new claim,
+    // only the missing half of the existing one. The stall detection is
+    // unweakened: the effect re-arms from this position, so an install that
+    // advances once and stops promotes again on schedule.
+    setStage((current) => (current === "slow" ? "loading" : current));
   }
 
   // `lastAdvance` is a DEPENDENCY, and that is the entire mechanism: React tears
