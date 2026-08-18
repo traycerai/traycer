@@ -118,13 +118,19 @@ export function useHeaderTabProjectBadge(
   const tabsById = useEpicCanvasStore(useShallow((state) => state.tabsById));
   const hint =
     tab.kind === "epic" ? workspaceHintForEpic(tab.epicId, tabsById) : null;
-  return useProjectProfilesStore((state) => {
-    if (tab.kind !== "epic") return null;
-    const bucket = selectProjectProfilesBucket(state, hostId);
-    const active = selectActiveProjectProfile(state, hostId);
-    const owner = resolveOwningProjectProfile(bucket.profiles, tab.epicId, hint);
-    return headerTabProjectBadge(active, owner);
-  });
+  return useProjectProfilesStore(
+    useShallow((state) => {
+      if (tab.kind !== "epic") return null;
+      const bucket = selectProjectProfilesBucket(state, hostId);
+      const active = selectActiveProjectProfile(state, hostId);
+      const owner = resolveOwningProjectProfile(
+        bucket.profiles,
+        tab.epicId,
+        hint,
+      );
+      return headerTabProjectBadge(active, owner);
+    }),
+  );
 }
 
 function workspaceHintForEpic(
