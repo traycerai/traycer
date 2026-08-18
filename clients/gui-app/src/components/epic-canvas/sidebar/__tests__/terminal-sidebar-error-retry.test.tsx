@@ -42,6 +42,20 @@ vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
   useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
+  useHostPlainTerminalAuthority: () => ({
+    capability: { status: "legacy" },
+    canMutate: false,
+  }),
+}));
+
+vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
+  useHostPlainTerminalMutations: () => ({
+    close: { mutateAsync: vi.fn(), isPending: false },
+    rename: { mutate: vi.fn(), isPending: false },
+  }),
+}));
+
 import { TerminalsPanelBody } from "../epic-terminal-sidebar";
 
 function wrapper(node: ReactNode): ReactNode {

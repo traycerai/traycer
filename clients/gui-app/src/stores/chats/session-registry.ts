@@ -80,7 +80,9 @@ export interface ChatSessionRegistryOptions {
  * a mismatch there is still a legitimate in-place rebuild.
  *
  * Time-based keep-alive: when a chat's last lease is dropped (its tile
- * unmounts on a tab switch) the session is NOT torn down. Its websocket stays
+ * unmounts - no longer on a mere tab switch, since pane chat retention keeps
+ * the tile mounted, but still on eviction or close) the session is NOT torn
+ * down. Its websocket stays
  * open and its loaded snapshot is retained so switching back paints instantly
  * - no reconnect, no loading spinner. A lease-free ("idle") session is held
  * until it goes untouched for `idleTtlMs`, at which point it is disposed.

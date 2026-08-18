@@ -20,6 +20,7 @@ import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
+import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
 
 const testState = vi.hoisted(() => ({
   reachability: {
@@ -90,6 +91,22 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
   }),
 }));
 
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: "legacy",
+    projection: undefined,
+    viewModel: null,
+    canMutate: false,
+    migrationPending: false,
+    migrationError: null,
+    retryMigration: () => undefined,
+    create: {},
+    ensureRunning: {},
+    rename: {},
+    close: {},
+  }),
+}));
+
 vi.mock("@/lib/perf/terminal-load-perf", () => ({
   beginTerminalLoad: vi.fn(),
 }));
@@ -124,6 +141,7 @@ import { TerminalTile } from "../terminal-tile";
 
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-1";
+let unregisterCloseAuthorities: Array<() => void> = [];
 
 function withTabHost(node: ReactNode): ReactNode {
   // A sign-in tile that has exited renders the restart button, and that button
@@ -187,6 +205,16 @@ function openTerminalFixture(inactiveClose: boolean): {
   const store = useEpicCanvasStore.getState();
   const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
   const closingNode = terminalNode("terminal-1", "inst-terminal-1");
+  unregisterCloseAuthorities.push(
+    registerEpicTerminalCloseAuthority({
+      instanceId: closingNode.instanceId,
+      hostId: closingNode.hostId,
+      terminalId: closingNode.id,
+      capability: "legacy",
+      canMutate: false,
+      close: () => Promise.resolve(),
+    }),
+  );
   store.openTileInTab(viewTabId, closingNode);
   const activeNode = inactiveClose
     ? terminalNode("terminal-2", "inst-terminal-2")
@@ -217,6 +245,8 @@ describe("<TerminalTile /> close navigation", () => {
 
   afterEach(() => {
     cleanup();
+    for (const unregister of unregisterCloseAuthorities) unregister();
+    unregisterCloseAuthorities = [];
   });
 
   it("routes unreachable-banner close for an active tile through the nested-focus boundary", () => {
@@ -442,6 +472,42 @@ describe("<TerminalTile /> close navigation", () => {
     // with no explanation and no way back.
     expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
     expect(screen.getByRole("button", { name: /Start again/ })).toBeDefined();
+  });
+
+  it("dismisses a capable-host sign-in ended panel through the legacy close branch", async () => {
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
+    unregisterCloseAuthorities.push(
+      registerEpicTerminalCloseAuthority({
+        instanceId: signInNode.instanceId,
+        hostId: signInNode.hostId,
+        terminalId: signInNode.id,
+        capability: "legacy",
+        canMutate: false,
+        close: () => Promise.resolve(),
+      }),
+    );
+    store.openTileInTab(viewTabId, signInNode);
+    const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvasBefore === undefined) throw new Error("expected view tab canvas");
+    const paneId = collectPanes(canvasBefore.root)[0].id;
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={viewTabId}
+          node={signInNode}
+          tileId={paneId}
+          isActive
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
+
+    store.closeCanvasTab(viewTabId, paneId, signInNode.instanceId);
+    expectTileClosed(viewTabId, signInNode.instanceId);
   });
 });
 

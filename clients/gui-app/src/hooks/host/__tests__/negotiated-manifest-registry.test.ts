@@ -69,7 +69,6 @@ describe("negotiated-manifest-registry", () => {
 
     unsubscribe();
   });
-
   it("reads an unknown host's method version as not-yet-known (null)", () => {
     expect(
       getNegotiatedHostMethodVersion("host-unknown", "epic.listChats"),

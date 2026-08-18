@@ -524,6 +524,36 @@ describe("NewWorktreeForm — typing performance", () => {
   });
 });
 
+describe("NewWorktreeForm — source search", () => {
+  it("shows 'No matching branches' for a non-matching query, then restores rows once cleared", () => {
+    branchesData = {
+      branches: [
+        { name: "development", isCurrent: true, isRemoteOnly: false },
+        { name: "chore/cleanup", isCurrent: false, isRemoteOnly: false },
+      ],
+      uncommittedFileCount: 0,
+    };
+    renderForm(() => undefined, null);
+    const search = screen.getByRole("combobox", { name: "Search branches" });
+
+    fireEvent.change(search, { target: { value: "zzz-no-such-branch" } });
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+
+    expect(screen.getByText("No matching branches")).toBeTruthy();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+
+    fireEvent.change(search, { target: { value: "" } });
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+
+    expect(screen.queryByText("No matching branches")).toBeNull();
+    expect(screen.getAllByRole("option").length).toBe(2);
+  });
+});
+
 describe("NewWorktreeForm — new-branch name", () => {
   it("working tree source: name required (prefilled), then autosaved", () => {
     branchesData = {

@@ -242,6 +242,38 @@ describe("useProviderTerminalLogin", () => {
     );
   });
 
+  it("still retires the replaced provider-login tile after the starter unmounts before the RPC resolves", async () => {
+    const pending = deferredStartResult();
+    mocks.startTerminalLoginRequest.mockImplementation(() => pending.promise);
+    const { wrapper } = makeWrapper();
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    store.openTileInTab(viewTabId, OLD_TERMINAL);
+
+    const { result, unmount } = renderStarter(viewTabId, wrapper);
+    await act(async () => {
+      result.current.start();
+      await Promise.resolve();
+    });
+    unmount();
+
+    pending.resolve({
+      sessionId: "term-new",
+      replacedSessionId: OLD_TERMINAL.id,
+    });
+
+    await waitFor(() => {
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+      if (canvas === undefined) throw new Error("expected view tab canvas");
+      expect(canvas.tilesByInstanceId[OLD_TERMINAL.instanceId]).toBeUndefined();
+      expect(
+        Object.values(canvas.tilesByInstanceId).some(
+          (tile) => tile?.type === "terminal" && tile.id === "term-new",
+        ),
+      ).toBe(true);
+    });
+  });
+
   // Row 4b: "Start again" on a dead sign-in tile passes its OWN tile as
   // `launchedFromTile`. After a host restart the coordinator has no
   // predecessor pointer, so it reports `replacedSessionId: null` - nothing

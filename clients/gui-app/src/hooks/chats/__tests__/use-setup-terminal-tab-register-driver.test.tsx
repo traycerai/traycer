@@ -7,6 +7,10 @@ import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-termi
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { useSetupTerminalRegistrationStore } from "@/stores/chats/setup-terminal-registration-store";
+import {
+  isSetupTerminal,
+  useSetupTerminalsStore,
+} from "@/stores/worktree/setup-terminals";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -58,6 +62,10 @@ function Wrapper(props: { readonly children: ReactNode }): ReactNode {
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useSetupTerminalRegistrationStore.getState().reset();
+  useSetupTerminalsStore.setState(
+    useSetupTerminalsStore.getInitialState(),
+    true,
+  );
 }
 
 describe("useSetupTerminalTabRegisterDriver", () => {
@@ -105,7 +113,11 @@ describe("useSetupTerminalTabRegisterDriver", () => {
       titleSource: "manual",
       hostId: HOST_ID,
       cwd: WORKTREE_ENTRY.worktreePath,
+      origin: "setup",
     });
+    expect(
+      isSetupTerminal(HOST_ID, WORKTREE_ENTRY.setupTerminalSessionId ?? ""),
+    ).toBe(true);
     // `instanceId` is a freshly minted per-tab-instance id (NOT the session
     // id - reusing it would alias stream handles across views).
     expect(typeof setupTile?.instanceId).toBe("string");

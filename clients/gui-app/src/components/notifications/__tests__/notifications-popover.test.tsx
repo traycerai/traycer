@@ -1712,6 +1712,45 @@ describe("NotificationsPopover", () => {
     ).toBeTypeOf("number");
   });
 
+  it("activates the same target from Enter on a keyboard-focused row", async () => {
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const onNavigate = vi.fn();
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+
+    openNotificationsStream((callbacks) => {
+      act(() => {
+        seedEntries(callbacks, [
+          threadEntry("route-key", "epic-key", "art-8", "thread-3"),
+        ]);
+      });
+      return { applyUpdate: () => {}, close: () => {} };
+    }, null);
+
+    renderRouter(router);
+
+    // The row itself is the arrow-key focus target, so Enter on it must do
+    // what clicking its body button does - not nothing.
+    const entry = await screen.findByTestId("notification-entry");
+    entry.focus();
+    expect(document.activeElement).toBe(entry);
+
+    await act(async () => {
+      fireEvent.keyDown(entry, { key: "Enter" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(captured.epicId).toBe("epic-key");
+    expect(captured.focusArtifactId).toBe("art-8");
+    expect(captured.focusThreadId).toBe("thread-3");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+  });
+
   it("navigates a TUI completion row to its terminal agent", async () => {
     applyHostSnapshot(
       [

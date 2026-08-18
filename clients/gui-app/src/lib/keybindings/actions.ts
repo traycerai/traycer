@@ -50,6 +50,7 @@ export const ACTION_IDS = [
   "nav.forward",
   "app.resources.open",
   "app.rate-limits.open",
+  "app.notifications.open",
   "app.history.open",
   "app.settings.open",
   "app.settings.section.byDigit",
@@ -360,9 +361,8 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     description: "Go back through the app's navigation history.",
     category: "app",
     kind: "chord",
-    // Match the directional browser convention on each platform. The provider
-    // defers Cmd/Ctrl+Arrow to native caret movement inside editable fields.
-    defaultChord: { mac: "mod+arrowleft", other: "alt+arrowleft" },
+    // `<` / `>` mnemonic without stealing arrow or Option-word navigation.
+    defaultChord: "mod+shift+,",
   },
   "nav.forward": {
     id: "nav.forward",
@@ -370,7 +370,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     description: "Go forward through the app's navigation history.",
     category: "app",
     kind: "chord",
-    defaultChord: { mac: "mod+arrowright", other: "alt+arrowright" },
+    defaultChord: "mod+shift+.",
   },
   "app.resources.open": {
     id: "app.resources.open",
@@ -378,7 +378,9 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     description: "Open the global Resource Monitor.",
     category: "app",
     kind: "chord",
-    // Matches Chromium's task-manager shortcut, the closest system analogue.
+    // Chromium's task-manager shortcut on Windows/Linux; kept on macOS for
+    // cross-platform consistency. Clearing the binding lets Shift+Esc pass
+    // through to a focused terminal.
     defaultChord: "shift+escape",
   },
   "app.rate-limits.open": {
@@ -388,6 +390,17 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "chord",
     defaultChord: "mod+shift+u",
+  },
+  "app.notifications.open": {
+    id: "app.notifications.open",
+    label: "Open notifications",
+    description:
+      "Open the notification center, then use Up/Down to move between notifications. Pressing the chord again closes it.",
+    category: "app",
+    kind: "chord",
+    // ⌘⇧N - N for notifications, in the same ⌘⇧ family as the other global
+    // panel openers (⌘⇧U usage limits). ⌘N is taken by "New task".
+    defaultChord: "mod+shift+n",
   },
   "app.history.open": {
     id: "app.history.open",

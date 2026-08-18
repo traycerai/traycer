@@ -16,6 +16,7 @@ import {
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
   rateLimitUsageResponseSchemaV40,
+  mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
   mapHuggingFaceAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
@@ -286,12 +287,13 @@ export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Downgrade bridge 4.0 -> 3.0: request is identity. The Hugging-Face- and
-// OpenCode-available snapshots each degrade to the unavailable
-// `unsupported_provider` shape - neither has an arm in the frozen v3.0 union,
-// and both ride 4.0 since the release collapsed them onto one major. Every
-// other arm - grok included, since v3.0 is where grok landed - is already valid
-// v3.0 and passes through the re-parse unchanged.
+// Downgrade bridge 4.0 -> 3.0: request is identity. The Hugging-Face-,
+// OpenCode- and Cursor-available snapshots each degrade to the unavailable
+// `unsupported_provider` shape - none has an arm in the frozen v3.0 union, and
+// all three ride 4.0 (the release collapsed Hugging Face and OpenCode onto one
+// major, and 4.0 is still unreleased, so Cursor joins them rather than opening
+// a 5.0). Every other arm - grok included, since v3.0 is where grok landed - is
+// already valid v3.0 and passes through the re-parse unchanged.
 export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
   typeof hostGetRateLimitUsageV40,
   typeof hostGetRateLimitUsageV30
@@ -303,16 +305,18 @@ export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
     ok: true,
     value: rateLimitUsageResponseSchemaV30.parse({
       ...response,
-      providerRateLimits: mapHuggingFaceAvailableToUnavailable(
-        mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+      providerRateLimits: mapCursorAvailableToUnavailable(
+        mapHuggingFaceAvailableToUnavailable(
+          mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+        ),
       ),
     }),
   }),
 });
 
-// Downgrade bridge 4.0 -> 2.1: composes all three available-arm maps before the
+// Downgrade bridge 4.0 -> 2.1: composes all four available-arm maps before the
 // v2.1 re-parse, because the frozen v2.1 union has none of the grok, Hugging
-// Face, or OpenCode arms.
+// Face, OpenCode, or Cursor arms.
 export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
   typeof hostGetRateLimitUsageV40,
   typeof hostGetRateLimitUsageV21
@@ -325,18 +329,20 @@ export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
     value: rateLimitUsageResponseSchemaV21.parse({
       ...response,
       providerRateLimits: mapGrokAvailableToUnavailable(
-        mapHuggingFaceAvailableToUnavailable(
-          mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+        mapCursorAvailableToUnavailable(
+          mapHuggingFaceAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+          ),
         ),
       ),
     }),
   }),
 });
 
-// Downgrade bridge 4.0 -> 1.2: composes all four frozen-line maps. The three
+// Downgrade bridge 4.0 -> 1.2: composes all five frozen-line maps. The four
 // available-arm degrades run before the reason degrade, so a genuinely
-// Hugging-Face-, OpenCode- or grok-available snapshot never lands on the
-// usage-fetch-failed branch. The v1.2 parse also strips v2.1 reset-credit
+// Hugging-Face-, OpenCode-, Cursor- or grok-available snapshot never lands on
+// the usage-fetch-failed branch. The v1.2 parse also strips v2.1 reset-credit
 // detail.
 export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
   typeof hostGetRateLimitUsageV40,
@@ -351,8 +357,10 @@ export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
       ...response,
       providerRateLimits: mapUsageFetchFailedToNotAvailable(
         mapGrokAvailableToUnavailable(
-          mapHuggingFaceAvailableToUnavailable(
-            mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+          mapCursorAvailableToUnavailable(
+            mapHuggingFaceAvailableToUnavailable(
+              mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
+            ),
           ),
         ),
       ),

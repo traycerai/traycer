@@ -41,10 +41,10 @@ export const prSubscribeListForEpicV10 = defineStreamRpcContract({
 
 /**
  * `pr.subscribeDetail@1.0` - streaming RPC for a single PR's heavy detail
- * (canvas tile). `epicId` is carried for authorization only - the resolver
- * verifies the requested PR is in that epic's derived set before any `gh`
- * invocation; `hostId` is never an argument, always derived from the
- * connection's host context.
+ * (canvas tile). `epicId` authorizes access to the task surface but does not
+ * constrain the requested GitHub coordinates: any PR may be opened there.
+ * `hostId` is never an argument, always derived from the connection's host
+ * context.
  */
 export const prSubscribeDetailV10 = defineStreamRpcContract({
   method: "pr.subscribeDetail",

@@ -23,6 +23,10 @@ import type {
   PrDetailTileRef,
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
+import {
+  parseReleasedTerminalRef,
+  serializeReleasedTerminalRef,
+} from "@/stores/epics/canvas/__tests__/fixtures/released-terminal-ref-reader";
 
 const HOST = "host-1";
 
@@ -85,6 +89,27 @@ describe("parseTileRef / serializeTileRef", () => {
     expect(parseTileRef(serializeTileRef(ref))).toEqual(ref);
   });
 
+  it("keeps terminal-agent refs on the record-backed schema unchanged", () => {
+    const ref: EpicArtifactRef = {
+      id: "terminal-agent-1",
+      instanceId: "inst-terminal-agent-1",
+      type: "terminal-agent",
+      name: "Agent",
+      hostId: HOST,
+    };
+    const serialized = serializeTileRef(ref);
+
+    expect(serialized).toEqual({
+      id: ref.id,
+      instanceId: ref.instanceId,
+      type: ref.type,
+      name: ref.name,
+      hostId: ref.hostId,
+    });
+    expect(parseTileRef(serialized)).toEqual(ref);
+    expect(isTileRefRecordBacked(ref)).toBe(true);
+  });
+
   it("round-trips a terminal ref with a cwd", () => {
     const withCwd: EpicTerminalRef = {
       id: "term-1",
@@ -96,6 +121,155 @@ describe("parseTileRef / serializeTileRef", () => {
       cwd: "/repo/wt-a",
     };
     expect(parseTileRef(serializeTileRef(withCwd))).toEqual(withCwd);
+  });
+
+  it("round-trips a canonical pointer with released-reader compatibility fields", () => {
+    const canonical: EpicTerminalRef = {
+      id: "term-canonical",
+      instanceId: "inst-term-canonical",
+      type: "terminal",
+      name: "Local presentation",
+      hostId: HOST,
+      authority: "host",
+      legacyFallback: {
+        name: "Fallback title",
+        titleSource: "manual",
+        cwd: "/repo",
+        shellCommand: "/bin/zsh",
+        shellArgs: ["-l"],
+      },
+    };
+
+    const serialized = serializeTileRef(canonical);
+    expect(serialized).toMatchObject({
+      authority: "host",
+      cwd: "/repo",
+      titleSource: "manual",
+    });
+    expect(parseReleasedTerminalRef(serialized)).toMatchObject({
+      id: canonical.id,
+      instanceId: canonical.instanceId,
+      name: canonical.name,
+      hostId: canonical.hostId,
+      cwd: "/repo",
+      titleSource: "manual",
+    });
+    expect(parseTileRef(serialized)).toEqual(canonical);
+  });
+
+  it("preserves an unknown authority without promoting rollback evidence", () => {
+    const persisted = {
+      id: "term-future",
+      instanceId: "inst-term-future",
+      type: "terminal",
+      name: "Local presentation",
+      hostId: HOST,
+      authority: "host-v2",
+      cwd: "/compatible",
+      titleSource: "manual",
+      legacyFallback: {
+        name: "Nested fallback",
+        cwd: "/nested",
+        titleSource: "default",
+      },
+    };
+
+    const parsed = parseTileRef(persisted);
+    expect(parsed).toEqual({
+      id: "term-future",
+      instanceId: "inst-term-future",
+      type: "terminal",
+      name: "Local presentation",
+      hostId: HOST,
+      authority: "unsupported",
+      rawAuthority: "host-v2",
+      legacyFallback: {
+        name: "Local presentation",
+        cwd: "/compatible",
+        titleSource: "manual",
+      },
+    });
+    if (parsed === null) throw new Error("current reader dropped future ref");
+    const serialized = serializeTileRef(parsed);
+    expect(serialized).toMatchObject({
+      authority: "host-v2",
+      cwd: "/compatible",
+      titleSource: "manual",
+    });
+    expect(parseReleasedTerminalRef(serialized)).not.toBeNull();
+    expect(parseTileRef(serialized)).toEqual(parsed);
+  });
+
+  it("round-trips an unknown structured authority payload verbatim", () => {
+    const authority = {
+      kind: "host-v3",
+      version: 3,
+      features: ["remote-owner", { lease: true }],
+    };
+    const parsed = parseTileRef({
+      id: "term-future-structured",
+      instanceId: "inst-term-future-structured",
+      type: "terminal",
+      name: "Future terminal",
+      hostId: HOST,
+      authority,
+      cwd: "/rollback",
+      titleSource: "default",
+    });
+    expect(parsed).toMatchObject({
+      authority: "unsupported",
+      rawAuthority: authority,
+    });
+    if (parsed === null) throw new Error("current reader dropped future ref");
+
+    const serialized = serializeTileRef(parsed);
+    expect(serialized).toMatchObject({ authority });
+    expect(parseTileRef(serialized)).toEqual(parsed);
+  });
+
+  it("survives current-write, released-read/write, and current-upgrade parsing", () => {
+    const canonical: EpicTerminalRef = {
+      id: "term-downgrade",
+      instanceId: "inst-term-downgrade",
+      type: "terminal",
+      name: "Local presentation",
+      hostId: HOST,
+      authority: "host",
+      legacyFallback: {
+        name: "Fallback title",
+        titleSource: "default",
+        cwd: "/repo/downgrade",
+      },
+      origin: "shell",
+    };
+    const released = parseReleasedTerminalRef(serializeTileRef(canonical));
+    if (released === null) throw new Error("released reader dropped the ref");
+    expect(parseTileRef(serializeReleasedTerminalRef(released))).toEqual({
+      id: canonical.id,
+      instanceId: canonical.instanceId,
+      type: "terminal",
+      name: canonical.name,
+      hostId: canonical.hostId,
+      cwd: "/repo/downgrade",
+      titleSource: "default",
+      origin: "shell",
+    });
+  });
+
+  it("round-trips a setup terminal ref's origin", () => {
+    const setupTerminal: EpicTerminalRef = {
+      id: "term-setup",
+      instanceId: "inst-term-setup",
+      type: "terminal",
+      name: "Setup: repo main",
+      titleSource: "manual",
+      hostId: HOST,
+      cwd: "/worktrees/repo",
+      origin: "setup",
+    };
+    expect(parseTileRef(serializeTileRef(setupTerminal))).toEqual(
+      setupTerminal,
+    );
   });
 
   it("round-trips a provider-login terminal ref's origin and originProviderId", () => {
