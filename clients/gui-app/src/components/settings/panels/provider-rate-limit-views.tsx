@@ -116,6 +116,7 @@ type OpenRouterRateLimits = Extract<
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
 type HuggingFaceRateLimits = Extract<
   ProviderRateLimits,
   { provider: "huggingface" }
@@ -1236,8 +1237,12 @@ function formatGrokPeriodLabel(
   return formatWindowDuration(durationMinutes);
 }
 
-/** Compact calendar date ("Jul 22, 2026") for a grok billing-period bound. */
-function formatGrokPeriodDate(epochMs: number): string {
+/**
+ * Compact calendar date ("Jul 22, 2026") for a billing-period bound. Shared by
+ * grok's billing period and Cursor's billing cycle - both render a plain epoch
+ * range, so neither provider owns this formatter.
+ */
+function formatBillingRangeDate(epochMs: number): string {
   return new Date(epochMs).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -1250,12 +1255,12 @@ function formatGrokPeriodDate(epochMs: number): string {
  * in grok's unmeasured-period fallback where there's no usage bar to carry a
  * reset date. `null` unless both bounds are known.
  */
-function formatGrokPeriodRange(
+function formatBillingRange(
   periodStart: number | null,
   periodEnd: number | null,
 ): string | null {
   if (periodStart === null || periodEnd === null) return null;
-  return `${formatGrokPeriodDate(periodStart)} - ${formatGrokPeriodDate(periodEnd)}`;
+  return `${formatBillingRangeDate(periodStart)} - ${formatBillingRangeDate(periodEnd)}`;
 }
 
 /**
@@ -1288,7 +1293,7 @@ function GrokPeriodFallback({
       ) : null}
       <ProviderTextRow
         label="Billing period"
-        value={formatGrokPeriodRange(periodStart, periodEnd)}
+        value={formatBillingRange(periodStart, periodEnd)}
       />
     </>
   );
@@ -1362,6 +1367,137 @@ export function GrokRateLimitView({
         </>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Cursor's usage detail. Structurally grok's twin - synthesized billing-cycle
+ * windows plus money rows - so it reuses the same `RateLimitWindowRow`, and
+ * its "% used · Resets <date>" reads identically to codex/claude.
+ *
+ * The two bars are the two buckets Cursor's own Spending page renders -
+ * "Cursor Models" (Cursor Grok + Composer) and "Other Models" (named
+ * third-party models) - deliberately NOT the blended included-usage
+ * percentage, which appears nowhere on that dashboard and contradicted it in
+ * a live comparison. When neither bucket was reported the cycle dates still
+ * render, keeping the card meaningful rather than blank - the same fallback
+ * grok uses.
+ *
+ * The dollars ride their OWN meter, not the bucket bars. Each bucket bar is
+ * measured against its own (unpublished, bonus-inflated) limit, while
+ * `usedUsd`/`includedLimitUsd`/`remainingUsd` describe Cursor's BLENDED $400
+ * purchased pool - a third denominator, ~81% consumed on the same live
+ * payload that read 6% / 40% on the buckets. A bare "$76.69 left of $400"
+ * row under those bars therefore presented as a broken calculation even
+ * though every number is Cursor's own (server-computed `remaining`). Pairing
+ * the dollars with a credit meter that shows THEIR percentage - the exact
+ * pattern the Hugging Face card uses - keeps the money visible on every
+ * surface while making its denominator visible with it.
+ */
+export function CursorRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: CursorRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  const overview = isOverviewVariant(variant);
+  return (
+    <div className="flex flex-col gap-3">
+      {data.cursorModels === null && data.otherModels === null ? (
+        <ProviderTextRow
+          label="Billing cycle"
+          value={formatBillingRange(data.cycleStart, data.cycleEnd)}
+        />
+      ) : (
+        <>
+          {data.cursorModels !== null ? (
+            <RateLimitWindowRow
+              label="Cursor Models"
+              window={data.cursorModels}
+            />
+          ) : null}
+          {data.otherModels !== null ? (
+            <RateLimitWindowRow
+              label="Other Models"
+              window={data.otherModels}
+            />
+          ) : null}
+        </>
+      )}
+      <CursorIncludedUsageBar
+        includedLimitUsd={data.includedLimitUsd}
+        usedUsd={data.usedUsd}
+      />
+      <ProviderNumberRow
+        label="Included usage left"
+        // Once spend crosses the purchased allowance the wire's remaining may
+        // run negative; "-$12 left" is meaningless to a reader, and the
+        // overflow already shows in the meter's detail and the bonus row.
+        value={
+          data.remainingUsd === null ? null : Math.max(0, data.remainingUsd)
+        }
+        format={formatProviderCurrency}
+      />
+      <ProviderNumberRow
+        label="Bonus usage"
+        value={data.bonusUsedUsd}
+        format={formatProviderCurrency}
+      />
+      {!overview ? (
+        <>
+          {data.displayMessage !== null ? (
+            <p className="text-ui-xs text-muted-foreground">
+              {data.displayMessage}
+            </p>
+          ) : null}
+          <ProviderNumberRow
+            label="On-demand limit"
+            value={data.onDemandLimitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="On-demand used"
+            value={data.onDemandUsedUsd}
+            format={formatProviderCurrency}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// Cursor's blended purchased pool as a credit meter, mirroring
+// `HuggingFaceCreditBar`: the fill percentage and the dollar detail share one
+// denominator by construction, so the money can sit under the bucket bars
+// without reading as a wrong computation of them.
+//
+// Deliberately NOT `creditUsageSeverity`, and never red: for the credit
+// providers, exhausting the allowance means real billing, so red is earned.
+// Cursor's purchased pool is a VALUE meter - spend runs past it onto the
+// bonus grant ("free usage beyond what you've purchased") with nothing cut
+// off and nothing billed; the enforcing gates are the bucket bars above,
+// which own the red. Past the allowance the fill pins at 100% (MeterRow
+// clamps) while the detail keeps the REAL spend ("$412.10 / $400.00"), so
+// the overflow stays visible instead of dressing up as a limit event.
+function CursorIncludedUsageBar({
+  includedLimitUsd,
+  usedUsd,
+}: {
+  readonly includedLimitUsd: number | null;
+  readonly usedUsd: number | null;
+}): ReactNode {
+  if (includedLimitUsd === null || includedLimitUsd <= 0 || usedUsd === null) {
+    return null;
+  }
+  const usedPercent = (Math.max(0, usedUsd) / includedLimitUsd) * 100;
+  return (
+    <MeterRow
+      label="Included usage"
+      usedPercent={usedPercent}
+      severity={usedPercent > 85 ? "running_low" : "healthy"}
+      detail={`${formatProviderCurrency(Math.max(0, usedUsd))} / ${formatProviderCurrency(includedLimitUsd)}`}
+    />
   );
 }
 
@@ -1524,5 +1660,10 @@ export function ProviderRateLimitDetail({
       return <HuggingFaceRateLimitView data={data} variant={variant} />;
     case "opencode":
       return <OpenCodeRateLimitView data={data} />;
+    // Cursor is windowed, not credit-shaped: its money fields back a real
+    // billing-cycle percentage, so it renders a usage bar like grok rather than
+    // the spend-only layout OpenRouter/Kilo Code/Hugging Face use.
+    case "cursor":
+      return <CursorRateLimitView data={data} variant={variant} />;
   }
 }
