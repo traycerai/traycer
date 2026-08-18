@@ -57,6 +57,7 @@ import {
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
+import { useRateLimitQueueTargetPhase } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
@@ -1530,6 +1531,11 @@ function SingleProfileRateLimitProviderBlock({
   readonly openOpenCodeModelProviders: () => void;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
+  const targetPhase = useRateLimitQueueTargetPhase(providerId, null);
+  const targetFetching =
+    rateLimitFetchLane(providerId) === "ephemeralProcess"
+      ? targetPhase === "fetching"
+      : query.isFetching;
   // Single source of truth for this provider's refresh action + spinner state
   // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
   // shared verbatim with the Settings card so they can't drift apart.
@@ -1544,11 +1550,15 @@ function SingleProfileRateLimitProviderBlock({
   });
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
-    isFetching: isRefreshing,
+    isFetching: targetFetching,
     isError: query.isError,
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
+  const signedOutWithoutUsage = isSignedOutWithoutCachedUsage(
+    fetchEligible,
+    query.data,
+  );
   const updatedAt =
     state.kind === "ready"
       ? (query.data?.lastGoodAt ?? query.dataUpdatedAt)
@@ -1567,10 +1577,7 @@ function SingleProfileRateLimitProviderBlock({
   // condensed - same scoping the plan/tier line used before it moved into
   // this header). `null` for a provider that doesn't report a plan/tier
   // (`resolveProviderPlanLabel`), so no chip renders for e.g. OpenRouter.
-  const planLabel =
-    variant === "popover-detail" && state.kind === "ready"
-      ? resolveProviderPlanLabel(state.data)
-      : null;
+  const planLabel = resolveSingleProfilePlanLabel(variant, state);
 
   return (
     // Ambient (profile-less) providers - grok, openrouter, kilocode - reuse the
@@ -1602,7 +1609,8 @@ function SingleProfileRateLimitProviderBlock({
           <UsageLimitUpdatedLabel
             ready={state.kind === "ready"}
             updatedAt={updatedAt}
-            refreshing={isRefreshing}
+            refreshing={targetFetching}
+            queued={targetPhase === "queued"}
             degraded={state.kind === "ready" && state.degraded}
             degradedReason={
               state.kind === "ready" ? state.degradedReason : null
@@ -1624,12 +1632,16 @@ function SingleProfileRateLimitProviderBlock({
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody
-        state={state}
-        variant={variant}
-        profileId={null}
-        openModelProvidersAction={openOpenCodeModelProviders}
-      />
+      {signedOutWithoutUsage ? (
+        <SignedOutRateLimitMessage />
+      ) : (
+        <RateLimitProviderBody
+          state={state}
+          variant={variant}
+          profileId={null}
+          openModelProvidersAction={openOpenCodeModelProviders}
+        />
+      )}
     </div>
   );
 }
@@ -1843,6 +1855,7 @@ function RateLimitProviderProfileRow({
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
+  const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
   useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
@@ -1858,16 +1871,11 @@ function RateLimitProviderProfileRow({
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
-  const dataPlanLabel =
-    state.kind === "ready" ? resolveProviderPlanLabel(state.data) : null;
-  const profilePlanLabel =
-    profile.identity?.tier !== null && profile.identity?.tier !== undefined
-      ? profile.identity.tier
-      : null;
-  const planLabel =
-    profilePlanLabel !== null && profilePlanLabel.length > 0
-      ? profilePlanLabel
-      : dataPlanLabel;
+  const signedOutWithoutUsage = isSignedOutWithoutCachedUsage(
+    fetchEligible,
+    query.data,
+  );
+  const planLabel = resolveProfileRowPlanLabel(profile, state);
 
   return (
     <div
@@ -1904,16 +1912,22 @@ function RateLimitProviderProfileRow({
           </div>
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
-            refreshing={query.isFetching}
+            refreshing={query.isFetching || targetPhase === "fetching"}
+            queued={targetPhase === "queued"}
+            signedOut={signedOutWithoutUsage}
           />
         </div>
       </div>
-      <RateLimitProviderBody
-        state={state}
-        variant={variant}
-        profileId={profileId}
-        openModelProvidersAction={openOpenCodeModelProviders}
-      />
+      {signedOutWithoutUsage ? (
+        <SignedOutRateLimitMessage />
+      ) : (
+        <RateLimitProviderBody
+          state={state}
+          variant={variant}
+          profileId={profileId}
+          openModelProvidersAction={openOpenCodeModelProviders}
+        />
+      )}
     </div>
   );
 }
@@ -1921,13 +1935,23 @@ function RateLimitProviderProfileRow({
 function ProfileUsageUpdatedLabel({
   updatedAt,
   refreshing,
+  queued,
+  signedOut,
 }: {
   readonly updatedAt: number | null;
   readonly refreshing: boolean;
+  readonly queued: boolean;
+  readonly signedOut: boolean;
 }): ReactNode {
   const now = useSampledNow();
   const ago = useRelativeTimestamp(updatedAt ?? 0);
+  if (queued) {
+    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
+  }
   if (refreshing) return <RefreshingText />;
+  if (signedOut) {
+    return <span className="text-ui-xs text-muted-foreground">signed out</span>;
+  }
   if (updatedAt === null) {
     return <span className="text-ui-xs text-muted-foreground">stale</span>;
   }
@@ -1950,15 +1974,20 @@ function UsageLimitUpdatedLabel({
   ready,
   updatedAt,
   refreshing,
+  queued,
   degraded,
   degradedReason,
 }: {
   readonly ready: boolean;
   readonly updatedAt: number;
   readonly refreshing: boolean;
+  readonly queued: boolean;
   readonly degraded: boolean;
   readonly degradedReason: RateLimitUnavailableReason | null;
 }): ReactNode {
+  if (queued) {
+    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
+  }
   if (!ready) return null;
   if (refreshing) return <RefreshingText />;
   if (updatedAt === 0) return null;
@@ -2081,6 +2110,47 @@ function RateLimitProviderBody({
         </div>
       );
   }
+}
+
+function isSignedOutWithoutCachedUsage(
+  fetchEligible: boolean,
+  envelope: ProviderRateLimitEnvelope | undefined,
+): boolean {
+  return (
+    !fetchEligible && (envelope === undefined || envelope.lastGood === null)
+  );
+}
+
+function resolveSingleProfilePlanLabel(
+  variant: PopoverBlockVariant,
+  state: PopoverProviderRateLimitState,
+): string | null {
+  return variant === "popover-detail" && state.kind === "ready"
+    ? resolveProviderPlanLabel(state.data)
+    : null;
+}
+
+function resolveProfileRowPlanLabel(
+  profile: ProviderProfile,
+  state: PopoverProviderRateLimitState,
+): string | null {
+  const profilePlanLabel =
+    profile.identity?.tier !== null && profile.identity?.tier !== undefined
+      ? profile.identity.tier
+      : null;
+  const dataPlanLabel =
+    state.kind === "ready" ? resolveProviderPlanLabel(state.data) : null;
+  return profilePlanLabel !== null && profilePlanLabel.length > 0
+    ? profilePlanLabel
+    : dataPlanLabel;
+}
+
+function SignedOutRateLimitMessage(): ReactNode {
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      Signed out — sign in to refresh usage.
+    </p>
+  );
 }
 
 /**
@@ -2285,6 +2355,8 @@ function TraycerAccountCards({
                   rateLimitUpdatedAtByAccount.get(account.key) ?? updatedAt
                 }
                 refreshing={refreshing}
+                queued={false}
+                signedOut={false}
               />
             </div>
             <TraycerSubscriptionView
