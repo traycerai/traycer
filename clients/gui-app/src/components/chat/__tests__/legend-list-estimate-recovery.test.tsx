@@ -203,9 +203,8 @@ describe("LegendList estimate recovery", () => {
         animated: false,
         index: 19,
       });
-      const replacementSettled = expect(
-        replacementScroll,
-      ).resolves.toBeUndefined();
+      const replacementSettled =
+        expect(replacementScroll).resolves.toBeUndefined();
       await advanceLegendListTime(100);
 
       await replacementSettled;
