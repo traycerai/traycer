@@ -2,6 +2,7 @@ import { createContext } from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
+  type RetainedHandleIdentity,
   type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -157,7 +158,9 @@ export function releaseOpenEpicSession(epicId: string): void {
   // Tab close is the one release path where a decision was offered: the close
   // confirmation reads `epicHasUnsyncedEdits`, which covers retained buffers,
   // so reaching here means the user has already answered for them too.
-  registry.release(epicId, "discard");
+  // The user was ASKED about these edits, so the live handle goes with them:
+  // "discard" is the answer to a question, not an involuntary teardown.
+  registry.release(epicId, "discard", null);
 }
 
 /**
@@ -180,13 +183,14 @@ export function releaseOpenEpicSession(epicId: string): void {
 export function releaseOpenEpicSessionIfUnused(
   epicId: string,
   retainedBuffers: "discard" | "keep",
+  dirtyLiveHandle: RetainedHandleIdentity | null,
 ): void {
   const state = useEpicCanvasStore.getState();
   const stillOpen = state.openTabOrder.some(
     (tabId) => state.tabsById[tabId]?.epicId === epicId,
   );
   if (stillOpen) return;
-  registry.release(epicId, retainedBuffers);
+  registry.release(epicId, retainedBuffers, dirtyLiveHandle);
 }
 
 /**
