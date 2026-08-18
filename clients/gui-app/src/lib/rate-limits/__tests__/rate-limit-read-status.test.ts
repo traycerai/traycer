@@ -97,6 +97,7 @@ describe("isRateLimitQueryFailure", () => {
         isError: false,
         error: null,
         queueOwned: true,
+        followUpExhausted: false,
       }),
     ).toBe(false);
   });
@@ -107,8 +108,25 @@ describe("isRateLimitQueryFailure", () => {
         isError: true,
         error: stillRunning(),
         queueOwned: true,
+        followUpExhausted: false,
       }),
     ).toBe(false);
+  });
+
+  // The queue allows ONE delayed collection per target. When that follow-up
+  // also comes back unheard, `scheduleReadFollowUp` declines another and
+  // nothing is left to collect the answer - so the lane being queue-owned stops
+  // justifying the suppression. Without this arm the row keeps showing a stale
+  // reading as healthy with no failure and no collector.
+  it("reports a still-running read once the follow-up budget is spent", () => {
+    expect(
+      isRateLimitQueryFailure({
+        isError: true,
+        error: stillRunning(),
+        queueOwned: true,
+        followUpExhausted: true,
+      }),
+    ).toBe(true);
   });
 
   // `httpFetch` providers refetch their own query and never enter the serial
@@ -121,6 +139,7 @@ describe("isRateLimitQueryFailure", () => {
         isError: true,
         error: stillRunning(),
         queueOwned: false,
+        followUpExhausted: false,
       }),
     ).toBe(true);
   });
@@ -131,6 +150,7 @@ describe("isRateLimitQueryFailure", () => {
         isError: true,
         error: terminalPreDispatch("credentials revoked"),
         queueOwned: true,
+        followUpExhausted: false,
       }),
     ).toBe(true);
   });

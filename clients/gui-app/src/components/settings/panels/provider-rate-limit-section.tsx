@@ -9,6 +9,7 @@ import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-r
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
+import { useIsRateLimitReadFollowUpExhausted } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import {
   isRateLimitCapableProvider,
@@ -163,6 +164,10 @@ function EmbeddedProviderRateLimitSettingsCard({
     refetch: query.refetch,
   });
   useRefreshProviderRateLimitsOnTurn(providerId, profileId, fetchEligible);
+  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
+    providerId,
+    profileId,
+  );
 
   return (
     <div className="flex flex-col gap-3 border-t border-border/60 pt-3">
@@ -174,6 +179,7 @@ function EmbeddedProviderRateLimitSettingsCard({
           isError: query.isError,
           error: query.error,
           queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
+          followUpExhausted,
         })}
         envelope={query.data}
         codexResetAction={resolveCodexResetCreditAction(
@@ -218,6 +224,10 @@ function ProviderRateLimitSettingsCard({
     refetch: query.refetch,
   });
   useRefreshProviderRateLimitsOnTurn(providerId, profileId, fetchEligible);
+  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
+    providerId,
+    profileId,
+  );
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">
@@ -240,6 +250,7 @@ function ProviderRateLimitSettingsCard({
           isError: query.isError,
           error: query.error,
           queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
+          followUpExhausted,
         })}
         envelope={query.data}
         codexResetAction={resolveCodexResetCreditAction(

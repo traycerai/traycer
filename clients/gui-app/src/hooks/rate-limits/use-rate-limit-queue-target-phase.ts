@@ -3,6 +3,7 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import {
   getRateLimitQueueTargetPhase,
   isRateLimitQueueTargetForced,
+  isRateLimitReadFollowUpExhausted,
   subscribeRateLimitQueueTargets,
   type RateLimitQueueTargetPhase,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
@@ -48,6 +49,37 @@ export function useIsRateLimitQueueTargetForced(
   const getSnapshot = useCallback(() => {
     if (queueScope === null) return false;
     return isRateLimitQueueTargetForced(
+      queueScope.hostId,
+      providerId,
+      profileId,
+    );
+  }, [profileId, providerId, queueScope]);
+
+  return useSyncExternalStore(
+    subscribeRateLimitQueueTargets,
+    getSnapshot,
+    () => false,
+  );
+}
+
+/**
+ * Whether this target's delayed follow-up read is spent, so nothing is left to
+ * collect an answer we stopped waiting for.
+ *
+ * A surface pairs this with {@link isRateLimitQueryFailure}: suppressing a
+ * still-running read is only honest while something is still coming back for
+ * it, and this is the point at which nothing is. Folded over the same registry
+ * as the phase, so the `notifyTargets` that publishes the follow-up's own
+ * settle is what re-renders the surface into its failure state.
+ */
+export function useIsRateLimitReadFollowUpExhausted(
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  const queueScope = useRateLimitQueueScope();
+  const getSnapshot = useCallback(() => {
+    if (queueScope === null) return false;
+    return isRateLimitReadFollowUpExhausted(
       queueScope.hostId,
       providerId,
       profileId,

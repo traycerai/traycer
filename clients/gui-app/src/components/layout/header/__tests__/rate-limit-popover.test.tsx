@@ -82,6 +82,11 @@ type MockState = {
   // Defaults to `null` (not tracked) for any key not present.
   targetPhases: Record<string, "queued" | "fetching">;
   forcedTargets: Record<string, boolean>;
+  // Targets whose single delayed follow-up read is spent, so nothing is coming
+  // back to collect an answer we stopped waiting for. Its own fixture rather
+  // than derived from the phase: the whole point is that an IDLE target can be
+  // in either state, and only this one stops the failure being suppressed.
+  followUpExhaustedTargets: Record<string, boolean>;
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -125,6 +130,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   draining: false,
   targetPhases: {},
   forcedTargets: {},
+  followUpExhaustedTargets: {},
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
@@ -200,6 +206,11 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
     providerId: string,
     profileId: string | null,
   ) => mocks.forcedTargets[resultKey(providerId, profileId)] ?? false,
+  useIsRateLimitReadFollowUpExhausted: (
+    providerId: string,
+    profileId: string | null,
+  ) =>
+    mocks.followUpExhaustedTargets[resultKey(providerId, profileId)] ?? false,
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: (
@@ -817,6 +828,7 @@ beforeEach(() => {
   mocks.draining = false;
   mocks.targetPhases = {};
   mocks.forcedTargets = {};
+  mocks.followUpExhaustedTargets = {};
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();

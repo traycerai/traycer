@@ -66,13 +66,26 @@ export function isRateLimitReadStillRunningOnHost(error: unknown): boolean {
  * connection behind cached usage that looks healthy, or an empty Settings card
  * with no error, until some later poll happens along. Callers pass the lane
  * rather than the provider id so this stays a leaf module.
+ *
+ * `followUpExhausted` is the same requirement applied to the queue-owned lane
+ * itself, which owns a BUDGET rather than an open-ended promise. The queue
+ * allows one delayed collection per target
+ * (`RATE_LIMIT_READ_FOLLOW_UP_LIMIT`); when that collection also comes back
+ * unheard, `scheduleReadFollowUp` declines another and the guarantee is spent.
+ * Suppressing past that point is the `httpFetch` mistake one level deeper -
+ * lane membership was never the real premise, a pending collection was - so the
+ * exhausted target reports its failure and stops vouching for a reading nothing
+ * is coming to refresh. Callers read it from the queue registry
+ * (`useIsRateLimitReadFollowUpExhausted`), keeping this a leaf module.
  */
 export function isRateLimitQueryFailure(query: {
   readonly isError: boolean;
   readonly error: unknown;
   readonly queueOwned: boolean;
+  readonly followUpExhausted: boolean;
 }): boolean {
   if (!query.isError) return false;
   if (!query.queueOwned) return true;
+  if (query.followUpExhausted) return true;
   return !isRateLimitReadStillRunningOnHost(query.error);
 }

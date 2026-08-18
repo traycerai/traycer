@@ -58,6 +58,7 @@ import {
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
   useAnyRateLimitQueueTargetFetching,
+  useIsRateLimitReadFollowUpExhausted,
   useRateLimitQueueTargetPhase,
 } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
@@ -1543,6 +1544,13 @@ function SingleProfileRateLimitProviderBlock({
   // Only this lane's reads are owned by the serial queue, so only they have a
   // follow-up standing behind a read we stopped waiting for.
   const queueOwned = rateLimitFetchLane(providerId) === "ephemeralProcess";
+  // ...and that follow-up is a single delayed attempt, so once it is spent this
+  // read has nothing left coming for it and must report rather than keep
+  // vouching for the cached reading.
+  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
+    providerId,
+    null,
+  );
   const targetFetching = queueOwned
     ? targetPhase === "fetching"
     : query.isFetching;
@@ -1565,6 +1573,7 @@ function SingleProfileRateLimitProviderBlock({
       isError: query.isError,
       error: query.error,
       queueOwned,
+      followUpExhausted,
     }),
     envelope: query.data,
   };
@@ -1882,6 +1891,10 @@ function RateLimitProviderProfileRow({
   };
 }): ReactNode {
   const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
+  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
+    providerId,
+    profileId,
+  );
   useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
@@ -1897,6 +1910,7 @@ function RateLimitProviderProfileRow({
       isError: query.isError,
       error: query.error,
       queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
+      followUpExhausted,
     }),
     envelope: query.data,
   };

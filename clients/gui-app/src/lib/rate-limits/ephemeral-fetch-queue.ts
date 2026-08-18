@@ -298,6 +298,49 @@ export function isRateLimitQueueTargetForced(
   );
 }
 
+/**
+ * Whether this target's follow-up budget is spent with nothing left in flight -
+ * i.e. we stopped waiting on a read, already spent the one delayed collection
+ * `scheduleReadFollowUp` allows, and that collection ALSO came back unheard.
+ *
+ * This is the limit of the "something will come back for it" reasoning that
+ * lets `isRateLimitQueryFailure` hide a still-running read. Once
+ * `scheduleReadFollowUp` declines a further attempt, nothing is scheduled to
+ * collect the answer, so continuing to suppress would leave a stale reading on
+ * screen looking healthy until some later poll happens along - the same
+ * silent-staleness the `queueOwned` arm rules out for the `httpFetch` lanes,
+ * one level deeper.
+ *
+ * Derived from the three registries rather than a fourth flag, so it cannot
+ * drift from the scheduler that owns the budget. Each clause is what keeps the
+ * transitions from flashing a failure the moment before a retry:
+ *
+ * - `attempts >= LIMIT` - the budget is spent. Absent (0) on a first failure,
+ *   which is why the initial "still running" read stays suppressed.
+ * - `!followUpTimers.has` - the delayed collection is not still waiting to run.
+ * - `!pendingTargets.has` - and it is not on the wire right now. Without this
+ *   the window between the timer firing and the follow-up settling would read
+ *   as exhausted and surface a failure DURING its own retry.
+ *
+ * So it turns true only after the follow-up has settled unheard, which
+ * `settlePendingTarget` publishes via `notifyTargets`. A `null` scope at
+ * follow-up time never enqueues, so the key never reappears in `pendingTargets`
+ * and this reports exhausted - correct, since an unconfigured queue is exactly
+ * the case where nothing is coming back.
+ */
+export function isRateLimitReadFollowUpExhausted(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  const key = rateLimitQueueProfileKey(hostId, providerId, profileId);
+  return (
+    (followUpAttempts.get(key) ?? 0) >= RATE_LIMIT_READ_FOLLOW_UP_LIMIT &&
+    !followUpTimers.has(key) &&
+    !pendingTargets.has(key)
+  );
+}
+
 export function subscribeRateLimitQueueTargets(
   listener: () => void,
 ): () => void {

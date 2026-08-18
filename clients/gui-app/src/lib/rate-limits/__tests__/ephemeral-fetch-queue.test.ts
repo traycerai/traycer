@@ -29,6 +29,7 @@ import {
   enqueueRateLimitFetchForScope,
   getRateLimitQueueTargetPhase,
   isRateLimitQueueDraining,
+  isRateLimitReadFollowUpExhausted,
   subscribeRateLimitQueueDraining,
   subscribeRateLimitQueueTargets,
   type RateLimitQueueBatchTarget,
@@ -240,6 +241,69 @@ describe("ephemeral-fetch-queue", () => {
       await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS * 5);
       await vi.advanceTimersByTimeAsync(0);
       expect(calls).toBe(2);
+    });
+
+    // That cap is exactly what `isRateLimitQueryFailure` leans on to keep a
+    // still-running read hidden: it stays quiet because a collection is coming.
+    // Once the cap declines one, nothing is, and the surface has to say so - at
+    // the RIGHT moments. The two false readings below are the point: a row that
+    // reported exhausted while its own collection was still waiting, or still
+    // on the wire, would flash a failure in the middle of the recovery this
+    // whole lane exists to perform.
+    it("reports the follow-up budget exhausted only once the collection has settled unheard", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      let calls = 0;
+      const settlers: Array<() => void> = [];
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        return new Promise((_resolve, reject) => {
+          settlers.push(() => {
+            reject(transportFailure());
+          });
+        });
+      };
+      function settleNextUnheard(): void {
+        const next = settlers.shift();
+        if (next === undefined) throw new Error("no request in flight");
+        next();
+      }
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+      const exhausted = (): boolean =>
+        isRateLimitReadFollowUpExhausted(HOST_ID, "codex", null);
+
+      expect(exhausted()).toBe(false);
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+      expect(exhausted()).toBe(false);
+
+      // Unheard. The budget is now spent, but the delayed collection is
+      // scheduled - something is still coming back for this read.
+      settleNextUnheard();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exhausted()).toBe(false);
+
+      // The collection is now ON THE WIRE. No timer is pending and the budget
+      // reads as spent, so only the in-flight clause keeps this honest.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+      expect(exhausted()).toBe(false);
+
+      // It came back unheard too, and `scheduleReadFollowUp` declines a third.
+      // Nothing is collecting now, so the read must stop being suppressed.
+      settleNextUnheard();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exhausted()).toBe(true);
     });
 
     it("does not let TanStack retry a queue-owned read into a second CLI probe", async () => {
