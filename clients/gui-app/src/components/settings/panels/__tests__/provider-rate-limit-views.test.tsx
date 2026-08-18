@@ -14,6 +14,7 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
+  CursorRateLimitView,
   GrokRateLimitView,
   HuggingFaceRateLimitView,
   KiloCodeRateLimitView,
@@ -46,6 +47,7 @@ type OpenRouterRateLimits = Extract<
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
 type HuggingFaceRateLimits = Extract<
   ProviderRateLimits,
   { provider: "huggingface" }
@@ -1237,5 +1239,76 @@ describe("ProviderRateLimitBody (Codex reset action)", () => {
 
     expect(screen.getByText("3 available")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Use reset" })).toBeTruthy();
+  });
+});
+
+describe("CursorRateLimitView", () => {
+  const CYCLE_END = NOW + 29 * 24 * 60 * 60 * 1000;
+  const cursor: CursorRateLimits = {
+    provider: "cursor",
+    available: true,
+    cycleStart: NOW - 2 * 24 * 60 * 60 * 1000,
+    cycleEnd: CYCLE_END,
+    cursorModels: {
+      usedPercent: 6,
+      resetsAt: CYCLE_END,
+      durationMinutes: 31 * 24 * 60,
+    },
+    otherModels: {
+      usedPercent: 40,
+      resetsAt: CYCLE_END,
+      durationMinutes: 31 * 24 * 60,
+    },
+    includedLimitUsd: 400,
+    usedUsd: 325.37,
+    remainingUsd: 74.63,
+    onDemandLimitType: "user",
+    onDemandLimitUsd: 1,
+    onDemandUsedUsd: 0.25,
+    onDemandRemainingUsd: 0.75,
+    displayMessage: "You've used 81% of your included usage",
+  };
+
+  it("keeps the Overview to the two Spending-page bucket bars, with no money", () => {
+    // Live-account regression: the bucket bars are each measured against their
+    // own unpublished limit, while the dollars describe Cursor's BLENDED $400
+    // pool (~81% consumed on the same payload). "$74.63 left of $400" under
+    // bars reading 6% / 40% presents as a broken calculation even though every
+    // number is Cursor's own - so the Overview, the surface compared against
+    // the Spending page, is bars-only, exactly like that page.
+    render(<CursorRateLimitView data={cursor} variant="popover-overview" />);
+    expect(screen.getByText("Cursor Models")).toBeTruthy();
+    expect(screen.getByText("6% used")).toBeTruthy();
+    expect(screen.getByText("Other Models")).toBeTruthy();
+    expect(screen.getByText("40% used")).toBeTruthy();
+    expect(screen.queryByText(/Included usage/)).toBeNull();
+    expect(screen.queryByText("$74.63")).toBeNull();
+  });
+
+  it("anchors the detail's money to Cursor's own sentence about the blended pool", () => {
+    render(<CursorRateLimitView data={cursor} variant="settings" />);
+    // The sentence names the pool's denominator, so the dollars beneath it
+    // cannot read as a wrong computation of the bucket bars above.
+    expect(
+      screen.getByText("You've used 81% of your included usage"),
+    ).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$74.63")).toBeTruthy();
+    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("$400.00")).toBeTruthy();
+    // On-demand in real dollars: a $1 limit renders as $1.00, never $100.
+    expect(screen.getByText("On-demand limit")).toBeTruthy();
+    expect(screen.getByText("$1.00")).toBeTruthy();
+    expect(screen.queryByText("$100.00")).toBeNull();
+  });
+
+  it("falls back to the billing-cycle range when no bucket was reported", () => {
+    render(
+      <CursorRateLimitView
+        data={{ ...cursor, cursorModels: null, otherModels: null }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Billing cycle")).toBeTruthy();
   });
 });

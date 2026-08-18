@@ -1383,9 +1383,16 @@ export function GrokRateLimitView({
  * render, keeping the card meaningful rather than blank - the same fallback
  * grok uses.
  *
- * Overview keeps the bars and the remaining included credits; the included
- * total and on-demand rows are single-provider-tab detail, matching how
- * grok/OpenRouter trim.
+ * Overview is bars-only. The money deliberately does NOT ride along: each
+ * bucket bar is measured against its own (unpublished) limit, while
+ * `remainingUsd`/`includedLimitUsd` describe Cursor's BLENDED $400 pool - a
+ * third denominator. Live comparison showed "$76.69 left of $400" (~81%
+ * consumed) rendered directly under bars reading 6% / 40%, which reads as a
+ * broken calculation even though every number is Cursor's own. Cursor's
+ * dashboard never juxtaposes the dollars with the bucket bars either. The
+ * detail surfaces keep the money, anchored by `displayMessage` - Cursor's own
+ * sentence about that pool ("You've used 81% of your included usage") - so
+ * the dollars arrive with the denominator that explains them.
  */
 export function CursorRateLimitView({
   data,
@@ -1418,15 +1425,20 @@ export function CursorRateLimitView({
           ) : null}
         </>
       )}
-      <ProviderNumberRow
-        label="Included credits left"
-        value={data.remainingUsd}
-        format={formatProviderCurrency}
-      />
       {!overview ? (
         <>
+          {data.displayMessage !== null ? (
+            <p className="text-ui-xs text-muted-foreground">
+              {data.displayMessage}
+            </p>
+          ) : null}
           <ProviderNumberRow
-            label="Included credits"
+            label="Included usage left"
+            value={data.remainingUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="Included usage"
             value={data.includedLimitUsd}
             format={formatProviderCurrency}
           />

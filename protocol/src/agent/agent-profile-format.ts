@@ -206,9 +206,13 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       rateLimits.otherModels === null
         ? null
         : formatWindowLine("other models", rateLimits.otherModels),
+      // "Included usage" is Cursor's own name for the blended $400 pool - a
+      // DIFFERENT denominator than the bucket windows above (each bucket is
+      // measured against its own unpublished limit), so this line reads as
+      // money, never as a percentage that could contradict the windows.
       rateLimits.includedLimitUsd === null
         ? null
-        : `included credits: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`,
+        : `included usage: ${formatNumber(rateLimits.remainingUsd)}/${formatNumber(rateLimits.includedLimitUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`,
       // Only worth a line when no bucket window already carried the reset -
       // otherwise it restates the instant `formatWindowLine` printed.
       hasBucketWindow ||
