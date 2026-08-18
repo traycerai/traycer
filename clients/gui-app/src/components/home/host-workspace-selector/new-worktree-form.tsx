@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useDeferredValue,
   useEffect,
   useId,
   useMemo,
@@ -23,7 +24,10 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { PickerOptionButton } from "@/components/home/worktree/worktree-branch-picker-options";
-import type { WorktreeBranchPickerRow } from "@/components/home/worktree/worktree-branch-picker-model";
+import {
+  pickerEmptyStateLabel,
+  type WorktreeBranchPickerRow,
+} from "@/components/home/worktree/worktree-branch-picker-model";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -436,9 +440,18 @@ const SourceBranchList = memo(function SourceBranchList(props: {
     () => createWorktreeBranchSearchIndex(rows),
     [rows],
   );
+  // Filtering on the deferred query keeps the input echo (and key-repeat
+  // backspace) off the search's critical path: the list catches up in a
+  // deferred render instead of blocking each keystroke. Load-bearing even
+  // though the substring fast path makes most keystrokes sub-ms: a short query
+  // with no substring hit still pays the Fuse typo-tolerance fallback
+  // (50–260ms over ~1k branches), and this hook is the only thing keeping that
+  // off the keystroke. Not provable in jsdom — `act` drains transition work,
+  // so tests pass with or without it.
+  const deferredQuery = useDeferredValue(query);
   const filtered = useMemo(
-    () => filterWorktreeBranchRows(rows, searchIndex, query),
-    [rows, searchIndex, query],
+    () => filterWorktreeBranchRows(rows, searchIndex, deferredQuery),
+    [rows, searchIndex, deferredQuery],
   );
   const activeIndex = sourceActiveIndex(filtered, activeId);
   const activeRow = activeIndex === -1 ? undefined : filtered[activeIndex];
@@ -527,7 +540,10 @@ const SourceBranchList = memo(function SourceBranchList(props: {
         data-testid="new-worktree-source-list"
       >
         <div className="px-2 py-1.5 text-ui-sm text-muted-foreground">
-          {props.emptyLabel}
+          {pickerEmptyStateLabel(
+            deferredQuery.trim().length > 0,
+            props.emptyLabel,
+          )}
         </div>
       </div>
     );
