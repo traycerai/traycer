@@ -7,6 +7,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import { ProviderPackVersionManagerPanel } from "@/components/settings/panels/provider-pack-version-manager-panel";
 import { PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS } from "@/components/settings/panels/provider-pack-version-manager-capability";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 
 type UsePackVersionVariables = {
   readonly packId: string;
@@ -83,6 +84,33 @@ type InstallMutateOptions = {
   readonly onError?: (error: unknown) => void;
 };
 
+type RemovePackVersionVariables = {
+  readonly packId: string;
+  readonly version: string;
+};
+
+type RemovePackVersionRefusalCode =
+  "is-current" | "holder-reserved" | "quarantine-reserved" | "deferred-locked";
+
+type RemoveMutateOptions = {
+  readonly onSuccess?: (response: {
+    readonly result:
+      | { readonly ok: true }
+      | {
+          readonly ok: false;
+          readonly code: RemovePackVersionRefusalCode;
+          readonly detail: string | null;
+        };
+  }) => void;
+  readonly onSettled?: () => void;
+  readonly onError?: (error: unknown) => void;
+};
+
+type SetPackPolicyVariables = {
+  readonly packId: string;
+  readonly autoDownload: boolean;
+};
+
 const mocks = vi.hoisted(() => {
   const supportByHostId = new Map<string, boolean | null>();
   let lastSupportArgs: HostMethodSupportArgs | null = null;
@@ -96,12 +124,18 @@ const mocks = vi.hoisted(() => {
           options: InstallMutateOptions,
         ) => void
       >(),
-    removeMutate: vi.fn(),
+    removeMutate:
+      vi.fn<
+        (
+          variables: RemovePackVersionVariables,
+          options: RemoveMutateOptions,
+        ) => void
+      >(),
     useMutate:
       vi.fn<
         (variables: UsePackVersionVariables, options: UseMutateOptions) => void
       >(),
-    setPolicyMutate: vi.fn(),
+    setPolicyMutate: vi.fn<(variables: SetPackPolicyVariables) => void>(),
     /**
      * Per-host capability map. The gate must consult the *passed* hostId, not an
      * ambient default — regressions would re-introduce scoped-host bugs.
@@ -227,22 +261,9 @@ function renderPanel(options: {
   );
 }
 
-/**
- * The row's details, as a screen reader gets them.
- *
- * THROWS rather than `?? ""`: an absent aria-label is the exact regression
- * these assertions exist to catch (Radix keeps hover-card content out of the
- * a11y tree, so the label is the only form a screen reader ever sees), and a
- * fallback would turn that into a passing test against an empty string.
- */
-function detailsLabel(version: string): string {
-  const label = screen
-    .getByTestId(`version-details-trigger-${version}`)
-    .getAttribute("aria-label");
-  if (label === null) {
-    throw new Error(`version ${version} rendered no details aria-label`);
-  }
-  return label;
+/** Row action buttons are icon-only; their accessible name carries the version. */
+function rowActionName(label: string, version: string): string {
+  return `${label} ${version}`;
 }
 
 describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
@@ -298,7 +319,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       screen.getByTestId("provider-pack-version-manager-unsupported"),
     ).toBeTruthy();
     expect(screen.queryByTestId("provider-pack-version-manager")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: rowActionName("Download", "1.0.0"),
+      }),
+    ).toBeNull();
 
     cleanup();
     mocks.lastSupportArgs = null;
@@ -330,7 +355,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       screen.queryByTestId("provider-pack-version-manager-unsupported"),
     ).toBeNull();
     expect(screen.queryByTestId("provider-pack-version-manager")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: rowActionName("Download", "1.0.0"),
+      }),
+    ).toBeNull();
   });
 
   it("shows unsupported copy when the host completed handshake without the methods", () => {
@@ -348,9 +377,17 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     ).toBeNull();
     expect(screen.queryByTestId("provider-pack-version-manager")).toBeNull();
     // Capability gate: no offered-then-failed action buttons.
-    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Use" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: rowActionName("Download", "1.0.0"),
+      }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: rowActionName("Use", "1.0.0") }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: rowActionName("Delete", "1.0.0") }),
+    ).toBeNull();
   });
 
   it("renders indeterminate progress for downloading with null percent, not error copy", () => {
@@ -369,21 +406,28 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(screen.queryByTestId("download-progress-determinate")).toBeNull();
     expect(screen.queryByTestId("condemned-no-retry")).toBeNull();
     expect(screen.queryByTestId("version-row-notice")).toBeNull();
+    // The row's action column is icon-only now; "in progress" is carried by
+    // the disabled "Downloading <version>" button, not by row text.
+    const downloadingButton = screen.getByRole("button", {
+      name: "Downloading 1.4.0",
+    });
+    expect(downloadingButton.hasAttribute("disabled")).toBe(true);
     // Row meta should describe progress, not a permanent/destructive failure.
     // textContent is typed non-null on HTMLElement; assert the real string.
     const row = screen.getByTestId("provider-pack-version-row-1.4.0");
-    expect(row.textContent).toMatch(/Downloading/i);
     expect(row.textContent).not.toMatch(
       /failed permanently|Install failed permanently/i,
     );
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: rowActionName("Retry", "1.4.0") }),
+    ).toBeNull();
   });
 
-  it("states a condemned install in the row's details and hides Retry", () => {
+  it("hides Retry/Download for a condemned install and states the reason inline", () => {
     // The row used to carry a `condemned-no-retry` sentence that repeated the
-    // meta line directly above it. The state is stated once now, in the
-    // details; "no retry" is carried by the ABSENCE of the button, which this
-    // still pins.
+    // meta line directly above it, then later a hover-card detail. Both are
+    // gone; the reason is now the row's own trouble line, and "no retry" is
+    // still carried by the ABSENCE of the button.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -395,15 +439,23 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
-    expect(detailsLabel("1.0.0")).toMatch(/permanently/i);
+    expect(
+      screen.queryByRole("button", { name: rowActionName("Retry", "1.0.0") }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: rowActionName("Download", "1.0.0"),
+      }),
+    ).toBeNull();
+    const trouble = screen.getByTestId("version-row-trouble");
+    expect(trouble.textContent).toMatch(/permanently/i);
   });
 
   it("wears ONE chip — Current outranks Recommended rather than stacking", () => {
     // Both flags are set. The row used to render both badges plus a meta line
-    // that said "pairs with this Traycer release" a third time. One chip; the
-    // rest is in the details.
+    // that said "pairs with this Traycer release" a third time; both the
+    // second badge and the meta line are gone now, with no replacement
+    // surface — a current row simply does not say "recommended" anywhere.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -423,8 +475,6 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
     const row = screen.getByTestId("provider-pack-version-row-1.2.0");
     expect(row.textContent).not.toMatch(/Recommended/u);
-    // Not lost — demoted.
-    expect(detailsLabel("1.2.0")).toMatch(/pairs with this Traycer release/iu);
   });
 
   it("offers no Download or Retry button for a non-retryable error (finding 1)", () => {
@@ -448,8 +498,14 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(row).toBeTruthy();
     // Composition: allow-list denies retry AND download eligibility denies —
     // no actionable install-fetch button under either label.
-    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: rowActionName("Download", "1.0.0"),
+      }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: rowActionName("Retry", "1.0.0") }),
+    ).toBeNull();
   });
 
   it("shows Retry (not Download) for a retryable network error", () => {
@@ -469,8 +525,14 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: rowActionName("Retry", "1.0.0") }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", {
+        name: rowActionName("Download", "1.0.0"),
+      }),
+    ).toBeNull();
   });
 
   it("clears the pin by sending version: null when Use latest automatically is clicked", async () => {
@@ -565,14 +627,17 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    // The composed meta now lives in the row's details rather than as a line
-    // under the version. Read through the accessible name, which is the same
-    // string the hover card renders — and the only form a screen reader gets,
-    // since Radix keeps hover-card content out of the a11y tree.
-    const text = detailsLabel("1.1.0");
-    expect(text.length).toBeGreaterThan(0);
-    expect(text.toLowerCase()).toMatch(/not necessarily damaged/);
-    expect(text.toLowerCase()).not.toMatch(/still usable/);
+    // Certification and install-state are independent axes. This row wears
+    // the Unpublished chip (certification) AND states its install trouble
+    // inline (install-state) — the two must not collapse into one claim.
+    expect(screen.getByTestId("version-row-chip-unpublished").textContent).toBe(
+      "Unpublished",
+    );
+    const trouble = screen.getByTestId("version-row-trouble");
+    expect(trouble.textContent.toLowerCase()).toMatch(
+      /not necessarily damaged/,
+    );
+    expect(trouble.textContent.toLowerCase()).not.toMatch(/still usable/);
   });
 
   it("offers Use on an installed non-current version even offline with no recommended row (D1 as revised 2026-08-12)", () => {
@@ -598,7 +663,9 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    const useButton = screen.getByRole("button", { name: "Use" });
+    const useButton = screen.getByRole("button", {
+      name: rowActionName("Use", "1.0.0"),
+    });
     expect(useButton.hasAttribute("disabled")).toBe(false);
   });
 
@@ -651,7 +718,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    await user.click(screen.getByRole("button", { name: "Download" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: rowActionName("Download", "1.5.0"),
+      }),
+    );
     const notice = screen.getByTestId("version-row-notice");
     expect(notice.textContent.toLowerCase()).toMatch(/withdrawn/);
     expect(notice.textContent.toLowerCase()).not.toMatch(/right now/);
@@ -730,12 +801,230 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
         managedOverrides: null,
       });
 
-      await user.click(screen.getByRole("button", { name: "Use" }));
+      await user.click(
+        screen.getByRole("button", { name: rowActionName("Use", "1.5.0") }),
+      );
       const notice = screen.getByTestId("version-row-notice");
       expect(notice.textContent).toMatch(expectMatch);
       expect(notice.textContent).not.toMatch(forbid);
     },
   );
+
+  it("arms delete on the first click and only removes on the confirming click", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.5.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: null,
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Delete", "1.5.0") }),
+    );
+
+    expect(mocks.removeMutate).not.toHaveBeenCalled();
+    const confirm = screen.getByTestId("version-delete-confirm-1.5.0");
+    expect(confirm).toBeTruthy();
+
+    await user.click(confirm);
+
+    expect(mocks.removeMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.removeMutate.mock.calls[0]?.[0]).toEqual({
+      packId: "opencode",
+      version: "1.5.0",
+    });
+  });
+
+  it("keeps focus on the delete control across the arming swap, named by version", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.5.0", installState: { status: "installed" } }),
+        version({ version: "2.0.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: null,
+    });
+
+    // Keyboard activation, because that is the path that breaks: arming
+    // unmounts the trash button, so without the mount-focus the second press
+    // lands on <body> and the two-step flow is unreachable without a mouse.
+    const trash = screen.getByRole("button", {
+      name: rowActionName("Delete", "1.5.0"),
+    });
+    trash.focus();
+    await user.keyboard("{Enter}");
+
+    const confirm = screen.getByTestId("version-delete-confirm-1.5.0");
+    expect(document.activeElement).toBe(confirm);
+    expect(confirm.getAttribute("aria-label")).toBe("Confirm delete 1.5.0");
+
+    await user.keyboard("{Enter}");
+
+    expect(mocks.removeMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.removeMutate.mock.calls[0]?.[0]).toEqual({
+      packId: "opencode",
+      version: "1.5.0",
+    });
+  });
+
+  it("disarms a delete when the settings scope follows to another host carrying the same version", async () => {
+    // The panel is mounted unkeyed under a scope whose host can auto-follow
+    // while the popover is open. If the arming were a bare version string it
+    // would survive the move, and the new host's identical row would mount
+    // already armed — one press from deleting on a machine nothing was armed
+    // on. Same pack, same version, different host: must NOT be armed.
+    const user = userEvent.setup();
+    const rows = [
+      version({ version: "1.5.0", installState: { status: "installed" } }),
+    ];
+    const view = render(
+      <ProviderPackVersionManagerPanel
+        hostId="host-1"
+        packId="opencode"
+        packDisplayName="opencode CLI"
+        managedVersions={managed(rows, null)}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Delete", "1.5.0") }),
+    );
+    expect(screen.getByTestId("version-delete-confirm-1.5.0")).toBeTruthy();
+
+    view.rerender(
+      <ProviderPackVersionManagerPanel
+        hostId="host-2"
+        packId="opencode"
+        packDisplayName="opencode CLI"
+        managedVersions={managed(rows, null)}
+      />,
+    );
+
+    expect(screen.queryByTestId("version-delete-confirm-1.5.0")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: rowActionName("Delete", "1.5.0") }),
+    ).toBeTruthy();
+    expect(mocks.removeMutate).not.toHaveBeenCalled();
+  });
+
+  it("says why the CURRENT version is blocked, since its chip slot is taken by Current", () => {
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "1.5.0",
+          current: true,
+          certification: "yanked",
+          installState: { status: "installed" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    expect(screen.getByText("Current")).toBeTruthy();
+    const trouble = screen.getByTestId("version-row-trouble");
+    expect(trouble.textContent).toContain("Withdrawn");
+  });
+
+  it("disarms an armed delete when another row's action runs", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.5.0", installState: { status: "installed" } }),
+        version({ version: "2.0.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: null,
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Delete", "1.5.0") }),
+    );
+    expect(screen.getByTestId("version-delete-confirm-1.5.0")).toBeTruthy();
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Use", "2.0.0") }),
+    );
+
+    expect(mocks.useMutate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("version-delete-confirm-1.5.0")).toBeNull();
+    // Back to its icon shape, not just "the confirm testid is gone".
+    expect(
+      screen.getByRole("button", { name: rowActionName("Delete", "1.5.0") }),
+    ).toBeTruthy();
+  });
+
+  it("renders a disabled delete carrying its reason for a quarantined version (regression: used to render no delete control at all)", () => {
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "1.3.0",
+          installState: { status: "unusable", reason: "quarantined" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    const blocked = screen.getByTestId("delete-disabled-blocked");
+    expect(blocked.hasAttribute("disabled")).toBe(true);
+    expect(tooltipTextNear(blocked)).toMatch(/quarantine/iu);
+  });
+
+  it("renders no delete control at all for a version with nothing on disk", () => {
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.6.0", installState: { status: "absent" } }),
+      ],
+      managedOverrides: null,
+    });
+
+    expect(screen.queryByTestId("delete-disabled-blocked")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: rowActionName("Delete", "1.6.0") }),
+    ).toBeNull();
+    expect(screen.queryByTestId("version-delete-confirm-1.6.0")).toBeNull();
+  });
+
+  it("renders no title and no on-disk footprint even with a non-null totalSizeBytes", () => {
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.0.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: { totalSizeBytes: 123_000_000 },
+    });
+
+    const panel = screen.getByTestId("provider-pack-version-manager");
+    expect(panel.textContent).not.toMatch(/· versions/u);
+    expect(panel.textContent).not.toMatch(/on disk/iu);
+  });
+
+  it("still exposes the auto-download switch and toggles the policy", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.0.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: { autoDownload: false },
+    });
+
+    const toggle = screen.getByRole("switch", {
+      name: "Auto-download updates",
+    });
+    await user.click(toggle);
+
+    expect(mocks.setPolicyMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.setPolicyMutate.mock.calls[0]?.[0]).toEqual({
+      packId: "opencode",
+      autoDownload: true,
+    });
+  });
 });
 
 /**
@@ -750,29 +1039,6 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
   // new top-level block gets none and every render accumulates in the same
   // document - which surfaces as "Found multiple elements", not as a leak.
   afterEach(cleanup);
-
-  it("opens the details card on focus and renders the composed meta", async () => {
-    // The a11y-name assertions elsewhere would ALL still pass if the card
-    // never rendered. This is the one that proves the visible surface exists.
-    renderPanel({
-      hostId: "host-1",
-      available: [
-        version({
-          version: "1.2.0",
-          recommended: true,
-          sizeBytes: 40 * 1024 * 1024,
-          installState: { status: "installed" },
-        }),
-      ],
-      managedOverrides: null,
-    });
-
-    screen.getByTestId("version-details-trigger-1.2.0").focus();
-    const card = await screen.findByTestId("version-details-1.2.0");
-    expect(card.textContent).toMatch(/Installed/u);
-    expect(card.textContent).toMatch(/40 MB/u);
-    expect(card.textContent).toMatch(/pairs with this Traycer release/iu);
-  });
 
   it("keeps a plain published version down to its number and its button", () => {
     // Nothing to say ⇒ no chip, and no details trigger at all: an affordance
@@ -792,7 +1058,12 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
     });
 
     const row = screen.getByTestId("provider-pack-version-row-1.2.0");
-    expect(row.textContent).toBe("1.2.0Download");
+    expect(row.textContent).toBe("1.2.0");
+    // The row action column is icon-only now; the bare number must not read
+    // as "no button" — the download control still has to be there.
+    expect(
+      screen.getByRole("button", { name: rowActionName("Download", "1.2.0") }),
+    ).toBeTruthy();
   });
 
   it("gives a yanked row its blocking chip, outranking Recommended", () => {
@@ -816,10 +1087,34 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
     expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
   });
 
-  it("demotes 'No longer published' out of the row and into the details", () => {
-    // THE REPORTED ROW. `uncertified` is informational — the copy stays
-    // installed and stays usable — and it was the loudest thing on a healthy
-    // row, stated twice: once as a badge, once inside the meta line.
+  it("gives a non-current uncertified version its Unpublished chip, outranking Recommended", () => {
+    // `uncertified` used to earn no chip at all (informational, stays
+    // installed and usable). It earns one now: it is the one state that
+    // decides whether a delete can be undone, which outranks a mere
+    // suggestion.
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "1.1.0",
+          recommended: true,
+          certification: "uncertified",
+          installState: { status: "installed" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    expect(screen.getByTestId("version-row-chip-unpublished").textContent).toBe(
+      "Unpublished",
+    );
+    expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
+  });
+
+  it("suppresses the Unpublished chip on the current row (states Current instead)", () => {
+    // THE REPORTED ROW. On a current row the reversibility question the
+    // Unpublished chip exists to flag does not apply — delete is already
+    // disabled for the current version — so the chip goes unsaid.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -834,9 +1129,10 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
       managedOverrides: null,
     });
 
-    const row = screen.getByTestId("provider-pack-version-row-0.147.0");
-    expect(row.textContent).not.toMatch(/No longer published/u);
-    expect(screen.getByTestId("version-row-chip-current")).toBeTruthy();
-    expect(detailsLabel("0.147.0")).toMatch(/No longer published/u);
+    expect(screen.getByTestId("version-row-chip-current").textContent).toBe(
+      "Current",
+    );
+    expect(screen.queryByTestId("version-row-chip-unpublished")).toBeNull();
+    expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
   });
 });
