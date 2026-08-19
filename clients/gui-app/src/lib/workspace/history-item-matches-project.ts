@@ -5,40 +5,42 @@ import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 const TRAYCER_WORKTREES_MARKER = "/.traycer/worktrees/";
 
 /**
- * An existing chat belongs to a project when it was claimed, when one of
- * its originating workspace paths is that project's folder, or when a
- * leftover Traycer worktree was created from that folder's repo slug.
+ * An existing chat belongs to a project when every workspace path sits
+ * inside that project's folders (or a documented Traycer worktree of
+ * them). Claim wins only when there is no path. Fan-out that also
+ * touched another repo is not this project's History row.
  */
 export function historyItemMatchesProject(
   item: Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
   profile: ProjectProfile,
 ): boolean {
-  if (profile.epicIds.includes(item.epicId)) return true;
-  if (profile.folderPaths.length === 0) return false;
+  if (profile.folderPaths.length === 0) {
+    return profile.epicIds.includes(item.epicId);
+  }
   const folders = profile.folderPaths.map(normalizePathSeparators);
-  if (
-    item.linkedWorkspaces.some((workspace) =>
+  if (item.linkedWorkspaces.length > 0) {
+    return item.linkedWorkspaces.every((workspace) =>
       folders.some((folder) =>
         pathIsInsideFolder(
           normalizePathSeparators(workspace.workspacePath),
           folder,
         ),
       ),
-    )
-  ) {
-    return true;
+    );
   }
   // When the cloud row already named its folders, do not also guess from
   // worktree basenames — two checkouts named Titanos would collide.
-  if (item.linkedWorkspaces.length > 0) return false;
-  return item.worktreePaths.some((worktreePath) =>
-    folders.some((folder) =>
-      isDocumentedTraycerWorktreeOfFolder(
-        normalizePathSeparators(worktreePath),
-        folder,
+  if (item.worktreePaths.length > 0) {
+    return item.worktreePaths.every((worktreePath) =>
+      folders.some((folder) =>
+        isDocumentedTraycerWorktreeOfFolder(
+          normalizePathSeparators(worktreePath),
+          folder,
+        ),
       ),
-    ),
-  );
+    );
+  }
+  return profile.epicIds.includes(item.epicId);
 }
 
 export function filterHistoryItemsForProject<

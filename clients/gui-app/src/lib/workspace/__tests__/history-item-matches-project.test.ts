@@ -44,7 +44,7 @@ describe("historyItemMatchesProject", () => {
     );
   });
 
-  it("matches a fan-out chat via the documented Traycer worktree path", () => {
+  it("does not match a fan-out chat that also has another project's worktree", () => {
     expect(
       historyItemMatchesProject(
         item("fanout", [
@@ -53,7 +53,42 @@ describe("historyItemMatchesProject", () => {
         ], []),
         PROFILE,
       ),
+    ).toBe(false);
+  });
+
+  it("matches a Titanos-only chat via the documented Traycer worktree path", () => {
+    expect(
+      historyItemMatchesProject(
+        item(
+          "titanos-only",
+          ["/Users/g/.traycer/worktrees/gavasques__titanos/traycer-titanos-x"],
+          [],
+        ),
+        PROFILE,
+      ),
     ).toBe(true);
+  });
+
+  it("does not match a fan-out chat that also linked another folder", () => {
+    expect(
+      historyItemMatchesProject(
+        item(
+          "fanout-linked",
+          [],
+          ["/Users/g/work/Titanos", "/Users/g/work/CRM"],
+        ),
+        PROFILE,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match a claimed chat that also has another project's folder", () => {
+    expect(
+      historyItemMatchesProject(
+        item("claimed", [], ["/Users/g/work/CRM"]),
+        PROFILE,
+      ),
+    ).toBe(false);
   });
 
   it("matches a local-mode chat by its originating workspace path", () => {
