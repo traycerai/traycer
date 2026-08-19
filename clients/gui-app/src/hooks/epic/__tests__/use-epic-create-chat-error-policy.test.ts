@@ -113,6 +113,10 @@ function getCreateOnError(): (
   ).onError;
 }
 
+/**
+ * The MANUAL fork dialog's request: a precise boundary the user picked. Nobody
+ * retries it, so every refusal it earns is terminal and must be reported.
+ */
 const VARIABLES: CreateChatMutationInput = {
   hostId: "host-test",
   epicId: "e",
@@ -127,6 +131,33 @@ const VARIABLES: CreateChatMutationInput = {
     interviewBlockId: null,
     carriedInterviews: null,
   },
+};
+
+/**
+ * The CLONE-on-host-switch request. `boundary: "latest"` has exactly one
+ * producer in this app (`cloneChatOnHostSwitch`), and that producer is standing
+ * by to narrate the history downgrade and retry without `forkSource`.
+ */
+const CLONE_VARIABLES: CreateChatMutationInput = {
+  hostId: "host-test",
+  epicId: "e",
+  chatId: "c",
+  parentId: null,
+  title: "t",
+  forkSource: {
+    boundary: "latest",
+    sourceChatId: "source-chat",
+    sourceOwnerUserId: null,
+  },
+};
+
+/** A plain create - the new-agent modal's shape, no fork at all. */
+const PLAIN_VARIABLES: CreateChatMutationInput = {
+  hostId: "host-test",
+  epicId: "e",
+  chatId: "c",
+  parentId: null,
+  title: "t",
 };
 
 describe("useEpicCreateChatForHostClient error policy", () => {
@@ -185,6 +216,70 @@ describe("useEpicCreateChatForHostClient error policy", () => {
     );
     expect(toast.error).toHaveBeenCalledWith(
       "This needs a newer Traycer host. Update the host to continue.",
+    );
+  });
+
+  // Review #1297 finding 1. The clone flow recovers from both of these - it
+  // narrates the downgrade and retries without `forkSource` - so a toast here
+  // describes an attempt, not an outcome, and the detail policy above makes it
+  // read as a specific terminal failure moments before the clone succeeds.
+  it.each([
+    ["E_FORK_CHECKPOINT_UNAVAILABLE" as const, "no assistant checkpoint yet"],
+    ["DOWNGRADE_UNSUPPORTED" as const, "epic.createChat@1.1 unavailable"],
+  ])(
+    "stays silent on %s for the clone's latest-boundary fork - the flow retries",
+    (code, message) => {
+      renderHook(() => useEpicCreateChatForHostClient(null), {
+        wrapper: makeWrapper(),
+      });
+      getCreateOnError()(makeError(code, message), CLONE_VARIABLES);
+      expect(toast.error).not.toHaveBeenCalled();
+      // Still released: no record will arrive for an attempt that failed, and
+      // the retry creates under its own id.
+      expect(clearPendingChatCreation).toHaveBeenCalledWith("e", "c");
+    },
+  );
+
+  // The guard that keeps the suppression from swallowing a real failure. Same
+  // code, precise boundary: the manual fork dialog has no retry behind it.
+  it("still toasts E_FORK_CHECKPOINT_UNAVAILABLE for a precise-boundary fork", () => {
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    getCreateOnError()(
+      makeError("E_FORK_CHECKPOINT_UNAVAILABLE", "no assistant checkpoint yet"),
+      VARIABLES,
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't create agent. no assistant checkpoint yet",
+    );
+  });
+
+  // And the suppression is scoped to the codes the flow retries on, not to the
+  // clone request as a whole - a worktree failure on a clone is terminal.
+  it("still toasts a non-recoverable failure on the clone's own request", () => {
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    getCreateOnError()(
+      makeError("RPC_ERROR", WORKTREE_CREATE_FAILED_MESSAGE),
+      CLONE_VARIABLES,
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      `Couldn't create agent. ${WORKTREE_CREATE_FAILED_MESSAGE}`,
+    );
+  });
+
+  it("toasts a checkpoint refusal that arrives with no fork source at all", () => {
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    getCreateOnError()(
+      makeError("E_FORK_CHECKPOINT_UNAVAILABLE", "no assistant checkpoint yet"),
+      PLAIN_VARIABLES,
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't create agent. no assistant checkpoint yet",
     );
   });
 });

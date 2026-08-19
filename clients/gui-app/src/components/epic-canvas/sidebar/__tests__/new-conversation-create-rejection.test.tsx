@@ -17,6 +17,7 @@ import {
   type InitialChatHandoff,
 } from "@/stores/epics/initial-chat-handoff-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
@@ -50,6 +51,14 @@ const DIRTY_CONTENT: JsonContent = {
 
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-a";
+/**
+ * Signed in for every case here, deliberately. `userId` is half the handoff
+ * key, and it is also what decides whether the request carries an
+ * `initialMessage` at all - which is the only way a host can answer
+ * `initialTurnStarted: true`. A signed-out harness would let the success case
+ * assert a response the system cannot actually produce.
+ */
+const USER_ID = "user-1";
 
 /** What the host answers when `git worktree add` refused the branch name. */
 function worktreeCreateRejection(): HostRpcError {
@@ -311,13 +320,14 @@ function Harness() {
 
 /**
  * The handoff for this epic, read by SCOPE - the modal mints its own chat id,
- * so the test cannot name it up front. `userId` is `null` because no profile is
- * signed in here, which is exactly what `initialChatHandoffKey` uses.
+ * so the test cannot name it up front. `initialChatHandoffKey` is
+ * {user, epic}, and the host segment is data on the record rather than part of
+ * the key.
  */
 function handoff(): InitialChatHandoff | null {
   return selectInitialChatHandoff(useInitialChatHandoffStore.getState(), {
     hostId: HOST_ID,
-    userId: null,
+    userId: USER_ID,
     epicId: EPIC_ID,
   });
 }
@@ -348,6 +358,9 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 beforeEach(() => {
+  useAuthStore.setState({
+    profile: { userId: USER_ID, userName: "Tester", email: "t@example.com" },
+  });
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent(EPIC_ID, DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode(EPIC_ID, "chat");
@@ -359,6 +372,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.setState({ profile: null });
   testState.bodySubmit = null;
   testState.installEditor = null;
   useNewConversationModalStore.getState().resetForTests();
@@ -385,6 +399,30 @@ describe("new-conversation modal: a rejected create leaves no live pending tab",
     const settled = handoff();
     expect(settled?.status).toBe("failed");
     expect(settled?.failureReason).toBe("Couldn't create the agent.");
+  });
+
+  // Review #1297 finding 3, the symmetric case. `markInitialTurnStarted` was
+  // dead for the SAME observer-unmount reason as the failure arm: the host has
+  // already kicked the provider turn from `initialMessage`, and this is what
+  // tells the handoff driver not to send it again. A regression leaves the
+  // handoff short of `sending` and costs a redundant round trip.
+  it("marks the initial turn started when the create resolves after the modal has closed", async () => {
+    testState.createChat.mockResolvedValue({ initialTurnStarted: true });
+    renderModal();
+    await submitAndSettle();
+
+    expect(testState.createRequests).toHaveLength(1);
+    expect(handoff()?.status).toBe("sending");
+  });
+
+  // The other side of that arm: the host did NOT start the turn, so the driver
+  // still owes the send and the handoff must not jump ahead of it.
+  it("leaves the handoff pending when the host did not start the initial turn", async () => {
+    testState.createChat.mockResolvedValue({ initialTurnStarted: false });
+    renderModal();
+    await submitAndSettle();
+
+    expect(handoff()?.status).toBe("pending");
   });
 
   it("fails only the handoff that was actually rejected, never a later create's", async () => {

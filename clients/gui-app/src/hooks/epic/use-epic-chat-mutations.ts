@@ -38,6 +38,7 @@ import {
   beginPendingChatCreation,
   clearPendingChatCreation,
 } from "@/lib/chats/pending-chat-creations";
+import { isRecoverableLatestForkRefusal } from "@/lib/chats/recoverable-fork-refusal";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -212,6 +213,14 @@ export function useEpicCreateChatForHostClient(
       onError: (error, variables) => {
         releaseCreatedChat(variables);
         if (isInlineForkRefusal(error)) return;
+        // A step inside an operation that recovers from it, not the end of
+        // one: the clone-on-host-switch flow narrates the history downgrade
+        // itself and retries without `forkSource`, so a toast here describes
+        // an ATTEMPT moments before the clone succeeds. Keyed on the request's
+        // `boundary: "latest"` as well as the code, so the manual fork
+        // dialog's precise-boundary refusal - genuinely terminal, nobody
+        // retrying - is still reported.
+        if (isRecoverableLatestForkRefusal(error, variables)) return;
         // WITH DETAIL, unlike its sibling mutations. A create is refused for
         // reasons that live entirely in the host's message and nowhere else:
         // the worktree the user asked for could not be made (`git worktree
