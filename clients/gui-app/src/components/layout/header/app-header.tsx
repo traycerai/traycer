@@ -3,7 +3,9 @@ import { UserMenu } from "@/components/auth/user-menu";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
+import { NotesHeaderControl } from "@/components/notes/notes-header-control";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
+import { ProjectProfileSwitcher } from "@/components/layout/header/project-profile-switcher";
 import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
@@ -49,8 +51,8 @@ export interface AppHeaderProps {
 
 /**
  * App navigation chrome. Frameless desktop shells use this row as the native
- * title bar: tabs and controls stay interactive, while the empty spacer before
- * the right-side controls remains available for window dragging.
+ * title bar: tabs and controls stay interactive, while the empty spacer after
+ * the tab strip remains available for window dragging.
  */
 export function AppHeader(props: AppHeaderProps): ReactNode {
   const { variant } = props;
@@ -91,28 +93,14 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
     >
       <WindowsMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
-      {/* Left drag handle: breathing room beside the traffic lights +
-          back/forward arrows so the window can be grabbed from the left end
-          too. Desktop-only (the browser app has neither traffic lights nor
-          arrows, so a left gap there would be stray).
-
-          IMPORTANT: this must be a DIRECT child of <header> (a top-level
-          title-bar element), mirroring the right-side spacer below. An
-          otherwise-identical drag spacer nested inside the flex tab-strip
-          section was NOT honored as a draggable region (only the right
-          spacer, a direct header child, dragged). Electron registers
-          `-webkit-app-region: drag` reliably only on top-level title-bar
-          elements. */}
-      {showTabStrip && framelessDesktop ? (
-        <div
-          aria-hidden
-          className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
-          style={spacerDragStyle}
-        />
-      ) : null}
+      <HeaderProjectProfileSlot
+        enabled={!navDisabled}
+        framelessDesktop={framelessDesktop}
+      />
       <div
         className={cn(
           "relative z-10 flex min-w-0 flex-1 items-center",
+          showTabStrip && "pl-1",
           draggable && "[-webkit-app-region:drag]",
         )}
       >
@@ -137,11 +125,27 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
         {!navDisabled && showGlobalResourceMonitor ? (
           <ResourceMonitorPopover className={undefined} />
         ) : null}
+        {!navDisabled ? <NotesHeaderControl /> : null}
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
       </div>
     </header>
+  );
+}
+
+function HeaderProjectProfileSlot(props: {
+  readonly enabled: boolean;
+  readonly framelessDesktop: boolean;
+}) {
+  if (!props.enabled) return null;
+  return (
+    <div
+      className="relative z-10 shrink-0"
+      style={props.framelessDesktop ? NO_DRAG_STYLE : undefined}
+    >
+      <ProjectProfileSwitcher />
+    </div>
   );
 }
 

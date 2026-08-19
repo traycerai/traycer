@@ -671,6 +671,15 @@ export interface EpicCanvasState {
  * - header-strip / command-palette consumers that read only tab metadata must
  * not re-render on every tile open/switch.
  */
+export interface EpicTabProjectWorkspace {
+  readonly primaryPath: string | null;
+  readonly linkedWorkspaces: ReadonlyArray<{
+    readonly hostId: string;
+    readonly workspacePath: string;
+  }>;
+  readonly worktreePaths: ReadonlyArray<string>;
+}
+
 export interface EpicViewTab {
   readonly tabId: string;
   readonly epicId: string;
@@ -678,4 +687,9 @@ export interface EpicViewTab {
   readonly surfaceMode?:
     | { readonly kind: "epic" }
     | { readonly kind: "phase-migration"; readonly phaseId: string };
+  /**
+   * Durable owner folders for project-profile tab filtering. Survives a cold
+   * session / restart because the live registry peek is not persisted.
+   */
+  readonly projectWorkspace?: EpicTabProjectWorkspace;
 }

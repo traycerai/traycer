@@ -74,6 +74,8 @@ import {
   useEpicActivityStatus,
   type EpicActivityStatus,
 } from "@/hooks/epic/use-epic-activity-status";
+import { useHeaderTabProjectBadge } from "@/hooks/workspace/use-project-scoped-header-strip";
+import { PROJECT_PROFILE_COLOR_DOT } from "@/components/layout/header/project-profile-colors";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
@@ -198,6 +200,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const activityStatus = useEpicActivityStatus(
     tab.kind === "epic" ? tab.epicId : null,
   );
+  const projectBadge = useHeaderTabProjectBadge(tab);
   const permissionRole = useRegisteredEpicPermissionRole(
     tab.kind === "epic" ? tab.epicId : null,
   );
@@ -398,6 +401,17 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           )}
           <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
+            {projectBadge !== null ? (
+              <span
+                aria-label={projectBadge.name}
+                title={projectBadge.name}
+                data-testid={`tab-project-color-${tab.id}`}
+                className={cn(
+                  "size-2 shrink-0 rounded-full",
+                  PROJECT_PROFILE_COLOR_DOT[projectBadge.color],
+                )}
+              />
+            ) : null}
             <TabLeadingIcon
               icon={tab.icon}
               titleGenerationPending={titleGenerationPending}

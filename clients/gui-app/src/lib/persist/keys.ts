@@ -307,6 +307,16 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   {
+    camelName: "projectProfiles",
+    leaf: "project-profiles",
+    kind: "static",
+  },
+  {
+    camelName: "projectNotes",
+    leaf: "project-notes",
+    kind: "static",
+  },
+  {
     camelName: "providersWorkspaceSelection",
     leaf: "providers-workspace-selection",
     kind: "static",

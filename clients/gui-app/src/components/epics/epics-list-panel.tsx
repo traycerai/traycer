@@ -89,6 +89,18 @@ import {
   useHistoryQuery,
   type HistoryFacets,
 } from "@/hooks/home/use-history-query";
+import { historyListEmptyState } from "@/lib/workspace/history-item-matches-project";
+import { claimEpicOnActiveProfile } from "@/lib/workspace/claim-epic-on-active-profile";
+import {
+  historyItemProjectBadge,
+  workspaceHintFromHistoryItem,
+} from "@/lib/workspace/header-tab-matches-project";
+import {
+  selectActiveProjectProfile,
+  selectProjectProfilesBucket,
+  useProjectProfilesStore,
+} from "@/stores/workspace/project-profiles-store";
+import { PROJECT_PROFILE_COLOR_DOT } from "@/components/layout/header/project-profile-colors";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
@@ -288,6 +300,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isFetching,
     error,
     hostId,
+    projectFilterActive,
+    preProjectFilterCount,
     refetch,
     fetchNextPage,
     hasNextPage,
@@ -611,6 +625,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               isPending={isPending}
               isFetching={isFetching}
               hasActiveFilters={hasActiveFilters}
+              projectFilterActive={projectFilterActive}
+              preProjectFilterCount={preProjectFilterCount}
+              hostId={hostId}
               items={items}
               onRetry={handleRetry}
               selectionMode={selectionMode}
@@ -953,6 +970,9 @@ interface EpicsListBodyProps {
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
+  readonly projectFilterActive: boolean;
+  readonly preProjectFilterCount: number;
+  readonly hostId: string | null;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -986,6 +1006,9 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isPending,
     isFetching,
     hasActiveFilters,
+    projectFilterActive,
+    preProjectFilterCount,
+    hostId,
     items,
     onRetry,
     selectionMode,
@@ -1015,7 +1038,16 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (isPending) {
     return <EpicsListLoading />;
   }
+  const emptyState = historyListEmptyState({
+    visibleCount: items.length,
+    preProjectFilterCount,
+    hasActiveFilters,
+    projectFilterActive,
+  });
   if (items.length === 0 && !hasActiveFilters) {
+    if (emptyState === "hidden-by-active-project") {
+      return <EpicsListProjectHiddenEmpty />;
+    }
     return (
       <div
         className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
@@ -1027,6 +1059,23 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   }
   if (items.length === 0 && hasActiveFilters && isFetching) {
     return <EpicsListFilteringLoading />;
+  }
+  if (items.length === 0) {
+    // Active filters, no in-flight refetch: the list is genuinely empty for
+    // this filter set.
+    if (emptyState === "hidden-by-active-project") {
+      return <EpicsListProjectHiddenEmpty />;
+    }
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+        data-testid="epics-list-filtered-empty"
+      >
+        <p className="font-medium text-foreground">
+          No tasks match these filters.
+        </p>
+      </div>
+    );
   }
   return (
     <>
@@ -1055,6 +1104,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
               isOpen={openEpicIds.has(item.epicId)}
               onRowKeyDown={onRowKeyDown}
+              hostId={hostId}
+              projectFilterActive={projectFilterActive}
             />
           ))}
         </ul>
@@ -1111,6 +1162,23 @@ function EpicsListFilteringLoading() {
   );
 }
 
+/**
+ * A project profile hid every visible row while chats still exist outside
+ * the project. Say where they went - "No tasks yet" here reads as data loss.
+ */
+function EpicsListProjectHiddenEmpty() {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-project-empty"
+    >
+      <p className="font-medium text-foreground">
+        Older chats are under All projects.
+      </p>
+    </div>
+  );
+}
+
 interface EpicsListRowProps {
   readonly item: HistoryItem;
   readonly selectionMode: boolean;
@@ -1129,6 +1197,8 @@ interface EpicsListRowProps {
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isOpen: boolean;
+  readonly hostId: string | null;
+  readonly projectFilterActive: boolean;
   /** Arrow-key traversal, bound to whichever control covers the whole card. */
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
@@ -1200,7 +1270,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     worktrees,
     isOpen,
     onRowKeyDown,
+    hostId,
+    projectFilterActive,
   } = props;
+  const projectBadge = useHistoryRowProjectBadge(hostId, item);
   const isPhase = item.taskType === "phase";
   const rowSweep = useHistoryRowSweep({
     item,
@@ -1305,11 +1378,29 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     // Passing the row's title threads it through tab creation so the
     // cold-open canvas skeleton can render the real epic title at +0ms,
     // not "Untitled task" until the snapshot arrives.
+    useEpicCanvasStore
+      .getState()
+      .stampEpicWorkspaceHint(
+        item.epicId,
+        workspaceHintFromHistoryItem(item),
+      );
     openEpicFromCommand(navigate, item.epicId, pathname, {
       title: item.title,
       source: "direct_ui",
     });
-  }, [isPhase, item, navigate, onOpenItem, onSelectEpic, pathname]);
+    if (projectFilterActive) {
+      claimEpicOnActiveProfile(hostId, item.epicId);
+    }
+  }, [
+    hostId,
+    isPhase,
+    item,
+    navigate,
+    onOpenItem,
+    onSelectEpic,
+    pathname,
+    projectFilterActive,
+  ]);
   const toggleEpicSelection = () => {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
@@ -1438,6 +1529,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       {rowInteractionLayer}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <HistoryRowProjectLabel badge={projectBadge} />
           <HistoryRowLeadingIcon item={item} />
           {isRenaming ? (
             <input
@@ -1564,6 +1656,47 @@ function HistoryPinControl(props: {
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
+  );
+}
+
+function useHistoryRowProjectBadge(
+  hostId: string | null,
+  item: Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
+) {
+  return useProjectProfilesStore(
+    useShallow((state) =>
+      historyItemProjectBadge(
+        selectActiveProjectProfile(state, hostId),
+        selectProjectProfilesBucket(state, hostId).profiles,
+        item,
+      ),
+    ),
+  );
+}
+
+function HistoryRowProjectLabel(props: {
+  readonly badge: {
+    readonly color: keyof typeof PROJECT_PROFILE_COLOR_DOT;
+    readonly name: string;
+  } | null;
+}): ReactNode {
+  if (props.badge === null) return null;
+  return (
+    <span
+      data-testid="epics-list-row-project"
+      className="flex shrink-0 items-center gap-1.5 text-muted-foreground"
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-2 rounded-full",
+          PROJECT_PROFILE_COLOR_DOT[props.badge.color],
+        )}
+      />
+      <span className="max-w-[8rem] truncate text-ui-xs font-medium">
+        {props.badge.name}
+      </span>
+    </span>
   );
 }
 
