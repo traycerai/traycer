@@ -1025,10 +1025,19 @@ function LocalHostDownActions(props: {
   });
   const reinstall = useRunnerReinstallTraycer();
   const removed = removal.data?.removedByUser === true;
+  // The verb SURVIVES ITS OWN FAILURE. `reinstall` clears the removal
+  // sentinel first and converges second, so a converge that comes back
+  // `failed`/`deferred` leaves the sentinel already cleared - `removed` flips
+  // to false, and this cluster would drop the only affordance for a machine
+  // that still has no host. Nothing else picks it up in this session either:
+  // main's boot actor settled at launch on the sentinel it saw then. Keeping
+  // the button on `isError` makes the retry the user's to take now; the next
+  // launch sees a cleared sentinel and boots on the ladder without them.
+  const removalRepairable = removed || reinstall.isError;
   const busy = props.settingUp || reinstall.isPending;
   return (
     <div className="flex shrink-0 items-center gap-1.5">
-      {removed ? (
+      {removalRepairable ? (
         <Button
           type="button"
           variant="default"

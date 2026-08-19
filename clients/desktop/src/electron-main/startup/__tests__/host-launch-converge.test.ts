@@ -1289,6 +1289,69 @@ describe("armLocalHostBootOnSignIn", () => {
     expect(convergeReadyCalls).toEqual([false]);
     expect(gate.listenerCount()).toBe(0);
   });
+
+  it("the disposer fences an attempt that is already in flight", async () => {
+    // `dispose()` used to clear the timer and the subscription without
+    // setting `settled` - so an attempt already in flight when it ran had its
+    // CONTINUATION land after disposal and walk straight into
+    // `scheduleRetry()`, arming a fresh timer for an actor main just tore
+    // down: a disposed actor that keeps provisioning. `dispose()` now sets
+    // `settled = true` before anything else, so that continuation's
+    // `scheduleRetry()` sees it and returns without arming.
+    //
+    // The disposal below lands INSIDE the in-flight window deterministically,
+    // not as a race the scheduler might win: `convergeReady` returns a
+    // promise this test holds the resolver for, so `dispose()` runs from the
+    // test body itself while that promise is PROVABLY still pending - only
+    // after it returns do we resolve `convergeReady` and let the
+    // continuation run.
+    vi.useFakeTimers();
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const convergeReadyCalls: boolean[] = [];
+    let resolveConverge: (
+      outcome: MutationOutcome<ConvergeReadyOk>,
+    ) => void = () => undefined;
+    const controller: IpcHostController = {
+      ...base,
+      convergeReady: (force: boolean) => {
+        convergeReadyCalls.push(force);
+        return new Promise<MutationOutcome<ConvergeReadyOk>>((resolve) => {
+          resolveConverge = resolve;
+        });
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    const dispose = armLocalHostBootOnSignIn(controller, gate);
+    await vi.advanceTimersByTimeAsync(0);
+    // Premise: the attempt is really in flight, parked on the unresolved
+    // `convergeReady` promise - not merely about to start one.
+    expect(convergeReadyCalls).toEqual([false]);
+    expect(gate.listenerCount()).toBe(1);
+
+    dispose();
+    expect(gate.listenerCount()).toBe(0);
+
+    // The in-flight promise now resolves - straight onto the disposed actor.
+    resolveConverge({
+      kind: "failed",
+      message: "installer could not write to the prefix",
+    });
+    // WITHOUT the fix (`settled` left false by `dispose()`), this advance
+    // would let the resolved continuation's `scheduleRetry()` arm rung 0 and
+    // then fire it, producing a SECOND `convergeReady` call below.
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
+
+    expect(convergeReadyCalls).toEqual([false]);
+    expect(gate.listenerCount()).toBe(0);
+  });
 });
 
 describe("applyHostUpdateMenuState", () => {

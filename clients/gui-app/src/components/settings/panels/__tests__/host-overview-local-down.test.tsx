@@ -213,4 +213,80 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
       expect(screen.queryByTestId("host-overview-reinstall-local")).toBeNull();
     });
   });
+
+  it("a reinstall whose converge fails keeps the verb, because the sentinel is already cleared", async () => {
+    // `useRunnerReinstallTraycer` clears the removal sentinel FIRST and only
+    // THEN converges (`use-runner-reinstall-traycer-mutation.ts`). A converge
+    // that RESOLVES non-ok is turned into a REJECTION by the mutation itself
+    // (`throw new Error(outcome.message)`), but the sentinel clear already
+    // landed - and `onSettled` refetches the removal-state query regardless
+    // of the mutation's outcome. Before the fix, `removalRepairable` gated on
+    // `removed` alone, so that refetch (now `removedByUser: false`) dropped
+    // the only affordance a machine with no host had left. The cluster now
+    // also renders on `reinstall.isError`, so the verb survives its own
+    // failure.
+    //
+    // The fixture models the real persisted sentinel across that refetch: the
+    // FIRST `getRemovalState` read (the down state that shows the button in
+    // the first place) says `removedByUser: true`; every read after
+    // (`clearRemoval` having actually run) says `false`.
+    // No initial implementation: what call 1 vs. call 2+ answer is owned
+    // entirely by the two lines below, not by a constructor default that
+    // would be shadowed by them anyway.
+    const getRemovalState =
+      vi.fn<() => Promise<{ readonly removedByUser: boolean }>>();
+    getRemovalState.mockResolvedValueOnce({ removedByUser: true });
+    getRemovalState.mockResolvedValue({ removedByUser: false });
+    const clearRemoval = vi.fn((): Promise<void> => Promise.resolve());
+    const convergeReady = vi.fn(
+      (force: boolean): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        void force;
+        return Promise.resolve({
+          kind: "failed",
+          message: "installer could not write to the prefix",
+        });
+      },
+    );
+    const management = buildOverviewManagement({
+      getRemovalState,
+      clearRemoval,
+      convergeReady,
+    });
+    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+
+    const reinstallButton = await screen.findByRole("button", {
+      name: "Reinstall Traycer",
+    });
+    fireEvent.click(reinstallButton);
+
+    // Premise: the converge really ran and really came back non-ok - which is
+    // what turns the mutation into a rejection and raises the error toast
+    // below, rather than the success path the earlier test in this file
+    // pins.
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledWith(false);
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't reinstall Traycer on This Mac.",
+        expect.objectContaining({
+          description: "installer could not write to the prefix",
+        }),
+      );
+    });
+
+    // The refetch actually happened - not merely that the button never left,
+    // which would pass just as happily against a query that stayed disabled
+    // and never re-read the sentinel at all.
+    await waitFor(() => {
+      expect(getRemovalState.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    await waitFor(() => {
+      const stillThere = screen.getByRole<HTMLButtonElement>("button", {
+        name: "Reinstall Traycer",
+      });
+      expect(stillThere.disabled).toBe(false);
+    });
+  });
 });

@@ -238,6 +238,15 @@ export function armLocalHostBootOnSignIn(
   };
 
   const dispose = (): void => {
+    // TERMINAL, and that has to be recorded BEFORE the resources go, because
+    // an attempt can be in flight right now. Clearing the timer and the
+    // subscription alone leaves `settled` false, so the continuation of an
+    // `getStatus()`/`convergeReady()` that resolves after disposal walks into
+    // `scheduleRetry()` and arms a fresh timer - a disposed actor that goes on
+    // provisioning. Reachable in production since the disposer is registered
+    // on the bridge's teardown list: a quit that lands mid-ladder is exactly
+    // this race.
+    settled = true;
     clearRetry();
     if (unsubscribe !== null) {
       unsubscribe();
@@ -245,8 +254,10 @@ export function armLocalHostBootOnSignIn(
     }
   };
 
+  // Reaching a terminal outcome and being torn down are now the SAME
+  // operation. The name is kept because the call sites below mean "this actor
+  // is done", not "someone asked it to stop".
   const settle = (): void => {
-    settled = true;
     dispose();
   };
 
