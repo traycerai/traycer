@@ -34,7 +34,7 @@ export function NoteEditor(props: {
     setTitle(note.title);
     setBody(note.body);
     setScopeValue(scopeToValue(note.scope));
-  }, [note.id, note.title, note.body, note.scope]);
+  }, [note.id]);
 
   const flush = () => {
     const pending = pendingRef.current;

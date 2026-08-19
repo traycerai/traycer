@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NotesHeaderControl } from "@/components/notes/notes-header-control";
 import { useProjectNotesStore } from "@/stores/workspace/project-notes-store";
@@ -109,6 +109,30 @@ describe("<NotesHeaderControl />", () => {
     expect(
       (screen.getByTestId("note-scope") as HTMLSelectElement).value,
     ).toBe(titanos);
+  });
+
+  it("keeps a newer title when the store echoes the previous save", () => {
+    const { titanos } = seed();
+    useProjectProfilesStore.getState().setActiveProfile(HOST, titanos);
+    mount();
+    fireEvent.click(screen.getByTestId("notes-button"));
+    fireEvent.click(screen.getByRole("button", { name: "Ads budget" }));
+    const noteId =
+      useProjectNotesStore
+        .getState()
+        .byHost[HOST]?.notes.find((note) => note.title === "Ads budget")?.id ??
+      "";
+    const title = screen.getByTestId("note-title") as HTMLInputElement;
+    fireEvent.change(title, { target: { value: "First" } });
+    fireEvent.change(title, { target: { value: "Second" } });
+    act(() => {
+      useProjectNotesStore.getState().updateNote(HOST, noteId ?? "", {
+        title: "First",
+        body: "cut spend",
+        scope: { kind: "project", profileId: titanos ?? "" },
+      });
+    });
+    expect(title.value).toBe("Second");
   });
 
   it("asks before deleting and keeps the note on cancel", () => {
