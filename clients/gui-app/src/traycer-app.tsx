@@ -5,8 +5,7 @@ import { HostControllerStatusListener } from "@/components/layout/bridges/host-c
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
-import { HostBootSurface } from "@/components/host/host-boot-surface";
-import { HOST_PROGRESS_IDLE_HEADING } from "@/lib/host/host-progress-copy";
+import { HostRuntimeBootFallback } from "@/components/host/host-runtime-boot-fallback";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -131,24 +130,15 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
   const openSettings = useCallback(() => {
     void router.navigate({ to: "/settings/host" });
   }, [router]);
-  // THE FIRST of a launch's three boot surfaces, and deliberately the same
-  // component as the others - same card, same sentence, same controls. Giving
-  // each phase its own shape and its own phrasing is what made one continuous
-  // wait look like a sequence of unrelated modals.
-  //
-  // Rendered inside a full-viewport centering wrapper because this one owns
-  // the whole window: it draws before any app chrome exists, where the later
-  // two sit inside the gate frame that already carries the header.
+  // THE FIRST of a launch's three boot surfaces - see
+  // `HostRuntimeBootFallback` for why it is the same card as the other two and
+  // why it reserves the header's slot.
   const hostRuntimeFallback = useMemo(
     () => (
-      <div className="flex min-h-svh w-full items-center justify-center bg-background p-6 text-foreground">
-        <HostBootSurface
-          testId={null}
-          message={HOST_PROGRESS_IDLE_HEADING}
-          onConfigureShell={configureShell}
-          onOpenSettings={openSettings}
-        />
-      </div>
+      <HostRuntimeBootFallback
+        onConfigureShell={configureShell}
+        onOpenSettings={openSettings}
+      />
     ),
     [configureShell, openSettings],
   );

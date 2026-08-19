@@ -8,7 +8,11 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  MockRunnerHost,
+  MockTraycerCli,
+} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import {
@@ -22,6 +26,7 @@ import {
 // `HostReadyGate` to `return props.children` would restore the regression with
 // every test still green.
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
+import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { appLogger } from "@/lib/logger";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -49,8 +54,22 @@ const hostStatus = vi.hoisted(() => ({
     | undefined,
 }));
 
+// The reader flags are DERIVED from `data`, never set beside it. The attempt
+// panel (`LocalBootstrapAttempts`) refuses a cached snapshot and refuses the
+// one a failed refetch retained, so it reads `isFetchedAfterMount` and
+// `isSuccess` as well - and a seam that let a fixture assert `isSuccess` while
+// `data` was `undefined` would be a state the real hook cannot produce, which
+// is how a mock ends up testing itself. `success` means "there is a snapshot"
+// here exactly as it does there. The fresh-read behaviour itself is exercised
+// against the real hook in `local-bootstrap-attempts.test.tsx`; this seam is
+// only about what the surfaces do with a snapshot once they legitimately have
+// one.
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
-  useRunnerTraycerHostStatusQuery: () => hostStatus,
+  useRunnerTraycerHostStatusQuery: () => ({
+    data: hostStatus.data,
+    isFetchedAfterMount: hostStatus.data !== undefined,
+    isSuccess: hostStatus.data !== undefined,
+  }),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -119,6 +138,20 @@ function renderGate(
   readiness: SurfaceReadiness,
   presentation: DefaultHostReadinessPresentation,
 ): GateHarness {
+  return renderGateWithCli(readiness, presentation, undefined);
+}
+
+/**
+ * `renderGate` with the shell's CLI stated. The default harness models a shell
+ * with NO CLI, where the bootstrap-log disclosure structurally cannot render
+ * (see `BootstrapLogDisclosure`) - so a fixture that asserts `Show details`
+ * PRESENT has to pass a real one, or it is asserting against nothing.
+ */
+function renderGateWithCli(
+  readiness: SurfaceReadiness,
+  presentation: DefaultHostReadinessPresentation,
+  traycerCli: ITraycerCli | null | undefined,
+): GateHarness {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -126,7 +159,7 @@ function renderGate(
     hosts: [],
     workspaceFolderPickerPaths: undefined,
     hasLocalHost: undefined,
-    traycerCli: undefined,
+    traycerCli,
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -546,6 +579,117 @@ describe("<HostReadyGate />", () => {
       screen.getByRole<HTMLButtonElement>("button", { name: "Open settings" })
         .disabled,
     ).toBe(false);
+  });
+
+  it("gives the provisioning-error card the failed attempt's diagnostics: the heading, the attempt panel with the bootstrap.log path, and Show details", () => {
+    // This card WINS over the window narrator on the state it describes (see
+    // `gateCardReadiness`), so the narrator's settled arm - the one place the
+    // attempt panel and the log path lived - was unreachable on exactly the
+    // launch that most needed them. A first launch whose install failed got
+    // "boom" and a Retry, and no path to take the failure anywhere.
+    hostStatus.data = {
+      bootstrapMarkers: [
+        {
+          timestamp: "t0",
+          phase: "starting",
+          fields: { shell: "/bin/zsh", args: "-i -l -c traycer" },
+        },
+        { timestamp: "t1", phase: "crashed", fields: { code: "1" } },
+      ],
+      bootstrapLogPath: "/Users/me/.traycer/bootstrap.log",
+      bootstrapLogTail: "",
+    };
+    renderGateWithCli(
+      { kind: "provisioning-error" },
+      { ...PRESENTATION, provisioningError: new Error("boom") },
+      // A real CLI: the disclosure self-hides without one, so its PRESENCE can
+      // only be proved on the positive shell.
+      new MockTraycerCli(),
+    );
+
+    // Existence first, so the assertions below cannot be satisfied by a card
+    // that failed to render at all.
+    const card = screen.getByTestId("host-ready-gate-provisioning-error");
+    expect(card).toBeTruthy();
+    // The same heading the narrator's settled cold-start face draws.
+    expect(
+      screen.getByRole("heading", { name: "Traycer Host didn't start" }),
+    ).toBeTruthy();
+    expect(screen.getByText("boom")).toBeTruthy();
+    // The attempt panel, with the log path IN THE OPEN (not behind the toggle).
+    expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
+    expect(
+      screen.getByTestId("local-host-bootstrap-log-path").textContent,
+    ).toBe("/Users/me/.traycer/bootstrap.log");
+    // The disclosure, and NOT a second `Open settings` inside it: this card
+    // has a real action row that already carries the escape hatch.
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("host-boot-open-settings")).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "Open settings" }),
+    ).toHaveLength(1);
+    // Nothing is starting: no spinner, no boot headline.
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByText("Starting Traycer…")).toBeNull();
+  });
+
+  it("draws restoring-request-context as the shared boot surface: idle heading, spinner, indeterminate bar, Show details and Open settings", () => {
+    // A WAIT, not a terminal, and it can sit between the attach cover and the
+    // narrator's card on any launch. It used to be a bare "Restoring
+    // authenticated session…" line with no spinner and no controls - a fourth
+    // card shape in a launch that must have one. Now it is the same card, the
+    // same idle sentence, the same bar and the same footer pair as the
+    // surfaces on either side of it, so the hand-off is invisible. The
+    // testids are the boot BODY's own (`local-host-loading-*`): the surface
+    // is that body with no lane, not a look-alike.
+    renderGateWithCli(
+      { kind: "restoring-request-context" },
+      PRESENTATION,
+      new MockTraycerCli(),
+    );
+
+    const card = screen.getByTestId(
+      "host-ready-gate-restoring-request-context",
+    );
+    expect(card.getAttribute("data-surface")).toBe(HOST_BOOT_CARD_SURFACE);
+    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
+      "Starting Traycer…",
+    );
+    expect(
+      screen.getByTestId("local-host-download-progress").dataset.indeterminate,
+    ).toBe("true");
+    expect(screen.queryByText("Restoring authenticated session…")).toBeNull();
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("host-boot-open-settings")).toBeTruthy();
+    // Still the gate's block: the app is not mounted behind it.
+    expect(screen.queryByRole("main")).toBeNull();
+  });
+
+  it("draws every gate-owned terminal through the shared boot card, so a launch that ends badly does not change shape to say so", () => {
+    // The family's guarantee is one geometry by construction; this pins the
+    // construction (the card's marker) rather than a class list, which would
+    // pin the current spelling of the geometry instead of the sharing.
+    for (const [readiness, presentation] of [
+      [
+        { kind: "provisioning-error" },
+        { ...PRESENTATION, provisioningError: new Error("boom") },
+      ],
+      [{ kind: "removed-host" }, { ...PRESENTATION, removed: true }],
+      [{ kind: "mobile-no-host" }, PRESENTATION],
+    ] as const) {
+      renderGate(readiness, presentation);
+      const frame = screen.getByTestId(`host-ready-gate-${readiness.kind}`);
+      expect(
+        frame.querySelector(`[data-surface="${HOST_BOOT_CARD_SURFACE}"]`),
+        readiness.kind,
+      ).not.toBeNull();
+      cleanup();
+    }
   });
 
   it("defers the zero-dialable default-host card to the window modal too - no gate-drawn card, no tab wording", () => {

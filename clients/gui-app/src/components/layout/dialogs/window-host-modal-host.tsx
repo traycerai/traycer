@@ -11,8 +11,7 @@ import {
   useHostReadinessController,
   type DefaultHostReadinessPresentation,
 } from "@/components/layout/host-readiness-controller-context";
-import { BootstrapAttemptDetails } from "@/components/host/bootstrap-attempt-details";
-import { summariseBootstrapAttempts } from "@/components/host/bootstrap-attempt-summary";
+import { LocalBootstrapAttempts } from "@/components/host/local-bootstrap-attempts";
 import {
   BootstrapLogDisclosure,
   LocalHostBodyShell,
@@ -20,7 +19,6 @@ import {
 } from "@/components/local-host-loading";
 import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
-import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { getClientAppVersion } from "@/lib/app-version";
@@ -218,29 +216,25 @@ function NarratingWindowHostModal(props: {
   // then draws no action row of its own). Two derivations of this would let a
   // card render the settings link in both places or in neither.
   //
-  // "In neither" is exactly what happened when this did not ask whether the
-  // body EXISTS: `buildLocalBootstrapBody` returns null for anything but a
-  // local `offline` lifecycle, so a blocking cold start whose target is a
-  // REMOTE host (activated in Settings, lease still `connecting`; no Retry,
-  // no update, nothing failed) hid the action row for a body that was not
-  // there - an empty card, and the settings escape hatch this file calls a
-  // lockout if lost was the thing lost. The body can host the link only under
-  // the same two conditions it renders under, so the gate states them.
-  const bodyCanHostSettings =
-    localLifecycle && narration.variant.kind === "offline";
+  // It is true exactly on the healthy blocking start - `offline`, nothing to
+  // retry, nothing to update, nothing failed - and that is also exactly when
+  // `buildBootBody` draws the boot body, so the link always has its footer row
+  // to sit on. This gate used to ask a fourth question, "is the target this
+  // machine", because the body was withheld for any other target; the answer
+  // was a card that drew nothing but the `Open settings` link. The body no
+  // longer depends on the target (see `buildBootBody`), so neither does this.
   const settingsOnly =
-    !blocking ||
-    retry.onRetry !== null ||
-    updateHost !== null ||
-    !bodyCanHostSettings
-      ? false
-      : !settled.failed;
+    blocking &&
+    narration.variant.kind === "offline" &&
+    retry.onRetry === null &&
+    updateHost === null &&
+    !settled.failed;
   const narrationProps: WindowHostModalProps = {
     cause: narration.cause,
     variant: narration.variant,
     progress,
     settingsOnly,
-    localBootstrapBody: buildLocalBootstrapBody({
+    bootBody: buildBootBody({
       variant: narration.variant,
       presentation,
       localLifecycle,
@@ -392,27 +386,60 @@ function resolveUpdateHost(
 }
 
 /**
- * The rich local-bootstrap body, or null when this wait is not about this
- * machine.
+ * The boot body, or null when this state has none.
  *
- * Only the `offline` variant gets it: a plan gate and a version mismatch are
+ * Only the `offline` variant gets one: a plan gate and a version mismatch are
  * both about a host that is up and answering, so a bootstrap log and a
  * "Configure shell…" button would be diagnostics for a failure that did not
  * happen.
  *
- * `LocalHostLoadingContent` has ONE face now, and this is why. It used to take
- * a `stage` and grow a second one on `"slow"`: its own Retry, and the
+ * TWO ARMS, gated on different things, and the difference is the point:
+ *
+ *  - A start that has NOT settled gets the loading body WHATEVER the target's
+ *    kind. It is the shared boot headline (the lane's F19 heading when this
+ *    machine's controller is doing something, the idle "Starting Traycer…"
+ *    when it is not), the current stage's bar, and the Show details / Open
+ *    settings footer - the same card the two boot surfaces before it drew.
+ *    This arm used to be withheld unless the target was this machine, on the
+ *    argument that the bootstrap log describes this computer. It does - and
+ *    that is TRUE information under a remote-target start too: on a desktop
+ *    the main process starts this machine's host whichever host is effective
+ *    (`armFirstInstallOnSignIn` and `runLaunchHostConvergeReconcile` in
+ *    `clients/desktop/src/electron-main/startup/host-launch-converge.ts`
+ *    consult sign-in and removal, never the selection), so the tail behind
+ *    `Show details` is the log of a start that is happening right now on
+ *    this computer, not a stale one. The two surfaces before this card offer
+ *    that same disclosure without knowing the target at all - they mount
+ *    before it is known - and gating only this phase on it re-creates the
+ *    mid-launch shape change this family exists to remove. The disclosure's
+ *    one gate is the one every phase can see: the shell has a CLI
+ *    (`BootstrapLogDisclosure` self-hides on `traycerCli === null`). What
+ *    the target DOES gate is what it should: no local action ARMS for a
+ *    remote target (`local-boot-intent.test.tsx` pins `convergeReady` /
+ *    `removalState` at zero with this body drawn), and the settled
+ *    diagnostics below stay target-gated. What withholding the body actually
+ *    produced was the reported launch: a fresh install on an account with
+ *    remote hosts derives a remote as effective until the local host
+ *    registers, and for that whole window the card was either empty but for
+ *    the `Open settings` link or the boxed lane line - a third shape, in a
+ *    launch that must have one.
+ *
+ *  - A start that HAS settled in failure gets this machine's diagnostics
+ *    (the attempt panel and the log disclosure) only when the failure is this
+ *    machine's. On a fleet this machine is not part of, the title and the
+ *    description are the whole story; a crash report about a local install
+ *    under "No host is available" blames the wrong computer.
+ *
+ * `LocalHostLoadingContent` has ONE face, and this is why. It used to take a
+ * `stage` and grow a second one on `"slow"`: its own Retry, and the
  * failed-attempt diagnostics. The Retry was a second place for this modal to
  * state an action it already states in one row, and the diagnostics belong on
- * the arm below where they are TRUE, not under a healthy spinner - so this
- * call site passed `"loading"` unconditionally, and once P3.2 deleted the
- * gate's fallbacks it was the only caller left. P3.4 deleted the branch it
- * had already stopped reaching. That the bootstrap.log path survives all of
- * this is the whole point - it is the one thing that lets a user take a stuck
- * startup somewhere else, and it has been orphaned by a surface move once
- * already.
+ * the settled arm where they are TRUE, not under a healthy spinner. That the
+ * bootstrap.log path survives all of this is the whole point - it is the one
+ * thing that lets a user take a stuck startup somewhere else, and it has been
+ * orphaned by a surface move once already.
  */
-function buildLocalBootstrapBody(args: {
+function buildBootBody(args: {
   readonly variant: WindowNarrationVariant;
   readonly presentation: DefaultHostReadinessPresentation;
   readonly localLifecycle: boolean;
@@ -428,14 +455,13 @@ function buildLocalBootstrapBody(args: {
   readonly settingsOnly: boolean;
 }): ReactNode | null {
   if (args.variant.kind !== "offline") return null;
-  if (!args.localLifecycle) return null;
   // NOTHING IS STARTING, so nothing may claim to be. The spinner and the stage
   // line are gated on the settled FAILURE rather than placed beside it:
   // `LocalHostLoadingContent`'s stage line falls back to
-  // `HOST_PROGRESS_IDLE_HEADING` - "Starting local Traycer Host…" - exactly when
-  // no lane is running, which is precisely this state. A live spinner over a
-  // crash report tells a user to wait for a start that is not happening, and
-  // they report a hang instead of a crash.
+  // `HOST_PROGRESS_IDLE_HEADING` exactly when no lane is running, which is
+  // precisely this state. A live spinner over a crash report tells a user to
+  // wait for a start that is not happening, and they report a hang instead of
+  // a crash.
   //
   // GATED ON THE FAILURE, NOT THE CAUSE - and it was the cause until a review
   // caught it. `cause === "no-usable-host"` covers only the arm where nothing can
@@ -444,24 +470,17 @@ function buildLocalBootstrapBody(args: {
   // issue) still reached the loading body and drew a live spinner claiming a
   // start. That is the user's original complaint inverted: they objected to
   // recovery actions on a start with no error, and this was a modal that HAD
-  // errored still insisting it was starting. The reachable route is a registered
-  // local host - so `effectiveHostId` is non-null and the cause stays
-  // `cold-start` - whose bootstrap failed on first launch.
+  // errored still insisting it was starting.
   //
   // One rule, two arms: ∅ is settled-by-definition (nothing can serve this
   // window IS the failure), and cold-start settles when the install reports one.
-  // The ∅ arm is now a case of the rule rather than a special arm beside it.
-  //
-  // The log disclosure still renders: it is the one affordance that lets
-  // someone take a stuck startup somewhere else, and it is TRUE on both.
-  // The attempt panel comes first because it is what explains the state; the
-  // toggle is a footnote to it.
-  //
-  // Wrapped in the same shell as the loading body, not a fragment: a body
-  // returned as a fragment hands its children straight to the dialog's own
-  // column, where each one carries its own alignment or none. One contract, both
-  // arms - otherwise the two bodies drift apart the moment either is touched.
   if (args.settledFailure) {
+    if (!args.localLifecycle) return null;
+    // The attempt panel comes first because it is what explains the state; the
+    // toggle is a footnote to it. Wrapped in the same shell as the loading
+    // body, not a fragment: a body returned as a fragment hands its children
+    // straight to the dialog's own column, where each one carries its own
+    // alignment or none. One contract, both arms.
     return (
       <LocalHostBodyShell>
         <LocalBootstrapAttempts />
@@ -491,26 +510,6 @@ function buildLocalBootstrapBody(args: {
         ) : null
       }
       onConfigureShell={args.presentation.configureShell}
-    />
-  );
-}
-
-/**
- * What the last bootstrap attempt tried, and where the full log lives.
- *
- * A single read, not a poll: while a user is staring at a failure card there
- * is nothing to gain from re-running the CLI underneath them, and the recovery
- * actions invalidate this query when they fire.
- */
-function LocalBootstrapAttempts(): ReactNode {
-  const status = useRunnerTraycerHostStatusQuery({ pollIntervalMs: null });
-  if (status.data === undefined) return null;
-  const summary = summariseBootstrapAttempts(status.data.bootstrapMarkers);
-  if (summary === null) return null;
-  return (
-    <BootstrapAttemptDetails
-      summary={summary}
-      bootstrapLogPath={status.data.bootstrapLogPath}
     />
   );
 }

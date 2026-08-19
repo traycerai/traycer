@@ -196,7 +196,6 @@ try {
       description: edge(byTestId('window-host-modal-description')),
       spinner: edge(byTestId('local-host-loading-spinner')),
       heading: edge(heading),
-      progressDetail: edge(byTestId('local-host-loading-progress-detail')),
       progressBar: edge(byTestId('local-host-download-progress')),
       toggle: edge(byTestId('local-host-loading-toggle-details')),
       // The LABEL, not the button box. The disclosure's column stretches its
@@ -233,7 +232,6 @@ try {
         type('dialogTitle', byTestId('window-host-modal-title')),
         type('dialogDescription', byTestId('window-host-modal-description')),
         type('stage', heading),
-        type('laneDetail', byTestId('local-host-loading-progress-detail')),
         type('toggleLabel', (() => {
           const el = byTestId('local-host-loading-toggle-details');
           return el === null ? null : el.querySelector('span');
@@ -314,7 +312,7 @@ try {
   // screen with a real box, so an "edges agree" verdict cannot be two nulls.
   //
   // NAMED FOR ITS ARM, deliberately. This member set is the cold-start body's -
-  // spinner, stage, lane detail, progress bar - so this check REQUIRES that arm
+  // spinner, stage, progress bar - so this check REQUIRES that arm
   // and would fail rather than measure if pointed at the ∅ body, which renders
   // the attempt panel and the disclosure and nothing else. That makes the whole
   // script a cold-start instrument, and the name has to say so: an arm-agnostic
@@ -325,7 +323,6 @@ try {
     description: closed.description,
     spinner: closed.spinner,
     heading: closed.heading,
-    progressDetail: closed.progressDetail,
     progressBar: closed.progressBar,
     toggleLabel: closed.toggleLabel,
   };

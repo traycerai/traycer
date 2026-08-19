@@ -2,40 +2,92 @@ import type { ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
 import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
+/**
+ * Marker every card of this family carries (`data-surface`), so a test can
+ * prove a surface is drawn THROUGH this component rather than merely
+ * resembling it. The family's whole guarantee is that its members share one
+ * geometry by construction; a class-list comparison would pin the current
+ * spelling of that geometry, this pins the construction. Its own attribute
+ * rather than `data-slot`, which is the primitive's (`card`) and is what its
+ * styling keys on.
+ */
+export const HOST_BOOT_CARD_SURFACE = "host-boot-card";
 
 /**
  * THE ONE SHAPE every pre-app host surface wears.
  *
- * A launch crosses three of them in sequence - the runtime-binding fallback
- * ("Starting Traycer…"), the gate's attach cover, and the window narrator's
- * startup card - and they are necessarily different React trees: the first
- * mounts above `HostRuntimeProvider`, the second inside the gate frame, the
- * third beside it. Nothing can make them one component.
+ * A launch crosses several of them in sequence - the runtime-binding fallback
+ * ("Starting Traycer…"), the gate's attach cover, the window narrator's
+ * startup card, and on a bad day one of the gate's own terminal cards - and
+ * they are necessarily different React trees: the first mounts above
+ * `HostRuntimeProvider`, the next inside the gate frame, the narrator's beside
+ * it. Nothing can make them one component.
  *
  * What CAN be shared is their geometry, and it has to be, because the user
- * does not see three components - they see one card that changes shape twice
- * mid-launch. Reported exactly that way: "the UX design gap between them, it
- * looks very weird, non aligned". Before this, the sequence went `max-w-sm`
- * centred with a small muted spinner, then `max-w-md` left-aligned with a
- * large foreground spinner floating on its own line.
+ * does not see several components - they see one card that changes shape
+ * mid-launch. Reported exactly that way, twice: "the UX design gap between
+ * them, it looks very weird, non aligned", and later "a modal with only the
+ * Open settings button and nothing else". Before this, the sequence went
+ * `max-w-sm` centred with a small muted spinner, then `max-w-md` left-aligned
+ * with a large foreground spinner floating on its own line - and the
+ * narrator's card was `max-w-md` again while the two before it were `sm`.
  *
- * One width, one alignment, one spinner treatment: later phases then ADD
- * content (a progress bar, a details toggle, actions) into a box that does not
- * move, which reads as one surface filling in rather than three modals taking
- * turns.
+ * One width, one alignment, one spinner treatment - and one BODY for every
+ * healthy wait (`LocalHostLoadingContent`: headline, bar, footer, whether or
+ * not a lane has spoken yet), so across a healthy launch only the sentence
+ * and the bar's fill change inside a box that does not move. Only a settled
+ * failure ADDS to it (a title, diagnostics, actions), which reads as one
+ * surface filling in rather than several modals taking turns.
+ *
+ * `pointer-events-auto` is unconditional and inert everywhere but one place:
+ * the narrator's startup layer is `pointer-events-none` so toasts and the gate
+ * frame's header stay clickable through it, and this card is what re-enables
+ * itself inside that layer. Stating it here rather than at that one call site
+ * keeps the card a self-contained thing to drop into any layer.
  */
 export function HostBootCard(props: {
   readonly children: ReactNode;
   readonly testId: string | null;
+  /**
+   * Extra `data-*` markers for the card element (a narration's variant and
+   * cause, for tests and for a screenshot's provenance). `{}` when none.
+   */
+  readonly dataset: Readonly<Record<`data-${string}`, string>>;
+  /**
+   * Caps the card at ITS LAYER's height and scrolls it inside, for a card
+   * drawn in a FIXED layer that cannot grow the page. A card in the gate frame
+   * or the runtime fallback sits in a `min-h-svh` column that scrolls as a
+   * whole, so it passes `false`; the narrator's startup layer passes `true`,
+   * because a failed face with the bootstrap log open can outgrow a small
+   * window.
+   *
+   * `max-h-full`, against the layer - NOT a viewport unit. The layer starts
+   * below the app header, so it is shorter than the viewport, and a cap
+   * written in `svh` can exceed the space that actually exists: at the
+   * supported 300% zoom on the 600px minimum window the CSS viewport is
+   * ~200px, the layer ~160px, and an `85svh` card of 170px centred in it
+   * overlapped the header and the window's bottom edge with its scrollable
+   * controls clipped. A percentage of the layer's own content box cannot.
+   * (Resolvable because the layer is a definite-height FLEX container - see
+   * `WindowHostStartupCard` for why the layer is flex and not grid.)
+   */
+  readonly viewportCapped: boolean;
 }): ReactNode {
-  const cardProps =
+  const testIdProps =
     props.testId === null ? {} : { "data-testid": props.testId };
   return (
     <Card
-      {...cardProps}
+      {...props.dataset}
+      {...testIdProps}
+      data-surface={HOST_BOOT_CARD_SURFACE}
       role="status"
       aria-live="polite"
-      className="w-full max-w-sm shadow-sm"
+      className={cn(
+        "pointer-events-auto w-full max-w-sm shadow-sm",
+        props.viewportCapped ? "max-h-full overflow-y-auto" : null,
+      )}
     >
       {/* CENTRED, and narrow. Ruled by the user against rendered screenshots,
           twice: the released card centred its content and "the centered one
@@ -47,9 +99,9 @@ export function HostBootCard(props: {
           `local-host-loading.tsx`. That decision was correct for what it was
           deciding - a DIALOG whose own left-aligned title and description sat
           above the body, where a centred body fought the heading above it. The
-          healthy boot card has no title and no description now, so there is
-          nothing left for the body to align WITH, and the winning argument for
-          left-alignment went with it. */}
+          boot card is not a dialog: when a face of it does carry a title (a
+          settled failure), the title centres with everything else, the way an
+          alert card reads. */}
       <CardContent className="flex flex-col items-center gap-4 py-6 text-center">
         {props.children}
       </CardContent>
@@ -89,36 +141,6 @@ export function HostBootHeadline(props: {
       >
         {props.message}
       </p>
-    </div>
-  );
-}
-
-export interface CenteredCardProps {
-  readonly message: string;
-  readonly spinnerVariant: AgentSpinnerVariant | null;
-  readonly testId: string | null;
-}
-
-/**
- * Full-viewport centered boot card, for the surfaces that own the whole window
- * (the host-runtime fallback, which renders before any app chrome exists).
- *
- * The viewport wrapper is the ONLY thing this adds over {@link HostBootCard} -
- * surfaces that sit inside the gate frame supply their own centering, because
- * that frame already carries the header and a second `min-h-svh` inside it
- * would push the card below the fold.
- */
-export function CenteredCard(props: CenteredCardProps): ReactNode {
-  return (
-    <div className="flex min-h-svh w-full items-center justify-center bg-background p-6 text-foreground">
-      <HostBootCard testId={props.testId}>
-        <HostBootHeadline
-          message={props.message}
-          spinnerVariant={props.spinnerVariant}
-          spinnerTestId="centered-card-agent-spinner"
-          messageTestId={null}
-        />
-      </HostBootCard>
     </div>
   );
 }

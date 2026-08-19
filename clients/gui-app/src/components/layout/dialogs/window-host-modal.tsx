@@ -2,7 +2,8 @@ import { type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { HostBootCard } from "@/components/centered-card";
+import { BELOW_APP_HEADER_TOP_CLASS } from "@/components/layout/header/app-header-height";
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
@@ -55,15 +56,20 @@ export interface WindowHostModalProps {
   readonly variant: WindowNarrationVariant;
   readonly progress: HostProgressView | null;
   /**
-   * The rich local-bootstrap body (live progress, Show details / bootstrap.log,
-   * "Configure shell…"), or `null` when this wait is not about this machine.
+   * The boot body - the shared boot headline with this machine's lane
+   * progress and the Show details / bootstrap.log disclosure while a start is
+   * in progress, or the failed attempt's diagnostics once it has settled - or
+   * `null` when this state has no body of that kind to draw.
    *
-   * Passed in rather than rendered here because it is only ever CORRECT for a
-   * local boot: offering to inspect this machine's bootstrap log while the
-   * fleet's only hosts are remote describes the wrong computer, which is the
-   * misattribution the readiness controller's loading arm already documents.
+   * Passed in rather than rendered here because the decision is the host's:
+   * every healthy start gets the body, WHATEVER the target's kind (see
+   * `buildBootBody`), while the settled diagnostics are drawn only when the
+   * failure is this machine's. Offering to inspect this machine's failed
+   * install while the fleet's only hosts are remote describes the wrong
+   * computer, and that arm keeps the title and description as its whole
+   * story.
    */
-  readonly localBootstrapBody: ReactNode | null;
+  readonly bootBody: ReactNode | null;
   readonly onRetry: (() => void) | null;
   readonly retryPending: boolean;
   /**
@@ -96,7 +102,7 @@ export interface WindowHostModalProps {
   readonly settingsEmphasis: "button" | "link";
   /**
    * Whether `Open settings` is the ONLY action this state offers, in which
-   * case the body already carries it inline on the footer row beside
+   * case the boot body already carries it inline on the footer row beside
    * `Show details` and the startup card draws no action row of its own.
    *
    * Decided above like every other action question - see the module doc. The
@@ -152,7 +158,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
           <WindowHostModalBody
             variant={props.variant}
             progress={props.progress}
-            localBootstrapBody={props.localBootstrapBody}
+            bootBody={props.bootBody}
           />
           <NarrationActions {...props} copy={copy} align="end" />
         </DialogPrimitive.Content>
@@ -166,20 +172,40 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
  * versions drew a host boot - a centered card in the gate's frame, not a
  * dialog.
  *
+ * It is drawn THROUGH `HostBootCard`, the same component as the two boot
+ * surfaces before it, and that is the whole point of it: a launch hands off
+ * from the runtime fallback to the gate's attach cover to this card, and the
+ * user sees ONE card the whole way only if all three are literally the same
+ * geometry. This one used to be `max-w-md` while the others were `sm`, and it
+ * centred against the full viewport while they centred under the header - so
+ * the card widened by 64px and jumped 20px the moment the narrator took over.
+ * The layer now starts BELOW the header (`BELOW_APP_HEADER_TOP_CLASS`) so its
+ * `p-6` box is the gate frame's box - and it is a FLEX row like that box, not
+ * a grid, for the same reason and one more: `HostBootCard`'s
+ * `viewportCapped` is a percentage `max-height`, and a percentage resolves
+ * against a flex container's definite height where an auto grid track grows
+ * with its content and would let the cap resolve against the very height it
+ * is meant to bound. Same centring, and a card that can actually be capped by
+ * the layer it sits in.
+ *
  * Structural differences from the dialog, all deliberate:
  *
- *  - NO overlay and NO pointer trap. The wrapper is `pointer-events-none`
- *    with only the card re-enabling itself, so toasts (the update toast
- *    above all - a pending update is MOST actionable when the host is being
- *    set up) and the gate frame's own header stay clickable.
+ *  - NO overlay and NO pointer trap. The layer is `pointer-events-none` with
+ *    only the card re-enabling itself, so toasts (the update toast above all
+ *    - a pending update is MOST actionable when the host is being set up)
+ *    and the gate frame's own header stay clickable.
  *  - The cold-start face has NO title and NO description while the start is
  *    healthy. "Setting up Traycer" over "Setting up Traycer Host…" over
  *    "Setting up…" was one event announced three times by three layers; the
- *    lane's own F19 heading inside the body is the one line, exactly as the
- *    released card had it.
+ *    boot body's own headline is the one line, exactly as the released card
+ *    had it. And that body is ALWAYS there on a healthy start - a card whose
+ *    body was withheld for a remote target rendered as nothing but the
+ *    `Open settings` link, which is the "modal with only the Open settings
+ *    button" report.
  *  - Recovery actions are withheld until they mean something: on a healthy
- *    start the row carries ONLY the quiet `Open settings` link, with Retry
- *    and Report issue gated above exactly as the released card gated them.
+ *    start the body's footer carries ONLY the quiet `Open settings` beside
+ *    `Show details`, with Retry and Report issue gated above exactly as the
+ *    released card gated them.
  *
  * ⚠ `Open settings` IS NOT OMITTED, however quiet the start looks, and the
  * temptation to drop it for a cleaner card is a LOCKOUT. This surface renders
@@ -198,48 +224,49 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
   const bareColdStart = props.cause === "cold-start" && !props.showReportIssue;
   return (
     <div
-      className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-6"
+      className={cn(
+        "pointer-events-none fixed inset-x-0 bottom-0 z-50 flex items-center justify-center p-6",
+        BELOW_APP_HEADER_TOP_CLASS,
+      )}
       data-testid="window-host-startup-card-layer"
     >
-      <Card
-        role="status"
-        aria-live="polite"
-        data-testid="window-host-startup-card"
-        data-variant={props.variant.kind}
-        data-cause={props.cause}
-        className="pointer-events-auto max-h-[85svh] w-full max-w-md overflow-y-auto shadow-sm"
+      <HostBootCard
+        testId="window-host-startup-card"
+        dataset={{
+          "data-variant": props.variant.kind,
+          "data-cause": props.cause,
+        }}
+        viewportCapped
       >
-        <CardContent className="flex flex-col gap-4 py-6">
-          {bareColdStart ? null : (
-            <>
-              <h2
-                data-testid="window-host-startup-card-title"
-                className="font-heading text-lg leading-none font-medium"
+        {bareColdStart ? null : (
+          <div className="flex flex-col gap-2">
+            <h2
+              data-testid="window-host-startup-card-title"
+              className="font-heading text-lg leading-none font-medium"
+            >
+              {props.cause === "cold-start"
+                ? "Traycer Host didn't start"
+                : copy.title}
+            </h2>
+            {props.cause === "cold-start" ? null : (
+              <p
+                className="text-ui-sm text-muted-foreground"
+                data-testid="window-host-startup-card-description"
               >
-                {props.cause === "cold-start"
-                  ? "Traycer Host didn't start"
-                  : copy.title}
-              </h2>
-              {props.cause === "cold-start" ? null : (
-                <p
-                  className="text-ui-sm text-muted-foreground"
-                  data-testid="window-host-startup-card-description"
-                >
-                  {copy.description}
-                </p>
-              )}
-            </>
-          )}
-          <WindowHostModalBody
-            variant={props.variant}
-            progress={props.progress}
-            localBootstrapBody={props.localBootstrapBody}
-          />
-          {props.settingsOnly ? null : (
-            <NarrationActions {...props} copy={copy} align="center" />
-          )}
-        </CardContent>
-      </Card>
+                {copy.description}
+              </p>
+            )}
+          </div>
+        )}
+        <WindowHostModalBody
+          variant={props.variant}
+          progress={props.progress}
+          bootBody={props.bootBody}
+        />
+        {props.settingsOnly ? null : (
+          <NarrationActions {...props} copy={copy} align="center" />
+        )}
+      </HostBootCard>
     </div>
   );
 }
@@ -339,23 +366,35 @@ function NarrationActions(
 function WindowHostModalBody(props: {
   readonly variant: WindowNarrationVariant;
   readonly progress: HostProgressView | null;
-  readonly localBootstrapBody: ReactNode | null;
+  readonly bootBody: ReactNode | null;
 }): ReactNode {
   if (props.variant.kind === "update-host") {
     return <IncompatibleDetail variant={props.variant} />;
   }
-  if (props.localBootstrapBody !== null) return props.localBootstrapBody;
+  if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
   return <LaneProgressLine progress={props.progress} />;
 }
 
 /**
- * The lane's own words, for the case where the rich local body is not the
- * right thing to draw but the controller is demonstrably doing something.
+ * The lane's own words, for a TITLED face that has no boot body but whose
+ * controller is demonstrably doing something: the plan-restricted arm, or a
+ * settled ∅ on a fleet this machine is not part of, while this machine's lane
+ * still runs underneath.
  *
  * "Traycer can't reach any host" beside a silent screen reads as a dead end
  * even while an install is streaming underneath; this is the line that says
- * the difference.
+ * the difference. It is NEVER the healthy startup card's body: that face has
+ * the full boot body (`buildBootBody`), and drawing this boxed line there
+ * instead was the "weird-looking Setting up Traycer" report - a bordered
+ * strip with a truncated heading and a percentage where every other phase of
+ * the launch draws the headline, the bar and the details footer.
+ *
+ * Heading and percentage ONLY - the same two things the boot body's bar says.
+ * The lane's byte count and its own message line (`transferLabel`, `detail`)
+ * are Settings ▸ Host's: on a launch card a "100 MB of 239 MB" reads as a
+ * download the app started because it was opened, and the detail is a log
+ * line with a path in it. See `HostProgress` in `local-host-loading.tsx`.
  */
 function LaneProgressLine(props: {
   readonly progress: HostProgressView;
@@ -363,32 +402,20 @@ function LaneProgressLine(props: {
   const { progress } = props;
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-border/60 bg-foreground/8 px-3 py-2"
+      className="flex items-center gap-2 rounded-md border border-border/60 bg-foreground/8 px-3 py-2"
       data-testid="window-host-modal-progress"
     >
-      <div className="flex items-center gap-2">
-        <AgentSpinningDots
-          className="size-3 shrink-0"
-          testId={undefined}
-          variant={undefined}
-        />
-        <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
-          {progress.heading}
-        </span>
-        {progress.percent === null ? null : (
-          <span className="shrink-0 font-mono text-code-xs tabular-nums text-muted-foreground">
-            {progress.percent}%
-          </span>
-        )}
-      </div>
-      {progress.transferLabel === null ? null : (
-        <span className="text-ui-xs text-muted-foreground">
-          {progress.transferLabel}
-        </span>
-      )}
-      {progress.detail === null ? null : (
-        <span className="truncate text-ui-xs text-muted-foreground">
-          {progress.detail}
+      <AgentSpinningDots
+        className="size-3 shrink-0"
+        testId={undefined}
+        variant={undefined}
+      />
+      <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
+        {progress.heading}
+      </span>
+      {progress.percent === null ? null : (
+        <span className="shrink-0 font-mono text-code-xs tabular-nums text-muted-foreground">
+          {progress.percent}%
         </span>
       )}
     </div>
@@ -412,8 +439,10 @@ function IncompatibleDetail(props: {
   return (
     <div
       // align-ok: a labelled version list inside its own fill - the labels
-      // line up only if the block keeps one left edge.
-      className="flex flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+      // line up only if the block keeps one left edge. `w-full` so the block
+      // spans the card like the attempt panel does on the settled faces,
+      // rather than shrink-wrapping in the centred column.
+      className="flex w-full flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
       data-testid="window-host-modal-incompatible-detail"
     >
       {detail.hostVersion === null ? null : (

@@ -9,6 +9,7 @@ import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import {
   HostReadinessControllerContext,
@@ -34,8 +35,22 @@ const hostStatus = vi.hoisted(() => ({
     | undefined,
 }));
 
+// The reader flags are DERIVED from `data`, never set beside it. The attempt
+// panel (`LocalBootstrapAttempts`) refuses a cached snapshot and refuses the
+// one a failed refetch retained, so it reads `isFetchedAfterMount` and
+// `isSuccess` as well - and a seam that let a fixture assert `isSuccess` while
+// `data` was `undefined` would be a state the real hook cannot produce, which
+// is how a mock ends up testing itself. `success` means "there is a snapshot"
+// here exactly as it does there. The fresh-read behaviour itself is exercised
+// against the real hook in `local-bootstrap-attempts.test.tsx`; this seam is
+// only about what the surfaces do with a snapshot once they legitimately have
+// one.
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
-  useRunnerTraycerHostStatusQuery: () => hostStatus,
+  useRunnerTraycerHostStatusQuery: () => ({
+    data: hostStatus.data,
+    isFetchedAfterMount: hostStatus.data !== undefined,
+    isSuccess: hostStatus.data !== undefined,
+  }),
 }));
 
 /**
@@ -353,16 +368,87 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
   });
 
-  it("cold-start on a REMOTE target keeps the settings escape hatch: no local body to host it inline, so the action row draws it", async () => {
-    // The one arm of the family that could lose `Open settings`. Blocking cold
-    // start, target REMOTE (activated in Settings, lease still connecting),
-    // nothing failed, local host fine so the slow stage never promotes: no
-    // Retry, no Update host, and `settled.failed` false. That made
-    // `settingsOnly` true - which suppresses the action row and delegates the
-    // link to the body - while `buildLocalBootstrapBody` returns null for any
-    // non-local lifecycle. An empty card over a blocked app, with the header
-    // nav disabled: a lockout. `settingsOnly` now also asks whether the body
-    // EXISTS to host the link.
+  it("cold-start on a REMOTE target draws the SAME boot body as a local one: headline, spinner, inline Open settings, no action row", async () => {
+    // THE REPORTED LAUNCH. A fresh install on an account that has remote hosts
+    // derives a remote as effective until the local host registers (the
+    // engine's third arm: no preference, no local row, first usable remote), so
+    // for that whole window the target is REMOTE, its lease is `connecting`,
+    // nothing has failed and nothing is slow. This arm used to withhold the
+    // boot body for any non-local target and let the action row carry the
+    // settings link on its own - which rendered as a card containing nothing
+    // but "Open settings". Now the body is drawn whatever the target's kind:
+    // same headline, same footer pair, same card as the two boot surfaces
+    // before it.
+    applySnapshot({
+      attached: true,
+      effectiveHostId: REMOTE_HOST_ID,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [
+        lease({ hostId: REMOTE_HOST_ID, status: "connecting", dead: null }),
+      ],
+    });
+
+    renderHostWithGate(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+      },
+      false,
+      new MockTraycerCli(),
+      GATE_BLOCKING,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+    });
+    const card = screen.getByTestId("window-host-startup-card");
+    expect(card.getAttribute("data-cause")).toBe("cold-start");
+    // Drawn THROUGH the shared boot card, not merely resembling it.
+    expect(card.getAttribute("data-surface")).toBe(HOST_BOOT_CARD_SURFACE);
+
+    // The boot body: spinner + the family's idle heading (no lane is running,
+    // and no machine has been named that a lane could describe).
+    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
+      "Starting Traycer…",
+    );
+    // The footer pair, exactly as the two surfaces before this one draw it:
+    // `Show details` with `Open settings` INLINE beside it ...
+    expect(
+      screen.getByTestId("local-host-loading-toggle-details"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("host-boot-open-settings").textContent).toContain(
+      "Open settings",
+    );
+    // ... and NO action row of the card's own: nothing failed, nothing to
+    // retry, so an equal-weight row would be the "something is wrong, pick
+    // one" signal on a start that is fine.
+    expect(screen.queryByTestId("window-host-modal-open-settings")).toBeNull();
+    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+    // And no title/description: the headline is the one line.
+    expect(screen.queryByTestId("window-host-startup-card-title")).toBeNull();
+    expect(
+      screen.queryByTestId("window-host-startup-card-description"),
+    ).toBeNull();
+  });
+
+  it("cold-start on a REMOTE target while this machine's lane runs: the lane heading in the boot headline and the bar, never the boxed lane line", async () => {
+    // The second shape of the same launch: the desktop's reconciler is
+    // installing the local host underneath while the derived target is still
+    // the remote. The lane is real and it is this machine's, so the boot body
+    // narrates it the way every other phase would - headline + progress bar -
+    // instead of the bordered `LaneProgressLine` strip that titled faces use
+    // under their own description. That strip under NO title was the
+    // "weird-looking Setting up Traycer" card.
+    controllerStatus.data = {
+      mutation: {
+        kind: "ensure",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
     applySnapshot({
       attached: true,
       effectiveHostId: REMOTE_HOST_ID,
@@ -386,17 +472,50 @@ describe("<WindowHostModalHost />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
+    expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
+      "Setting up Traycer Host…",
+    );
+    expect(screen.getByTestId("local-host-download-progress")).toBeTruthy();
+    expect(screen.queryByTestId("window-host-modal-progress")).toBeNull();
+    // Still the healthy footer, still no action row.
+    expect(screen.getByTestId("host-boot-open-settings")).toBeTruthy();
+    expect(screen.queryByTestId("window-host-modal-open-settings")).toBeNull();
+  });
+
+  it("∅ on a REMOTE-only fleet keeps this machine's diagnostics OFF the card: the settled arm is the one place the target still gates", async () => {
+    // The counterweight to the two fixtures above. The healthy body lost its
+    // target gate; the SETTLED body did not, and must not - an attempt panel
+    // about a local install under "No host is available" on a fleet this
+    // machine is not part of blames the wrong computer. Title + description +
+    // actions are that arm's whole story.
+    hostStatus.data = BOOTSTRAP_MARKERS;
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [deadLease(REMOTE_HOST_ID, { reason: "offline" })],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+      },
+      false,
+      new MockTraycerCli(),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
+    expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
     expect(
-      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
-    ).toBe("cold-start");
-    // No local body on a remote target ...
-    expect(screen.queryByTestId("host-boot-open-settings")).toBeNull();
-    // ... so the action row is what carries the escape hatch.
-    const openSettings = screen.getByTestId("window-host-modal-open-settings");
-    expect(openSettings.textContent).toContain("Open settings");
-    // Still a healthy start: nothing failed, nothing to retry.
-    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+      screen.queryByTestId("local-host-loading-toggle-details"),
+    ).toBeNull();
+    expect(screen.getByTestId("window-host-modal-open-settings")).toBeTruthy();
   });
 
   it("cold-start, healthy (stage: loading, no provisioningError): Retry, Report issue absent; Open settings present as a link; spinner shown; no attempt summary", async () => {
@@ -944,7 +1063,7 @@ describe("<WindowHostModalHost />", () => {
       // The defect class: both bodies were fragments, so their children became
       // direct children of the dialog's own column and each one carried its own
       // alignment or none. Asserted per arm because the two arms are built by
-      // different branches of `buildLocalBootstrapBody` - fixing one and
+      // different branches of `buildBootBody` - fixing one and
       // leaving the other is exactly how they drift.
       hostStatus.data = BOOTSTRAP_MARKERS;
       applySnapshot({

@@ -10,11 +10,15 @@ import { useRouterState } from "@tanstack/react-router";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { HostBootCard } from "@/components/centered-card";
 import { HostBootSurface } from "@/components/host/host-boot-surface";
-import { HOST_PROGRESS_IDLE_HEADING } from "@/lib/host/host-progress-copy";
+import { LocalBootstrapAttempts } from "@/components/host/local-bootstrap-attempts";
+import {
+  BootstrapLogDisclosure,
+  LocalHostBodyShell,
+} from "@/components/local-host-loading";
 import { hostFailureReportIssueAction } from "@/components/layout/host-failure-report";
 import { compatibilityPresentation } from "@/components/layout/host-compatibility-presentation";
 import {
@@ -420,15 +424,40 @@ export function HostScopeReady(props: {
  * claims. That is what makes the deletions below provable rather than argued -
  * add a kind to the narrator without removing its case here and this file stops
  * compiling, instead of quietly reviving a second narrator.
+ *
+ * Exported for ONE reader outside this file: the boot-family screenshot gallery
+ * (`__tests__/browser/host-boot-family-gallery.tsx`), which renders every face
+ * of the launch side by side to prove they are one card. Production mounts it
+ * only through `DefaultHostReadyGate`.
  */
-function SurfaceReadinessFallback(props: {
+export function SurfaceReadinessFallback(props: {
   readonly readiness: GateDrawnReadiness;
 }): ReactNode {
   const controller = useHostReadinessController();
   const presentation = controller.defaultHostPresentation;
+  // The auth-restore wait is a WAIT, not a terminal, and it can sit between
+  // the attach cover and the narrator's card on any launch. It therefore wears
+  // the shared boot surface - same card, same idle sentence, same Show details
+  // / Open settings footer - rather than a bare "Restoring authenticated
+  // session…" line with no spinner and no controls, which read as a fourth,
+  // unrelated card taking a turn in the middle of one launch. The sentence is
+  // the family's idle heading on purpose: while nothing lane-specific is
+  // known every phase says the same thing, and "Traycer is starting" is what
+  // restoring the session is a step of.
+  if (props.readiness.kind === "restoring-request-context") {
+    return (
+      <div className="flex flex-1 items-center justify-center p-6">
+        <HostBootSurface
+          testId="host-ready-gate-restoring-request-context"
+          onConfigureShell={presentation.configureShell}
+          onOpenSettings={presentation.openSettings}
+        />
+      </div>
+    );
+  }
   // No install-progress read here any more. Every kind that HAD progress to
   // show (`loading-host`, `provisioning-host`, the slow-host card) belongs to
-  // the window narrator now; the four kinds left are terminals with nothing
+  // the window narrator now; the kinds left are terminals with nothing
   // streaming behind them.
   return (
     <FallbackFrame
@@ -559,7 +588,6 @@ function AttachPendingCard(props: {
           is what made the sequence read as unrelated modals. */}
       <HostBootSurface
         testId="host-gate-attach-pending"
-        message={HOST_PROGRESS_IDLE_HEADING}
         onConfigureShell={props.presentation.configureShell}
         onOpenSettings={props.presentation.openSettings}
       />
@@ -568,10 +596,15 @@ function AttachPendingCard(props: {
 }
 
 /**
- * The full-screen host-boot card, drawn (max-w-md, shadow-sm, gap-4/py-6) the
- * way the standalone host-boot splash drew it before the gate took over - that
- * view predates the split work and must not drift. The splash component itself
- * was deleted in P3.4; this frame is where its shape lives now.
+ * The gate's own full-screen card, drawn through the SHARED boot card.
+ *
+ * It used to carry its own `max-w-md` card, which was the released splash's
+ * shape before the gate took over. That predated the boot-card family; once
+ * the family existed, this was the one member with a different width, so a
+ * launch that ended on a terminal (a failed install, a removed host) widened
+ * its card by 64px at the very moment it had bad news. Same card, same
+ * centring, same spinner rules; this frame adds only the message, the
+ * optional detail line, a body slot and the action row.
  *
  * It took a `variant` until P3.2: `slot` was the bounded in-surface form, drawn
  * without a card because it sat inside a tab's frame. P2.2 deleted the per-pane
@@ -586,58 +619,58 @@ function FallbackFrame(props: {
 }): ReactNode {
   const hasActionsRow =
     props.fallback.actions.length > 0 || props.fallback.footer !== null;
-  const content = (
-    <>
-      {props.fallback.message === null ? null : (
-        <p data-testid={props.messageTestId} className="text-muted-foreground">
-          {props.fallback.message}
-        </p>
-      )}
-      {props.fallback.detail === null ? null : (
-        <p className="text-ui-xs text-muted-foreground">
-          {props.fallback.detail}
-        </p>
-      )}
-      {props.fallback.body}
-      {hasActionsRow ? (
-        <div className="flex flex-wrap justify-center gap-2">
-          {props.fallback.actions.map((action) => (
-            <Button
-              key={action.testId}
-              type="button"
-              size="sm"
-              variant={action.variant}
-              disabled={action.disabled}
-              onClick={action.onClick}
-              data-testid={action.testId}
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <span>{action.label}</span>
-                {action.pending ? (
-                  <AgentSpinningDots
-                    className={undefined}
-                    testId={`${action.testId}-spinner`}
-                    variant={undefined}
-                  />
-                ) : null}
-              </span>
-            </Button>
-          ))}
-          {props.fallback.footer}
-        </div>
-      ) : null}
-    </>
-  );
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background p-6 text-foreground"
       data-testid={props.testId}
     >
-      <Card className="w-full max-w-md shadow-sm">
-        <CardContent className="flex flex-col items-center gap-4 py-6 text-center text-ui-sm">
-          {content}
-        </CardContent>
-      </Card>
+      <HostBootCard testId={null} dataset={{}} viewportCapped={false}>
+        {props.fallback.title === null ? null : (
+          // The same heading treatment as the narrator's titled faces
+          // (`WindowHostStartupCard`): a settled failure gets a title, and the
+          // two cards that can say "this machine's host didn't start" say it
+          // in the same type on the same card.
+          <h2 className="font-heading text-lg leading-none font-medium">
+            {props.fallback.title}
+          </h2>
+        )}
+        {props.fallback.message === null ? null : (
+          <p
+            data-testid={props.messageTestId}
+            className="text-ui-sm text-muted-foreground"
+          >
+            {props.fallback.message}
+          </p>
+        )}
+        {props.fallback.body}
+        {hasActionsRow ? (
+          <div className="flex flex-wrap justify-center gap-2">
+            {props.fallback.actions.map((action) => (
+              <Button
+                key={action.testId}
+                type="button"
+                size="sm"
+                variant={action.variant}
+                disabled={action.disabled}
+                onClick={action.onClick}
+                data-testid={action.testId}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <span>{action.label}</span>
+                  {action.pending ? (
+                    <AgentSpinningDots
+                      className={undefined}
+                      testId={`${action.testId}-spinner`}
+                      variant={undefined}
+                    />
+                  ) : null}
+                </span>
+              </Button>
+            ))}
+            {props.fallback.footer}
+          </div>
+        ) : null}
+      </HostBootCard>
     </div>
   );
 }
@@ -658,9 +691,10 @@ interface ReadinessFallbackAction {
 }
 
 interface ReadinessFallback {
+  /** The heading of a SETTLED state, or null for a card that is only a line. */
+  readonly title: string | null;
   readonly message: string | null;
-  readonly detail: string | null;
-  /** Rich slot content rendered between the message/detail text and the actions row. */
+  /** Rich slot content rendered between the message and the actions row. */
   readonly body: ReactNode | null;
   /** Rich content rendered alongside the action buttons, in the same row. */
   readonly footer: ReactNode | null;
@@ -668,7 +702,19 @@ interface ReadinessFallback {
 }
 
 /**
- * Four kinds, and the type says so.
+ * The gate-drawn kinds that are TERMINALS - a card with a message and actions
+ * rather than a wait. `restoring-request-context` is a wait and draws the boot
+ * surface instead (see `SurfaceReadinessFallback`), so it is carved out here
+ * at the type level: the switch below is total over what is left, and a new
+ * gate-drawn kind has to say which of the two it is.
+ */
+type GateTerminalReadiness = Exclude<
+  GateDrawnReadiness,
+  { readonly kind: "restoring-request-context" }
+>;
+
+/**
+ * Three kinds, and the type says so.
  *
  * `loading-host`, `provisioning-host` and `unavailable-host` are absent because
  * `GateDrawnReadiness` excludes them - the window narrator speaks for all three.
@@ -679,23 +725,15 @@ interface ReadinessFallback {
  * reachability was a predicate rather than a type.
  */
 function fallbackContent(
-  readiness: GateDrawnReadiness,
+  readiness: GateTerminalReadiness,
   presentation: DefaultHostReadinessPresentation,
 ): ReadinessFallback {
   switch (readiness.kind) {
-    case "restoring-request-context":
-      return {
-        message: "Restoring authenticated session…",
-        detail: null,
-        body: null,
-        footer: null,
-        actions: [],
-      };
     case "mobile-no-host":
       return {
+        title: null,
         message:
           "No host connected. Connect a host from this device to get started.",
-        detail: null,
         body: null,
         footer: null,
         actions: [],
@@ -704,11 +742,11 @@ function fallbackContent(
       return provisioningErrorFallback(presentation);
     case "removed-host":
       return {
-        message: "Traycer was removed",
+        title: "Traycer was removed",
         // The original card named the actual next step. "Reinstall to start
         // the host again" answered a question the user was not asking: they
         // removed it on purpose and need to know how to finish.
-        detail:
+        message:
           "You removed Traycer's background components from this device, so the host won't start. Your agents and history are preserved. To finish, quit Traycer and drag it from Applications to the Trash.",
         body: null,
         footer: null,
@@ -731,6 +769,20 @@ function fallbackContent(
             pending: false,
             onClick: presentation.reinstall,
           },
+          // The family's escape hatch, on this card too. Removing this
+          // machine's background components does not remove the account's
+          // OTHER hosts, and Settings ▸ Host is where one of those gets
+          // activated - a user who removed local Traycer on purpose may well
+          // be doing so to work from a remote machine. Same rule as every
+          // other card in the launch: never a terminal with no way to Settings.
+          {
+            label: "Open settings",
+            testId: "local-host-removed-open-settings",
+            variant: "outline",
+            disabled: false,
+            pending: false,
+            onClick: presentation.openSettings,
+          },
         ],
       };
   }
@@ -740,11 +792,31 @@ function provisioningErrorFallback(
   presentation: DefaultHostReadinessPresentation,
 ): ReadinessFallback {
   return {
+    // The same heading the narrator's settled cold-start face uses: both cards
+    // say "this machine's host didn't start", and they say it identically.
+    title: "Traycer Host didn't start",
     message:
       presentation.provisioningError?.message ??
       "Could not start Traycer Host.",
-    detail: null,
-    body: null,
+    // THE DIAGNOSTICS, and this card had none. It is drawn when this machine's
+    // install just failed, and it WINS over the window narrator on that state
+    // (`gateCardReadiness`) - which meant the narrator's settled arm, the one
+    // place the attempt panel and the bootstrap.log path lived, was unreachable
+    // for exactly the launch that most needed them. A user staring at "Could
+    // not start Traycer Host." with Retry and nothing else has no path to take
+    // the failure anywhere. Same body as the narrator's settled arm, by
+    // composition rather than by copy: the attempt panel first (it explains
+    // the state), then the log disclosure with NO trailing peer, because this
+    // card has a real action row that already carries `Open settings`.
+    body: (
+      <LocalHostBodyShell>
+        <LocalBootstrapAttempts />
+        <BootstrapLogDisclosure
+          onConfigureShell={presentation.configureShell}
+          trailing={null}
+        />
+      </LocalHostBodyShell>
+    ),
     footer: hostFailureReportIssueAction({
       title: "Could not start Traycer Host",
       message: "Traycer Host could not start.",

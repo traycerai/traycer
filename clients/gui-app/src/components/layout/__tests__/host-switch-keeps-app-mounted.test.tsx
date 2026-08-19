@@ -54,8 +54,19 @@ vi.mock("@/components/layout/header/app-header", () => ({
 // diagnostics correctly stay hidden.
 const hostStatus = vi.hoisted(() => ({ data: undefined }));
 
+// This suite never supplies a snapshot, so all three fields are the no-read
+// state and are written as such - `data !== undefined` would be a comparison
+// the type already decides (and ESLint says so). The reader flags exist
+// because `LocalBootstrapAttempts` refuses a cached snapshot and refuses the
+// one a failed refetch retained; see the note in
+// `default-host-ready-gate.test.tsx`. The local-bootstrap diagnostics
+// correctly stay hidden here either way.
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
-  useRunnerTraycerHostStatusQuery: () => hostStatus,
+  useRunnerTraycerHostStatusQuery: () => ({
+    data: hostStatus.data,
+    isFetchedAfterMount: false,
+    isSuccess: false,
+  }),
 }));
 
 const PRESENTATION: DefaultHostReadinessPresentation = {

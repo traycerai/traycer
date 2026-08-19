@@ -1,19 +1,30 @@
 import type { ReactNode } from "react";
-import { HostBootCard, HostBootHeadline } from "@/components/centered-card";
-import { BootstrapLogDisclosure } from "@/components/local-host-loading";
+import { HostBootCard } from "@/components/centered-card";
+import { LocalHostLoadingContent } from "@/components/local-host-loading";
 
 /**
- * The WHOLE boot card - headline, details disclosure and `Open settings` -
- * for the two phases that precede the window narrator.
+ * The WHOLE boot card - headline, progress bar, details disclosure and
+ * `Open settings` - for the phases that precede the window narrator.
+ *
+ * It is the narrator's own healthy body (`LocalHostLoadingContent`) with no
+ * lane, drawn in the shared card. Not "the same headline and controls" - the
+ * SAME BODY, bar included, so the card the runtime fallback draws before the
+ * router exists is, to the pixel, the card the narrator draws once a lane is
+ * reporting: same box, same rows, and the only things that change across a
+ * healthy launch are the sentence and the bar's fill. There is deliberately
+ * no `message` prop: every wait face says the body's idle heading
+ * (`HOST_PROGRESS_IDLE_HEADING`) until a lane says something new, and a prop
+ * would be a way for one phase to say it differently.
  *
  * WHY THE CONTROLS ARE HERE AND NOT ONLY ON THE LAST CARD. A launch crosses
  * three surfaces, and only the last one used to carry `Show details` and
  * `Open settings`; the first two were bare. So the card visibly GREW controls
  * partway through a wait, which reads as a different dialog replacing the
  * first rather than one surface progressing - the "why do we have these 2
- * modals" report. Same controls in the same places at every phase means the
- * only thing that changes across a launch is the sentence and, once a lane
- * reports, a progress bar.
+ * modals" report. The bar followed the same rule one review later: it used
+ * to appear only once a lane reported, and a fresh install showed "3-4
+ * different modals … a modal shows some progress bar in the middle … the UI
+ * feels jumpy when the modal size keeps changing".
  *
  * Both controls are genuinely LIVE here, which is why they are rendered rather
  * than stubbed disabled:
@@ -30,22 +41,16 @@ import { BootstrapLogDisclosure } from "@/components/local-host-loading";
  *    hatch this family must never lose.
  */
 export function HostBootSurface(props: {
-  readonly message: string;
   readonly testId: string | null;
   readonly onConfigureShell: () => void;
   readonly onOpenSettings: () => void;
 }): ReactNode {
   return (
-    <HostBootCard testId={props.testId}>
-      <HostBootHeadline
-        message={props.message}
-        spinnerVariant="sparkle"
-        spinnerTestId="host-boot-spinner"
-        messageTestId="host-boot-message"
-      />
-      <BootstrapLogDisclosure
+    <HostBootCard testId={props.testId} dataset={{}} viewportCapped={false}>
+      <LocalHostLoadingContent
+        progress={null}
         onConfigureShell={props.onConfigureShell}
-        trailing={
+        footerTrailing={
           <BootOpenSettingsButton onOpenSettings={props.onOpenSettings} />
         }
       />

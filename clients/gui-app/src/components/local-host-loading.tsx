@@ -60,6 +60,7 @@ export function BootstrapLogDisclosure(
   // toggles closed-then-open quickly.
   const status = useRunnerTraycerHostStatusQuery({
     pollIntervalMs: showDetails ? BOOTSTRAP_TAIL_POLL_MS : null,
+    onMount: "when-stale",
   });
   // No CLI, no bootstrap log - but a neighbour control still has to render, or
   // the footer disappears entirely on shells that never had a log to offer.
@@ -146,10 +147,10 @@ export interface LocalHostLoadingContentProps {
 }
 
 /**
- * The host-boot body: spinner, progress heading/detail, the download progress
- * bar, and the bootstrap-log disclosure (with the "Configure shell…"
- * shortcut). Deliberately has no outer chrome (no `min-h-svh` wrapper, no
- * `<AppHeader>`, no `<Card>`) so its caller provides its own bounded layout.
+ * The host-boot body: spinner + heading, the progress bar, and the
+ * bootstrap-log disclosure (with the "Configure shell…" shortcut).
+ * Deliberately has no outer chrome (no `min-h-svh` wrapper, no `<AppHeader>`,
+ * no `<Card>`) so its caller provides its own bounded layout.
  *
  * ONE PURPOSE, since P3.4: this describes a start that is still in progress,
  * and nothing else. It used to take a `stage` and grow a second face on
@@ -159,6 +160,25 @@ export interface LocalHostLoadingContentProps {
  * actions in one row of its own, drawing the attempt diagnostics beside this
  * body on the arm where they are true. A body with no branch cannot disagree
  * with the surface it sits in about what is happening.
+ *
+ * ONE HEIGHT, whatever the lane has said. Every member of this body is drawn
+ * on every call - `progress: null` (no lane yet) draws the idle heading over
+ * an indeterminate bar, a reporting lane draws its heading over a filling
+ * bar - so the same body serves the two boot surfaces BEFORE the narrator
+ * (`HostBootSurface`) and the narrator's healthy face itself, and the card is
+ * one box from the first frame of a launch until a lane finishes. It used to
+ * add the bar (and a lane-detail line) only once a lane reported, which made
+ * the card grow mid-wait; on a centred card that moves both edges, and it was
+ * reported after a real install as "3-4 different modals … the UI feels jumpy
+ * when the modal size keeps changing".
+ *
+ * NO LANE-DETAIL LINE. `HostProgressView.detail` is the lane's own message -
+ * "extracting host archive into ~/.traycer/…/staging", "atomically replacing
+ * install directory" - a log line with a path in it, not a sentence for a
+ * launch card, and its arrival was one of the shapes in that report. The
+ * heading (`hostProgressHeading`) already names the phase in the user's
+ * words; the detail stays in the shared table for Settings ▸ Host, where a
+ * user has gone looking for it.
  */
 export function LocalHostLoadingContent(
   props: LocalHostLoadingContentProps,
@@ -185,7 +205,14 @@ export function LocalHostLoadingContent(
         spinnerTestId="local-host-loading-spinner"
         messageTestId="local-host-loading-stage"
       />
-      <ProgressLines view={progressView} />
+      {/* THE CONTRACT, not a special case: no measured position => indeterminate.
+          That covers a lane that reports no percentage (`verify`, `swap`,
+          `service-start`, anything added later) AND the wait before any lane
+          has spoken - both are "busy, position unknown", which is exactly what
+          an indeterminate `progressbar` means. The block is the CURRENT
+          stage's, not "the download's": it stopped being that the moment the
+          carry-forward was scoped to one stage. */}
+      <HostProgress percent={progressView?.percent ?? null} />
       <BootstrapLogDisclosure
         onConfigureShell={props.onConfigureShell}
         trailing={props.footerTrailing}
@@ -194,56 +221,31 @@ export function LocalHostLoadingContent(
   );
 }
 
-/**
- * The lane's detail line and its progress bar, both of which only exist when
- * the lane has said something. Split out of the body so the body's branch
- * count stays about its own layout rather than about the view's optionality.
- */
-function ProgressLines(props: {
-  readonly view: HostProgressView | null;
-}): ReactNode {
-  const { view } = props;
-  if (view === null) return null;
-  return (
-    <>
-      {view.detail === null ? null : (
-        <p
-          data-testid="local-host-loading-progress-detail"
-          className="text-ui-sm text-muted-foreground"
-        >
-          {view.detail}
-        </p>
-      )}
-      {/* THE CONTRACT, not a special case: a lane is RUNNING and reports no
-          percentage => indeterminate. Reaching here at all means a lane is
-          running - `useHostProvisioningProgress` returns `null` when none is,
-          which the guard above already handled - so the only question left is
-          whether it has a number.
-
-          Written as the contract rather than as an extract-shaped patch, so it
-          covers `verify`, `swap`, `service-start` and anything added later for
-          free. The block also stopped being "the download's progress" the moment
-          the carry-forward was scoped to one stage; it is the CURRENT stage's. */}
-      <HostProgress percent={view.percent} transferLabel={view.transferLabel} />
-    </>
-  );
-}
-
 interface HostProgressProps {
-  /** `null` for a running stage with no measured position - see the contract above. */
+  /** `null` while nothing has a measured position - see the contract above. */
   readonly percent: number | null;
-  readonly transferLabel: string | null;
 }
 
 /**
- * The current stage's progress: determinate when it reports a percentage,
- * indeterminate when it is merely running.
+ * The boot card's ONE progress bar: determinate when the running stage
+ * reports a percentage, indeterminate otherwise - and present on EVERY wait
+ * face, the idle "Starting Traycer…" included.
  *
  * WHY IT RENDERS AT ALL WITHOUT A NUMBER. Before this, the block was gated on
  * `percent !== null`, so at a stage transition the whole thing unmounted and the
  * card lost 48px - and because the modal is centred with `-translate-y-1/2`, both
  * of its edges moved 24px and the whole dialog jumped mid-install. Measured, on
- * the one surface this epic exists to fix. Holding the space is the point.
+ * the one surface this epic exists to fix. Holding the space is the point - and
+ * it now holds it from the first frame of the launch (see
+ * `LocalHostLoadingContent`), because a bar that appeared when the lane began
+ * reporting was the same jump one phase earlier.
+ *
+ * NO BYTES. This row used to carry "100 MB of 239 MB" beside the percentage.
+ * On a card that is on screen the moment the app opens, a byte count reads as
+ * "Traycer began downloading something because I launched it" - reported as
+ * alarming - where a percentage reads as the same start progressing. The
+ * transfer figures stay in the shared table (`HostProgressView.transferLabel`)
+ * for Settings ▸ Host, where a user has gone looking for them.
  *
  * ⚠ AND IT MUST NOT HIDE A STALL. It cannot: stall detection is entirely the
  * staged wait's (`LOCAL_HOST_SLOW_START_THRESHOLD_MS` and
@@ -258,19 +260,12 @@ function HostProgress(props: HostProgressProps) {
     <div
       data-testid="local-host-download-progress"
       data-indeterminate={indeterminate ? "true" : "false"}
-      className="flex w-full flex-col gap-2"
+      // `items-center`: the figure below the track centres, like everything
+      // else on this card (heading above, footer below). A right-aligned
+      // figure with nothing on its left - which is what dropping the byte
+      // count left behind - hung off the track's end like an orphan.
+      className="flex w-full flex-col items-center gap-2"
     >
-      {/* Bytes and percent ONLY. This slot used to fall back to the stage's
-          short label ("Setting up…"), which merely repeated the heading two
-          lines up in fewer words - the third of the three "Setting up"s. The
-          row keeps its height either way so a transfer label appearing at the
-          download stage does not bounce the centered card. */}
-      <div className="flex min-h-4 items-center justify-between text-ui-xs text-muted-foreground">
-        <span>{props.transferLabel ?? ""}</span>
-        {indeterminate ? null : (
-          <span className="font-medium text-foreground">{props.percent}%</span>
-        )}
-      </div>
       <div
         role="progressbar"
         aria-valuemin={0}
@@ -279,7 +274,13 @@ function HostProgress(props: HostProgressProps) {
         // a `progressbar` with no `aria-valuenow` is announced as busy with an
         // unknown position, rather than as a specific amount done.
         aria-valuenow={props.percent ?? undefined}
-        className="h-2 w-full overflow-hidden rounded-full bg-foreground/8"
+        // Thin, fully rounded, and CLIPPED: `overflow-hidden` is what keeps
+        // the sweeping segment (which travels from -100% to +340% of its own
+        // width) inside the track's rounded ends, and the track is `w-full`
+        // of the body column, so it can never run past the card's padding.
+        // The track's fill is an alpha of the foreground, which survives
+        // every preset theme on a raised surface (see AGENTS.md).
+        className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/8"
       >
         {indeterminate ? (
           // A SWEEPING SEGMENT, not a pulsing full-width fill: a full bar reads as
@@ -301,6 +302,22 @@ function HostProgress(props: HostProgressProps) {
             style={{ width: `${String(props.percent)}%` }}
           />
         )}
+      </div>
+      {/* The percentage ONLY, under the track. This slot used to sit above
+          the bar and fall back to the stage's short label ("Setting up…"),
+          which merely repeated the heading two lines up in fewer words - the
+          third of the three "Setting up"s - and later carried the byte count
+          (see above). The row keeps its height either way so a percentage
+          appearing at the download stage does not bounce the centred card,
+          and `tabular-nums` keeps "9%" -> "10%" from shifting as it counts.
+
+          `min-h-[1lh]`, not a fixed `min-h-4`: the reserved slot is exactly
+          one line OF THIS ROW, so it follows `text-ui-xs`'s line height
+          instead of restating today's value of it in `rem` - the two agree
+          now and a token change is where they would stop. The unit is
+          already used across the composer surfaces. */}
+      <div className="flex min-h-[1lh] items-center justify-center text-ui-xs text-muted-foreground tabular-nums">
+        {indeterminate ? null : <span>{props.percent}%</span>}
       </div>
     </div>
   );

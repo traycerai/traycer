@@ -143,8 +143,10 @@ const queryClient = new QueryClient({
 
 export function WindowHostModalAlignmentFixture(): React.ReactElement {
   // Built through the real shared copy table rather than hand-assembled, so the
-  // body renders the same detail line and progress bar a live download does -
-  // they are members of the alignment set being measured.
+  // body renders the same heading and progress bar a live download does - they
+  // are members of the alignment set being measured. (The table's detail line
+  // and byte count are supplied and deliberately NOT drawn by this body; see
+  // `HostProgress`.)
   const progress = buildHostProgressView({
     kind: "ensure",
     startedAt: "2026-01-01T00:00:00.000Z",
@@ -177,10 +179,10 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
             cause="cold-start"
             variant={{ kind: "offline" }}
             progress={progress}
-            // The REAL body, composed exactly as `buildLocalBootstrapBody`
-            // composes it for this arm. A hand-rolled stand-in would be a
+            // The REAL body, composed exactly as `buildBootBody` composes it
+            // for this arm. A hand-rolled stand-in would be a
             // measurement of the fixture.
-            localBootstrapBody={
+            bootBody={
               <LocalHostLoadingContent
                 progress={progress}
                 onConfigureShell={() => undefined}

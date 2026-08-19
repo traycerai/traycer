@@ -44,10 +44,10 @@ const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  * The files whose alignment `LocalHostBodyShell` owns.
  *
  * Listed explicitly rather than globbed. The gate's own fallback card
- * (`host-readiness-controller.tsx`) is DELIBERATELY centred - it is the
- * `max-w-md` host-boot splash shape, which predates this work and must not
- * drift - so a glob over the host surfaces would flag a correct file and the
- * guard would be waived into uselessness on its first run.
+ * (`host-readiness-controller.tsx`) is drawn through the shared `HostBootCard`
+ * and composes this family's body by import; its own lines carry no
+ * alignment of their own to guard, so a glob over the host surfaces would only
+ * widen the list without adding a claim.
  */
 const BODY_FAMILY: readonly string[] = [
   "components/local-host-loading.tsx",

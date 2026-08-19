@@ -31,7 +31,7 @@ function baseProps(
     cause: "no-usable-host",
     variant: { kind: "offline" },
     progress: null,
-    localBootstrapBody: null,
+    bootBody: null,
     onRetry: null,
     retryPending: false,
     onUpdateHost: null,
@@ -209,7 +209,7 @@ describe("<WindowHostModal />", () => {
     expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
   });
 
-  it("renders heading/percent/transfer in window-host-modal-progress when progress is set and localBootstrapBody is null", () => {
+  it("renders heading and percent - never the byte count or the lane's message - in window-host-modal-progress when progress is set and bootBody is null", () => {
     renderModal(
       baseProps({
         variant: { kind: "offline" },
@@ -217,14 +217,18 @@ describe("<WindowHostModal />", () => {
           heading: "Setting up Traycer Host…",
           percent: 42,
           transferLabel: "1.0 MB of 2.0 MB",
+          detail: "extracting host archive into /Users/me/.traycer/staging",
         }),
-        localBootstrapBody: null,
+        bootBody: null,
       }),
     );
     const progressBlock = screen.getByTestId("window-host-modal-progress");
     expect(progressBlock.textContent).toContain("Setting up Traycer Host…");
     expect(progressBlock.textContent).toContain("42%");
-    expect(progressBlock.textContent).toContain("1.0 MB of 2.0 MB");
+    // The view carries both (supplied above); the launch card draws neither -
+    // same rule as the boot body's bar, see `HostProgress`.
+    expect(progressBlock.textContent).not.toContain("MB");
+    expect(progressBlock.textContent).not.toContain("extracting host archive");
   });
 
   it("the bootstrap body wins over progress when both are supplied", () => {
@@ -232,7 +236,7 @@ describe("<WindowHostModal />", () => {
       baseProps({
         variant: { kind: "offline" },
         progress: buildProgress({}),
-        localBootstrapBody: <div data-testid="local-bootstrap-body">boot</div>,
+        bootBody: <div data-testid="local-bootstrap-body">boot</div>,
       }),
     );
     expect(screen.getByTestId("local-bootstrap-body")).toBeTruthy();
