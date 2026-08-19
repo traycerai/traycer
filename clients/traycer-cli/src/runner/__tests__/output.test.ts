@@ -315,20 +315,40 @@ describe("createOutput progress bar rendering", () => {
     // mid-wait. Checked across the whole range, including the two ends.
     capture = captureStderr(true);
     const output = createOutput(makeRuntime());
-    for (const percent of [0, 1, 2, 17, 42, 61, 99, 100]) {
+    // FRACTIONS INCLUDED. `ProgressInfo.percent` is a `number`, and every
+    // producer in this repo happening to `Math.round` its byte ratio is each
+    // caller remembering rather than a property of this sink - "2.5%" is five
+    // characters and would move the column the rail exists to hold still.
+    for (const percent of [0, 1, 2, 2.5, 17, 42, 61, 99.6, 100]) {
       output.progress(
         downloadTick("downloading host 1.5.0", percent, percent, 100),
       );
     }
 
     const rails = capture.writes().map(railOf);
-    expect(rails).toHaveLength(8);
+    expect(rails).toHaveLength(9);
     for (const rail of rails) {
       expect([...rail]).toHaveLength(PROGRESS_BAR_WIDTH);
     }
     // The percentage sits at the same column in every frame.
     const columns = new Set(capture.writes().map((w) => w.indexOf("%")));
     expect(columns.size).toBe(1);
+    // Floored, not rounded: 99.6 reads as 99 beside a rail that is
+    // deliberately not full, rather than as a 100% that disagrees with it.
+    expect(capture.writes()[3]).toContain("  2%");
+    expect(capture.writes()[7]).toContain(" 99%");
+    expect(capture.writes()[7]).not.toContain("100%");
+    expect(rails[7]).not.toBe("━".repeat(PROGRESS_BAR_WIDTH));
+  });
+
+  it("floors the percentage on the non-TTY line too, where there is no rail to hold a column", () => {
+    // The other half of the same defect: a CI log reading
+    // "downloading host 1.5.0 52.34000000000001%".
+    capture = captureStderr(false);
+    const output = createOutput(makeRuntime());
+    output.progress(downloadTick("downloading host 1.5.0", 52.34, 52, 100));
+
+    expect(capture.writes()).toEqual(["downloading host 1.5.0 52%\n"]);
   });
 
   it("fills by FLOOR with a half-cell leading edge, so it neither overstates a start nor completes early", () => {

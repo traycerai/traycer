@@ -171,6 +171,23 @@ const ARCHIVE_HEARTBEAT_STAGE_PREFIX = "registry-archive-";
 function isArchiveHeartbeatStage(stage: string): boolean {
   return stage.startsWith(ARCHIVE_HEARTBEAT_STAGE_PREFIX);
 }
+/**
+ * The integer a human reads, from a position that need not be one.
+ *
+ * `ProgressInfo.percent` is a `number`: every producer in this repo happens to
+ * `Math.round` its byte ratio, but that is each caller remembering, not a
+ * property of the sink - and the rail's whole promise is that its figure
+ * occupies a fixed three-column slot ("2.5%" is five characters and moves it).
+ * Normalising HERE makes the promise the renderer's own.
+ *
+ * FLOOR, matching the rail's own fill: `Math.round(99.6)` would print 100%
+ * beside a rail that is deliberately not full (see the half-cell rule), and a
+ * label disagreeing with the bar it labels is worse than a rounded digit.
+ */
+function displayPercent(percent: number): string {
+  return String(Math.floor(percent));
+}
+
 function renderProgressBar(
   info: ProgressInfo,
   dim: (s: string) => string,
@@ -193,7 +210,7 @@ function renderProgressBar(
   // The number column is padded so a rail does not shuffle sideways as the
   // figure grows a digit, and it trails the rail (rather than leading it) so
   // the eye tracks one moving edge.
-  return `${label}${bar}  ${String(percent).padStart(3)}%`;
+  return `${label}${bar}  ${displayPercent(percent).padStart(3)}%`;
 }
 
 export function createOutput(runtime: RuntimeContext): Output {
@@ -302,7 +319,12 @@ export function createOutput(runtime: RuntimeContext): Output {
         if (decile === lastNonTtyDecile) return;
         lastNonTtyDecile = decile;
         if (info.message !== null) {
-          writeStderrLine(`${info.message} ${info.percent}%`);
+          // Same normalisation as the rail's: a CI log line reading
+          // "downloading host 1.5.0 52.34000000000001%" is the other half of
+          // the same defect.
+          writeStderrLine(
+            `${info.message} ${displayPercent(Math.max(0, Math.min(100, info.percent)))}%`,
+          );
         }
         return;
       }
