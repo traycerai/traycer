@@ -105,6 +105,7 @@ export function NotesDialog(props: {
         </div>
         {editing !== null && hostId !== null ? (
           <NoteEditor
+            key={editing.id}
             hostId={hostId}
             note={editing}
             profiles={profilesBucket.profiles}
