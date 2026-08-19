@@ -47,8 +47,21 @@ const FACES = [
   "gate-removed",
   "dialog",
 ];
-/** The faces that must not MOVE relative to one another (same top + height). */
-const WAIT_FACES = new Set(["runtime", "attach", "restoring", "narrator-idle"]);
+/**
+ * The faces that must not MOVE relative to one another (same top + height):
+ * every healthy wait, INCLUDING the narrator with a lane reporting at 42% -
+ * a launch crosses all five and the bar is on every one of them, so a lane
+ * starting to report changes the sentence and the fill, not the box.
+ * `narrator-slow` is deliberately not here: it grows a Retry action row,
+ * which is a real state change on its own clock, not a hand-off.
+ */
+const WAIT_FACES = new Set([
+  "runtime",
+  "attach",
+  "restoring",
+  "narrator-idle",
+  "narrator-lane",
+]);
 
 const args = process.argv.slice(2);
 const dark = args.includes("--dark");

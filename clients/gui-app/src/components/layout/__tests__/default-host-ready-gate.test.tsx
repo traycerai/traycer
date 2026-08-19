@@ -52,6 +52,13 @@ const hostStatus = vi.hoisted(() => ({
         readonly bootstrapLogTail: string;
       }
     | undefined,
+  // A result that HAS BEEN FETCHED since the reader mounted. The attempt panel
+  // (`LocalBootstrapAttempts`) refuses the cached snapshot and waits for a fresh
+  // read, so a mock that only carried `data` would hide the panel from every
+  // test here. That fresh-read behaviour is exercised against the real hook in
+  // `local-bootstrap-attempts.test.tsx`; this seam is only about what the
+  // surfaces do with a snapshot once they have one.
+  isFetchedAfterMount: true,
 }));
 
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
@@ -621,13 +628,15 @@ describe("<HostReadyGate />", () => {
     expect(screen.queryByText("Starting Traycer…")).toBeNull();
   });
 
-  it("draws restoring-request-context as the shared boot surface: idle heading, spinner, Show details and Open settings", () => {
+  it("draws restoring-request-context as the shared boot surface: idle heading, spinner, indeterminate bar, Show details and Open settings", () => {
     // A WAIT, not a terminal, and it can sit between the attach cover and the
     // narrator's card on any launch. It used to be a bare "Restoring
     // authenticated session…" line with no spinner and no controls - a fourth
     // card shape in a launch that must have one. Now it is the same card, the
-    // same idle sentence and the same footer pair as the surfaces on either
-    // side of it, so the hand-off is invisible.
+    // same idle sentence, the same bar and the same footer pair as the
+    // surfaces on either side of it, so the hand-off is invisible. The
+    // testids are the boot BODY's own (`local-host-loading-*`): the surface
+    // is that body with no lane, not a look-alike.
     renderGateWithCli(
       { kind: "restoring-request-context" },
       PRESENTATION,
@@ -638,10 +647,13 @@ describe("<HostReadyGate />", () => {
       "host-ready-gate-restoring-request-context",
     );
     expect(card.getAttribute("data-surface")).toBe(HOST_BOOT_CARD_SURFACE);
-    expect(screen.getByTestId("host-boot-spinner")).toBeTruthy();
-    expect(screen.getByTestId("host-boot-message").textContent).toBe(
+    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
       "Starting Traycer…",
     );
+    expect(
+      screen.getByTestId("local-host-download-progress").dataset.indeterminate,
+    ).toBe("true");
     expect(screen.queryByText("Restoring authenticated session…")).toBeNull();
     expect(
       screen.getByTestId("local-host-loading-toggle-details"),

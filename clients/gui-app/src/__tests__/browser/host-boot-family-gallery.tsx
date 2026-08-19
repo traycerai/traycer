@@ -30,10 +30,7 @@ import {
 } from "@/components/local-host-loading";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  buildHostProgressView,
-  HOST_PROGRESS_IDLE_HEADING,
-} from "@/lib/host/host-progress-copy";
+import { buildHostProgressView } from "@/lib/host/host-progress-copy";
 import { cn } from "@/lib/utils";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import "@/index.css";
@@ -361,7 +358,6 @@ function Face(): ReactElement {
           <div className="flex flex-1 items-center justify-center p-6">
             <HostBootSurface
               testId="host-gate-attach-pending"
-              message={HOST_PROGRESS_IDLE_HEADING}
               onConfigureShell={noop}
               onOpenSettings={noop}
             />

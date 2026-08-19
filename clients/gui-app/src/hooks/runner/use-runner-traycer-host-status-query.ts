@@ -19,11 +19,29 @@ export interface UseRunnerTraycerHostStatusQueryOptions {
    * host is starting up.
    */
   readonly pollIntervalMs: number | null;
+  /**
+   * What a MOUNT does with a snapshot already in the cache.
+   *
+   *  - `"when-stale"`: the ordinary rule - reuse it while it is within
+   *    `staleTime`, refetch otherwise. For a reader that shows the LIVE tail
+   *    (`BootstrapLogDisclosure`), whose poll refreshes it anyway.
+   *  - `"always"`: refetch on mount regardless, and let the caller gate on
+   *    `isFetchedAfterMount` so it never presents the cached one. For a
+   *    reader that describes a state transition that HAPPENED JUST NOW -
+   *    the failed-attempt panel (`LocalBootstrapAttempts`) mounts on the
+   *    failure, but the disclosure beside it read this same query while the
+   *    start was still healthy, and a snapshot from 20 seconds ago is
+   *    "fresh" by the 30-second rule while describing the attempt BEFORE
+   *    the one that just failed - or none. Only `convergeReady`'s SUCCESS
+   *    invalidates this key, so nothing else would refresh it in time.
+   */
+  readonly onMount: "when-stale" | "always";
 }
 
 function traycerHostStatusQueryOptions(
   traycerCli: ITraycerCli | null,
   pollIntervalMs: number | null,
+  onMount: "when-stale" | "always",
 ) {
   return queryOptions<TraycerHostStatusSnapshot>({
     queryKey:
@@ -43,6 +61,7 @@ function traycerHostStatusQueryOptions(
     // explicit invalidate.
     staleTime: pollIntervalMs !== null ? 0 : 30_000,
     refetchInterval: pollIntervalMs ?? false,
+    refetchOnMount: onMount === "always" ? "always" : true,
   });
 }
 
@@ -50,10 +69,13 @@ function traycerHostStatusQueryOptions(
  * Reads `traycer host status` through the runner-host CLI bridge. Host-
  * independent: works whether the host is up, starting, or wedged.
  * Consumers:
- *   - `LocalHostLoadingContent` - polls only while its details disclosure is
- *     open, so the live bootstrap.log tail stays fresh while a user watches.
- *   - `LocalBootstrapAttempts` in the window narrator - a single read: the
- *     renderer stops driving updates while the user reads the diagnostics.
+ *   - `BootstrapLogDisclosure` (every boot card's `Show details`) - polls only
+ *     while the disclosure is open, so the live bootstrap.log tail stays
+ *     fresh while a user watches.
+ *   - `LocalBootstrapAttempts` (the narrator's settled arm and the gate's
+ *     `provisioning-error` card) - a single FRESH read on mount, then no
+ *     polling: the renderer stops driving updates while the user reads the
+ *     diagnostics. See `onMount`.
  *
  * Disabled on shells without a CLI (mobile, web) - `traycerCli === null`.
  */
@@ -62,6 +84,10 @@ export function useRunnerTraycerHostStatusQuery(
 ): UseQueryResult<TraycerHostStatusSnapshot> {
   const runnerHost = useRunnerHost();
   return useQuery(
-    traycerHostStatusQueryOptions(runnerHost.traycerCli, opts.pollIntervalMs),
+    traycerHostStatusQueryOptions(
+      runnerHost.traycerCli,
+      opts.pollIntervalMs,
+      opts.onMount,
+    ),
   );
 }

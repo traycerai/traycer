@@ -180,7 +180,13 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
  * centred against the full viewport while they centred under the header - so
  * the card widened by 64px and jumped 20px the moment the narrator took over.
  * The layer now starts BELOW the header (`BELOW_APP_HEADER_TOP_CLASS`) so its
- * `p-6` box is the gate frame's box.
+ * `p-6` box is the gate frame's box - and it is a FLEX row like that box, not
+ * a grid, for the same reason and one more: `HostBootCard`'s
+ * `viewportCapped` is a percentage `max-height`, and a percentage resolves
+ * against a flex container's definite height where an auto grid track grows
+ * with its content and would let the cap resolve against the very height it
+ * is meant to bound. Same centring, and a card that can actually be capped by
+ * the layer it sits in.
  *
  * Structural differences from the dialog, all deliberate:
  *
@@ -219,7 +225,7 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
   return (
     <div
       className={cn(
-        "pointer-events-none fixed inset-x-0 bottom-0 z-50 grid place-items-center p-6",
+        "pointer-events-none fixed inset-x-0 bottom-0 z-50 flex items-center justify-center p-6",
         BELOW_APP_HEADER_TOP_CLASS,
       )}
       data-testid="window-host-startup-card-layer"
@@ -383,6 +389,12 @@ function WindowHostModalBody(props: {
  * instead was the "weird-looking Setting up Traycer" report - a bordered
  * strip with a truncated heading and a percentage where every other phase of
  * the launch draws the headline, the bar and the details footer.
+ *
+ * Heading and percentage ONLY - the same two things the boot body's bar says.
+ * The lane's byte count and its own message line (`transferLabel`, `detail`)
+ * are Settings ▸ Host's: on a launch card a "100 MB of 239 MB" reads as a
+ * download the app started because it was opened, and the detail is a log
+ * line with a path in it. See `HostProgress` in `local-host-loading.tsx`.
  */
 function LaneProgressLine(props: {
   readonly progress: HostProgressView;
@@ -390,32 +402,20 @@ function LaneProgressLine(props: {
   const { progress } = props;
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-border/60 bg-foreground/8 px-3 py-2"
+      className="flex items-center gap-2 rounded-md border border-border/60 bg-foreground/8 px-3 py-2"
       data-testid="window-host-modal-progress"
     >
-      <div className="flex items-center gap-2">
-        <AgentSpinningDots
-          className="size-3 shrink-0"
-          testId={undefined}
-          variant={undefined}
-        />
-        <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
-          {progress.heading}
-        </span>
-        {progress.percent === null ? null : (
-          <span className="shrink-0 font-mono text-code-xs tabular-nums text-muted-foreground">
-            {progress.percent}%
-          </span>
-        )}
-      </div>
-      {progress.transferLabel === null ? null : (
-        <span className="text-ui-xs text-muted-foreground">
-          {progress.transferLabel}
-        </span>
-      )}
-      {progress.detail === null ? null : (
-        <span className="truncate text-ui-xs text-muted-foreground">
-          {progress.detail}
+      <AgentSpinningDots
+        className="size-3 shrink-0"
+        testId={undefined}
+        variant={undefined}
+      />
+      <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
+        {progress.heading}
+      </span>
+      {progress.percent === null ? null : (
+        <span className="shrink-0 font-mono text-code-xs tabular-nums text-muted-foreground">
+          {progress.percent}%
         </span>
       )}
     </div>

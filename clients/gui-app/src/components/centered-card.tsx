@@ -34,9 +34,11 @@ export const HOST_BOOT_CARD_SURFACE = "host-boot-card";
  * with a large foreground spinner floating on its own line - and the
  * narrator's card was `max-w-md` again while the two before it were `sm`.
  *
- * One width, one alignment, one spinner treatment: later phases then ADD
- * content (a progress bar, a details toggle, actions, a title when something
- * has actually failed) into a box that does not move, which reads as one
+ * One width, one alignment, one spinner treatment - and one BODY for every
+ * healthy wait (`LocalHostLoadingContent`: headline, bar, footer, whether or
+ * not a lane has spoken yet), so across a healthy launch only the sentence
+ * and the bar's fill change inside a box that does not move. Only a settled
+ * failure ADDS to it (a title, diagnostics, actions), which reads as one
  * surface filling in rather than several modals taking turns.
  *
  * `pointer-events-auto` is unconditional and inert everywhere but one place:
@@ -54,11 +56,22 @@ export function HostBootCard(props: {
    */
   readonly dataset: Readonly<Record<`data-${string}`, string>>;
   /**
-   * Caps the card at the viewport and scrolls it inside, for a card drawn in a
-   * FIXED layer that cannot grow the page. A card in the gate frame or the
-   * runtime fallback sits in a `min-h-svh` column that scrolls as a whole, so
-   * it passes `false`; the narrator's startup layer passes `true`, because a
-   * failed face with the bootstrap log open can outgrow a small window.
+   * Caps the card at ITS LAYER's height and scrolls it inside, for a card
+   * drawn in a FIXED layer that cannot grow the page. A card in the gate frame
+   * or the runtime fallback sits in a `min-h-svh` column that scrolls as a
+   * whole, so it passes `false`; the narrator's startup layer passes `true`,
+   * because a failed face with the bootstrap log open can outgrow a small
+   * window.
+   *
+   * `max-h-full`, against the layer - NOT a viewport unit. The layer starts
+   * below the app header, so it is shorter than the viewport, and a cap
+   * written in `svh` can exceed the space that actually exists: at the
+   * supported 300% zoom on the 600px minimum window the CSS viewport is
+   * ~200px, the layer ~160px, and an `85svh` card of 170px centred in it
+   * overlapped the header and the window's bottom edge with its scrollable
+   * controls clipped. A percentage of the layer's own content box cannot.
+   * (Resolvable because the layer is a definite-height FLEX container - see
+   * `WindowHostStartupCard` for why the layer is flex and not grid.)
    */
   readonly viewportCapped: boolean;
 }): ReactNode {
@@ -73,7 +86,7 @@ export function HostBootCard(props: {
       aria-live="polite"
       className={cn(
         "pointer-events-auto w-full max-w-sm shadow-sm",
-        props.viewportCapped ? "max-h-[85svh] overflow-y-auto" : null,
+        props.viewportCapped ? "max-h-full overflow-y-auto" : null,
       )}
     >
       {/* CENTRED, and narrow. Ruled by the user against rendered screenshots,

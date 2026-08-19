@@ -19,7 +19,6 @@ import {
   BootstrapLogDisclosure,
   LocalHostBodyShell,
 } from "@/components/local-host-loading";
-import { HOST_PROGRESS_IDLE_HEADING } from "@/lib/host/host-progress-copy";
 import { hostFailureReportIssueAction } from "@/components/layout/host-failure-report";
 import { compatibilityPresentation } from "@/components/layout/host-compatibility-presentation";
 import {
@@ -450,7 +449,6 @@ export function SurfaceReadinessFallback(props: {
       <div className="flex flex-1 items-center justify-center p-6">
         <HostBootSurface
           testId="host-ready-gate-restoring-request-context"
-          message={HOST_PROGRESS_IDLE_HEADING}
           onConfigureShell={presentation.configureShell}
           onOpenSettings={presentation.openSettings}
         />
@@ -590,7 +588,6 @@ function AttachPendingCard(props: {
           is what made the sequence read as unrelated modals. */}
       <HostBootSurface
         testId="host-gate-attach-pending"
-        message={HOST_PROGRESS_IDLE_HEADING}
         onConfigureShell={props.presentation.configureShell}
         onOpenSettings={props.presentation.openSettings}
       />

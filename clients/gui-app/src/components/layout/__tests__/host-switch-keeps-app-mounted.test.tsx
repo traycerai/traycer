@@ -52,7 +52,10 @@ vi.mock("@/components/layout/header/app-header", () => ({
 
 // A shell with no CLI: the query is disabled and the local-bootstrap
 // diagnostics correctly stay hidden.
-const hostStatus = vi.hoisted(() => ({ data: undefined }));
+const hostStatus = vi.hoisted(() => ({
+  data: undefined,
+  isFetchedAfterMount: true,
+}));
 
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
   useRunnerTraycerHostStatusQuery: () => hostStatus,

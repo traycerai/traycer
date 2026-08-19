@@ -401,15 +401,28 @@ function resolveUpdateHost(
  *    when it is not), the current stage's bar, and the Show details / Open
  *    settings footer - the same card the two boot surfaces before it drew.
  *    This arm used to be withheld unless the target was this machine, on the
- *    argument that the bootstrap log describes this computer. But the two
- *    surfaces before it offer that same disclosure without knowing the target
- *    at all, and on a desktop this machine's lane IS what is running under a
- *    remote-target start (the launch reconciler installs the local host
- *    regardless). What withholding it actually produced was the reported
- *    launch: a fresh install on an account with remote hosts derives a remote
- *    as effective until the local host registers, and for that whole window
- *    the card was either empty but for the `Open settings` link or the boxed
- *    lane line - a third shape, in a launch that must have one.
+ *    argument that the bootstrap log describes this computer. It does - and
+ *    that is TRUE information under a remote-target start too: on a desktop
+ *    the main process starts this machine's host whichever host is effective
+ *    (`armFirstInstallOnSignIn` and `runLaunchHostConvergeReconcile` in
+ *    `clients/desktop/src/electron-main/startup/host-launch-converge.ts`
+ *    consult sign-in and removal, never the selection), so the tail behind
+ *    `Show details` is the log of a start that is happening right now on
+ *    this computer, not a stale one. The two surfaces before this card offer
+ *    that same disclosure without knowing the target at all - they mount
+ *    before it is known - and gating only this phase on it re-creates the
+ *    mid-launch shape change this family exists to remove. The disclosure's
+ *    one gate is the one every phase can see: the shell has a CLI
+ *    (`BootstrapLogDisclosure` self-hides on `traycerCli === null`). What
+ *    the target DOES gate is what it should: no local action ARMS for a
+ *    remote target (`local-boot-intent.test.tsx` pins `convergeReady` /
+ *    `removalState` at zero with this body drawn), and the settled
+ *    diagnostics below stay target-gated. What withholding the body actually
+ *    produced was the reported launch: a fresh install on an account with
+ *    remote hosts derives a remote as effective until the local host
+ *    registers, and for that whole window the card was either empty but for
+ *    the `Open settings` link or the boxed lane line - a third shape, in a
+ *    launch that must have one.
  *
  *  - A start that HAS settled in failure gets this machine's diagnostics
  *    (the attempt panel and the log disclosure) only when the failure is this

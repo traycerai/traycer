@@ -33,6 +33,13 @@ const hostStatus = vi.hoisted(() => ({
         readonly bootstrapLogTail: string;
       }
     | undefined,
+  // A result that HAS BEEN FETCHED since the reader mounted. The attempt panel
+  // (`LocalBootstrapAttempts`) refuses the cached snapshot and waits for a fresh
+  // read, so a mock that only carried `data` would hide the panel from every
+  // test here. That fresh-read behaviour is exercised against the real hook in
+  // `local-bootstrap-attempts.test.tsx`; this seam is only about what the
+  // surfaces do with a snapshot once they have one.
+  isFetchedAfterMount: true,
 }));
 
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({

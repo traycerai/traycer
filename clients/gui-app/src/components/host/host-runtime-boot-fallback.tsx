@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { HostBootSurface } from "@/components/host/host-boot-surface";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
-import { HOST_PROGRESS_IDLE_HEADING } from "@/lib/host/host-progress-copy";
 import { cn } from "@/lib/utils";
 
 /**
@@ -9,9 +8,9 @@ import { cn } from "@/lib/utils";
  * draws before the runtime binding exists, i.e. before any app chrome.
  *
  * Deliberately the same component as the two after it - same card, same
- * sentence, same controls (`HostBootSurface`). Giving each phase its own shape
- * and its own phrasing is what made one continuous wait look like a sequence
- * of unrelated modals.
+ * sentence, same bar, same controls (`HostBootSurface`). Giving each phase its
+ * own shape and its own phrasing is what made one continuous wait look like a
+ * sequence of unrelated modals.
  *
  * It owns the whole window, so it RESERVES the header's slot instead of
  * centring against the full viewport. The two surfaces after it sit under the
@@ -33,7 +32,6 @@ export function HostRuntimeBootFallback(props: {
       <div className="flex flex-1 items-center justify-center p-6">
         <HostBootSurface
           testId={null}
-          message={HOST_PROGRESS_IDLE_HEADING}
           onConfigureShell={props.onConfigureShell}
           onOpenSettings={props.onOpenSettings}
         />

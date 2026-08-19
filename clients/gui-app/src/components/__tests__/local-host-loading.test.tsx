@@ -161,12 +161,13 @@ describe("<LocalHostLoadingContent />", () => {
     ).not.toBeNull();
   });
 
-  it("renders host download progress with percentage and byte count", () => {
+  it("renders host download progress as the heading and a percentage - never the byte count, never the lane's own message", () => {
     const container = mountLoadingContent(
       buildHost(),
-      // Built through the REAL shared table, not a hand-written view:
-      // the copy and the units are what this asserts, and a
-      // hand-assembled view would supply the very thing under test.
+      // Built through the REAL shared table, not a hand-written view: the
+      // table still produces the transfer label and the detail line (Settings
+      // ▸ Host reads them), so this proves the SURFACE withholds them rather
+      // than a fixture that never supplied them.
       buildHostProgressView({
         kind: "ensure",
         startedAt: LANE_STARTED_AT,
@@ -182,11 +183,39 @@ describe("<LocalHostLoadingContent />", () => {
     );
 
     expect(container.textContent).toContain("Downloading Traycer Host…");
-    expect(container.textContent).toContain("downloading host 1.2.3");
-    expect(container.textContent).toContain("100 MB of 239 MB");
     expect(container.textContent).toContain("42%");
     const progress = screen.getByRole("progressbar");
     expect(progress.getAttribute("aria-valuenow")).toBe("42");
+    // NO BYTES on a launch card. "100 MB of 239 MB" on a card that is on
+    // screen the moment the app opens read as "Traycer began downloading
+    // something because I launched it" - reported as alarming. The figure is
+    // still in the view (positive control below); this surface does not draw
+    // it.
+    expect(container.textContent).not.toContain("MB");
+    expect(container.textContent).not.toContain("100 MB of 239 MB");
+    // NO LANE-DETAIL LINE. "downloading host 1.2.3" is the lane's log line;
+    // the heading already names the phase in the user's words, and a second
+    // line appearing under it was one of the shapes in "3-4 different modals".
+    expect(container.textContent).not.toContain("downloading host 1.2.3");
+    expect(
+      screen.queryByTestId("local-host-loading-progress-detail"),
+    ).toBeNull();
+    // Positive control: the table DID produce both, so the absences above are
+    // the surface's doing.
+    const view = buildHostProgressView({
+      kind: "ensure",
+      startedAt: LANE_STARTED_AT,
+      progress: {
+        stage: "download",
+        percent: 42,
+        bytes: 104_857_600,
+        totalBytes: 250_609_664,
+        workUnits: null,
+        message: "downloading host 1.2.3",
+      },
+    });
+    expect(view?.transferLabel).toBe("100 MB of 239 MB");
+    expect(view?.detail).toBe("downloading host 1.2.3");
   });
 
   it("says the setup event ONCE - the bar carries position, never a second phrasing of the heading", () => {
@@ -217,9 +246,8 @@ describe("<LocalHostLoadingContent />", () => {
     );
 
     expect(container.textContent).toContain("Setting up Traycer Host…");
-    // The lane's own message and its position both survive - what goes is the
-    // restatement.
-    expect(container.textContent).toContain("extracting host runtime");
+    // The position survives - what goes is the restatement (and the lane's own
+    // log line, which is not this surface's to draw; see the download test).
     expect(container.textContent).toContain("80%");
     expect(container.textContent).not.toContain("Setting up…");
     expect(container.textContent).not.toContain("Downloading…");
@@ -230,25 +258,33 @@ describe("<LocalHostLoadingContent />", () => {
     expect(container.textContent.match(/Setting up/g)?.length ?? 0).toBe(1);
   });
 
-  it("draws NO bar when no lane is running, and an indeterminate one when a lane reports no percentage", () => {
-    // THE BOUNDARY on the indeterminate contract, and the inverse of the lie it
-    // replaced. The bar means "this stage is running"; with no lane running there
-    // is nothing to claim, and a bar on the idle heading would assert activity
-    // where there is none.
+  it("draws an indeterminate bar when no lane is running, and when a lane reports no percentage", () => {
+    // THE CONTRACT: no measured position => indeterminate, and the bar is on
+    // EVERY wait face. This REVERSES an earlier pin here ("draws NO bar when no
+    // lane is running"), which read the bar as a claim that a lane runs. It is
+    // not: an indeterminate `progressbar` means "busy, position unknown", which
+    // is exactly what a start that has not reported yet is - and a bar that
+    // appeared only once a lane reported was a mid-wait height change on a
+    // centred card. Reported after a real install as "3-4 different modals …
+    // the UI feels jumpy when the modal size keeps changing", the ruling
+    // changed. The height it holds is measured in the browser gallery
+    // (`scripts/host-boot-family-gallery-browser.mjs`); jsdom cannot see it.
     //
-    // `progress: null` is exactly that state - `useHostProvisioningProgress`
+    // `progress: null` is exactly the no-lane state - `useHostProvisioningProgress`
     // returns null when no lane is running, and the body falls back to
     // HOST_PROGRESS_IDLE_HEADING.
     mountLoadingContent(buildHost(), null);
-    expect(screen.queryByRole("progressbar")).toBeNull();
-    expect(screen.queryByTestId("local-host-download-progress")).toBeNull();
+    const idleBar = screen.getByTestId("local-host-download-progress");
+    expect(idleBar.dataset.indeterminate).toBe("true");
+    expect(
+      screen.getByRole("progressbar").getAttribute("aria-valuenow"),
+    ).toBeNull();
+    expect(idleBar.textContent).not.toContain("%");
 
     cleanup();
 
-    // A RUNNING lane with no percentage: the bar appears, marked indeterminate,
-    // with no percentage figure beside it. The height it holds is what stops the
-    // card jumping at a stage transition - measured in the browser harness, since
-    // jsdom has no layout engine and cannot see it.
+    // A RUNNING lane with no percentage: the same bar, still indeterminate,
+    // with no percentage figure beside it.
     mountLoadingContent(
       buildHost(),
       buildHostProgressView({
