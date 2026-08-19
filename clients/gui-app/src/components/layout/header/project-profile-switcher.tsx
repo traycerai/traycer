@@ -18,6 +18,7 @@ import {
   useProjectProfilesStore,
 } from "@/stores/workspace/project-profiles-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { deleteActiveProjectProfile } from "@/lib/workspace/delete-project-profile";
 import { ProjectProfileCreateDialog } from "./project-profile-create-dialog";
 import { PROJECT_PROFILE_COLOR_DOT } from "./project-profile-colors";
 
@@ -174,7 +175,5 @@ function activateProfile(
 }
 
 function deleteActiveProfile(hostId: string | null, profileId: string): void {
-  if (hostId === null) return;
-  useProjectProfilesStore.getState().deleteProfile(hostId, profileId);
-  useLandingDraftStore.getState().replaceActiveDraftWorkspaceFromStores();
+  deleteActiveProjectProfile(hostId, profileId);
 }
