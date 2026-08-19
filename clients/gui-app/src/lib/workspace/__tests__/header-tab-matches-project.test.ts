@@ -95,6 +95,19 @@ describe("headerTabMatchesProject", () => {
     ).toBe(false);
   });
 
+  it("hides a fan-out epic even when Titanos is first in the folder list", () => {
+    expect(
+      headerTabMatchesProject({ kind: "epic", epicId: "issue-1180" }, TITANOS, {
+        worktreePaths: [],
+        linkedWorkspaces: [
+          { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+          { hostId: "host-a", workspacePath: "/Users/g/work/Traycer" },
+        ],
+        primaryPath: "/Users/g/work/Titanos",
+      }),
+    ).toBe(false);
+  });
+
   it("hides a claimed epic whose primary folder belongs to another project", () => {
     expect(
       headerTabMatchesProject(
@@ -114,7 +127,18 @@ describe("headerTabMatchesProject", () => {
 describe("resolveOwningProjectProfile", () => {
   const profiles = [TITANOS, CRM];
 
-  it("returns the profile whose folder is the epic primary workspace", () => {
+  it("returns the profile only when every workspace folder is inside it", () => {
+    expect(
+      resolveOwningProjectProfile(profiles, "any-epic", {
+        worktreePaths: [],
+        linkedWorkspaces: [
+          { hostId: "host-a", workspacePath: "/Users/g/work/CRM" },
+        ],
+      }),
+    ).toEqual(CRM);
+  });
+
+  it("returns null when the epic also has folders outside that profile", () => {
     expect(
       resolveOwningProjectProfile(profiles, "any-epic", {
         worktreePaths: [],
@@ -123,7 +147,7 @@ describe("resolveOwningProjectProfile", () => {
           { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
         ],
       }),
-    ).toEqual(CRM);
+    ).toBeNull();
   });
 
   it("returns the claimed profile when the epic has no workspace", () => {

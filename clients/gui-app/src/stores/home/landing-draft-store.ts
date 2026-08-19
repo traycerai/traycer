@@ -499,12 +499,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // Isolation applies at profile switch (this method) and at new-draft
         // create. A background draft keeps the folder set it was minted with —
         // activating it does not re-snapshot, so in-progress folder edits
-        // survive a profile change.
+        // survive a profile change. Switching while no Start Page is active
+        // must not mint a tab — that stacked duplicate Start Pages.
         const id = get().activeDraftId;
-        if (id === null) {
-          get().createDraft(null);
-          return;
-        }
+        if (id === null) return;
         set((state) =>
           updateDraftWorkspace(state, id, () =>
             readCurrentLandingDraftWorkspaceSnapshot(),

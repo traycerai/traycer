@@ -511,7 +511,7 @@ describe("useLandingDraftStore", () => {
     ).toEqual([WORKSPACE_A.path]);
   });
 
-  it("replaceActiveDraftWorkspaceFromStores mints a draft when none is active", () => {
+  it("replaceActiveDraftWorkspaceFromStores does not mint a Start Page when none is active", () => {
     useWorkspaceFoldersStore.getState().addResolvedFolders(HOST_A, [
       { ...WORKSPACE_A, hostId: HOST_A },
       { ...WORKSPACE_B, hostId: HOST_A },
@@ -527,13 +527,8 @@ describe("useLandingDraftStore", () => {
 
     useLandingDraftStore.getState().replaceActiveDraftWorkspaceFromStores();
 
-    const activeId = useLandingDraftStore.getState().activeDraftId;
-    expect(activeId).not.toBeNull();
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.find((entry) => entry.id === activeId)?.workspace.folders,
-    ).toEqual([WORKSPACE_A.path]);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
   });
 
   it("setDraftContent stores content on the target draft and bails on no-op writes", () => {
