@@ -465,6 +465,95 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(pathInput().value).toBe("/Users/tester/code/");
   });
 
+  it("Add picks the directory deliberately aimed with an arrow", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+
+    // The initial `..` highlight is only a visual default. Moving down is the
+    // first explicit aim, and Add must commit that row without requiring the
+    // user to open it first.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+
+    await expect(pick).resolves.toBe("/Users/tester/code");
+    expect(recordedRecents).toEqual(["/Users/tester/code"]);
+  });
+
+  it("ctrl+Enter picks the same deliberately aimed directory as Add", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.keyDown(pathInput(), { key: "Enter", ctrlKey: true });
+
+    await expect(pick).resolves.toBe("/Users/tester/code");
+  });
+
+  it("keeps a typed path authoritative after arrow navigation", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+
+    fireEvent.change(pathInput(), {
+      target: { value: "/Users/tester/co" },
+    });
+    // `code` and `consulting` are both visible, so this is a real movement to
+    // a directory row rather than a boundary keypress. The typed path still
+    // wins because editing the field established the user's source of truth.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+
+    await expect(pick).resolves.toBe("/Users/tester/co");
+  });
+
+  it("clears an aimed directory when the selection moves back to ..", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.keyDown(pathInput(), { key: "ArrowUp" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+
+    await expect(pick).resolves.toBe("/Users/tester");
+  });
+
+  it("does not promote an auto-highlighted root entry without movement", async () => {
+    queryByPath.set(
+      pathKey(null),
+      readyLevel({
+        directoryPath: "/",
+        parentPath: null,
+        entries: [
+          { path: "/apps", name: "apps" },
+          { path: "/code", name: "code" },
+        ],
+      }),
+    );
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+
+    // Row zero is highlighted because the listbox needs an active option, not
+    // because the user aimed at `/apps`.
+    fireEvent.keyDown(pathInput(), { key: "ArrowUp" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+
+    await expect(pick).resolves.toBe("/");
+  });
+
   it("relative input shows a hint, not a loading state", async () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());
