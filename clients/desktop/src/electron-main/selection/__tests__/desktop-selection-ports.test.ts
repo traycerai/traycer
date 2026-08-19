@@ -1652,21 +1652,29 @@ describe("createDesktopLocalHostEnsurePort", () => {
     });
   });
 
-  it("maps a busy outcome to {ok: true} - a host with work in progress is a running host", async () => {
+  it("does NOT treat a busy refusal as proof of life - E_HOST_BUSY is a fail-safe", async () => {
     const controller = new FakeHostController();
     const port = createDesktopLocalHostEnsurePort(controller);
-    // The converge wanted to swap bytes and declined to disrupt live work.
-    // The engine asked "is the local host running?", and it is. Resolving
-    // `deferred` here instead paced a retry that re-spawned the CLI every
-    // hold for as long as the host stayed busy, once the ensure stopped being
-    // gated on the local host being the window's target (nothing dials a
-    // non-target local host, so nothing else could end never-dialed).
+    // The tempting reading is "a host that is up with active work", and an
+    // earlier revision of this port resolved `{ok: true}` on it to spare a
+    // non-target local host one CLI spawn per pacing hold. `assertHostNotBusy`
+    // says otherwise in its own words: it raises `E_HOST_BUSY` when a live
+    // PID's idle state CANNOT BE DETERMINED - `/activity` timed out, refused,
+    // answered malformed, or 404'd - exactly as it does when the host reports
+    // real work. A WEDGED host is the first case, so `{ok: true}` handed
+    // `onHostProvedAlive` a host that cannot serve: refusal evidence cleared,
+    // lease usable, failover free to choose it, and each later ensure clearing
+    // the refusals its failed dials had just rebuilt.
     controller.outcome = {
       kind: "busy",
       continuation: "retry-with-force",
       message: "busy",
     };
-    await expect(port.ensureReady()).resolves.toEqual({ ok: true });
+    await expect(port.ensureReady()).resolves.toEqual({
+      ok: false,
+      reason: "busy",
+      deferred: true,
+    });
   });
 
   it("maps failed/deferred outcomes to {ok: false, reason: <kind>}, with only failed non-deferred", async () => {

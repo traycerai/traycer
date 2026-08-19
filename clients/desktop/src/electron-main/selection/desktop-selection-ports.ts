@@ -715,26 +715,35 @@ export function createDesktopLocalHostEnsurePort(
         if (outcome.value.running) return { ok: true };
         return { ok: false, reason: "removed-by-user", deferred: false };
       }
-      // `busy` is a HOST that is up with active work: the converge wanted to
-      // swap its bytes and declined to disrupt it. For the engine that IS the
-      // answer it asked for - "is the local host running?" - so it resolves
-      // `ok`, which is what lets proof of life create the evidence record that
-      // ends never-dialed. It used to resolve `deferred` (paced retry, lease
-      // left alone), which was harmless while the ensure only fired for a
-      // WANTED local host: a window pointed at it dialed it and ended
-      // never-dialed on its own. The ensure now fires whichever host is
-      // effective, and a local host nothing dials would otherwise draw one
-      // converge - a CLI spawn - every pacing hold for as long as it stayed
-      // busy. The pending swap is not this port's business: the launch
-      // reconciler and the idle-apply monitors own updates.
-      if (outcome.kind === "busy") return { ok: true };
-      // `deferred` says nothing dead-worthy about the host, and the engine
-      // must not turn it into a dead lease: it is the controller's word for
-      // "the lane or its CLI lock was busy, nothing ran".
+      // NEITHER SURVIVING OUTCOME IS PROOF OF LIFE, and `busy` is the one that
+      // looks like it. It reads as "a host that is up with active work", and
+      // an earlier revision of this port resolved it `ok` on that reading, to
+      // spare a non-target local host one CLI spawn per pacing hold. The
+      // reading is wrong: `E_HOST_BUSY` is a FAIL-SAFE. `assertHostNotBusy`
+      // raises it when a live PID's idle state CANNOT BE DETERMINED - the
+      // `/activity` probe timed out, refused the connection, answered
+      // malformed, or 404'd from a pre-feature host - as much as when the host
+      // answers "I am working". A WEDGED host is exactly the first case, so
+      // crediting it handed `onHostProvedAlive` a host that cannot serve:
+      // refusal evidence cleared, the lease usable, failover free to pick it,
+      // and every following ensure clearing the refusals the failed dials had
+      // just rebuilt.
+      //
+      // So `busy` rejoins `deferred`: the lease is left alone and the request
+      // is paced, which is the honest answer to "nothing here was
+      // established". `failed` keeps its own answer - it ran and concluded, so
+      // it stays the one arm allowed to arm the engine's dead-lease cooldown.
+      // The cost is the spawn that reading was meant to avoid, once per hold
+      // while a host stays busy - accepted, because it is bounded, it ends by
+      // itself when real work finishes (the next converge answers `ok` with a
+      // version it proved), and no amount of it can select a host that is not
+      // serving. Only reachability independently confirmed could restore the
+      // shortcut, and this port has no such evidence - the engine's own dial
+      // is what has it.
       return {
         ok: false,
         reason: outcome.kind,
-        deferred: outcome.kind === "deferred",
+        deferred: outcome.kind === "deferred" || outcome.kind === "busy",
       };
     },
   };
