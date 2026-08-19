@@ -1,5 +1,6 @@
-import { copyFile, mkdir, rename, rm, symlink } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { chmod, copyFile, mkdir, readdir, rename, rm } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import type { Environment } from "../runner/environment";
 import { cliInstallHomeDir } from "./paths";
 
@@ -26,16 +27,13 @@ export function wellKnownCliBinaryPath(environment: Environment): string {
 }
 
 export type WellKnownCliStageOutcome =
-  // The binary already IS the well-known slot; nothing to do.
+  // The binary already IS the well-known slot; nothing to do. This guard is
+  // what keeps a Desktop-staged slot binary intact when something anchors
+  // the slot path itself - without it, staging would replace the real
+  // binary with a copy of itself mid-flight.
   | { readonly staged: "already-well-known"; readonly wellKnownPath: string }
-  // A symlink at the well-known slot now points at the binary. Stays fresh
-  // across in-place upgrades (`cli upgrade` swaps bytes at the same path).
-  | { readonly staged: "symlink"; readonly wellKnownPath: string }
-  // Windows fallback when symlinks are unavailable (needs Developer Mode or
-  // elevation there): a byte copy. Refreshed on every mark-source /
-  // re-anchor; between those it can serve a stale-but-functional CLI, the
-  // same worst case `host update`'s preserved-invocation contract accepts.
-  | { readonly staged: "copy"; readonly wellKnownPath: string }
+  // The slot now holds a fresh COPY of the binary's bytes.
+  | { readonly staged: "staged"; readonly wellKnownPath: string }
   // Best-effort failure: the caller's primary contract (manifest write,
   // service registration against the real binary) still holds; only the
   // host's view through this slot stays degraded. Callers surface this.
@@ -46,38 +44,53 @@ export type WellKnownCliStageOutcome =
       readonly errorMessage: string;
     };
 
-// Stage the well-known CLI slot to point at `binaryPath`, atomically
-// (create under a temp name, rename over whatever is there - a previous
-// symlink, a stale copy, or a Desktop-staged binary being re-anchored
-// away from). Never throws: staging is an availability upgrade layered on
-// top of the caller's primary write, so failure is data, not an abort.
+// Stage the well-known CLI slot with a COPY of the bytes at `binaryPath`.
+// Never throws: staging is an availability upgrade layered on top of the
+// caller's primary write, so failure is data, not an abort.
+//
+// A copy, deliberately NOT a symlink - keep this in lockstep with
+// Desktop's `installBundledCli` (clients/desktop .../cli/cli-discovery.ts),
+// which is the sibling writer of this same slot and learned both lessons
+// in the field:
+//
+//   - Its POSIX slot used to be a symlink; any target remove/replace left
+//     a DANGLING link that lstat still shows while exec fails ENOENT. A
+//     copy cannot dangle - if the anchored binary later moves or dies,
+//     the slot keeps serving the last-anchored bytes (the accepted
+//     stale-but-functional worst case) instead of taking the host's CLI
+//     access and the registered service down with it. Freshness is
+//     event-driven, not link-driven: every writer of live CLI bytes
+//     (mark-source / re-anchor, both `cli upgrade` swap paths, the
+//     packaged self-invocation fallback) re-stages this slot.
+//   - On Windows the slot binary is routinely the RUNNING image (the
+//     registered service launches from it), which holds a delete lock but
+//     allows RENAME: move the old image aside, copy into the now-free
+//     name, and sweep `.old-*` leftovers once their processes exit.
+//
+// The staging name is per-invocation (pid + uuid): a fixed temp name is
+// shared mutable state between concurrent installers, and rename() is only
+// atomic with respect to a source nobody else is writing.
 export async function stageWellKnownCliBinary(opts: {
   readonly environment: Environment;
   readonly binaryPath: string;
 }): Promise<WellKnownCliStageOutcome> {
   const wellKnownPath = wellKnownCliBinaryPath(opts.environment);
-  const target = resolve(opts.binaryPath);
-  if (resolve(wellKnownPath) === target) {
+  const source = resolve(opts.binaryPath);
+  if (resolve(wellKnownPath) === source) {
     return { staged: "already-well-known", wellKnownPath };
   }
-  const staging = `${wellKnownPath}.staging-${process.pid}`;
+  const staging = `${wellKnownPath}.staging-${process.pid}-${randomUUID()}`;
   try {
     await mkdir(dirname(wellKnownPath), { recursive: true });
-    await rm(staging, { force: true });
-    try {
-      await symlink(target, staging);
-      await rename(staging, wellKnownPath);
-      return { staged: "symlink", wellKnownPath };
-    } catch (symlinkError) {
-      // Windows without Developer Mode / elevation refuses file symlinks
-      // (EPERM). A copy keeps the contract; elsewhere symlink failure is
-      // a real error worth reporting as-is.
-      if (process.platform !== "win32") throw symlinkError;
-      await rm(staging, { force: true });
-      await copyFile(target, staging);
-      await rename(staging, wellKnownPath);
-      return { staged: "copy", wellKnownPath };
+    await copyFile(source, staging);
+    if (process.platform === "win32") {
+      await sweepAsideSlotBinaries(wellKnownPath);
+      await renameSlotBinaryAside(wellKnownPath);
+    } else {
+      await chmod(staging, 0o755);
     }
+    await rename(staging, wellKnownPath);
+    return { staged: "staged", wellKnownPath };
   } catch (error) {
     await rm(staging, { force: true }).catch(() => undefined);
     const named = error instanceof Error ? error : new Error(String(error));
@@ -87,5 +100,45 @@ export async function stageWellKnownCliBinary(opts: {
       errorName: named.name,
       errorMessage: named.message,
     };
+  }
+}
+
+// Move a (possibly running) slot binary out of the stable name so a new
+// copy can take its place. Windows-only concern: a running image blocks
+// delete and rename-onto, but permits being renamed itself. A missing
+// binary (first staging) is not an error.
+async function renameSlotBinaryAside(wellKnownPath: string): Promise<void> {
+  try {
+    await rename(wellKnownPath, `${wellKnownPath}.old-${Date.now()}`);
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
+// Best-effort sweep of `<binary>.old-<ts>` leftovers from previous
+// rename-aside stagings. Deletion fails while a renamed image is still
+// executing; those unlock once the old process exits, so each staging pass
+// retries the whole set and the trash never outlives one host generation
+// by much.
+async function sweepAsideSlotBinaries(wellKnownPath: string): Promise<void> {
+  const dir = dirname(wellKnownPath);
+  const prefix = `${basename(wellKnownPath)}.old-`;
+  let entries: readonly string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    await rm(join(dir, entry), { force: true }).catch(() => undefined);
   }
 }

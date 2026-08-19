@@ -3,10 +3,12 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { lstat, readlink } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -61,11 +63,11 @@ describe("wellKnownCliBinaryPath", () => {
 });
 
 describe("stageWellKnownCliBinary", () => {
-  it("creates a symlink at the well-known path pointing at the resolved target", async () => {
+  it("stages a regular-file copy of the binary's bytes at the well-known path, mode 0o755", async () => {
     const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
       await import("../well-known-cli");
     const target = join(workHome, "real-binary");
-    writeFileSync(target, "binary bytes");
+    writeFileSync(target, "binary-one");
 
     const result = await stageWellKnownCliBinary({
       environment: ENVIRONMENT,
@@ -73,25 +75,27 @@ describe("stageWellKnownCliBinary", () => {
     });
 
     const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-    expect(result).toEqual({ staged: "symlink", wellKnownPath });
+    expect(result).toEqual({ staged: "staged", wellKnownPath });
     const stat = await lstat(wellKnownPath);
-    expect(stat.isSymbolicLink()).toBe(true);
-    expect(await readlink(wellKnownPath)).toBe(target);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    expect(stat.mode & 0o777).toBe(0o755);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("binary-one");
   });
 
-  it("replaces an existing symlink at the well-known path, retargeting it to a second binary", async () => {
+  it("re-staging over an already-staged slot replaces its bytes with the second binary's", async () => {
     const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
       await import("../well-known-cli");
     const first = join(workHome, "binary-one");
     const second = join(workHome, "binary-two");
-    writeFileSync(first, "one");
-    writeFileSync(second, "two");
+    writeFileSync(first, "binary-one");
+    writeFileSync(second, "binary-two");
 
     const firstResult = await stageWellKnownCliBinary({
       environment: ENVIRONMENT,
       binaryPath: first,
     });
-    expect(firstResult.staged).toBe("symlink");
+    expect(firstResult.staged).toBe("staged");
 
     const secondResult = await stageWellKnownCliBinary({
       environment: ENVIRONMENT,
@@ -99,13 +103,11 @@ describe("stageWellKnownCliBinary", () => {
     });
 
     const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-    expect(secondResult).toEqual({ staged: "symlink", wellKnownPath });
-    const stat = await lstat(wellKnownPath);
-    expect(stat.isSymbolicLink()).toBe(true);
-    expect(await readlink(wellKnownPath)).toBe(second);
+    expect(secondResult).toEqual({ staged: "staged", wellKnownPath });
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("binary-two");
   });
 
-  it("replaces an existing regular file at the well-known path with a symlink", async () => {
+  it("replaces an existing unrelated regular file at the well-known path with the staged bytes", async () => {
     const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
       await import("../well-known-cli");
     const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
@@ -119,13 +121,37 @@ describe("stageWellKnownCliBinary", () => {
       binaryPath: target,
     });
 
-    expect(result).toEqual({ staged: "symlink", wellKnownPath });
+    expect(result).toEqual({ staged: "staged", wellKnownPath });
     const stat = await lstat(wellKnownPath);
-    expect(stat.isSymbolicLink()).toBe(true);
-    expect(await readlink(wellKnownPath)).toBe(target);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("binary bytes");
   });
 
-  it("returns already-well-known when binaryPath equals the well-known path, without turning it into a self-symlink", async () => {
+  it("upgrades a legacy symlink at the well-known path to a regular-file copy (rename swallows the old symlink)", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    // A leftover symlink from a pre-copy install, pointing anywhere - the
+    // rename-into-place must replace it outright, not follow or preserve it.
+    symlinkSync(join(workHome, "nonexistent-legacy-target"), wellKnownPath);
+    const target = join(workHome, "real-binary");
+    writeFileSync(target, "binary bytes");
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: target,
+    });
+
+    expect(result).toEqual({ staged: "staged", wellKnownPath });
+    const stat = await lstat(wellKnownPath);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("binary bytes");
+  });
+
+  it("returns already-well-known when binaryPath equals the well-known path, without re-staging it", async () => {
     const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
       await import("../well-known-cli");
     const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
@@ -141,6 +167,7 @@ describe("stageWellKnownCliBinary", () => {
     const stat = await lstat(wellKnownPath);
     expect(stat.isSymbolicLink()).toBe(false);
     expect(stat.isFile()).toBe(true);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("the real binary");
   });
 
   it("returns a failed outcome without throwing when the well-known slot's parent cannot be created", async () => {

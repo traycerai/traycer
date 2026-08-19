@@ -533,13 +533,12 @@ async function tryReplaceLiveBinary(opts: {
 }
 
 // Live CLI bytes just changed at `livePath`; refresh the well-known slot
-// so it keeps serving the current binary. A no-op cost on POSIX where the
-// slot is a symlink to `livePath` already, but on Windows the slot can be
-// a byte COPY (symlinks need Developer Mode / elevation there), and a
-// stale copy is what the host daemon would keep shelling for doctor /
-// update. Best-effort like every other slot write: a failure leaves the
-// previous slot contents serving, which is the accepted
-// stale-but-functional worst case.
+// so it keeps serving the current binary. The slot is a byte COPY (see
+// `stageWellKnownCliBinary` for why it is not a symlink), so every writer
+// of live CLI bytes must re-stage it - a stale copy is what the host
+// daemon would keep shelling for doctor / update. Best-effort like every
+// other slot write: a failure leaves the previous slot contents serving,
+// which is the accepted stale-but-functional worst case.
 async function refreshWellKnownSlot(
   environment: Environment,
   livePath: string,

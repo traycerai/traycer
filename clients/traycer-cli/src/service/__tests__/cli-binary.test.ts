@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { lstat, readlink } from "node:fs/promises";
+import { lstat, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -209,10 +209,10 @@ describe("resolveServiceCliInvocation", () => {
   // invocation spelling (e.g. "traycer") into service units as a bogus
   // entry-script argument - a SEA binary has no entry script, so replaying
   // that arg produces "error: unknown command". The fix stages the
-  // well-known slot as a symlink to `process.execPath` and points the
+  // well-known slot as a COPY of `process.execPath`'s bytes and points the
   // service at THAT path with no leading args, regardless of
   // `allowSelfInvocation`.
-  it("stages the well-known slot as a symlink to process.execPath and returns empty args when packaged, even with allowSelfInvocation false", async () => {
+  it("stages a copy of process.execPath at the well-known slot and returns empty args when packaged, even with allowSelfInvocation false", async () => {
     seaState.current = true;
     const { wellKnownCliBinaryPath } =
       await import("../../store/well-known-cli");
@@ -226,9 +226,13 @@ describe("resolveServiceCliInvocation", () => {
     });
 
     expect(result).toEqual({ command: wellKnownPath, args: [] });
-    const stat = await lstat(wellKnownPath);
-    expect(stat.isSymbolicLink()).toBe(true);
-    expect(await readlink(wellKnownPath)).toBe(process.execPath);
+    const slotStat = await lstat(wellKnownPath);
+    expect(slotStat.isSymbolicLink()).toBe(false);
+    expect(slotStat.isFile()).toBe(true);
+    // process.execPath is the ~100MB running binary - compare sizes rather
+    // than reading and diffing the whole file.
+    const execStat = await stat(process.execPath);
+    expect(slotStat.size).toBe(execStat.size);
   });
 
   it("falls back to process.execPath with empty args when packaged but staging the well-known slot fails", async () => {

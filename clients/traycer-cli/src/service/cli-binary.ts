@@ -22,7 +22,7 @@ import {
 //        - The dev orchestrator (`scripts/dev-desktop.js` stages a
 //          bun wrapper at `~/.traycer/cli/dev-runs/<slot>/bin/traycer`
 //          when `DEV_DESKTOP_SLOT` is present)
-//        - `cli mark-source` / `cli re-anchor` (stage a symlink to the
+//        - `cli mark-source` / `cli re-anchor` (stage a copy of the
 //          anchored binary alongside the manifest write)
 //      Lets the orchestrator hand off to the CLI without any
 //      explicit flag or env-var coupling - convention over
@@ -133,7 +133,7 @@ export async function resolveServiceCliInvocation(
   // at the same time so the host daemon (whose CLI discovery reads ONLY
   // `<cliInstallHomeDir>/bin/traycer`) can shell this CLI for doctor /
   // update, and point the service at that slot when staging succeeds - a
-  // later `cli re-anchor` then retargets the service without
+  // later `cli re-anchor` then refreshes what the service runs without
   // re-registration. Staging failure degrades to the real binary path:
   // the service still works, only the host's slot view stays cold.
   if (packaged) {

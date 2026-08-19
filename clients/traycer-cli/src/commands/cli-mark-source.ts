@@ -214,8 +214,8 @@ export async function writeMarkSource(opts: {
         hasVersion: opts.version.length > 0,
         hadPreviousManifest: previous !== null,
       });
-      // Anchor time is also when the well-known slot must start pointing
-      // at this binary: the host daemon's own CLI discovery (doctor /
+      // Anchor time is also when the well-known slot must start serving
+      // this binary: the host daemon's own CLI discovery (doctor /
       // update / service status) reads ONLY `<cliInstallHomeDir>/bin/`,
       // never this manifest, so an npm/brew/hand-placed install stays
       // invisible to it - "has no Traycer CLI installed" in the GUI -
