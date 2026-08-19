@@ -25,6 +25,7 @@ import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { createOwnedTempDir } from "../store/owned-temp";
 import { hostHomeDir, hostInstallDir, ensureHostHomeDir } from "../store/paths";
 import { extractHostSource, resolveHostExecutable } from "./extract";
+import { preserveLegacyProviders } from "./legacy-providers";
 import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
 import {
@@ -1081,6 +1082,12 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     });
   }
   if (targetExists) {
+    // Carry the outgoing install's bundled provider packs into the new
+    // install BEFORE the old dir is invalidated - a slim host archive ships
+    // no coding-agent CLIs, and these bytes are what keeps every provider
+    // runnable until its registry pack downloads (see legacy-providers.ts).
+    // Best-effort by its own contract; it never fails the install.
+    await preserveLegacyProviders(trash, target, logger);
     // Layered invalidation (rename-to-`.dead-*` -> sidecar-unlink ->
     // recursive-rm -> accept-and-log), not a plain `rm`: mirrors
     // `download-stage.ts`'s `replaceStagedDir`, which creates and discards
