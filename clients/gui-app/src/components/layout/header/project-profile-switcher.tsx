@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
   selectActiveProjectProfile,
   selectProjectProfilesBucket,
@@ -29,7 +29,7 @@ import { PROJECT_PROFILE_COLOR_DOT } from "./project-profile-colors";
  * project's folders.
  */
 export function ProjectProfileSwitcher() {
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const bucket = useProjectProfilesStore((state) =>
     selectProjectProfilesBucket(state, hostId),
   );
