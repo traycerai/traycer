@@ -1,15 +1,17 @@
 /**
- * Shared primitives for the mobile shell's whole-screen touch recognizers -
- * the left-edge pull that opens the navigation drawer, and the downward drag
- * that dismisses the soft keyboard.
+ * Shared primitives for the mobile shell's touch recognizers - the leftward
+ * pull that pushes the navigation drawer back off screen, the downward drag
+ * that dismisses the soft keyboard, and the row swipe that reveals a task's
+ * tray.
  *
- * Both sit at the document in the capture phase, over surfaces that own
- * gestures of their own, so both need the same questions answered the same
- * way: has this drag declared an axis, has it committed, and does something
- * under the finger already claim it. One definition, because a recognizer that
- * guesses differently from its neighbour is how one ends up stealing the
- * other's touches.
+ * They sit over surfaces that own gestures of their own - two of them at the
+ * document in the capture phase - so they need the same questions answered the
+ * same way: has this drag declared an axis, has it committed, and does
+ * something under the finger already claim it. One definition, because a
+ * recognizer that guesses differently from its neighbour is how one ends up
+ * stealing the other's touches.
  */
+import { blockingLayerClaimed } from "@/components/layout/shell/blocking-layer-claim";
 
 export interface DirectionalGesture {
   /** Travel along the gesture's own axis, positive in its direction. */
@@ -24,8 +26,8 @@ export interface DirectionalGesture {
  *
  * A two-state recognizer has to decide on the first pixel, so it either steals
  * scrolls or misses swipes. `wait` lets an ambiguous drag stay unclaimed until
- * it declares itself, which is what makes the edge zone usable for both
- * gestures at once.
+ * it declares itself, which is what lets these recognizers share a surface
+ * with the scrollers underneath them.
  */
 export type DirectionalIntent = "activate" | "fail" | "wait";
 
@@ -113,9 +115,8 @@ function asElement(target: EventTarget | null): Element | null {
  * own touches (`touch-action: none`).
  *
  * The mobile terminal key bar is the case that matters: it cancels `touchstart`
- * outright so a key press cannot blur the terminal, and its leftmost column
- * sits inside the drawer's edge zone. A shell recognizer firing there would
- * open the drawer - or dismiss the keyboard - in the middle of someone typing
+ * outright so a key press cannot blur the terminal. A shell recognizer firing
+ * on the same touch would dismiss the keyboard in the middle of someone typing
  * into a terminal.
  */
 export function declaresOwnTouchHandling(target: EventTarget | null): boolean {
@@ -132,20 +133,20 @@ export function declaresOwnTouchHandling(target: EventTarget | null): boolean {
  *
  * A few surfaces do: the tab strips (`touch-pan-x` over an `overflow-x-auto`
  * rail), the attachment strip, code blocks. Those are gestures a user could be
- * mid-way through when the drawer stole the touch, so this refuses rather than
- * competes.
+ * mid-way through when a shell recognizer stole the touch, so this refuses
+ * rather than competes.
  *
  * Answered by walking the ancestors at touch time rather than from a registry
  * of pannable surfaces. A registry is more precise - it can say "this rail is
  * scrolled away from its start, so it owns the drag" for surfaces that are not
  * ancestors of the touch - but it has to be kept in step with every surface
- * that gains or loses a pan, and the narrow edge zone already keeps the two
- * apart for every case in the app today.
+ * that gains or loses a pan, and each recognizer here already enters from a
+ * surface of its own, which keeps the two apart for every case in the app
+ * today.
  *
  * `scrollWidth > clientWidth` is part of the test on purpose: a rail whose tabs
  * all fit does not actually pan, and treating it as if it did would leave a
- * dead strip along the screen edge whose length varied with how many tabs
- * happened to be open.
+ * dead strip whose length varied with how many tabs happened to be open.
  */
 export function ownsHorizontalGesture(target: EventTarget | null): boolean {
   if (declaresOwnTouchHandling(target)) return true;
@@ -196,9 +197,10 @@ export function verticalScrollTargetForDownwardDrag(
  * true before it has anything to dismiss.
  *
  * A focused entry is not a reason for other shell gestures to stand down. The
- * drawer's edge pull deliberately runs while the keyboard is up and drops it as
- * part of opening, because a menu that becomes unreachable from any screen with
- * a live composer is unreachable from most of the app.
+ * drawer's close pull deliberately runs while the keyboard is up, because
+ * pushing the menu away mid-draft is an ordinary thing to do and nothing is
+ * claimed until the classifier has seen travel a caret could not have asked
+ * for.
  *
  * This is also the app's only usable "is the soft keyboard up" signal. The
  * viewport measurement that would answer it directly
@@ -226,6 +228,74 @@ export function isWithinFocusedTextEntry(target: EventTarget | null): boolean {
   if (active === null) return false;
   if (!(target instanceof Node)) return false;
   return active === target || active.contains(target);
+}
+
+/**
+ * Whether a touch landed inside a text entry, focused or not.
+ *
+ * Asked of the TARGET rather than of `document.activeElement`, and the
+ * difference is the whole point. A horizontal drag inside a field is a text
+ * selection - the caret being dragged across the line - which is a gesture the
+ * field owns whether or not it held focus when the finger came down. A
+ * recognizer keyed on focus instead would stand down across the entire app
+ * whenever a composer happened to be focused, which on a phone is most screens.
+ *
+ * Rich editors are recognized by the `contenteditable` ATTRIBUTE rather than by
+ * the resolved `isContentEditable` property. The property's whole advantage is
+ * that it resolves inheritance, and this walk already climbs to the ancestor
+ * carrying the attribute - so the attribute answers the same question one level
+ * up, and answers it in terms of what the markup actually declares.
+ *
+ * The NEAREST declaration wins, which is what makes an explicit
+ * `contenteditable="false"` a real carve-out rather than a value that is merely
+ * skipped over. The walk stops there and answers no, because the editor said
+ * that subtree is not text: rich-text node views - a mention chip, a
+ * slash-command result, an attached image - are non-editable atoms sitting
+ * inside an editable root, and there is no caret in one to drag. Continuing up
+ * to the root would refuse a gesture over every one of them, which is the
+ * opposite of what the carve-out is for. A field nested INSIDE such an atom is
+ * still a field: the tag is checked first, at every level.
+ */
+export function withinTextEntry(target: EventTarget | null): boolean {
+  let node = asElement(target);
+  while (node !== null) {
+    if (node.tagName === "INPUT" || node.tagName === "TEXTAREA") return true;
+    const editable = node.getAttribute("contenteditable");
+    if (editable === "false") return false;
+    if (editable !== null) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Whether a layer is covering the app - a dialog, a sheet, an alert, a modal
+ * menu, or a surface that blocks the app by its own means.
+ *
+ * TWO SOURCES, because there are two ways to be blocking and only one of them
+ * is visible in the DOM.
+ *
+ * The first is `body`'s inline `pointer-events`, which the dismissable-layer
+ * primitive sets to `none` for as long as at least one layer has outside
+ * pointer events disabled, and restores when the last one unmounts. That is not
+ * a proxy for the question: it IS the question. "A modal layer is up" matters
+ * here only because it means the surface underneath is not the user's to
+ * interact with, and this is the app declaring exactly that. Every surface
+ * using the primitive's modal machinery funnels through it, so nothing has to
+ * be enumerated and nothing new has to be remembered when one is added.
+ *
+ * The second is the explicit claim, for surfaces that block WITHOUT that
+ * machinery - the ones that mount the primitive non-modally and inert a subtree
+ * of their own instead, so the document never learns anything. They are no less
+ * blocking for it; they are just silent, and a guard reading only the barrier
+ * would wave a gesture straight through them.
+ *
+ * Cheap enough to ask per gesture: an inline style read on one element and a
+ * counter, no query and no layout.
+ */
+export function modalLayerCoversApp(): boolean {
+  if (document.body.style.pointerEvents === "none") return true;
+  return blockingLayerClaimed();
 }
 
 /** Blurs the focused text entry, which is what closes the soft keyboard. */

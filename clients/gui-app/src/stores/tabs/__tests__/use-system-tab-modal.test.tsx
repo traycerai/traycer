@@ -550,11 +550,13 @@ describe("openHistory viewport gate", () => {
   beforeEach(() => {
     modalProbe.current = null;
     useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
   afterEach(() => {
     cleanup();
     setInnerWidth(originalInnerWidth);
     useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
 
   it("routes to the /epics full page on phones", async () => {
@@ -569,6 +571,32 @@ describe("openHistory viewport gate", () => {
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/epics");
+    });
+  });
+
+  it("seeds the phone /epics navigation from the ambient store's remembered filters", async () => {
+    setInnerWidth(375);
+    useHistorySearchStore.setState({
+      search: {
+        ...DEFAULT_HISTORY_SEARCH,
+        query: "api",
+        ownershipScopes: ["mine"],
+      },
+    });
+    const router = buildHistoryRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/epics");
+    });
+    expect(router.state.location.search).toMatchObject({
+      historyQuery: "api",
+      historyOwnership: ["mine"],
     });
   });
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   projectDefaultHostReadiness,
-  resolveSurfaceReadiness,
   type DefaultHostReadinessPresentation,
 } from "@/components/layout/host-readiness-controller-context";
 
@@ -22,7 +21,6 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
   reinstall: () => undefined,
   configureShell: () => undefined,
   refreshDirectory: () => undefined,
-  directoryRefreshing: false,
   openSettings: () => undefined,
   compatibility: {
     status: "compatible",
@@ -86,67 +84,4 @@ describe("projectDefaultHostReadiness", () => {
       ).toEqual({ kind: "ready" });
     });
   }
-});
-
-describe("resolveSurfaceReadiness relay-only directory provenance", () => {
-  const base = {
-    scope: "default-host" as const,
-    tabHostId: null,
-    authStatus: "signed-in" as const,
-    activeHostId: null,
-    requestContextUserId: "user-1",
-    directoryEntries: [],
-    hasLocalHost: false,
-    hasReadySessionFor: () => false,
-    leases: [],
-    authorityAttached: false,
-  };
-
-  it("answers searching-hosts while the registry has never delivered a listing", () => {
-    // A cold relay-only launch: the directory is empty because nobody has
-    // reached the registry yet, not because the account owns no hosts.
-    // Presenting the no-host instruction there flashed "No host connected"
-    // on every cold start.
-    expect(
-      resolveSurfaceReadiness({
-        ...base,
-        hasMobileNoHost: false,
-        hostsUnknown: true,
-      }),
-    ).toEqual({ kind: "searching-hosts" });
-  });
-
-  it("answers mobile-no-host only once the emptiness is a delivered answer", () => {
-    expect(
-      resolveSurfaceReadiness({
-        ...base,
-        hasMobileNoHost: true,
-        hostsUnknown: false,
-      }),
-    ).toEqual({ kind: "mobile-no-host" });
-  });
-
-  it("orders searching-hosts ahead of the no-host answer", () => {
-    // The two flags are mutually exclusive at the source (`getCardinality`),
-    // but the ordering is the load-bearing half of that contract: an
-    // unanswered registry must never be presented as an answered one.
-    expect(
-      resolveSurfaceReadiness({
-        ...base,
-        hasMobileNoHost: true,
-        hostsUnknown: true,
-      }),
-    ).toEqual({ kind: "searching-hosts" });
-  });
-
-  it("never shows a directory surface on a shell with a local host", () => {
-    expect(
-      resolveSurfaceReadiness({
-        ...base,
-        hasLocalHost: true,
-        hasMobileNoHost: false,
-        hostsUnknown: true,
-      }),
-    ).toEqual({ kind: "loading-host" });
-  });
 });

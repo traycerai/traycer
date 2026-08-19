@@ -7,8 +7,9 @@ import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
-import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
+import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
+import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -48,6 +49,10 @@ export function AppShell(props: AppShellProps) {
   // above rather than on the field itself. Self-gated on the mobile-app product
   // flag, so desktop attaches nothing.
   useDragToDismissKeyboard();
+  // App-wide for the same reason: the swipe answers wherever the user is, and
+  // the surface it navigates away from has no say in it. Self-gated on the
+  // mobile-app product flag, so desktop attaches nothing and keeps its arrows.
+  useMobileHistorySwipes();
 
   return (
     <PrimaryFocusCoordinatorProvider>

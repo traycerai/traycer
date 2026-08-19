@@ -69,7 +69,7 @@ interface StreamState {
  * of `hostState` (the LOCAL host). `hasLocalHost: null` means "no
  * `RunnerHostProvider` in the tree", which is the default every case here
  * starts from - the local-host path must behave identically under it.
- * `boundHostId` stands in for `useReactiveActiveHostId()`, which is what a
+ * `boundHostId` stands in for `useAddressableHostId()`, which is what a
  * relay-only shell's serving host resolves through.
  */
 interface ServingHostFallbackState {
@@ -185,8 +185,8 @@ vi.mock("@/providers/use-runner-host", () => ({
       : { hasLocalHost: servingHostFallbackState.hasLocalHost },
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => servingHostFallbackState.boundHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => servingHostFallbackState.boundHostId,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({

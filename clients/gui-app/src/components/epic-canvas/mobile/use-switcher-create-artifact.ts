@@ -5,7 +5,7 @@ import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-ca
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -35,7 +35,7 @@ export function useSwitcherCreateArtifact(
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
   );
-  const activeHostId = useCanvasHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
 
   const create = useCallback(
     (type: EpicArtifactKind) => {

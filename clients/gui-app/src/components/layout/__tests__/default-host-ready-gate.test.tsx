@@ -106,7 +106,6 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   configureShell: () => undefined,
   refreshDirectory: () => undefined,
   openSettings: () => undefined,
-  directoryRefreshing: false,
   compatibility: {
     status: "compatible",
     degraded: false,
@@ -314,7 +313,7 @@ describe("<HostReadyGate />", () => {
     expect(screen.getByRole("banner").dataset.variant).toBe("host-loading");
   });
 
-  it("keeps the app mounted after latching for every non-ready kind", () => {
+  it("keeps the app mounted after latching for every non-splash non-ready kind", () => {
     // D1 post-latch table: once the window has been ready, non-ready kinds
     // must NOT unmount the shell. That unmount is what made every host switch
     // (and every transient probe failure on a host that was already running)
@@ -323,13 +322,6 @@ describe("<HostReadyGate />", () => {
     // exception below. Listed exhaustively rather than filtered from the union
     // so that adding a kind without deciding its post-latch behavior shows up
     // here as a missing row.
-    //
-    // `searching-hosts` is in this list deliberately: a background registry
-    // read that answers `signed-out` (a rejected bearer, which the fetch
-    // adapter does not turn into a GUI sign-out) un-observes the listing and
-    // reaches it without any real sign-out, and unmounting a live window for
-    // an unanswered registry would throw away exactly the work the latch
-    // protects.
     const postLatchKinds: ReadonlyArray<SurfaceReadiness["kind"]> = [
       "loading-host",
       "unavailable-host",
@@ -337,7 +329,6 @@ describe("<HostReadyGate />", () => {
       "provisioning-host",
       "removed-host",
       "restoring-request-context",
-      "searching-hosts",
     ];
     const harness = renderGate({ kind: "ready" }, PRESENTATION);
     expect(screen.getByRole("main")).toBeTruthy();
@@ -361,26 +352,6 @@ describe("<HostReadyGate />", () => {
     expect(screen.getByTestId("host-ready-gate").dataset.readiness).toBe(
       "mobile-no-host",
     );
-  });
-
-  it("still full-screens the two directory kinds BEFORE the gate has ever latched", () => {
-    // Cold-start-only, not a post-latch exception. Nothing is mounted yet on
-    // a cold start, so replacing the screen to ask "which host" or say
-    // "looking for your hosts" costs nothing - the same premise that makes
-    // `loading-host` full-screen pre-latch a few tests up. That premise stops
-    // holding the instant the app has painted once: a live session can still
-    // land on any of these three (see the post-latch pin above), and by then
-    // there is a real window - editors, terminals, scroll position - behind
-    // the block. That is why the gate's own post-latch rule has NO exception
-    // for them (`DefaultHostReadyGate`'s docstring) while this pin, taken
-    // before the first `ready`, still sees the full-screen card.
-    for (const kind of ["searching-hosts", "mobile-no-host"] as const) {
-      renderGate({ kind }, PRESENTATION);
-      expect(screen.queryByRole("main")).toBeNull();
-      const gate = screen.getByTestId("host-ready-gate");
-      expect(gate.dataset.readiness).toBe(kind);
-      cleanup();
-    }
   });
 
   it("lets /settings through even while the host is not ready", () => {

@@ -44,6 +44,9 @@ describe("<PrimaryActionShortcutHint /> inside a labelled button", () => {
   });
 });
 
+// Main's contrast contract, kept alongside the mobile-gate cases: the keycaps
+// inherit the button's own colors, so they stay legible on every preset's
+// primary action fill.
 const PRIMARY_ACTION_PRESETS = [
   ["amoled light", "#171717", "#ffffff"],
   ["amoled dark", "#ededed", "#000000"],
@@ -67,7 +70,7 @@ const PRIMARY_ACTION_PRESETS = [
   ["everforest dark", "#a7c080", "#2d353b"],
 ] as const;
 
-describe("PrimaryActionShortcutHint", () => {
+describe("PrimaryActionShortcutHint keycap contrast", () => {
   it("keeps keycaps at the action label contrast across full-palette presets", () => {
     const { container } = render(
       <div className="bg-primary text-primary-foreground">

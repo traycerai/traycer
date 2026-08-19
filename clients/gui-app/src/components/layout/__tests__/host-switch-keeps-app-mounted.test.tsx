@@ -86,7 +86,6 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   reinstall: () => undefined,
   configureShell: () => undefined,
   refreshDirectory: () => undefined,
-  directoryRefreshing: false,
   openSettings: () => undefined,
   compatibility: {
     status: "compatible",
@@ -374,34 +373,5 @@ describe("the ready gate does not remount the app when readiness context changes
     expect(sentinelMounts.count).toBe(1);
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
     expectNoWindowScopeBanner();
-  });
-});
-
-describe("directory transitions keep the app mounted", () => {
-  // `searching-hosts` is reachable on a LIVE session, not only on a cold
-  // start: a background registry read that answers `signed-out` (a rejected
-  // bearer, which the fetch adapter deliberately does not turn into a GUI
-  // sign-out) clears the remote directory and un-observes the listing with
-  // the app still fully mounted. Unmounting there is exactly the regression
-  // this file's helper exists to catch. (`mobile-no-host` is the one splash
-  // exception and full-screens instead - pinned in the gate's own tests.)
-  it("keeps the SAME app node mounted on searching-hosts", () => {
-    const harness = mountSwitchSurface(
-      { kind: "ready" },
-      PRESENTATION,
-      mockLocalHostEntry,
-    );
-    const shellBefore = screen.getByTestId("app-shell");
-    typeIntoScratch("work-in-progress");
-    expect(sentinelMounts.count).toBe(1);
-
-    harness.setReadiness({ kind: "searching-hosts" }, PRESENTATION);
-
-    // Same node, carrying the DOM state a user would have put in it - not
-    // a fresh one that merely looks the same.
-    expect(screen.getByTestId("app-shell")).toBe(shellBefore);
-    expect(readScratch()).toBe("work-in-progress");
-    expect(sentinelMounts.count).toBe(1);
-    expect(screen.queryByTestId("host-ready-gate")).toBeNull();
   });
 });

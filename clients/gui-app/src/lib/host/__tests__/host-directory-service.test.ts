@@ -425,39 +425,6 @@ describe("HostDirectoryService", () => {
     expect(directory.getDefaultEntry()).toBeNull();
   });
 
-  it("auto-defaults to the single AVAILABLE remote when every other entry is unavailable", async () => {
-    // Several registered hosts but only one reachable is not a real choice:
-    // forcing the choose-host wall there would ask the user to pick between
-    // one live host and dead entries. Two (or zero) available keeps the
-    // null default so the wall can ask.
-    const host = makeHost(null);
-    const offlineRemote: HostDirectoryEntry = {
-      hostId: "mock-remote-offline",
-      label: "Offline Remote",
-      kind: "remote",
-      websocketUrl: null,
-      version: "0.0.0-mock",
-      transportDialability: "not-dialable",
-    };
-    const directory = makeDirectory({
-      authContextId: null,
-      credentialGeneration: null,
-      runnerHost: host,
-      localHostIdSeeder: null,
-      remoteFetcher: () =>
-        Promise.resolve({
-          kind: "hosts",
-          entries: [offlineRemote, mockRemoteHostEntry],
-        }),
-    });
-    await directory.start();
-
-    expect(directory.getCardinality()).toBe("many");
-    expect(directory.getDefaultEntry()?.hostId).toBe(
-      mockRemoteHostEntry.hostId,
-    );
-  });
-
   it("reports cardinality 'zero' when the directory has no local or remote entries", async () => {
     const host = makeHost(null);
     const directory = makeDirectory({

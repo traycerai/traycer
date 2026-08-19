@@ -57,20 +57,6 @@ import {
   deregisterHostViaHttp,
   type DeregisterHostFetchResult,
 } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
-import {
-  InMemoryAuthorityIdentitySource,
-  InMemoryHostFleetSource,
-  InMemoryPreferredHostStore,
-  createInProcessSelectionAuthority,
-  inertLocalHostOutageSignal,
-  type InProcessSelectionAuthority,
-} from "@traycer-clients/shared/host-selection/in-process-selection-authority";
-import {
-  createIncrementingIncarnationIds,
-  silentAuthorityLog,
-  systemAuthorityClock,
-} from "@traycer-clients/shared/host-selection/selection-authority-engine";
-import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type {
   CredentialsMigrationOutcome,
   DeviceFlowAuthorization,
@@ -81,6 +67,7 @@ import type {
   IDeviceDescriber,
   ILinkCodeScanner,
   INotificationHost,
+  IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
   ITokenStore,
@@ -88,6 +75,7 @@ import type {
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
   NotificationShowOutcome,
+  PushPermissionState,
   RegisteredHostsChange,
   StoredAuthTokens,
   StoredCredentials,
@@ -97,6 +85,22 @@ import type {
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  createInProcessSelectionAuthority,
+  InMemoryAuthorityIdentitySource,
+  InMemoryHostFleetSource,
+  inertLocalHostOutageSignal,
+  unavailableLocalHostEnsurePort,
+  type InProcessSelectionAuthority,
+} from "@traycer-clients/shared/host-selection/in-process-selection-authority";
+import {
+  createIncrementingIncarnationIds,
+  silentAuthorityLog,
+  systemAuthorityClock,
+  type PreferredHostSaveResult,
+  type PreferredHostStore,
+} from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { MobilePushRegistration } from "./push-registration";
 
@@ -108,10 +112,20 @@ export interface MobileRunnerHostOptions {
   readonly relayBaseUrl: string;
   /**
    * OS push lifecycle owner, or `null` where pushes cannot exist (the dev web
-   * entry, tests). Only its click relay is consumed here - registration
-   * follows the token store on its own once `start()` runs in bootstrap.
+   * entry, tests). Its click relay and its permission reads are consumed here -
+   * registration itself follows the token store on its own once `start()` runs
+   * in bootstrap.
    */
   readonly pushRegistration: MobilePushRegistration | null;
+  /**
+   * Jumps to this app's notification page in the OS Settings app - the only
+   * repair path once the OS has remembered a refusal. Injected (rather than
+   * called from here) so the native-settings plugin stays in the bootstrap
+   * entry and these host tests stay plugin-free; `null` on the dev web entry,
+   * where there is no OS page to open - which also makes `pushPermission`
+   * itself `null` there (see `buildPushPermission`).
+   */
+  readonly openPushSettings: (() => Promise<void>) | null;
   /**
    * The deep-link scheme this build's NATIVE shell registered (`traycer` from
    * Info.plist / AndroidManifest), threaded into the verification URL as
@@ -121,6 +135,16 @@ export interface MobileRunnerHostOptions {
    * would launch an installed production app instead.
    */
   readonly returnScheme: string | null;
+  /**
+   * Overrides where the selection authority's fleet membership comes from, or
+   * `null` for the production answer (the registry list under the stored
+   * bearer). The dev entry passes the same dev-slot source the directory's
+   * `remoteFetcher` uses, so the authority can derive an effective host for a
+   * loopback dev host that is not registered in the cloud. Resolves to the
+   * fleet's host ids, or `null` on a transient failure (the current fleet is
+   * retained - a blip must not read as "you own no hosts").
+   */
+  readonly fleetHostIds: (() => Promise<readonly string[] | null>) | null;
   /**
    * Native QR scanner for link-login sign-in, or `null` where no camera
    * exists (the dev web entry, tests). Constructed by the entry point so the
@@ -160,22 +184,6 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState = new MobileNoopTrayState();
-  /**
-   * Browser/dev topology (D16): the selection authority engine mounted
-   * in-process behind the single window's adapter - the same composition
-   * `MockRunnerHost` uses, which the contract names for shells with no main
-   * process. The phone is exactly that shell: one window, no local host.
-   */
-  readonly selectionFleet = new InMemoryHostFleetSource({
-    revision: 0,
-    identityGeneration: 0,
-    localHostId: null,
-    hosts: [],
-  });
-  readonly selectionIdentity = new InMemoryAuthorityIdentitySource(null);
-  readonly selectionPreferredStore = new InMemoryPreferredHostStore();
-  private selectionAuthorityMount: InProcessSelectionAuthority;
-  readonly selectionAuthority: SelectionAuthorityClient;
   readonly workspaceFolders: IWorkspaceFoldersHost = {
     // No native folder dialog on the phone - remote-host folder adds go
     // through the RPC-backed remote folder picker in gui-app.
@@ -203,16 +211,50 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
   readonly deviceFlow: IDeviceFlowHost;
+  /**
+   * The phone's own notification switch. `null` wherever this shell cannot
+   * both read the permission AND open the OS page to repair it (the dev web
+   * entry, tests) - so the GUI's one branch on `null` hides the Settings row
+   * wherever it would have nothing to report or no working button.
+   */
+  readonly pushPermission: IPushPermissionHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   private readonly systemResume = new MobileSystemResume();
+  /**
+   * The in-window selection authority (the "shell with no main process"
+   * binding the contract names): the SAME engine desktop mounts in Electron
+   * main, behind the in-process adapter, fed by the three ports below. The
+   * phone has no local host and cannot provision one, so the ensure port
+   * refuses and the outage signal is inert - derivation only ever lands on a
+   * remote host or on ∅.
+   */
+  readonly selectionFleet = new InMemoryHostFleetSource({
+    revision: 0,
+    identityGeneration: 0,
+    localHostId: null,
+    hosts: [],
+  });
+  readonly selectionIdentity = new InMemoryAuthorityIdentitySource(null);
+  private readonly selectionPreferredStore: PreferredHostStore =
+    new MobilePreferredHostStore();
+  private readonly selectionAuthorityMount: InProcessSelectionAuthority;
+  readonly selectionAuthority: SelectionAuthorityClient;
+  private readonly fleetHostIds:
+    (() => Promise<readonly string[] | null>) | null;
 
   constructor(options: MobileRunnerHostOptions) {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.authnBaseUrl;
     this.relayBaseUrl = options.relayBaseUrl;
+    this.fleetHostIds = options.fleetHostIds;
     this.linkCodeScanner = options.linkCodeScanner;
     this.deviceDescriber = options.deviceDescriber;
     this.notifications = buildNotifications(options.pushRegistration);
+    this.pushPermission = buildPushPermission(
+      options.pushRegistration,
+      options.openPushSettings,
+      this.systemResume,
+    );
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,
       options.authnBaseUrl,
@@ -225,17 +267,10 @@ export class MobileRunnerHost implements IRunnerHost {
     this.selectionAuthorityMount = createInProcessSelectionAuthority({
       fleet: this.selectionFleet,
       identity: this.selectionIdentity,
-      // A relay-only shell owns no host process, so the D14 ensure genuinely
-      // cannot provision - the refusal is the honest answer, and the engine's
-      // derivation falls through to the usable remotes.
-      localHostEnsure: {
-        ensureReady: () =>
-          Promise.resolve({
-            ok: false as const,
-            reason: "local-provisioning-unavailable",
-            deferred: false,
-          }),
-      },
+      // Refusing (rather than deferring) is what makes the engine's ∅
+      // definition come out right on a shell that can never provision: no
+      // usable lease AND no ensure available.
+      localHostEnsure: unavailableLocalHostEnsurePort,
       localOutage: inertLocalHostOutageSignal,
       preferredStore: this.selectionPreferredStore,
       clock: systemAuthorityClock,
@@ -243,11 +278,69 @@ export class MobileRunnerHost implements IRunnerHost {
       log: silentAuthorityLog,
     });
     this.selectionAuthority = this.selectionAuthorityMount.client;
+    // The identity port follows the token store: the stored credential IS the
+    // phone's signed-in identity (there is no separate auth-session process).
+    // The generation advances only when the USER changes - `syncSelectionId`
+    // compares ids before setting - so a routine token rotation never wipes
+    // the authority's evidence.
+    this.tokenStore.subscribe((change) => {
+      this.syncSelectionIdentity(change.userId);
+    });
+    // Seed both ports from whatever credential survived the last launch; the
+    // fleet publish rides behind the identity so its generation stamp is the
+    // seeded one, not the initial null's.
+    void this.tokenStore.get().then((stored) => {
+      this.syncSelectionIdentity(stored?.user.id ?? null);
+      if (stored === null) {
+        void this.refreshHostFleet();
+      }
+    });
   }
 
   /**
-   * `null`: this shell owns no registry cadence - the window's directory
-   * service keeps its own poll timer, the browser/dev answer.
+   * Advances the identity port when the signed-in USER actually changed, and
+   * re-reads the fleet under the new identity - the same "identity change
+   * refreshes the fleet" edge the engine's own doc names.
+   */
+  private syncSelectionIdentity(userId: string | null): void {
+    if (this.selectionIdentity.current().identityKey === userId) {
+      return;
+    }
+    this.selectionIdentity.set(userId);
+    void this.refreshHostFleet();
+  }
+
+  /**
+   * `IRunnerHost.refreshHostFleet`: re-reads fleet membership and publishes it
+   * atomically. Callers are the membership mutations (a deregistration, a
+   * fresh registration observed by the directory's poll) plus the identity
+   * edge above; a duplicate call costs one refetch and can never publish
+   * something false.
+   *
+   * The generation is captured before the (async) read and re-checked after,
+   * so a fetch that raced an identity transition is dropped rather than
+   * stamped onto the new account.
+   */
+  async refreshHostFleet(): Promise<void> {
+    const identity = this.selectionIdentity.current();
+    const hostIds = await this.resolveFleetHostIds();
+    if (hostIds === null) {
+      return;
+    }
+    if (this.selectionIdentity.current().generation !== identity.generation) {
+      return;
+    }
+    this.selectionFleet.publish(
+      identity.generation,
+      null,
+      hostIds.map((hostId) => ({ hostId, kind: "remote" as const })),
+    );
+  }
+
+  /**
+   * `null`: this shell owns no registry cadence - the directory keeps its own
+   * poll timer, exactly as the browser/dev topology does. Membership changes
+   * that poll observes reach the authority through `refreshHostFleet`.
    */
   onRegisteredHostsChange(
     handler: (push: RegisteredHostsChange) => void,
@@ -256,30 +349,24 @@ export class MobileRunnerHost implements IRunnerHost {
     return null;
   }
 
-  /**
-   * Re-reads the registry and republishes the fleet tuple. The authority runs
-   * in this window, so "tell the shell its copy is stale" resolves to one
-   * atomic fetch-and-publish here; a failed or signed-out read republishes
-   * nothing (the fleet stays as stale as it already was, and the evidence
-   * kernel is what recovers).
-   */
-  async refreshHostFleet(): Promise<void> {
-    const credentials = await this.tokenStore.get();
-    if (credentials === null) return;
+  private async resolveFleetHostIds(): Promise<readonly string[] | null> {
+    if (this.fleetHostIds !== null) {
+      return this.fleetHostIds();
+    }
+    const stored = await this.tokenStore.get();
+    if (stored === null) {
+      // Signed out is an answer, not a failure: an empty fleet is what lets
+      // the engine retire a previous account's derivation.
+      return [];
+    }
     const result = await fetchRegisteredHostsViaHttp(
       this.authnBaseUrl,
-      credentials.token,
+      stored.token,
     );
-    if (result.kind !== "ok") return;
-    const current = this.selectionFleet.snapshot();
-    this.selectionFleet.publish(
-      current.identityGeneration,
-      null,
-      result.response.hosts.map((host) => ({
-        hostId: host.hostId,
-        kind: "remote" as const,
-      })),
-    );
+    if (result.kind !== "ok") {
+      return null;
+    }
+    return result.response.hosts.map((host) => host.hostId);
   }
 
   beginAuthAttempt(): void {
@@ -492,7 +579,7 @@ export class MobileRunnerHost implements IRunnerHost {
     // WebView resumes, its `visibilitychange` edge is the same "the browser
     // returned" fact. Subscribing to the resume source instead of a native
     // App-plugin `appUrlOpen` listener keeps the shell on its deliberate
-    // four-plugin footprint, and also nudges the poll when the user returns
+    // five-plugin footprint, and also nudges the poll when the user returns
     // MANUALLY (no deep link at all - e.g. after using the manual-code page).
     // A resume with no in-flight attempt is a no-op in the consumer
     // (`AuthService.handleReturnSignal` only collapses an active poll wait).
@@ -981,6 +1068,80 @@ function disposable(): Disposable {
 }
 
 /**
+ * BOTH halves of the capability or none of it.
+ *
+ * A `pushPermission` that could read the OS answer but not open the OS page
+ * would render the Settings row with a repair button that resolves
+ * successfully and does nothing - the mutation's error toast, the one thing
+ * that would report it, can never fire on a resolved promise. The two inputs
+ * come from independent platform branches in `main.tsx` (the registration
+ * target and the settings opener), so the agreement between them is asserted
+ * HERE, once, instead of being assumed twice.
+ */
+function buildPushPermission(
+  push: MobilePushRegistration | null,
+  openPushSettings: (() => Promise<void>) | null,
+  systemResume: MobileSystemResume,
+): IPushPermissionHost | null {
+  if (push === null || openPushSettings === null) return null;
+  return new MobilePushPermissionHost(push, openPushSettings, systemResume);
+}
+
+/**
+ * `IRunnerHost.pushPermission` on the phone: a thin adapter over the object
+ * that already owns the plugin and the registration guard
+ * (`MobilePushRegistration`) plus the shell's own resume edge.
+ *
+ * `onChange` deliberately carries no state - it says "this MAY have changed,
+ * re-read it". Two things can change it without this app doing anything: the
+ * person flipping the switch in the OS Settings app (observed as the
+ * foreground-resume edge on the way back, the same edge registration follows)
+ * and the OS prompt a `request()` just raised. Neither tells us the new value,
+ * so the reader's `get()` is what settles it.
+ */
+class MobilePushPermissionHost implements IPushPermissionHost {
+  private readonly handlers = new Set<() => void>();
+
+  constructor(
+    private readonly registration: MobilePushRegistration,
+    private readonly openPushSettings: () => Promise<void>,
+    private readonly systemResume: MobileSystemResume,
+  ) {}
+
+  get(): Promise<PushPermissionState> {
+    return this.registration.permissionState();
+  }
+
+  async request(): Promise<PushPermissionState> {
+    const state = await this.registration.requestPermission();
+    // The prompt has settled (either way) - tell subscribers to re-read rather
+    // than trusting them to correlate this with the value returned above.
+    for (const handler of Array.from(this.handlers)) {
+      handler();
+    }
+    return state;
+  }
+
+  async openSettings(): Promise<void> {
+    // Always a real jump: this object only exists where an opener was
+    // injected, so a rejection here means the OS refused, which is exactly
+    // what the caller's error toast is for.
+    await this.openPushSettings();
+  }
+
+  onChange(handler: () => void): Disposable {
+    const resumeSubscription = this.systemResume.subscribe(handler);
+    this.handlers.add(handler);
+    return {
+      dispose: () => {
+        resumeSubscription.dispose();
+        this.handlers.delete(handler);
+      },
+    };
+  }
+}
+
+/**
  * The phone's `IRunnerHost.onSystemResumed` source.
  *
  * On this platform "the machine woke up" is not a power event - it is the app
@@ -993,8 +1154,9 @@ function disposable(): Disposable {
  * the network never went anywhere, only this runtime did.
  *
  * `visibilitychange` and not a Capacitor App-state plugin: WKWebView and the
- * Android WebView both raise it, so this costs no new native dependency in a
- * shell that deliberately carries only core, keyboard, push and app-launcher.
+ * Android WebView both raise it, so this costs no ADDITIONAL native dependency
+ * in a shell that deliberately carries only core, keyboard, push,
+ * app-launcher, secure-storage and native-settings.
  *
  * Fires ONLY on the hidden -> visible edge. That edge filter is also the whole
  * dedupe, deliberately with no debounce timer: the event is edge-driven (a
@@ -1066,4 +1228,45 @@ class MobileNoopTrayState implements ITrayState {
     void handler;
     return disposable();
   }
+}
+
+/**
+ * Identity-bucketed preferred-host persistence for the in-window authority,
+ * durable across launches via `localStorage` (the WebView's storage survives
+ * app restarts; only an uninstall clears it). Bucketing by identity keeps the
+ * "another account inherits nothing" property the desktop store has.
+ *
+ * A failed READ is genuinely "no preference" (first-run answer); a failed
+ * WRITE is reported so the engine can treat the preference as unsaved.
+ */
+class MobilePreferredHostStore implements PreferredHostStore {
+  load(identityKey: string | null): string | null {
+    if (identityKey === null) return null;
+    try {
+      return window.localStorage.getItem(preferredHostKey(identityKey));
+    } catch {
+      return null;
+    }
+  }
+
+  save(
+    identityKey: string | null,
+    hostId: string | null,
+  ): PreferredHostSaveResult {
+    if (identityKey === null) return { ok: true };
+    try {
+      if (hostId === null) {
+        window.localStorage.removeItem(preferredHostKey(identityKey));
+      } else {
+        window.localStorage.setItem(preferredHostKey(identityKey), hostId);
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String(error) };
+    }
+  }
+}
+
+function preferredHostKey(identityKey: string): string {
+  return `traycer.mobile.preferred-host.${identityKey}`;
 }

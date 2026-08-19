@@ -25,8 +25,8 @@ vi.mock("@/providers/use-runner-host", () => ({
     state.runnerHost,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: (): string | null => state.boundHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: (): string | null => state.boundHostId,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({

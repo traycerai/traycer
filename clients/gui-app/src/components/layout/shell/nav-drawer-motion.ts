@@ -7,23 +7,6 @@ import type { ValueAnimationTransition } from "motion/react";
  */
 
 /**
- * How far from the left edge a pointer must land for the pull to be a drawer
- * gesture rather than a touch on whatever surface is underneath.
- *
- * The only absolute measurement in this file, and it is absolute because the
- * thing it describes is: a fingertip is the same size on a 4.7" phone as on a
- * tablet, so a zone expressed as a fraction of the viewport would be an
- * unhittable sliver on one and a wide dead band on the other. Every other
- * threshold here is either a viewport fraction or density-independent physics.
- *
- * The strip is carved out of whichever surface is underneath - a chat timeline,
- * the canvas, a terminal - so every pixel of it is a pixel those surfaces lose.
- * Wide enough for a thumb reaching across the screen, narrow enough that
- * content is not routinely touched here.
- */
-export const NAV_DRAWER_EDGE_ZONE_PX = 32;
-
-/**
  * Release speed that commits the gesture on its own, in px per SECOND - the
  * unit motion reports pointer velocity in, so it crosses no conversion.
  *
@@ -130,8 +113,8 @@ export interface NavDrawerRelease {
  * system took away expressed no intent, however far it had travelled or however
  * fast it was moving when it was interrupted - so the panel returns to the side
  * it started from. Deciding it here rather than at the call site is what gives
- * every entry into the drag the same answer: a pull from the edge, a push from
- * the scrim and a drag on the panel itself all release through this.
+ * every entry into the drag the same answer: a push from the scrim and a drag
+ * on the panel itself both release through this.
  */
 export function resolvesToOpen(release: NavDrawerRelease): boolean {
   if (release.cancelled) return release.openAtGestureStart;

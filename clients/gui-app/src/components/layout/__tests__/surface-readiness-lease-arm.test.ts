@@ -52,7 +52,6 @@ function resolve(input: {
     requestContextUserId: "user-1",
     directoryEntries: [undialableEntry("host-a")],
     hasLocalHost: true,
-    hostsUnknown: false,
     hasMobileNoHost: false,
     hasReadySessionFor: () => false,
     leases: input.leases,

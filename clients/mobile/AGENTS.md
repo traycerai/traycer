@@ -1,195 +1,82 @@
 # AGENTS.md
 
-Read this together with the repository root guide and
-`clients/gui-app/AGENTS.md`.
+Read with the repo root guide and `clients/gui-app/AGENTS.md`.
 
 ## Purpose and boundary
 
-`clients/mobile` is a thin Capacitor shell around the shared `gui-app`, with an
-iOS and an Android platform. The dev loop is emulator/Simulator-only (it dials
-a Mac-loopback dev host); shipped builds (`TRAYCER_MOBILE_ENV=staging|production`)
-use real remote-host discovery and distribute through TestFlight.
+Thin Capacitor shell around the shared `gui-app` (iOS + Android). Dev loop is
+Simulator/emulator against a Mac dev slot; shipped builds
+(`TRAYCER_MOBILE_ENV=staging|production`) use remote-host discovery and go out
+through TestFlight (internal repo `release-mobile-ios.yaml`; runbook in the
+internal `docs/mobile/AGENTS.md`).
 
-This workspace may:
+May: mount `<TraycerApp />` with a mobile `IRunnerHost`; bridge
+browser/secure-storage/native-HTTP; adapt the shared GUI for safe areas and
+touch in mobile-only CSS. Must not: change or duplicate the RPC protocol, host
+lifecycle, authn, cloud UI, or the dev-slot allocator.
 
-- mount `<TraycerApp />` with a mobile `IRunnerHost`;
-- bridge browser, secure-storage, and native HTTP capabilities;
-- consume an existing `make dev-gui-app` or `make dev-desktop` slot;
-- adapt the shared GUI for phone safe areas and touch layout in mobile-only
-  CSS.
+## Host and auth invariants
 
-It must not change or duplicate the RPC protocol, host lifecycle, authn
-service, cloud UI, remote-host service, or root `dev-desktop` allocator.
-Sentry is outside the current milestone. iOS
-store signing and TestFlight release automation now exist — cloud-managed
-signing driven by the internal repo's `release-mobile-ios.yaml` (tag-triggered,
-staging and production lanes); the shared `App` Xcode scheme is committed for
-exactly that pipeline. App Store submission itself is still out of scope. OS push (permission, APNs/FCM token
-registration, tap-to-open) is IN the milestone — see `src/push-registration.ts`;
-the registration flow is one platform-agnostic controller, and the platform
-only decides the `(platform, environment)` pair (`pushRegistrationTarget`).
+- No bundled local host — `onLocalHostChange` emits `null`, never transitions.
+  `vite.config.ts` injects exactly one `kind: "remote"` directory entry from
+  the selected dev slot; never hard-code ports.
+- Sign-in is the OAuth device flow. The return signal is payload-free
+  (`visibilitychange` resume edge via `IRunnerHost.onAuthCallback`); polling
+  must complete sign-in even with no signal. `traycer://` scheme registered in
+  both native projects.
+- Native HTTP (CapacitorHttp) keeps auth requests out of WKWebView CORS — and
+  replaces the transport User-Agent, so anything identifying the device must be
+  self-reported in a request body, not read from headers.
+- Signs in as `"desktop"` client kind (deployed authn rejects `"mobile"`) —
+  `DEVICE_FLOW_CLIENT_ID` in `src/mobile-runner-host.ts`; flip when authn
+  accepts it.
+- Push tokens bind to the login session (`/api/v3/user/push-tokens`); sign-out
+  unregisters via `.../remove` — plain sign-out is local-only and revokes
+  nothing server-side.
 
-## Host and auth model
+## Key files
 
-- Mobile has no bundled local host. `onLocalHostChange` synchronously emits
-  `null` and never transitions.
-- `vite.config.ts` reads the selected existing slot at
-  `~/.traycer/host/dev-runs/<slot>/pid.json`, validates it, and injects exactly
-  one `kind: "remote"` directory entry through the GUI's existing
-  `RemoteHostFetcher` seam.
-- Dev auth/cloud URLs are explicit launcher inputs. Never hard-code ports or
-  derive the root allocator's port algorithm here.
-- Interactive sign-in is current OAuth device flow. The callback signal is
-  payload-free and sign-in must complete by polling even if no return signal is
-  delivered. Native builds thread `return_scheme=traycer` into the verification
-  URL so the cloud `/device` page can deep-link the OS back to the app after
-  approval; the return signal itself is the WebView's `visibilitychange` resume
-  edge (no `@capacitor/app` plugin), wired through
-  `IRunnerHost.onAuthCallback`. The scheme is registered in both native
-  projects (`CFBundleURLTypes` / a `BROWSABLE` intent-filter).
-- Capacitor's native HTTP patch keeps auth requests out of WKWebView CORS.
-- The shared device-auth client supports `"cli"`, `"desktop"`, and `"mobile"`;
-  this shell is MEANT to sign in as `"mobile"` (authn shows mobile-specific
-  approval copy and the session lists as a mobile device), but temporarily
-  signs in as `"desktop"` because the deployed authn (staging AND production,
-  verified 2026-08-14) still rejects the `"mobile"` client kind — see
-  `DEVICE_FLOW_CLIENT_ID` in `src/mobile-runner-host.ts`.
-- Push tokens register against authn's `/api/v3/user/push-tokens` bound to the
-  login session. Sign-out unregisters via `POST .../remove` and that call is
-  the primary cleanup — plain sign-out is local-only and revokes nothing, so a
-  failed remove lingers deliverable until the session family is revoked
-  (sessions panel), the token rebinds, or authn's reaper collects it after the
-  family's sessions expire. Explicit session revocation does cascade the row
-  away server-side.
-
-## Important files
-
-- `src/mobile-runner-host.ts` — current `IRunnerHost`, device-flow controller,
-  and native secure token storage.
-- `src/push-registration.ts` — OS push lifecycle: permission, provider-token
-  registration following the token store, and the tap→activation relay the
-  GUI consumes through `notifications.onClick` (cold-start taps buffered).
-- `src/web/main.tsx` — mounts the shared GUI and supplies the one-host fetcher.
-- `src/web/index.css` — Tailwind entrypoint; its `@source` for `gui-app` is
-  required or shared utility classes disappear from the mobile bundle.
-- `src/web/mobile.css` — mobile-only safe-area/responsive overrides.
-- `scripts/dev-run.ts` — slot resolution, `run.json` reading, and the Capacitor
-  live-reload handoff, shared by both launchers so they cannot drift.
-- `scripts/dev-ios.ts` / `scripts/dev-android.ts` — live-reload launchers that
-  consume the existing slot. Android additionally opens `adb reverse` tunnels.
-- `ios/` — generated Capacitor 8 Swift Package Manager project.
-- `android/` — generated Capacitor 8 Gradle project.
-
-For both native projects: keep the generated structure authoritative and
-reapply only small reviewed native deltas. The current Android deltas are
-exactly five — `POST_NOTIFICATIONS`, the activity's
-`windowSoftInputMode="adjustResize"`, and the `traycer://` `BROWSABLE`
-intent-filter (return-to-app after device approval) in
-`app/src/main/AndroidManifest.xml`, the debug-only cleartext overlay under
-`app/src/debug/`, and the tracked `app/google-services.json.example`.
-
-Run `bun run --cwd clients/mobile sync:android` before invoking `./gradlew`
-directly. `capacitor.settings.gradle` is tracked but embeds bun install-layout
-hashes (`node_modules/.bun/@capacitor+android@8.4.2+<hash>/…`) that shift with
-any dependency change, and `settings.gradle` includes
-`capacitor-cordova-android-plugins/`, which is gitignored — so a fresh clone or
-a post-dep-bump tree fails Gradle confusingly until a sync regenerates both.
-`cap run`/`cap build` sync first and are unaffected.
+- `src/mobile-runner-host.ts` — `IRunnerHost`, device flow, secure token store.
+- `src/push-registration.ts` — push permission/registration/tap-relay,
+  platform-agnostic; platform only picks `pushRegistrationTarget`. Also backs
+  the `IRunnerHost.pushPermission` capability the Settings row reads.
+- `src/web/main.tsx` — mounts the shared GUI.
+- `src/web/index.css` — its `@source` for `gui-app` is required or shared
+  utility classes vanish from the bundle. `mobile.css` — mobile-only overrides.
+- `scripts/dev-run.ts` + `dev-ios.ts` / `dev-android.ts` — slot-consuming
+  live-reload launchers (Android adds `adb reverse` tunnels).
+- `ios/`, `android/` — generated Capacitor projects: keep the generated
+  structure authoritative; reapply only small reviewed native deltas.
 
 ## Commands
 
-From the repository root:
-
 ```bash
-bun run --cwd clients/mobile compile
-bun run --cwd clients/mobile test
-bun run --cwd clients/mobile build:web
-bun run --cwd clients/mobile sync:ios      # sync:android
-bun run --cwd clients/mobile dev:ios -- \
-  --slot <slot>
-bun run --cwd clients/mobile dev:android -- \
-  --slot <slot>
+bun run --cwd clients/mobile compile | test | build:web | sync:ios | sync:android
+bun run --cwd clients/mobile dev:ios -- --slot <slot>      # dev:android
 ```
 
-In the internal repository, `make dev-gui-app` owns the per-worktree GUI App
-Vite server and dev host without starting Electron. `make dev-ios` and
-`make dev-android` resolve that worktree's slot, then the matching launcher
-reads the server URL from `run.json`, builds/installs the native app, creates
-ignored web assets when they are absent, and connects Capacitor live reload to
-it. React/CSS changes reload without reinstalling; Capacitor config, plugin,
-Swift/Java, Gradle, or Xcode-project changes require a native rebuild.
-`make dev-desktop` remains compatible when Electron testing is also needed.
+Normal entry points live in the internal repo: `make dev-gui-app` then
+`make dev-ios` / `make dev-android` (resolve the worktree's slot, install,
+connect live reload). React/CSS hot-reloads; native/config changes need a
+rebuild. Run `sync:android` before invoking `./gradlew` directly — tracked
+Gradle files embed install-layout hashes that go stale.
 
-The workspace scripts above are the escape hatch when an explicit slot is
-needed; the Makefile targets are the normal entry points.
+## Android notes
 
-## Android specifics
-
-- **Loopback.** The emulator's `127.0.0.1` is its own, not the Mac's, so
-  `dev-android.ts` runs `adb reverse` for every port the slot publishes
-  (authn, cloud UI, GUI App, and the host's RPC port read from `pid.json`).
-  That is what lets the single set of `http://localhost:<port>` URLs baked by
-  `vite.config.ts` work unchanged on both platforms — there is deliberately no
-  Android-only URL rewriting and no `10.0.2.2` in application code. Re-run the
-  launcher after a host restart so the new RPC port gets a tunnel.
-- **Scheme.** `androidScheme` is `http` to match `iosScheme` — parity is the
-  reason, and the only one; the loopback WebSocket guard accepts `http:` and
-  `https:` on loopback identically. Live reload overrides the document origin
-  anyway, so this governs only the packaged build. Settled early because
-  changing it after an install exists wipes origin-scoped storage. Debug builds
-  carry a loopback-scoped cleartext exemption; release builds do not.
-- **Firebase config is ops.** `android/app/google-services.json` is gitignored
-  and normally absent. `android/app/build.gradle` (Capacitor's own template
-  code) applies the `com.google.gms.google-services` plugin only when the file
-  is readable, so **the absence is the supported default**: the build succeeds,
-  Firebase never initializes, `PushNotifications.register()` rejects, and
-  `src/push-registration.ts` logs and swallows it. See
-  `android/app/google-services.json.example` for the shape — do not rename it
-  with its placeholder values in place, which would fail later and less
-  clearly.
-- **Notification permission.** `POST_NOTIFICATIONS` must be declared in the app
-  manifest; the plugin's library manifest does not contribute it, and without
-  it Android denies the request without ever showing the dialog. Below API 33
-  the plugin reports `granted` and no prompt is issued.
-
-### Verification status
-
-Emulator-verified: **nothing**. This machine has an Android SDK but no AVD
-system image, and the loop was never run end to end. Treat the following as
-open:
-
-- app launch, live reload, and `adb reverse` against a live `make dev-gui-app`;
-- the host WebSocket accepting the `http://localhost` WebView origin in
-  practice (reasoned from `loopback-upgrade-guard.ts`, not observed);
-- the Android 13+ permission dialog;
-- **the packaged-build scheme choice** — `androidScheme` only takes effect
-  without live reload, and no packaged build has been run. Whether such a build
-  loads its `http://localhost` assets with cleartext disabled is likewise
-  unconfirmed;
-- **soft-keyboard behavior** — `adjustResize` is set so the `h-dvh` shell and
-  terminal key bar track the visible area, but that has never been seen on a
-  device. The Capacitor Keyboard plugin's `resize`/`autoBackdropColor` options
-  are iOS-only, so Android has no equivalent knob to fall back on;
-- any real FCM token or push delivery (ops-gated regardless).
-
-Gradle-verified on this machine: `assembleDebug` and `assembleRelease` both
-succeed with no `google-services.json`; the merged debug manifest carries
-`POST_NOTIFICATIONS`, the network-security config, and the plugin's FCM
-service; the merged release manifest carries the permission but not the
-cleartext exemption; and `processDebugGoogleServices` exists only when the
-config file is present.
+- `adb reverse` gives the emulator the Mac's `localhost` ports — no `10.0.2.2`
+  anywhere in app code; re-run the launcher after a host restart.
+- `androidScheme` is `http` for iOS parity; changing it after installs exist
+  wipes origin-scoped storage.
+- `google-services.json` is gitignored ops config; its absence is the supported
+  default (build succeeds, push registration rejects and is swallowed).
+- `POST_NOTIFICATIONS` must stay declared in the app manifest or Android 13+
+  denies without ever prompting.
 
 ## Working rules
 
-- Import shared contracts; do not redefine them.
-- Keep unsupported mobile capabilities as explicit no-ops/nulls matching
-  `IRunnerHost`.
-- Keep the production mobile code free of release/telemetry scaffolding until
-  those milestones are explicitly approved. (Push was approved with the
-  notifications milestone and lives in `src/push-registration.ts`; the Android
-  platform was approved with it.)
-- Platform differences belong in the native projects, the launcher scripts, or
-  `pushRegistrationTarget` — not in branching inside the shared GUI.
-- Follow root type-safety rules: no `any`, unsafe assertions, optional function
-  parameters, or default parameter values.
-- Tests live under `__tests__/` and mock native plugins at the package boundary.
+- Import shared contracts; never redefine them. Unsupported capabilities are
+  explicit no-ops/nulls on `IRunnerHost`.
+- Platform differences live in the native projects, launcher scripts, or
+  `pushRegistrationTarget` — never as branches inside the shared GUI.
+- Root type-safety rules apply. Tests under `__tests__/`, native plugins mocked
+  at the package boundary.

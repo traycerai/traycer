@@ -156,12 +156,22 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   }),
 }));
 
+// The list panel hands the sweep dialog the app-wide following client; the
+// panel renders outside a HostRuntimeProvider here, and the sweep query is
+// mocked below anyway (sibling epics-list-panel suites use the same stubs).
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
-  useEpicSweepWorktreeCandidates: () => ({
+  useEpicSweepWorktreeCandidatesForClient: () => ({
     hostId: "host-test",
     rows: [],
     isPending: false,
     isError: false,
+    checkedAt: null,
+    canRefresh: true,
+    refresh: () => Promise.resolve(),
   }),
 }));
 
@@ -445,14 +455,14 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBeNull();
     });
 
-    // The nav-drawer edge guard in `withinNavDrawerEdgeZone` only reads
-    // `clientX` on an OPEN tray - a closed one's forward direction is
-    // leftward, so a rightward drag fails `classifyDirectionalIntent`'s
-    // counter-direction arm the same way it does starting anywhere else on
-    // the row. Pinned as its own case because it starts inside the strip the
-    // open-tray guard below tests against, so a regression that widened the
-    // guard to the closed state would still be caught here.
-    it("stays closed on a rightward drag starting inside the nav-drawer edge zone", async () => {
+    // The edge guard in `withinEdgeZone` only reads `clientX` on an OPEN tray
+    // - a closed one's forward direction is leftward, so a rightward drag
+    // fails `classifyDirectionalIntent`'s counter-direction arm the same way
+    // it does starting anywhere else on the row. Pinned as its own case
+    // because it starts inside the strip the open-tray guard below tests
+    // against, so a regression that widened the guard to the closed state
+    // would still be caught here.
+    it("stays closed on a rightward drag starting inside the reserved edge zone", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
@@ -543,14 +553,14 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ).toBeNull();
     });
 
-    // The shell's nav-drawer edge pull is a document-capture recognizer with
-    // `touch-action: pan-y` sitting over the row, not `pan-x`, so nothing
-    // upstream stands it down when a close-swipe starts inside its strip -
-    // the row has to yield instead. `withinNavDrawerEdgeZone` does that at
-    // `onPointerDown`: a touch starting at `clientX: 10`, inside `[0, 32]` at
-    // the jsdom-default zero safe-area inset, is never tracked, so the tray
-    // stays open however far past its commit distance the drag travels.
-    it("leaves an open tray open on a rightward close-swipe starting inside the nav-drawer edge zone", async () => {
+    // The row sits under `touch-action: pan-y`, not `pan-x`, so nothing
+    // upstream stands a shell recognizer down when a close-swipe starts
+    // inside the reserved strip - the row has to yield instead.
+    // `withinEdgeZone` does that at `onPointerDown`: a touch starting at
+    // `clientX: 10`, inside `[0, 32]` at the jsdom-default zero safe-area
+    // inset, is never tracked, so the tray stays open however far past its
+    // commit distance the drag travels.
+    it("leaves an open tray open on a rightward close-swipe starting inside the reserved edge zone", async () => {
       renderPanel("embedded", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);

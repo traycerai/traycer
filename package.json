@@ -191,7 +191,7 @@
     "wait-on": "^9.1.0"
   },
   "overrides": {
-    "@radix-ui/react-dialog": "1.1.21",
+    "@radix-ui/react-dialog": "1.1.22",
     "@radix-ui/react-dismissable-layer": "1.1.18",
     "@codemirror/state": "^6.7.1",
     "@codemirror/language": "^6.12.4",

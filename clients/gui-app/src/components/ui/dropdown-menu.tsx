@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
 function DropdownMenu({
   ...props
@@ -43,6 +44,7 @@ function DropdownMenuContent({
   className,
   align = "start",
   sideOffset = 4,
+  collisionPadding,
   container,
   onCloseAutoFocus,
   ...props
@@ -55,6 +57,8 @@ function DropdownMenuContent({
   // Concealed region (see `portal-concealment-context`): un-present the
   // portal; it re-presents intact when the region returns.
   const concealed = usePortalConcealed();
+  // Read above the early returns so hook order does not depend on presentation.
+  const safeAreaInsets = useSafeAreaCollisionPadding();
   if (!paneFocused || concealed) return null;
   return (
     <DropdownMenuPrimitive.Portal container={container}>
@@ -62,8 +66,14 @@ function DropdownMenuContent({
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         align={align}
+        collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 max-h-(--radix-dropdown-menu-content-available-height) w-(--radix-dropdown-menu-trigger-width) min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // `max-w-safe-dvw` is primitive-owned and sits ahead of the caller's
+          // `className`, so an unmodified caller `max-w-*` displaces it -
+          // CSS allows one width clamp per element, so the cap is a default,
+          // not a floor. It only conflicts at all because the token is
+          // registered in `cn()`'s merge config (`lib/utils.ts`).
+          "z-50 max-h-(--radix-dropdown-menu-content-available-height) w-(--radix-dropdown-menu-trigger-width) max-w-safe-dvw min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
@@ -260,13 +270,18 @@ function DropdownMenuSubTrigger({
 
 function DropdownMenuSubContent({
   className,
+  collisionPadding,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+  // A submenu opens sideways from a row that is itself already near an edge, so
+  // it is the surface most likely to need the clamp its parent content has.
+  const safeAreaInsets = useSafeAreaCollisionPadding();
   return (
     <DropdownMenuPrimitive.SubContent
       data-slot="dropdown-menu-sub-content"
+      collisionPadding={collisionPadding ?? safeAreaInsets}
       className={cn(
-        "z-50 min-w-[96px] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+        "z-50 max-w-safe-dvw min-w-[96px] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
         className,
       )}
       {...props}

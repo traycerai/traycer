@@ -47,9 +47,6 @@ export function useSwitcherRename(
   const renameChat = useEpicRenameChat();
   const renameTuiAgent = useEpicRenameTuiAgent();
   const renameArtifact = useEpicRenameArtifact(true);
-  // The switcher lists the Epic session's terminals, so rename goes to that
-  // same client - the app-wide wrapper was removed with the host lifecycle
-  // redesign, and it renamed host B's sessions from host A's rows anyway.
   const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
 
   return useCallback(

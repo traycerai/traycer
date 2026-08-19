@@ -3,6 +3,11 @@ import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import {
+  AndroidSettings,
+  IOSSettings,
+  NativeSettings,
+} from "capacitor-native-settings";
+import {
   TraycerApp,
   hostRpcRegistry,
   setMobileApp,
@@ -52,6 +57,34 @@ function buildPushRegistration(
   });
 }
 
+/**
+ * How the Settings row's "Open Settings" button leaves the app, or `null` on
+ * the dev web entry, which has no OS page to open (and no push permission to
+ * repair - `pushRegistration` is `null` there too, so the row never renders).
+ *
+ * Both platforms land on the app's NOTIFICATION screen, one tap from the
+ * switch: `AppNotification` resolves iOS 15.4+'s notification-settings URL and
+ * falls back to the app page (`UIApplication.openSettingsURLString`, the one
+ * screen Apple supports opening) below that, where Notifications is one row
+ * down anyway.
+ */
+function buildOpenPushSettings(): (() => Promise<void>) | null {
+  const platform = Capacitor.getPlatform();
+  if (platform === "ios") {
+    return async (): Promise<void> => {
+      await NativeSettings.openIOS({ option: IOSSettings.AppNotification });
+    };
+  }
+  if (platform === "android") {
+    return async (): Promise<void> => {
+      await NativeSettings.openAndroid({
+        option: AndroidSettings.AppNotification,
+      });
+    };
+  }
+  return null;
+}
+
 const config = __TRAYCER_MOBILE_CONFIG__;
 
 // The baked dev host captures the port as of Vite startup, which goes stale
@@ -59,7 +92,9 @@ const config = __TRAYCER_MOBILE_CONFIG__;
 // pid.json per request, so each directory refresh gets the live port.
 // BROWSER-TESTING SCAFFOLDING (dev entry only): a shipped build carries no
 // `devHost` and uses real remote-host discovery instead (see below).
-function buildDevHostFetcher(devHost: TraycerMobileDevHost): RemoteHostFetcher {
+function buildDevHostFetcher(
+  devHost: TraycerMobileDevHost,
+): () => Promise<RemoteHostFetchOutcome> {
   // The baked config predates the directory's dialability field; the dev
   // host is a loopback WebSocket, which is the definition of dialable.
   const bakedHost: RemoteHostFetchOutcome = {
@@ -106,8 +141,10 @@ function buildDevHostFetcher(devHost: TraycerMobileDevHost): RemoteHostFetcher {
 // (`GET /api/v3/hosts` through `MobileRunnerHost.listRegisteredHosts`)
 // projected into relay-backed `remote` entries. The same production path the
 // desktop shell is on.
-const remoteFetcher: RemoteHostFetcher | null =
+const devHostFetch: (() => Promise<RemoteHostFetchOutcome>) | null =
   config.devHost === null ? null : buildDevHostFetcher(config.devHost);
+const remoteFetcher: RemoteHostFetcher | null =
+  devHostFetch === null ? null : () => devHostFetch();
 
 function bootstrap(): void {
   document.documentElement.classList.add("traycer-mobile-client");
@@ -133,12 +170,25 @@ function bootstrap(): void {
     hostLabel: config.hostLabel,
     relayBaseUrl: config.relayBaseUrl,
     pushRegistration,
+    openPushSettings: buildOpenPushSettings(),
     // The scheme registration ships with the NATIVE shell (Info.plist /
     // AndroidManifest), so platform - not Vite environment - decides: any
     // native install of this app answers `traycer://`, while the dev web
     // entry registers nothing and must not name a scheme some other installed
     // app would answer.
     returnScheme: Capacitor.isNativePlatform() ? "traycer" : null,
+    // The selection authority's fleet rides the same dev-slot source the
+    // directory's fetcher uses, so a loopback dev host (never registered in
+    // the cloud) is still a derivation candidate. `null` = registry list.
+    fleetHostIds:
+      devHostFetch === null
+        ? null
+        : async () => {
+            const outcome = await devHostFetch();
+            return outcome.kind === "hosts"
+              ? outcome.entries.map((entry) => entry.hostId)
+              : null;
+          },
     // The ML Kit plugin has no web implementation, so the camera capability
     // exists only on a native install; the browser entry keeps the manual
     // code-entry path alone.
@@ -152,9 +202,11 @@ function bootstrap(): void {
       : null,
   });
   // After the host exists: registration follows the token store (sign-in,
-  // app start while signed in, sign-out), and the plugin listeners attach
-  // now so a cold-start tap is captured before the GUI mounts.
-  pushRegistration?.start(host.tokenStore);
+  // app start while signed in, sign-out) and the host's resume edge (a
+  // permission granted later in the OS Settings app), and the plugin
+  // listeners attach now so a cold-start tap is captured before the GUI
+  // mounts.
+  pushRegistration?.start(host.tokenStore, host);
   const container = document.getElementById("root");
   if (container === null) {
     throw new Error("#root element not found in index.html");

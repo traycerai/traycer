@@ -138,9 +138,6 @@ export function HostReadinessControllerProvider(props: {
   // folded into the intent - a shell with no local host is never booting one.
   const canProvision = authStatus === "signed-in" && localBootIntent;
   const directory = binding === null ? null : binding.directory;
-  const directoryRefreshing = useHostDirectoryRefreshing(directory);
-  const cardinality =
-    directory === null ? "unknown" : directory.getCardinality();
   // Stable identities: the presentation is memoized on its inputs, and a
   // fresh closure each render would re-run every readiness consumer in the
   // surface tree.
@@ -172,8 +169,9 @@ export function HostReadinessControllerProvider(props: {
           leases={leases}
           authorityAttached={authorityAttached}
           hasLocalHost={runnerHost.hasLocalHost}
-          hasMobileNoHost={cardinality === "zero"}
-          hostsUnknown={cardinality === "unknown"}
+          hasMobileNoHost={
+            binding !== null && binding.directory.getCardinality() === "zero"
+          }
           lifecycle={lifecycle}
           compatibility={compatibility}
           targetKind={targetKind}
@@ -181,7 +179,6 @@ export function HostReadinessControllerProvider(props: {
           onConfigureShell={props.onConfigureShell}
           onRefreshDirectory={refreshDirectory}
           onOpenSettings={props.onOpenSettings}
-          directoryRefreshing={directoryRefreshing}
         >
           {props.children}
         </HostReadinessControllerContents>
@@ -205,7 +202,6 @@ function HostReadinessControllerContents(props: {
   readonly authorityAttached: boolean;
   readonly hasLocalHost: boolean;
   readonly hasMobileNoHost: boolean;
-  readonly hostsUnknown: boolean;
   readonly lifecycle: HostProvisioningLifecycle;
   readonly compatibility: HostCompatibility;
   readonly targetKind: HostTargetKind;
@@ -213,7 +209,6 @@ function HostReadinessControllerContents(props: {
   readonly onConfigureShell: () => void;
   readonly onRefreshDirectory: () => void;
   readonly onOpenSettings: () => void;
-  readonly directoryRefreshing: boolean;
   readonly children: ReactNode;
 }): ReactNode {
   const defaultHostPresentation = useMemo(
@@ -226,11 +221,9 @@ function HostReadinessControllerContents(props: {
         configureShell: props.onConfigureShell,
         refreshDirectory: props.onRefreshDirectory,
         openSettings: props.onOpenSettings,
-        directoryRefreshing: props.directoryRefreshing,
       }),
     [
       props.compatibility,
-      props.directoryRefreshing,
       props.lifecycle,
       props.localBootIntent,
       props.targetKind,
@@ -253,7 +246,6 @@ function HostReadinessControllerContents(props: {
         hasReadySessionFor: props.hasReadySessionFor,
         hasLocalHost: props.hasLocalHost,
         hasMobileNoHost: props.hasMobileNoHost,
-        hostsUnknown: props.hostsUnknown,
         leases: props.leases,
         authorityAttached: props.authorityAttached,
       });
@@ -277,7 +269,6 @@ function HostReadinessControllerContents(props: {
       props.hasReadySessionFor,
       props.hasLocalHost,
       props.hasMobileNoHost,
-      props.hostsUnknown,
       props.leases,
       props.authorityAttached,
       props.requestContextUserId,
@@ -391,7 +382,6 @@ function presentationFromLifecycle(args: {
   readonly configureShell: () => void;
   readonly refreshDirectory: () => void;
   readonly openSettings: () => void;
-  readonly directoryRefreshing: boolean;
 }): DefaultHostReadinessPresentation {
   return {
     targetKind: args.targetKind,
@@ -413,7 +403,6 @@ function presentationFromLifecycle(args: {
     configureShell: args.configureShell,
     refreshDirectory: args.refreshDirectory,
     openSettings: args.openSettings,
-    directoryRefreshing: args.directoryRefreshing,
     compatibility: compatibilityPresentation(args.compatibility),
   };
 }
@@ -474,22 +463,11 @@ export function SurfaceReadinessFallback(props: {
     <FallbackFrame
       fallback={fallbackContent(props.readiness, presentation)}
       testId={`host-ready-gate-${props.readiness.kind}`}
-      messageTestId={fallbackMessageTestId(props.readiness.kind)}
+      messageTestId={
+        props.readiness.kind === "mobile-no-host" ? "mobile-no-host" : null
+      }
     />
   );
-}
-
-/**
- * The two directory-empty surfaces tag their message so a test can tell them
- * apart by copy, not just by the frame's readiness kind - they differ only in
- * whether the registry has answered, which is exactly what regressed.
- */
-function fallbackMessageTestId(
-  kind: GateDrawnReadiness["kind"],
-): string | null {
-  if (kind === "mobile-no-host") return "mobile-no-host";
-  if (kind === "searching-hosts") return "searching-hosts";
-  return null;
 }
 
 /**
@@ -500,7 +478,7 @@ function fallbackMessageTestId(
  * drive host-dependent affordances during setup.
  *
  * After the first `ready` render the gate LATCHES and never replaces the app
- * again, without exception. Blocking a second time is what made every host
+ * again (one exception below). Blocking a second time is what made every host
  * switch - and every transient probe failure on a host that was running the
  * whole time - throw away the entire DOM: editors, terminals, scroll
  * positions, popovers. The recovery actions did not disappear with the block:
@@ -524,12 +502,9 @@ function fallbackMessageTestId(
  *  - `/settings` still bypasses it. The splash's own "Configure shell" button
  *    navigates there, so gating settings on a ready host would make the
  *    escape hatch unreachable from the screen that offers it.
- *  - Post-latch it has NO exceptions. Every non-ready kind - including the
- *    three relay-only no-selection states - keeps the app mounted and is
- *    reported by `HostStatusStrip` instead. The three used to full-screen on
- *    the premise that an unbound relay shell has nothing worth keeping; a live
- *    session reaches all three (see `postLatchSurfaceFor`), so the premise
- *    only ever held before the first paint, which is the un-latched path.
+ *  - `mobile-no-host` keeps the full-screen surface even post-latch
+ *    (`postLatchSurfaceFor`): a mobile shell with no host at all has no app
+ *    worth keeping mounted, and it is not reachable from a desktop switch.
  *
  * Readiness and presentation both come from the one controller above; this
  * adds no second subscription.
@@ -754,17 +729,6 @@ function fallbackContent(
   presentation: DefaultHostReadinessPresentation,
 ): ReadinessFallback {
   switch (readiness.kind) {
-    case "searching-hosts":
-      return {
-        title: null,
-        // Names what the app is actually doing - reading the host registry -
-        // rather than claiming a connection to a host it has not found yet,
-        // and rather than the no-host screen's instruction to go set one up.
-        message: "Looking for your hosts…",
-        body: null,
-        footer: null,
-        actions: [directoryRefreshAction(presentation)],
-      };
     case "mobile-no-host":
       return {
         title: null,
@@ -772,7 +736,7 @@ function fallbackContent(
           "No host connected. Connect a host from this device to get started.",
         body: null,
         footer: null,
-        actions: [directoryRefreshAction(presentation)],
+        actions: [],
       };
     case "provisioning-error":
       return provisioningErrorFallback(presentation);
@@ -822,30 +786,6 @@ function fallbackContent(
         ],
       };
   }
-}
-
-/**
- * Manual registry re-fetch, offered on both directory-empty surfaces.
- *
- * On a relay-only shell these are the two screens with no other way forward:
- * the 15s poll is the only thing that would otherwise move them, so a user
- * who has just woken their Mac has nothing to do but wait out a clock they
- * cannot see. `pending` tracks the SERVICE's in-flight state rather than this
- * click, because `refresh()` coalesces onto one request - a poll tick already
- * running is a fetch, and offering a live button for it would promise a second
- * one that never happens.
- */
-function directoryRefreshAction(
-  presentation: DefaultHostReadinessPresentation,
-): ReadinessFallbackAction {
-  return {
-    label: "Refresh",
-    testId: "host-directory-refresh",
-    variant: "outline",
-    disabled: presentation.directoryRefreshing,
-    pending: presentation.directoryRefreshing,
-    onClick: presentation.refreshDirectory,
-  };
 }
 
 function provisioningErrorFallback(
@@ -958,38 +898,5 @@ function useHostDirectoryEntries(
     [directory],
   );
   const getSnapshot = useCallback(() => entriesRef.current, []);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
-/**
- * Refresh liveness for the manual-refresh action. Its own subscription rather
- * than a field on the directory fan-out above: a fetch starting and finishing
- * changes no entry, and the entry fan-out feeds every host-scoped query in the
- * app.
- */
-function useHostDirectoryRefreshing(
-  directory: {
-    readonly onRefreshStateChange: (
-      listener: (refreshing: boolean) => void,
-    ) => { readonly dispose: () => void };
-    readonly isRefreshing: () => boolean;
-  } | null,
-): boolean {
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      if (directory === null) return () => undefined;
-      const subscription = directory.onRefreshStateChange(() => {
-        onStoreChange();
-      });
-      return () => {
-        subscription.dispose();
-      };
-    },
-    [directory],
-  );
-  const getSnapshot = useCallback(
-    () => directory !== null && directory.isRefreshing(),
-    [directory],
-  );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

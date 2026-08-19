@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginListenerHandle } from "@capacitor/core";
 import type { DeviceFlowResult } from "@traycer-clients/shared/platform/runner-host";
 import { MobileRunnerHost } from "../src/mobile-runner-host";
+import {
+  MobilePushRegistration,
+  type CapacitorPushPermissionState,
+  type PushNotificationAction,
+  type PushNotificationsPluginSlice,
+  type PushRegistrationError,
+  type PushRegistrationToken,
+} from "../src/push-registration";
 
 const nativeMocks = vi.hoisted(() => ({
   browserOpen: vi.fn(),
@@ -32,10 +41,78 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     authnBaseUrl: "http://localhost:32350",
     hostLabel: "test-slot",
     relayBaseUrl: "ws://localhost:8787/attach",
+    fleetHostIds: null,
     // Push lifecycle is exercised in push-registration.test.ts; the host's
     // click sink with `null` is the dev-web no-op these tests always had.
     pushRegistration: null,
+    openPushSettings: null,
     returnScheme,
+    linkCodeScanner: null,
+    deviceDescriber: null,
+  });
+}
+
+/**
+ * The plugin slice, faked at the package boundary as everywhere else in this
+ * workspace - `MobilePushRegistration` is a plain object here, never `start()`ed,
+ * so nothing below touches Capacitor.
+ */
+class FakePushPlugin implements PushNotificationsPluginSlice {
+  permission: CapacitorPushPermissionState = "denied";
+  afterRequest: CapacitorPushPermissionState = "granted";
+
+  readonly checkPermissions = vi.fn(async () => ({ receive: this.permission }));
+  readonly requestPermissions = vi.fn(async () => ({
+    receive: this.afterRequest,
+  }));
+  readonly register = vi.fn(async (): Promise<void> => {});
+
+  addListener(
+    eventName: "registration",
+    listener: (token: PushRegistrationToken) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "registrationError",
+    listener: (error: PushRegistrationError) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "pushNotificationActionPerformed",
+    listener: (action: PushNotificationAction) => void,
+  ): Promise<PluginListenerHandle>;
+  async addListener(
+    eventName: string,
+    listener:
+      | ((token: PushRegistrationToken) => void)
+      | ((error: PushRegistrationError) => void)
+      | ((action: PushNotificationAction) => void),
+  ): Promise<PluginListenerHandle> {
+    void eventName;
+    void listener;
+    return { remove: async () => {} };
+  }
+}
+
+function phoneRunner(input: {
+  readonly plugin: FakePushPlugin;
+  /** `null` stands in for a platform with no OS settings page (dev web). */
+  readonly openPushSettings: (() => Promise<void>) | null;
+}): MobileRunnerHost {
+  return new MobileRunnerHost({
+    signInUrl: "http://localhost:32352/sign-in",
+    authnBaseUrl: "http://localhost:32350",
+    hostLabel: "test-slot",
+    relayBaseUrl: "ws://localhost:8787/attach",
+    fleetHostIds: null,
+    pushRegistration: new MobilePushRegistration({
+      plugin: input.plugin,
+      authnBaseUrl: "http://localhost:32350",
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: async () => ({ kind: "ok" }),
+      removeToken: async () => ({ kind: "ok" }),
+    }),
+    openPushSettings: input.openPushSettings,
+    returnScheme: "traycer",
     linkCodeScanner: null,
     deviceDescriber: null,
   });
@@ -447,6 +524,137 @@ describe("MobileRunnerHost", () => {
 
       authSubscription.dispose();
       resumeSubscription.dispose();
+    });
+  });
+
+  describe("pushPermission", () => {
+    // Same visibility fixture as the resume tests above: `onChange`'s first
+    // source IS the foreground-resume edge.
+    let state: DocumentVisibilityState = "visible";
+
+    beforeEach(() => {
+      state = "visible";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    function setVisibility(next: DocumentVisibilityState): void {
+      state = next;
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    /** For the cases where the OS-settings jump is not what is under test. */
+    const OPEN_SETTINGS = async (): Promise<void> => {};
+
+    it("is null where push itself is absent - the dev web entry", () => {
+      expect(runner(null).pushPermission).toBeNull();
+    });
+
+    it("is null when no OS settings page was injected - never a dead button", () => {
+      // Both halves or none: a row that can read the permission but cannot
+      // open the page to repair it would offer a button that resolves
+      // successfully and does nothing.
+      expect(
+        phoneRunner({
+          plugin: new FakePushPlugin(),
+          openPushSettings: null,
+        }).pushPermission,
+      ).toBeNull();
+    });
+
+    it("reads the OS answer through the registration object", async () => {
+      const plugin = new FakePushPlugin();
+      plugin.permission = "prompt-with-rationale";
+      const pushPermission = phoneRunner({
+        plugin,
+        openPushSettings: OPEN_SETTINGS,
+      }).pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+
+      // Mapped to the shared vocabulary, and never a prompt.
+      await expect(pushPermission.get()).resolves.toBe("prompt");
+      expect(plugin.requestPermissions).not.toHaveBeenCalled();
+    });
+
+    it("fires onChange on the resume edge - the person may have just changed it in OS Settings", () => {
+      const pushPermission = phoneRunner({
+        plugin: new FakePushPlugin(),
+        openPushSettings: OPEN_SETTINGS,
+      }).pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+      const changes: number[] = [];
+      const subscription = pushPermission.onChange(() => changes.push(1));
+
+      setVisibility("hidden");
+      expect(changes).toEqual([]);
+      setVisibility("visible");
+      expect(changes).toEqual([1]);
+
+      subscription.dispose();
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(changes).toEqual([1]);
+    });
+
+    it("fires onChange after a request settles", async () => {
+      const plugin = new FakePushPlugin();
+      plugin.permission = "prompt";
+      plugin.afterRequest = "granted";
+      const pushPermission = phoneRunner({
+        plugin,
+        openPushSettings: OPEN_SETTINGS,
+      }).pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+      const changes: number[] = [];
+      const subscription = pushPermission.onChange(() => changes.push(1));
+
+      await expect(pushPermission.request()).resolves.toBe("granted");
+      expect(plugin.requestPermissions).toHaveBeenCalledTimes(1);
+      expect(changes).toEqual([1]);
+
+      subscription.dispose();
+      await pushPermission.request();
+      expect(changes).toEqual([1]);
+    });
+
+    it("opens the OS page through the injected fn", async () => {
+      const opened: number[] = [];
+      const pushPermission = phoneRunner({
+        plugin: new FakePushPlugin(),
+        openPushSettings: async () => {
+          opened.push(1);
+        },
+      }).pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+
+      await pushPermission.openSettings();
+
+      expect(opened).toEqual([1]);
+    });
+
+    it("lets an openSettings failure reach the caller's error surface", async () => {
+      const pushPermission = phoneRunner({
+        plugin: new FakePushPlugin(),
+        openPushSettings: async () => {
+          throw new Error("the OS refused");
+        },
+      }).pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+
+      await expect(pushPermission.openSettings()).rejects.toThrow(
+        "the OS refused",
+      );
     });
   });
 });

@@ -364,8 +364,8 @@ describe("MobileNavDrawer", () => {
   });
 
   /**
-   * Both entries into the drag that this file can reach without a real
-   * compositor: the document-level edge recognizer, whose listeners are plain
+   * The entries into the drag that this file can reach without a real
+   * compositor: the document-level close recognizer, whose listeners are plain
    * DOM ones, and the scrim, whose pointer handling replaced a click handler.
    * jsdom lays nothing out, so what is asserted here is the handoff and its
    * side effects - the tracking itself only exists on a device.
@@ -421,17 +421,19 @@ describe("MobileNavDrawer", () => {
       });
     }
 
-    // Pulling the drawer out mid-draft is an ordinary thing to do, and leaving
-    // the keyboard up would put the menu and the keyboard on screen together.
-    // The draft itself is untouched - only focus moves.
-    it("drops the keyboard when the edge pull claims the gesture", async () => {
+    // The hamburger is the only way in. A rightward drag from the screen's
+    // leading edge belongs to whatever surface is underneath it - a chat
+    // timeline, the canvas, a terminal - and the drawer must take no part of
+    // it: the panel stays parked, the store stays shut, and a focused field
+    // keeps its caret rather than being blurred by a gesture that opened
+    // nothing.
+    it("leaves the drawer shut on a rightward drag from the screen edge", async () => {
       useMobileNavStore.setState({ open: false });
       renderDrawer();
       await screen.findByTestId("mobile-nav-drawer");
       const input = document.createElement("input");
       document.body.appendChild(input);
       input.focus();
-      expect(document.activeElement).toBe(input);
 
       dispatchPointer("pointerdown", {
         clientX: 20,
@@ -449,8 +451,20 @@ describe("MobileNavDrawer", () => {
         pointerId: 1,
         isPrimary: true,
       });
+      dispatchPointer("pointerup", {
+        clientX: 200,
+        clientY: 100,
+        target: document.body,
+        timeStamp: 200,
+        pointerId: 1,
+        isPrimary: true,
+      });
 
-      expect(document.activeElement).not.toBe(input);
+      expect(useMobileNavStore.getState().open).toBe(false);
+      expect(document.activeElement).toBe(input);
+      expect(
+        screen.getByTestId("mobile-nav-drawer").hasAttribute("inert"),
+      ).toBe(true);
     });
 
     /**

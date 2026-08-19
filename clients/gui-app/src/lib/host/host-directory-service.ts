@@ -171,6 +171,12 @@ export class HostDirectoryService implements IHostDirectoryService {
   private lastKnownLocalHostId: string | null = loadPersistedLocalHostId();
   private remoteEntries: readonly HostDirectoryEntry[] = [];
   /**
+   * The snapshot most recently fanned out through `emit()`, kept so the poll
+   * path (`emitIfSnapshotChanged`) can suppress no-change re-emits. `null`
+   * only before the first emit.
+   */
+  private lastEmittedSnapshot: readonly HostDirectoryEntry[] | null = null;
+  /**
    * True once a fetch has actually DELIVERED a registry listing (`hosts`),
    * empty or not. It is what separates "the registry says you own no hosts"
    * from "nobody has managed to ask the registry yet", which an empty
@@ -183,12 +189,6 @@ export class HostDirectoryService implements IHostDirectoryService {
    * listing delivered are cleared by the same outcome.
    */
   private hasObservedRemoteListing = false;
-  /**
-   * The snapshot most recently fanned out through `emit()`, kept so the poll
-   * path (`emitIfSnapshotChanged`) can suppress no-change re-emits. `null`
-   * only before the first emit.
-   */
-  private lastEmittedSnapshot: readonly HostDirectoryEntry[] | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
   /**
    * Refresh-liveness subscribers, kept OFF the main `listeners` fan-out on
@@ -295,6 +295,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.started = true;
+    this.hasObservedRemoteListing = false;
     // BEFORE the first refresh: the very first launch after the upgrade that
     // introduced the persisted key has nothing stored, and that launch is
     // exactly the reinstall this guard exists for - the host is down, so no
@@ -427,20 +428,40 @@ export class HostDirectoryService implements IHostDirectoryService {
       // not clear the newer one when it finally settles.
       if (this.refreshInFlight?.request === request) {
         this.refreshInFlight = null;
-        this.notifyRefreshState(false);
       }
+      this.emitRefreshState();
     });
     this.refreshInFlight = { era, request };
-    this.notifyRefreshState(true);
+    // After the assignment, so `isRefreshing()` already answers true for a
+    // listener that reads it synchronously from this notification.
+    this.emitRefreshState();
     return request;
   }
 
   /**
-   * Whether a directory fetch is in flight - a manual one or the background
-   * poll; `refreshForEra` coalesces them onto one request, so this is the one
-   * lock every Refresh affordance must observe (a button that stayed live
-   * through the background poll would promise a second fetch that never
-   * starts).
+   * Drop any in-flight refresh so the next caller starts a fresh one.
+   *
+   * Called on credential rotation: the pending request carries the OLD bearer,
+   * so joining it hands a caller an answer the new credential never asked for
+   * — and if that answer is a 401, a clear. Losing the coalescing here costs
+   * one request.
+   *
+   * Emits the refresh state for the same reason the request's own `finally`
+   * does: this is the other way `isRefreshing()` goes false, and the manual
+   * Refresh affordance is driven by that subscription alone - without the
+   * emit it stays locked in its pending state until the orphaned request
+   * happens to settle.
+   */
+  invalidateInFlightRefresh(): void {
+    this.refreshInFlight = null;
+    this.emitRefreshState();
+  }
+
+  /**
+   * Whether a registry fetch is in flight right now - a manual one or the
+   * background poll, since `refresh()` coalesces both onto one request. Drives
+   * the manual-refresh affordance's pending state on the readiness surfaces
+   * that offer it.
    */
   isRefreshing(): boolean {
     return this.refreshInFlight !== null;
@@ -453,26 +474,6 @@ export class HostDirectoryService implements IHostDirectoryService {
         this.refreshStateListeners.delete(listener);
       },
     };
-  }
-
-  private notifyRefreshState(refreshing: boolean): void {
-    for (const listener of this.refreshStateListeners) {
-      listener(refreshing);
-    }
-  }
-
-  /**
-   * Drop any in-flight refresh so the next caller starts a fresh one.
-   *
-   * Called on credential rotation: the pending request carries the OLD bearer,
-   * so joining it hands a caller an answer the new credential never asked for
-   * — and if that answer is a 401, a clear. Losing the coalescing here costs
-   * one request.
-   */
-  invalidateInFlightRefresh(): void {
-    if (this.refreshInFlight === null) return;
-    this.refreshInFlight = null;
-    this.notifyRefreshState(false);
   }
 
   findById(hostId: string): HostDirectoryEntry | null {
@@ -525,17 +526,21 @@ export class HostDirectoryService implements IHostDirectoryService {
    *
    * The host-readiness controller consumes this as `hasMobileNoHost`, which
    * resolves to the `mobile-no-host` readiness kind and its no-host guidance
-   * surface. Consumers can alternatively compute it from `list()`; this helper
-   * just centralises the mapping.
+   * surface. Consumers can alternatively compute the counts from `list()`;
+   * this helper centralises the mapping - and the `unknown` distinction,
+   * which `list()` cannot express at all.
+   *
+   * `unknown` is NOT "zero, provisionally". An empty merged directory means
+   * "you have no hosts" only once a registry listing has actually been seen
+   * (`hasObservedRemoteListing`); before that it means nobody has managed to
+   * ask. On a relay-only shell the difference is the whole surface: reporting
+   * `zero` while the first fetch had failed (or ran without a bearer) told a
+   * user with a live, registered Mac to go connect a host, until the next 15s
+   * poll quietly replaced the screen.
    */
-  getCardinality(): "zero" | "one" | "many" | "unknown" {
+  getCardinality(): "unknown" | "zero" | "one" | "many" {
     const total = this.snapshot().length;
     if (total === 0) {
-      // An empty directory is only EVIDENCE once a registry listing has
-      // actually been delivered; before that the emptiness means "nobody has
-      // reached the registry yet" (cold start, failed fetch, or a signed-out
-      // outcome from a still-settling bearer), and presenting it as the
-      // no-host answer flashed "No host connected" on every cold launch.
       return this.hasObservedRemoteListing ? "zero" : "unknown";
     }
     if (total === 1) {
@@ -554,13 +559,13 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   dispose(): void {
-    this.refreshStateListeners.clear();
     if (this.localSubscription !== null) {
       this.localSubscription.dispose();
       this.localSubscription = null;
     }
     this.stopRefreshPolling();
     this.listeners.clear();
+    this.refreshStateListeners.clear();
     this.started = false;
   }
 
@@ -782,34 +787,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return this.snapshot();
     }
     if (outcome.kind === "failed") {
-      // Retention is only safe for the SAME identity. The era fence above has
-      // already proven `era.identity` is the CURRENT identity, so a mismatch
-      // here means the retained list was committed by a previous account:
-      // keeping it would show (and keep bindable) A's machines under B's
-      // session until some later read succeeds. Dropping is not a genuine
-      // outcome - it clears the foreign list without claiming the registry
-      // said "empty".
-      if (
-        this.remoteEntries.length > 0 &&
-        this.lastCommitIdentity !== era.identity
-      ) {
-        appLogger.debug(
-          "[host-directory] dropping remote entries committed under a previous identity after a failed refresh",
-          { remoteCount: this.remoteEntries.length },
-        );
-        this.remoteEntries = [];
-        this.lastCommitIdentity = null;
-        // The dropped listing was another account's answer; for THIS identity
-        // the registry is unasked again.
-        this.hasObservedRemoteListing = false;
-        this.emitIfSnapshotChanged();
-        return this.snapshot();
-      }
-      appLogger.debug(
-        "[host-directory] refresh failed, retaining last-known remote entries",
-        { remoteCount: this.remoteEntries.length },
-      );
-      return this.snapshot();
+      return this.retainOrDropAfterFailedRefresh(era);
     }
     // The ORDERING fence, completing the era fences above. A constructive
     // read issued under a superseded credential is still ALLOWED to commit -
@@ -838,14 +816,15 @@ export class HostDirectoryService implements IHostDirectoryService {
       this.remoteEntries.map((entry) => entry.hostId),
     );
     this.remoteEntries = outcome.kind === "hosts" ? outcome.entries : [];
-    // Listing provenance. A transition can leave the SNAPSHOT unchanged (an
-    // empty listing arriving over an empty directory, or a sign-out clearing
-    // one that was already empty) while still moving the readiness gate
-    // between its searching and no-host surfaces - so a flip forces the emit
-    // the snapshot compare below would otherwise swallow.
-    const observedListing = outcome.kind === "hosts";
-    const provenanceFlipped = observedListing !== this.hasObservedRemoteListing;
-    this.hasObservedRemoteListing = observedListing;
+    // Tracks BOTH directions. `signed-out` un-observes the listing it once
+    // saw: it clears `remoteEntries` without the registry having said a word,
+    // so a bearer that rotates out from under a directory holding host A left
+    // the historical flag standing and turned the clear into the claim "you
+    // own no hosts" - the same lie the unknown state exists to prevent, just
+    // reached from the other side.
+    const observedBefore = this.hasObservedRemoteListing;
+    this.hasObservedRemoteListing = outcome.kind === "hosts";
+    const observedChanged = observedBefore !== this.hasObservedRemoteListing;
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
     // fleet (desktop main) stays stale. Activate on it then refuses
@@ -870,14 +849,17 @@ export class HostDirectoryService implements IHostDirectoryService {
       requestFleetRefresh(this.runnerHost);
     }
     await this.reseedLocalHostIdIfUnknown();
-    // Emit only when the merged snapshot actually changed. The 60s registry
-    // poll lands here on every tick; an unconditional emit made every
-    // `onChange` consumer (17 query call sites) re-render/refetch app-wide
-    // each tick even when nothing changed. A provenance flip is the one
-    // change the snapshot cannot carry, so it takes the unconditional path.
-    if (provenanceFlipped) {
+    if (observedChanged) {
+      // Crossing between "unknown" and "zero" changes `getCardinality()`'s
+      // answer while an EMPTY directory stays byte-for-byte identical either
+      // way - so the snapshot compare below would swallow the one emit that
+      // redraws the readiness gate.
       this.emit();
     } else {
+      // Emit only when the merged snapshot actually changed. The 60s registry
+      // poll lands here on every tick; an unconditional emit made every
+      // `onChange` consumer (17 query call sites) re-render/refetch app-wide
+      // each tick even when nothing changed.
       this.emitIfSnapshotChanged();
     }
     appLogger.debug("[host-directory] refresh complete", {
@@ -886,6 +868,70 @@ export class HostDirectoryService implements IHostDirectoryService {
       remoteCount: this.remoteEntries.length,
       totalCount: this.snapshot().length,
     });
+    return this.snapshot();
+  }
+
+  /**
+   * The `failed` arm of `performRefresh`, split out for the complexity
+   * budget: retention is only safe for the same identity, so a foreign
+   * residue (rows OR a foreign observed-listing flag) is dropped rather than
+   * retained, with the emit choice mirroring the commit path's
+   * flag-flip rule.
+   */
+  private retainOrDropAfterFailedRefresh(
+    era: AuthEra,
+  ): readonly HostDirectoryEntry[] {
+    // Retention is only safe for the SAME identity. The era fence above has
+    // already proven `era.identity` is the CURRENT identity, so a mismatch
+    // here means the retained list was committed by a previous account:
+    // keeping it would show (and keep bindable) A's machines under B's
+    // session until some later read succeeds. Dropping is not a genuine
+    // outcome - it clears the foreign list without claiming the registry
+    // said "empty".
+    //
+    // A previous account leaves behind TWO pieces of state, and the rows are
+    // only one of them: it also leaves the record that the registry has been
+    // read (`hasObservedRemoteListing`), which is what makes an empty merged
+    // directory mean "you own no hosts" rather than "nobody has managed to
+    // ask" (see `getCardinality`). Keying this branch on the rows alone
+    // misses the account that legitimately owned NO hosts - it committed an
+    // empty listing, so there is nothing to drop and the branch never ran,
+    // and its observation went on answering `zero` for the next account. The
+    // condition is therefore identity plus EITHER residue.
+    const foreignIdentity = this.lastCommitIdentity !== era.identity;
+    const foreignObservedListing =
+      foreignIdentity && this.hasObservedRemoteListing;
+    if (
+      foreignIdentity &&
+      (this.remoteEntries.length > 0 || foreignObservedListing)
+    ) {
+      appLogger.debug(
+        "[host-directory] dropping directory state committed under a previous identity after a failed refresh",
+        {
+          remoteCount: this.remoteEntries.length,
+          observedListing: this.hasObservedRemoteListing,
+        },
+      );
+      this.remoteEntries = [];
+      this.lastCommitIdentity = null;
+      this.hasObservedRemoteListing = false;
+      // Un-observing moves `getCardinality()` between its unknown and zero
+      // answers over a directory that is empty EITHER WAY, so the snapshot
+      // compare would swallow the one emit that redraws the readiness gate -
+      // the same reason the commit path emits unconditionally when the flag
+      // flips. Dropping rows always changes the snapshot, so that half can
+      // still take the compared emit.
+      if (foreignObservedListing) {
+        this.emit();
+      } else {
+        this.emitIfSnapshotChanged();
+      }
+      return this.snapshot();
+    }
+    appLogger.debug(
+      "[host-directory] refresh failed, retaining last-known remote entries",
+      { remoteCount: this.remoteEntries.length },
+    );
     return this.snapshot();
   }
 
@@ -1069,6 +1115,13 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.lastEmittedSnapshot = snapshot;
     for (const listener of this.listeners) {
       listener(snapshot, this.localEntry);
+    }
+  }
+
+  private emitRefreshState(): void {
+    const refreshing = this.isRefreshing();
+    for (const listener of this.refreshStateListeners) {
+      listener(refreshing);
     }
   }
 

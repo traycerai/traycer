@@ -607,6 +607,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly zoom: IZoomHost;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
+  // No OS push on the desktop: notifications here are native `show` calls, not
+  // an APNs/FCM permission the user can revoke from a settings app.
+  readonly pushPermission: null = null;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly selectionAuthority: SelectionAuthorityClient;
   private readonly refreshSelectionFleet: () => Promise<void>;

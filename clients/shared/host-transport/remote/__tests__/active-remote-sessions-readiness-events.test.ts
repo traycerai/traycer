@@ -50,7 +50,6 @@ function fakeSession(): FakeSession {
     ready: false,
     closedUnderneath: false,
     start: vi.fn(),
-    wake: vi.fn(),
     isClosed: () => closeCalls > 0 || session.closedUnderneath,
     isReady: () => session.ready,
     sendUnary: vi.fn(async () => ({}) as never),
@@ -61,6 +60,7 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by these tests");
     }),
     notifyBearerRotated: vi.fn(),
+    wake: vi.fn(),
     onClosed: (listener) => {
       closedListeners.add(listener);
       return () => {

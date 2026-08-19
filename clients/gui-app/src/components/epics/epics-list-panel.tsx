@@ -820,7 +820,14 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
       className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2"
       data-testid="panel-chrome-bar"
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      {/* `flex-1` stretches the toolbar search when leading carries it, but
+          deliberately NO `min-w-0`: the shrink permit let this box collapse
+          under the button cluster while the Clear button inside could not
+          shrink with it, overlapping "Clear" onto the sort menu on narrow
+          phones. Without it the cluster's min-width is the Clear button, so
+          the row's flex-wrap fires instead. The search input keeps its own
+          `min-w-0`, so it still yields space before any wrap. */}
+      <div className="flex flex-1 items-center gap-2">
         {props.leading}
         {props.filters.active ? (
           <ClearFiltersButton onClick={props.filters.onClear} />

@@ -239,7 +239,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       tabIndex={-1}
       onKeyDown={onRowKeyDown}
       className={cn(
-        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 active:press-scrim focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6 pointer-coarse:touch-chrome",
+        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6 active:press-scrim pointer-coarse:touch-chrome",
         packPresentation.packRemote && "opacity-60",
       )}
       data-testid="notification-entry"

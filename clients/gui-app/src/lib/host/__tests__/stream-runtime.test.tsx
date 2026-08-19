@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, act } from "@testing-library/react";
+import { resetRemoteResumeSweepForTest } from "@/lib/host/stream-wake-reconnect";
 import { StrictMode, useLayoutEffect, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -175,7 +176,6 @@ import {
   useStreamHostId,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { resetRemoteResumeSweepForTest } from "@/lib/host/stream-wake-reconnect";
 import {
   HostReadinessControllerContext,
   type DefaultHostReadinessPresentation,
@@ -467,7 +467,6 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
   configureShell: () => undefined,
   refreshDirectory: () => undefined,
   openSettings: () => undefined,
-  directoryRefreshing: false,
   compatibility: {
     status: "compatible",
     degraded: false,
@@ -491,9 +490,9 @@ describe("HostStreamProvider", () => {
     bindingRef.value = null;
     useSelectionAuthorityStore.getState().reset();
     runnerHostRef.handlers.clear();
-    // Paired with the line above: the sweep's install flag is module-level, so
-    // clearing the fake's subscribers without clearing the flag would leave
-    // every later test one registration short of what production has.
+    // Cleared together with the handler set: the sweep is a module-level
+    // singleton, so leaving it believed-installed would hand every later test
+    // one fewer registration than production has.
     resetRemoteResumeSweepForTest();
     mocks.createRemoteHostTransport.mockReset();
     streamFactorySpy.build.mockReset();

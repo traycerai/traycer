@@ -94,16 +94,7 @@ vi.mock("@/components/home/toolbar/composer-toolbar", () => ({
 }));
 
 vi.mock("@/components/home/mobile/composer-mobile-toolbar", () => ({
-  ComposerMobileToolbar: (props: {
-    readonly createProfileHostId: string | null;
-    readonly runTargetHostId: string | null;
-  }) => {
-    bodyMocks.toolbarHostIds.push({
-      createProfileHostId: props.createProfileHostId,
-      runTargetHostId: props.runTargetHostId,
-    });
-    return <div data-testid="mobile-toolbar" />;
-  },
+  ComposerMobileToolbar: () => <div data-testid="mobile-toolbar" />,
 }));
 
 afterEach(() => {

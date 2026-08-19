@@ -32,7 +32,6 @@ export type SurfaceReadiness =
   | { readonly kind: "ready" }
   | { readonly kind: "restoring-request-context" }
   | { readonly kind: "loading-host" }
-  | { readonly kind: "searching-hosts" }
   | { readonly kind: "mobile-no-host" }
   | { readonly kind: "unavailable-host" }
   | { readonly kind: "provisioning-host" }
@@ -122,16 +121,8 @@ export interface DefaultHostReadinessPresentation {
    * `anyHostDialable`, which chose between two report families by scanning the
    * directory every render. Its question was directory vocabulary, and the
    * modal answers the same triage question from leases instead.
-   *
-   * `refreshDirectory` is owned once by the readiness controller:
-   * `HostDirectoryService.refresh()` coalesces callers onto one in-flight
-   * request, so every slot offering the action must observe the same
-   * `directoryRefreshing` lock or one of them would show a live button for a
-   * fetch that is already running.
    */
   readonly refreshDirectory: () => void;
-  /** A directory fetch is in flight - a manual one or the background poll. */
-  readonly directoryRefreshing: boolean;
   readonly openSettings: () => void;
   // `requestRespawn`/`respawnPending` sat here too, owned once so two
   // default-host slots in a split shared one respawn lock. Their last renderer
@@ -314,7 +305,6 @@ const EMPTY_DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
   reinstall: () => undefined,
   configureShell: () => undefined,
   refreshDirectory: () => undefined,
-  directoryRefreshing: false,
   openSettings: () => undefined,
   compatibility: {
     status: "compatible",
@@ -409,7 +399,6 @@ function defaultHostReadiness(args: {
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
   readonly hasLocalHost: boolean;
   readonly hasMobileNoHost: boolean;
-  readonly hostsUnknown: boolean;
   readonly hasReadySessionFor: (hostId: string) => boolean;
   readonly leases: readonly HostLeaseSnapshot[];
   readonly authorityAttached: boolean;
@@ -426,12 +415,6 @@ function defaultHostReadiness(args: {
     )
   ) {
     return READY;
-  }
-  // Before the no-host arm, never after it: an empty directory reaches both,
-  // and only this ordering keeps an unanswered registry (`hostsUnknown` - no
-  // listing delivered yet) from being presented as an answered one.
-  if (!args.hasLocalHost && args.hostsUnknown) {
-    return { kind: "searching-hosts" };
   }
   if (!args.hasLocalHost && args.hasMobileNoHost) {
     return { kind: "mobile-no-host" };
@@ -462,12 +445,6 @@ export function resolveSurfaceReadiness(args: {
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
   readonly hasLocalHost: boolean;
   readonly hasMobileNoHost: boolean;
-  /**
-   * The directory is empty and has never seen a registry listing, so the
-   * emptiness is not yet evidence of anything (`getCardinality()` is
-   * `unknown`). Mutually exclusive with `hasMobileNoHost` by construction.
-   */
-  readonly hostsUnknown: boolean;
   /**
    * Reactive per-host answer to `hasReadyRemoteSession`, threaded from the
    * provider's `useRemoteSessionsPollReadiness` subscription (see

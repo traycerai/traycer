@@ -123,8 +123,8 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   useTerminalList: () => ({ data: { sessions: holder.sessions } }),
 }));
 vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-A",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-A",
 }));
 vi.mock("@/lib/terminals/terminal-session-filters", () => ({
   isVisibleEpicTerminalSession: () => true,
@@ -143,11 +143,14 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicDeleteArtifact: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
-  useTerminalRename: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-vi.mock("@/hooks/terminal/use-terminal-kill-mutation", () => ({
-  useTerminalKill: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
+  useTerminalKillFor: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => null,
 }));
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => vi.fn(),

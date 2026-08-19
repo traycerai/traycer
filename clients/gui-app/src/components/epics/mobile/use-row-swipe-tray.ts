@@ -8,7 +8,6 @@ import {
   classifyDirectionalIntent,
   commitsDirectionalGesture,
 } from "@/components/layout/shell/shell-gestures";
-import { NAV_DRAWER_EDGE_ZONE_PX } from "@/components/layout/shell/nav-drawer-motion";
 import { readSafeAreaInsets } from "@/lib/safe-area-insets";
 
 /**
@@ -42,15 +41,26 @@ const OVERPULL_PX = 40;
 const TAP_SLOP_PX = 6;
 
 /**
- * Whether a touch landed where the shell's drawer pull is already listening.
+ * Width of the strip along the screen's leading edge that a row swipe leaves
+ * alone, reserved for whatever gesture the shell claims that edge with.
+ *
+ * Absolute because the thing it describes is: a fingertip is the same size on a
+ * 4.7" phone as on a tablet, so a zone expressed as a fraction of the viewport
+ * would be an unhittable sliver on one and a wide dead band on the other.
+ */
+const EDGE_ZONE_PX = 32;
+
+/**
+ * Whether a touch landed in the strip a row swipe yields.
  *
  * Measured from the safe-area inset rather than from zero: on a device with a
  * landscape sensor housing the app does not start at x=0, and a strip pinned
- * to the raw viewport edge would sit beside the drawer's rather than over it.
+ * to the raw viewport edge would sit beside the reserved one rather than over
+ * it.
  */
-function withinNavDrawerEdgeZone(clientX: number): boolean {
+function withinEdgeZone(clientX: number): boolean {
   const left = readSafeAreaInsets().left;
-  return clientX >= left && clientX <= left + NAV_DRAWER_EDGE_ZONE_PX;
+  return clientX >= left && clientX <= left + EDGE_ZONE_PX;
 }
 
 /**
@@ -211,12 +221,12 @@ export function useRowSwipeTray(args: RowSwipeTrayArgs): RowSwipeTray {
       // exists to prevent.
       trackingRef.current = null;
       setDragOffsetPx(null);
-      // A tap inside the strip is still the row's - the drawer only answers a
-      // directed drag - so the tap flag clears here too rather than below.
+      // A tap inside the strip is still the row's - only a directed drag is
+      // ever yielded - so the tap flag clears here too rather than below.
       consumedTapRef.current = false;
       // Only the open state can contend for the edge: a closed tray's forward
-      // direction is leftward, which the drawer never answers.
-      if (isOpen && withinNavDrawerEdgeZone(event.clientX)) return;
+      // direction is leftward, away from the reserved strip.
+      if (isOpen && withinEdgeZone(event.clientX)) return;
       trackingRef.current = {
         epoch: enableEpoch,
         pointerId: event.pointerId,

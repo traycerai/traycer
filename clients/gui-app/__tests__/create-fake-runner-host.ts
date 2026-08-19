@@ -150,6 +150,9 @@ export function createFakeRunnerHost(
     // `createInertSelectionAuthorityClient()` through `overrides` instead.
     selectionAuthority: createDefaultLocalSelectionAuthority("fake-local-host"),
     zoom: null,
+    // Desktop-shaped by default; a phone-shaped test passes its own
+    // `pushPermission` double through `overrides`.
+    pushPermission: null,
   };
   return { ...base, ...overrides };
 }

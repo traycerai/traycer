@@ -125,10 +125,17 @@ export function useSystemTabModalActions(): SystemTabModalActions {
     // On phones History is only the full-page `/epics` route, never the modal
     // or a strip tab. Every entry point (header/hamburger, palette, keybindings
     // via the bridge) funnels through here, so this one gate routes them all to
-    // the routed surface. No `search` reducer: leaving the current route drops
-    // the overlay params on its own, mirroring the mobile `openSettings` gate.
+    // the routed surface. The navigation carries the ambient store's remembered
+    // filters (the same memory the desktop modal reads), so a bare "view all"
+    // reopens where the user left off; the URL stays the route's live
+    // authority, and an explicit deep link still wins by carrying its own
+    // params. Leaving the current route drops the overlay params on its own,
+    // mirroring the mobile `openSettings` gate.
     if (isMobileViewport()) {
-      void router.navigate({ to: "/epics" });
+      void router.navigate({
+        to: "/epics",
+        search: historySearchToParams(useHistorySearchStore.getState().search),
+      });
       return;
     }
     const historyTab = useTabsStore.getState().systemTabs.history;

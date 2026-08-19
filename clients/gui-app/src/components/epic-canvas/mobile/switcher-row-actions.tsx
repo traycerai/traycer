@@ -65,7 +65,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact();
   // The row's terminal lives on the host the switcher LISTS (the Epic
-  // session's), so Close goes to that same client.
+  // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(
     useEpicSessionHostClient(),
     "Couldn't close the terminal.",

@@ -116,7 +116,6 @@ const EMPTY_PRESENTATION: DefaultHostReadinessPresentation = {
   reinstall: () => undefined,
   configureShell: () => undefined,
   refreshDirectory: () => undefined,
-  directoryRefreshing: false,
   openSettings: () => undefined,
   compatibility: {
     status: "compatible",

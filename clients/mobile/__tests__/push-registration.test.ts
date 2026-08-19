@@ -24,12 +24,14 @@ import {
   MobilePushRegistration,
   activationPayloadFromPushData,
   pushRegistrationTarget,
+  toPushPermissionState,
+  type CapacitorPushPermissionState,
   type PushNotificationAction,
   type PushNotificationsPluginSlice,
-  type PushPermissionState,
   type PushRegistrationError,
   type PushRegistrationToken,
   type PushTokenSource,
+  type SystemResumeSource,
 } from "../src/push-registration";
 
 const AUTHN_URL = "http://localhost:32350";
@@ -88,8 +90,30 @@ async function drain(): Promise<void> {
   }
 }
 
+/** A hand-driven stand-in for the shell's foreground-resume edge. */
+class FakeSystemResume implements SystemResumeSource {
+  private readonly handlers = new Set<() => void>();
+
+  onSystemResumed(handler: () => void): Disposable {
+    this.handlers.add(handler);
+    return { dispose: () => this.handlers.delete(handler) };
+  }
+
+  async resume(): Promise<void> {
+    for (const handler of this.handlers) {
+      handler();
+    }
+    await drain();
+  }
+}
+
+/** For tests where the resume edge is not what is under test. */
+const NO_RESUME: SystemResumeSource = {
+  onSystemResumed: () => ({ dispose: () => {} }),
+};
+
 interface PermissionResult {
-  readonly receive: PushPermissionState;
+  readonly receive: CapacitorPushPermissionState;
 }
 
 type PushPluginEvent =
@@ -117,16 +141,24 @@ class FakePlugin implements PushNotificationsPluginSlice {
     if (this.registerError !== null) throw this.registerError;
   });
 
+  /**
+   * Mutable on purpose: the late-grant tests flip this from "denied" to
+   * "granted" between start and resume, standing in for the person toggling
+   * Traycer on in the OS Settings app.
+   */
+  permission: CapacitorPushPermissionState;
+
   constructor(
-    private readonly permission: PushPermissionState,
-    afterRequest: PushPermissionState,
+    permission: CapacitorPushPermissionState,
+    afterRequest: CapacitorPushPermissionState,
   ) {
+    this.permission = permission;
     this.requestPermissions = vi.fn(async () => ({ receive: afterRequest }));
   }
 
-  async checkPermissions(): Promise<PermissionResult> {
-    return { receive: this.permission };
-  }
+  readonly checkPermissions: Mock<() => Promise<PermissionResult>> = vi.fn(
+    async () => ({ receive: this.permission }),
+  );
 
   addListener(
     eventName: "registration",
@@ -165,8 +197,8 @@ class FakePlugin implements PushNotificationsPluginSlice {
 }
 
 function fakePlugin(input: {
-  readonly permission: PushPermissionState;
-  readonly afterRequest: PushPermissionState;
+  readonly permission: CapacitorPushPermissionState;
+  readonly afterRequest: CapacitorPushPermissionState;
 }): FakePlugin {
   return new FakePlugin(input.permission, input.afterRequest);
 }
@@ -237,7 +269,7 @@ describe("MobilePushRegistration", () => {
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     plugin.emitRegistration("apns-token-1");
     await drain();
@@ -266,7 +298,7 @@ describe("MobilePushRegistration", () => {
     });
     const source = new FakeTokenSource();
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     expect(calls.registered).toEqual([]);
 
@@ -298,12 +330,105 @@ describe("MobilePushRegistration", () => {
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
 
     // Already-denied never re-prompts: `requestPermissions` is only reached
     // from the "prompt" states.
     expect(plugin.requestPermissions).not.toHaveBeenCalled();
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(calls.registered).toEqual([]);
+  });
+
+  it("registers once on resume after the permission was granted in OS Settings", async () => {
+    const plugin = fakePlugin({ permission: "denied", afterRequest: "denied" });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    const resume = new FakeSystemResume();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+
+    push.start(source, resume);
+    await drain();
+    expect(plugin.register).not.toHaveBeenCalled();
+
+    // Still refused: a resume reads the OS answer and stops. No prompt, no
+    // APNs, no HTTP.
+    await resume.resume();
+    expect(plugin.checkPermissions).toHaveBeenCalledTimes(2);
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(calls.registered).toEqual([]);
+
+    // The person flips Traycer on in the OS Settings app and swipes back.
+    plugin.permission = "granted";
+    await resume.resume();
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
+    expect(plugin.register).toHaveBeenCalledTimes(1);
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toEqual([
+      {
+        bearer: "bearer-1",
+        token: "apns-token-1",
+        platform: "ios",
+        environment: "sandbox",
+      },
+    ]);
+  });
+
+  it("a resume while already registered is free: no OS read, no APNs, no HTTP", async () => {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    const resume = new FakeSystemResume();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+
+    push.start(source, resume);
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(1);
+    const checksAfterStart = plugin.checkPermissions.mock.calls.length;
+
+    // The common case - every foreground resume of a working install - must
+    // stop at the in-memory guard before touching the OS, APNs, or authn.
+    await resume.resume();
+    await resume.resume();
+    await resume.resume();
+    expect(plugin.checkPermissions).toHaveBeenCalledTimes(checksAfterStart);
+    expect(plugin.register).toHaveBeenCalledTimes(1);
+    expect(calls.registered).toHaveLength(1);
+  });
+
+  it("a resume while signed out never reaches the OS permission read", async () => {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    const resume = new FakeSystemResume();
+
+    push.start(source, resume);
+    await drain();
+    await resume.resume();
+
+    expect(plugin.checkPermissions).not.toHaveBeenCalled();
     expect(plugin.register).not.toHaveBeenCalled();
     expect(calls.registered).toEqual([]);
   });
@@ -320,7 +445,7 @@ describe("MobilePushRegistration", () => {
     });
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     plugin.emitRegistration("apns-token-1");
     await drain();
@@ -355,7 +480,7 @@ describe("MobilePushRegistration", () => {
     });
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     plugin.emitRegistration("apns-token-1");
     await drain();
@@ -394,7 +519,7 @@ describe("MobilePushRegistration", () => {
     });
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     plugin.emitRegistration("apns-token-1");
     await drain();
@@ -422,7 +547,7 @@ describe("MobilePushRegistration", () => {
       registerResult: OK,
       removeResult: OK,
     });
-    push.start(new FakeTokenSource());
+    push.start(new FakeTokenSource(), NO_RESUME);
     await drain();
 
     // The tap that launched the app lands before the GUI mounts.
@@ -448,6 +573,139 @@ describe("MobilePushRegistration", () => {
     // Warm taps flow straight through.
     plugin.emitAction({ entryId: "entry-2", epicId: "epic-2", chatId: null });
     expect(received).toHaveLength(2);
+  });
+});
+
+/**
+ * The `IRunnerHost.pushPermission` half: what the Settings row reads and what
+ * its Enable button does. The fixtures start from `denied` so the sign-in path
+ * settles without prompting - `ensureRegistered` only prompts on a `prompt`
+ * state - which leaves the request under test as the only prompt in the test.
+ */
+describe("MobilePushRegistration permission surface", () => {
+  it("maps Capacitor's four states onto the shared three", () => {
+    expect(toPushPermissionState("granted")).toBe("granted");
+    expect(toPushPermissionState("denied")).toBe("denied");
+    expect(toPushPermissionState("prompt")).toBe("prompt");
+    // Android's "denied once, one more ask allowed" is a prompt from the GUI's
+    // side: the row keeps offering Enable, and the OS decides what happens.
+    expect(toPushPermissionState("prompt-with-rationale")).toBe("prompt");
+  });
+
+  it("reads the permission without ever prompting", async () => {
+    const plugin = fakePlugin({
+      permission: "prompt-with-rationale",
+      afterRequest: "granted",
+    });
+    const { push } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+
+    await expect(push.permissionState()).resolves.toBe("prompt");
+    expect(plugin.checkPermissions).toHaveBeenCalledTimes(1);
+    expect(plugin.requestPermissions).not.toHaveBeenCalled();
+  });
+
+  it("registers exactly once when the person grants from the Settings row", async () => {
+    const plugin = fakePlugin({
+      permission: "denied",
+      afterRequest: "granted",
+    });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+
+    push.start(source, NO_RESUME);
+    await drain();
+    expect(plugin.register).not.toHaveBeenCalled();
+
+    await expect(push.requestPermission()).resolves.toBe("granted");
+    expect(plugin.requestPermissions).toHaveBeenCalledTimes(1);
+    expect(plugin.register).toHaveBeenCalledTimes(1);
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toEqual([
+      {
+        bearer: "bearer-1",
+        token: "apns-token-1",
+        platform: "ios",
+        environment: "sandbox",
+      },
+    ]);
+
+    // The guard the grant just set makes a second Enable (or any later resume)
+    // stop before touching APNs or authn.
+    await expect(push.requestPermission()).resolves.toBe("granted");
+    expect(plugin.register).toHaveBeenCalledTimes(1);
+    expect(calls.registered).toHaveLength(1);
+  });
+
+  it("registers nothing when the person refuses the prompt", async () => {
+    const plugin = fakePlugin({ permission: "prompt", afterRequest: "denied" });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+
+    push.start(source, NO_RESUME);
+    await drain();
+    const requestsAfterStart = plugin.requestPermissions.mock.calls.length;
+
+    await expect(push.requestPermission()).resolves.toBe("denied");
+    expect(plugin.requestPermissions).toHaveBeenCalledTimes(
+      requestsAfterStart + 1,
+    );
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(calls.registered).toEqual([]);
+  });
+
+  it("a grant before start() registers nothing - there is no login to bind to yet", async () => {
+    const plugin = fakePlugin({
+      permission: "denied",
+      afterRequest: "granted",
+    });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+
+    // `start()` is what hands this object the token source; bootstrap always
+    // calls it before the GUI can mount, so this is the unreachable-by-design
+    // gate - pinned so it stays a silent stop rather than becoming a throw.
+    await expect(push.requestPermission()).resolves.toBe("granted");
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(calls.registered).toEqual([]);
+  });
+
+  it("grants while signed out cost nothing but the OS answer", async () => {
+    const plugin = fakePlugin({
+      permission: "denied",
+      afterRequest: "granted",
+    });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+
+    push.start(source, NO_RESUME);
+    await drain();
+
+    // Nothing to bind a token to yet; the sign-in path registers later.
+    await expect(push.requestPermission()).resolves.toBe("granted");
+    expect(plugin.register).not.toHaveBeenCalled();
+    expect(calls.registered).toEqual([]);
   });
 });
 
@@ -484,7 +742,7 @@ describe("MobilePushRegistration on Android", () => {
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     plugin.emitRegistration("fcm-token-1");
     await drain();
@@ -512,7 +770,7 @@ describe("MobilePushRegistration on Android", () => {
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     plugin.emitRegistration("fcm-token-1");
     await drain();
@@ -528,7 +786,7 @@ describe("MobilePushRegistration on Android", () => {
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
 
     expect(plugin.requestPermissions).toHaveBeenCalledTimes(1);
@@ -549,7 +807,7 @@ describe("MobilePushRegistration on Android", () => {
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
 
     expect(plugin.register).toHaveBeenCalledTimes(1);
@@ -581,7 +839,7 @@ describe("MobilePushRegistration on Android", () => {
     const source = new FakeTokenSource();
     await source.setSignedIn(credentials("user-1", "bearer-1"));
 
-    push.start(source);
+    push.start(source, NO_RESUME);
     await drain();
     plugin.emitRegistration("fcm-token-1");
     await drain();

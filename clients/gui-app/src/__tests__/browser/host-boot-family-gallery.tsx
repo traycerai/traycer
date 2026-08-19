@@ -175,7 +175,6 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   reinstall: noop,
   configureShell: noop,
   refreshDirectory: noop,
-  directoryRefreshing: false,
   openSettings: noop,
   compatibility: {
     status: "compatible",

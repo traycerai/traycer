@@ -23,8 +23,7 @@ import {
   NAV_DRAWER_SETTLE_REDUCED,
   resolvesToOpen,
 } from "@/components/layout/shell/nav-drawer-motion";
-import { blurTextEntry } from "@/components/layout/shell/shell-gestures";
-import { useNavDrawerPull } from "@/components/layout/shell/use-nav-drawer-pull";
+import { useNavDrawerClosePull } from "@/components/layout/shell/use-nav-drawer-close-pull";
 import { useModalSurfaceContainment } from "@/components/layout/shell/use-modal-surface-containment";
 import { cn } from "@/lib/utils";
 
@@ -55,11 +54,12 @@ interface MobileNavDrawerSurfaceProps {
  * because the pointer event that would have begun the drag is gone by the time
  * the new subtree has rendered.
  *
- * Both directions are one drag on one element. The open pull comes in through
- * the edge recognizer, which hands its pointer event to the same drag controls
- * the panel exposes; the close pull is a pointer landing on the panel itself.
- * One engine, one spring, one release rule - so the drawer arrives and leaves
- * with the weight of a single physical object.
+ * Both directions are one drag on one element. Opening is the header's
+ * hamburger, which asks for a settle rather than a drag; closing is a pointer
+ * landing on the panel or on the scrim, either of which is handed to the same
+ * drag controls the panel exposes. One engine, one spring, one release rule -
+ * so the drawer arrives and leaves with the weight of a single physical
+ * object.
  */
 export function MobileNavDrawerSurface(
   props: MobileNavDrawerSurfaceProps,
@@ -318,23 +318,16 @@ export function MobileNavDrawerSurface(
     [settle, x],
   );
 
-  useNavDrawerPull({
-    onActivate: (event, travelPx, closing) => {
+  useNavDrawerClosePull({
+    onActivate: (event, travelPx) => {
       beginPointerGesture();
-      // Pulling the drawer out while typing is a request for the menu, not for
-      // the caret - so the keyboard goes away with the same gesture rather
-      // than leaving the drawer sharing the screen with it. The draft is
-      // untouched; only focus moves. Blurring HERE rather than at the settle
-      // also means the containment captures a blurred document as the place to
-      // return focus to, so closing the drawer cannot raise the keyboard again.
-      blurTextEntry();
       // Meet the finger where the drag declared itself, so what follows is 1:1
       // against the ORIGINAL touch-down rather than against the point 15px
       // later where the classifier made up its mind. Measured from the live
       // position rather than from an endpoint, so a pull that interrupts a
       // settle picks the panel up where it actually is. The drag engine reads
       // that same live value as its origin, so seeding is the whole handoff.
-      const seeded = x.get() + (closing ? -travelPx : travelPx);
+      const seeded = x.get() - travelPx;
       x.jump(Math.min(Math.max(seeded, 0), widthRef.current));
       dragControls.start(event);
       // The classifier already required travel, so neither outcome here can be
@@ -353,8 +346,6 @@ export function MobileNavDrawerSurface(
     },
     withinPanel: (target) =>
       target instanceof Node && (panelRef.current?.contains(target) ?? false),
-    withinLayer: (target) =>
-      target instanceof Node && (layerRef.current?.contains(target) ?? false),
   });
 
   const dismiss = useCallback((): void => {
@@ -390,9 +381,9 @@ export function MobileNavDrawerSurface(
           that pulled the panel out expects to be able to push it back from
           anywhere it is covering, so a pointer landing here is handed to the
           panel's own drag rather than being treated as a click target - the
-          same handoff the edge pull uses, except the panel is already at the
-          open position, so there is nothing to seed and the tracking is 1:1
-          from the first pixel.
+          same handoff the panel's close pull uses, except this one needs no
+          classifier to arbitrate it, so there is nothing to seed and the
+          tracking is 1:1 from the first pixel.
 
           Dismissal rides the release rather than a click. A tap and a drag
           enter through the same pointerdown, and only the release can tell them

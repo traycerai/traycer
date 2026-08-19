@@ -47,11 +47,16 @@
 	<array>
 		<string>armv7</string>
 	</array>
+	<!-- iPhone is portrait-only by decision: landscape width crosses the
+	     GUI's 768px desktop breakpoint, mounting the tab/sidebar layout,
+	     whose minimum content width then wedges the WKWebView layout
+	     viewport on rotation back (shrink-to-fit keeps innerWidth wide, so
+	     the app stays locked in a zoomed-out desktop view). iPad keeps all
+	     orientations - its smaller dimension clears the breakpoint, so the
+	     desktop view there is legitimate and stable. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>

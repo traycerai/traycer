@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { LogOut, Settings, SquareArrowOutUpRight } from "lucide-react";
+import { LogOut, Pin, Settings, SquareArrowOutUpRight } from "lucide-react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,7 @@ import {
 } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
@@ -200,11 +200,11 @@ export function MobileNavDrawer(): ReactNode {
       />
       {installedApp ? (
         /* A hand-driven surface rather than a dialog primitive, for one
-           reason: it has to follow the finger from the screen edge. Every
-           dialog primitive available here mounts its panel on open, so there
-           is no panel to drag while the drawer is closed, and no amount of
-           configuration produces one - the panel has to outlive the open
-           state, which means owning the transform outright.
+           reason: dismissal has to follow the finger and stay interruptible
+           mid-flight. Every dialog primitive available here plays a canned
+           exit the hand cannot catch or reverse, and no amount of
+           configuration produces one - a panel that tracks a pointer 1:1 has
+           to own its transform outright.
 
            Branched on the PRODUCT flag, not the viewport, because the drawer
            itself is mounted by form factor: a narrow desktop window renders
@@ -250,9 +250,10 @@ interface DrawerTaskListProps {
 
 /**
  * Inline recent-task list under "New task". Same data source as the landing
- * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) with the
- * default (unfiltered, recency-sorted) search - no filter/sort/selection
- * chrome; the full surface stays one tap away on the landing page.
+ * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) and the
+ * same ambient search memory every history surface shares - the drawer shows
+ * the list the way the user last filtered it, with no filter/sort/selection
+ * chrome of its own; the full surface stays one tap away on the landing page.
  */
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
@@ -262,6 +263,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   // formatter per row - rather than a per-row `useRelativeTimestamp`, which
   // would take one subscription each to re-render the same list anyway.
   const now = useSampledNow();
+  const { search } = useAmbientHistorySearchState();
   const {
     data,
     isPending,
@@ -270,7 +272,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useHistoryQuery({ search: DEFAULT_HISTORY_SEARCH, nowMs: null });
+  } = useHistoryQuery({ search, nowMs: null });
   const items = data?.items ?? [];
 
   const openItem = (item: HistoryItem) => {
@@ -349,8 +351,18 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
               openItem(item);
             }}
           >
-            {/* No leading icon: every row in this list is a task, so a repeated
-                glyph carried no information and cost the title ~28px. */}
+            {/* No leading icon on ordinary rows: every row in this list is a
+                task, so a repeated glyph carried no information and cost the
+                title ~28px. The pin glyph appears only on pinned rows, where
+                it IS the information - mirrors the list panel's pinned style
+                (primary + filled). */}
+            {item.isPinned ? (
+              <Pin
+                aria-label="Pinned"
+                data-testid="mobile-nav-task-pin"
+                className="size-3.5 shrink-0 fill-current text-primary"
+              />
+            ) : null}
             <span className="min-w-0 flex-1 truncate text-left font-normal">
               {drawerItemDisplayTitle(item)}
             </span>

@@ -118,6 +118,7 @@ function ChatUserMessageMentionChipImpl({
       sideOffset={undefined}
       align={undefined}
     >
+      {/* muted-fill-ok: transcript chip on bg-background, bordered besides */}
       <span
         className="mx-px inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90"
         data-composer-chip="mention"

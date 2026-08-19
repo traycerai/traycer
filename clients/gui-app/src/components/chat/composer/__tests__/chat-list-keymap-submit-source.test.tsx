@@ -390,6 +390,94 @@ describe("ChatListKeymap submit source", () => {
   });
 });
 
+describe("ChatListKeymap on a mobile-width viewport", () => {
+  const originalInnerWidth = window.innerWidth;
+
+  function setInnerWidth(value: number) {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value,
+    });
+  }
+
+  afterEach(() => {
+    setInnerWidth(originalInnerWidth);
+  });
+
+  it("plain Enter inserts a newline instead of submitting", () => {
+    setInnerWidth(390);
+    const sources: ChatComposerSubmitSource[] = [];
+    const { editor } = makeEditor({
+      onSubmit: (source) => {
+        sources.push(source);
+      },
+      pickerStore: createComposerPickerStore(),
+    });
+    editor.commands.insertContent("hello");
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(sources).toEqual([]);
+    // splitBlock: the one paragraph became two — the visible newline.
+    expect(editor.state.doc.childCount).toBe(2);
+  });
+
+  it("Mod-Enter still submits (hardware keyboard on a narrow window)", () => {
+    setInnerWidth(390);
+    const sources: ChatComposerSubmitSource[] = [];
+    const { editor } = makeEditor({
+      onSubmit: (source) => {
+        sources.push(source);
+      },
+      pickerStore: createComposerPickerStore(),
+    });
+    editor.commands.insertContent("steer me");
+
+    expect(editor.commands.keyboardShortcut("Mod-Enter")).toBe(true);
+    expect(sources).toEqual(["mod-enter"]);
+  });
+
+  it("Enter with an open picker still commits the highlighted item", () => {
+    setInnerWidth(390);
+    const sources: ChatComposerSubmitSource[] = [];
+    const commit = vi.fn();
+    const pickerStore = createComposerPickerStore();
+    const { editor } = makeEditor({
+      onSubmit: (source) => {
+        sources.push(source);
+      },
+      pickerStore,
+    });
+    editor.commands.insertContent("/te");
+    pickerStore.getState().openPicker({
+      sessionId: 1,
+      kind: "slash",
+      slashScope: "all",
+      slashTrigger: "/",
+      range: { from: 1, to: 2 },
+      query: "te",
+      commit,
+      dismiss: null,
+      focusEditor: null,
+      clientRect: null,
+    });
+    pickerStore.getState().setItems({
+      sessionId: 1,
+      kind: "slash",
+      query: "te",
+      slashScope: "all",
+      step: ROOT_MENTION_STEP,
+      items: [slashPickerItem()],
+      loading: false,
+      loadFailed: false,
+      retryLoad: null,
+    });
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(sources).toEqual([]);
+  });
+});
+
 function slashCommand(name: string): {
   readonly harnessId: "claude";
   readonly name: string;

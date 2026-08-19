@@ -2815,18 +2815,17 @@ export class RemoteSession<
     // (see `SUSTAINED_READY_RESET_MS`); any drop before then clears the timer
     // and the escalation carries on from where it was.
     this.armSustainedReadyTimer();
-    // The authority's evidence is NOT held behind that dwell. The ready
-    // boundary is the ONLY site that mints a session id, and it runs once per
-    // connect generation (the guard above); the success outcome and the
-    // announcement that makes every later failure for this host inert until
-    // retraction both belong to the boundary itself, not to the transport's
-    // own backoff forgiveness.
+    // The AUTHORITY's evidence is not dwell-gated: the ready boundary is the
+    // ONLY site that mints a session id, and it runs once per connect
+    // generation (the guard above). Order matters: the dial success clears
+    // the host's death streak, and the announcement then makes every later
+    // failure for this host inert until the session is retracted.
     this.reportEvidenceOutcome(
       this.dialAttemptId(this.connectGeneration),
       "success",
     );
     this.announceSession(`${this.evidenceScope}:s${this.connectGeneration}`);
-    // Recovery is not held behind the dwell either: every ready boundary is
+    // Recovery is NOT held behind the dwell either: every ready boundary is
     // availability evidence, the clean first open included - queries that
     // raced this session's first dial have already errored pre-send and
     // exhausted their retry, and this emission is the only automatic signal
