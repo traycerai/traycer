@@ -127,10 +127,10 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     });
     renderLocalDown({ settingUp: false, management, name: "This Mac" });
 
-    const doctorButton = await screen.findByTestId(
-      "host-overview-recovery-doctor",
-    );
-    expect(doctorButton.hasAttribute("disabled")).toBe(false);
+    const doctorButton = await screen.findByRole<HTMLButtonElement>("button", {
+      name: "Run doctor",
+    });
+    expect(doctorButton.disabled).toBe(false);
     expect(screen.queryByTestId("host-overview-start-local")).toBeNull();
     expect(screen.queryByTestId("host-overview-reinstall-local")).toBeNull();
     // No Start verb anywhere on the page — not merely absent under its old
@@ -144,10 +144,10 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     });
     renderLocalDown({ settingUp: true, management, name: "This Mac" });
 
-    const doctorButton = await screen.findByTestId(
-      "host-overview-recovery-doctor",
-    );
-    expect(doctorButton.hasAttribute("disabled")).toBe(true);
+    const doctorButton = await screen.findByRole<HTMLButtonElement>("button", {
+      name: "Run doctor",
+    });
+    expect(doctorButton.disabled).toBe(true);
   });
 
   it("a removed host gets Reinstall Traycer, which clears the sentinel and converges", async () => {
@@ -179,9 +179,9 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
 
     // The removal read is async (the sentinel query starts disabled-shaped
     // and resolves after mount), so the button only appears once it settles.
-    const reinstallButton = await screen.findByTestId(
-      "host-overview-reinstall-local",
-    );
+    const reinstallButton = await screen.findByRole("button", {
+      name: "Reinstall Traycer",
+    });
     fireEvent.click(reinstallButton);
 
     await waitFor(() => {
@@ -202,7 +202,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
     const management = buildOverviewManagement({ getRemovalState });
     renderLocalDown({ settingUp: false, management, name: "This Mac" });
 
-    await screen.findByTestId("host-overview-recovery-doctor");
+    await screen.findByRole("button", { name: "Run doctor" });
     // Let the removal-state query actually settle before trusting the
     // absence below — otherwise a still-pending query would pass this
     // assertion for the wrong reason.

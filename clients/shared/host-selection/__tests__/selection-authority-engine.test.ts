@@ -3381,6 +3381,14 @@ describe("SelectionAuthorityEngineImpl - P1.3 failover scenarios", () => {
     // in-flight arm reads `ready` for it, which is service. Prove the guard
     // is about service, not about the token: with a session, the same revive
     // is damped for the full window.
+    //
+    // The first authority is disposed HERE, not at the end: the control below
+    // shares this `clock`, so an engine left armed would also take timer
+    // callbacks from the `advance` that drives the control's return window.
+    // Nothing above is asserted again, so those callbacks could not change a
+    // verdict - but a second engine reacting to the first one's deadlines is
+    // not a fixture anyone should have to reason about.
+    authority.dispose();
     const authority2 = createTestAuthority({
       initialFleet: {
         identityGeneration: 0,
@@ -3415,7 +3423,6 @@ describe("SelectionAuthorityEngineImpl - P1.3 failover scenarios", () => {
     expect(authority2.engine.snapshot().effectiveHostId).toBe("P");
 
     authority2.dispose();
-    authority.dispose();
   });
 });
 

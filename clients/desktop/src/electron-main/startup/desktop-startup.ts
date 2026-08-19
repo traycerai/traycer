@@ -939,7 +939,12 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
 // caller is `runDesktopStartup`, and it invokes the real reconciliation that
 // determines whether a launch is allowed to apply, activate, or do nothing.
 export function runDeferred<
-  TState,
+  // Constrained to what the teardown registration below needs, and no more:
+  // the generic exists so a test can hand this a light state object, and
+  // `BootState` satisfies this shape structurally.
+  TState extends {
+    readonly bridge: { readonly disposeFns: Array<() => void> } | null;
+  },
   TServices extends {
     readonly hostController: IpcHostController;
     readonly menu: HostUpdateMenuSurface;
@@ -957,7 +962,20 @@ export function runDeferred<
   // and keeps retrying until it is (see `armLocalHostBootOnSignIn`). Arming is
   // synchronous and cheap - it either acts now or waits for the sign-in that
   // the pre-retirement renderer gate also waited for.
-  armLocalHostBootOnSignIn(services.hostController, services.signedIn);
+  //
+  // Its disposer is registered on the bridge's teardown list because the arm
+  // now owns a RETRY TIMER as well as the sign-in subscription, and a settled
+  // arm is not the only way this process ends: a shutdown while the ladder is
+  // still climbing would otherwise leave a live auth-session listener behind.
+  // The timers are `unref`ed and so can never hold the process open; this is
+  // about not leaving a subscription running through teardown. `bridge` is
+  // installed by the window phase, well before this handoff - a null here
+  // (a test plan that never built one) simply keeps today's behaviour.
+  const disposeLocalHostBoot = armLocalHostBootOnSignIn(
+    services.hostController,
+    services.signedIn,
+  );
+  state.bridge?.disposeFns.push(disposeLocalHostBoot);
   void timed("deferred", "host-launch-converge", () =>
     runLaunchHostConvergeReconcile(services.hostController, services.menu),
   );
