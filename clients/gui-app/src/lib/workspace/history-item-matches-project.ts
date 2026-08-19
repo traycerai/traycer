@@ -101,12 +101,20 @@ function pathIsInsideFolder(path: string, folder: string): boolean {
 
 function normalizePathSeparators(path: string): string {
   const withSlashes = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (isWindowsDrivePath(withSlashes)) {
+  if (isCaseInsensitiveWindowsPath(withSlashes)) {
     return withSlashes.toLowerCase();
   }
   return withSlashes;
 }
 
+function isCaseInsensitiveWindowsPath(path: string): boolean {
+  return isWindowsDrivePath(path) || isWindowsUncPath(path);
+}
+
 function isWindowsDrivePath(path: string): boolean {
   return /^[A-Za-z]:(?:\/|$)/.test(path);
+}
+
+function isWindowsUncPath(path: string): boolean {
+  return /^\/\/[^/]+/.test(path);
 }
