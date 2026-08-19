@@ -12,7 +12,10 @@ import {
 //
 //   1. CLI manifest at `<cliInstallHomeDir>/manifest.json` - written by the
 //      Desktop bootstrap + package-manager install hooks. Source of
-//      truth when present.
+//      truth when present. For the npm distribution (an interpreter-run
+//      Node bundle whose manifest is synthesized from its env shim), the
+//      running interpreter is pinned into the invocation - see
+//      `npmInterpreterInvocation`.
 //   2. Install-scoped bin dir at `<cliInstallHomeDir>/bin/traycer` - the
 //      well-known staging location every install path drops a binary
 //      (or wrapper script) into BEFORE invoking `traycer host
@@ -99,7 +102,12 @@ export async function resolveServiceCliInvocation(
         exitCode: 1,
       });
     }
-    return { command: manifest.binaryPath, args: [] };
+    return (
+      (await npmInterpreterInvocation(manifest)) ?? {
+        command: manifest.binaryPath,
+        args: [],
+      }
+    );
   }
 
   // Well-known per-environment bin dir. Every install path (Desktop setup
@@ -156,6 +164,29 @@ export async function resolveServiceCliInvocation(
   const args: readonly string[] =
     typeof entryArg === "string" ? [entryArg] : [];
   return { command, args };
+}
+
+// The npm distribution ships a Node bundle, not a SEA: its manifest
+// (usually SYNTHESIZED by `readCliManifest` from the bundle's
+// `TRAYCER_CLI_DISTRIBUTION="npm"` shim, since the npm package has no
+// install hook) points at the shebanged bundle script. Registering that
+// script directly makes the service depend on `node` being on the service
+// manager's PATH - false for nvm installs under systemd, so the unit dies
+// with ENOENT while the CLI works fine interactively. When the resolving
+// process IS that bundle (the shim env is set and we are not a packaged
+// binary, so `process.execPath` is the interpreter running it), pin the
+// absolute interpreter into the invocation instead:
+// `<node> <bundle> host start`. Resolutions from OTHER processes cannot
+// know the right interpreter and keep the direct-script behavior.
+// Superseded once npm ships per-platform SEA binaries.
+async function npmInterpreterInvocation(manifest: {
+  readonly binaryPath: string;
+  readonly source: string;
+}): Promise<CliInvocation | null> {
+  if (manifest.source !== "npm") return null;
+  if (process.env.TRAYCER_CLI_DISTRIBUTION !== "npm") return null;
+  if (await isPackagedRun()) return null;
+  return { command: process.execPath, args: [manifest.binaryPath] };
 }
 
 // Whether this process is a compiled single-executable (SEA) binary, i.e.

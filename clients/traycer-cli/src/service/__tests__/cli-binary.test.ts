@@ -150,6 +150,102 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
+  // The npm distribution ships a shebanged Node bundle with no install
+  // hook: `readCliManifest` SYNTHESIZES an npm-source manifest from the
+  // `TRAYCER_CLI_DISTRIBUTION=npm` env shim (binaryPath = process.argv[1])
+  // when no manifest file exists on disk. Registering that script directly
+  // makes the service depend on `node` being on the service manager's PATH
+  // (false for nvm under systemd), so the resolver pins the absolute
+  // interpreter instead - but only when the RESOLVING process is that same
+  // npm bundle (env shim set, not packaged).
+  it("pins the interpreter when a persisted manifest's source is npm and the distribution shim env is set", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    process.env.TRAYCER_CLI_DISTRIBUTION = "npm";
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+    const result = await resolveServiceCliInvocation({
+      environment: ENVIRONMENT,
+      override: null,
+      allowSelfInvocation: false,
+    });
+
+    expect(result).toEqual({ command: process.execPath, args: [binaryPath] });
+  });
+
+  it("uses the manifest binaryPath directly when source is npm but the distribution shim env is unset", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+    const result = await resolveServiceCliInvocation({
+      environment: ENVIRONMENT,
+      override: null,
+      allowSelfInvocation: false,
+    });
+
+    expect(result).toEqual({ command: binaryPath, args: [] });
+  });
+
+  it("uses the manifest binaryPath directly when source is npm and the shim env is set but the resolving run is packaged (execPath is not an interpreter)", async () => {
+    seaState.current = true;
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    process.env.TRAYCER_CLI_DISTRIBUTION = "npm";
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+    const result = await resolveServiceCliInvocation({
+      environment: ENVIRONMENT,
+      override: null,
+      allowSelfInvocation: false,
+    });
+
+    expect(result).toEqual({ command: binaryPath, args: [] });
+  });
+
+  it("synthesizes an npm manifest end-to-end from the distribution shim (no manifest file, no well-known slot) and pins the interpreter", async () => {
+    const argv1Path = join(workHome, "npm-bundle-argv1.js");
+    writeFileSync(argv1Path, "#!/usr/bin/env node\n");
+    process.env.TRAYCER_CLI_DISTRIBUTION = "npm";
+    process.argv = [process.argv[0] ?? "node", argv1Path];
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+    const result = await resolveServiceCliInvocation({
+      environment: ENVIRONMENT,
+      override: null,
+      allowSelfInvocation: false,
+    });
+
+    expect(result).toEqual({
+      command: process.execPath,
+      args: [argv1Path],
+    });
+  });
+
   it("uses the well-known binary when no manifest exists but one is staged on disk", async () => {
     const { wellKnownCliBinaryPath } =
       await import("../../store/well-known-cli");
