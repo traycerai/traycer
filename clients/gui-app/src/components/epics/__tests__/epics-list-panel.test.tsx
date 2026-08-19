@@ -157,6 +157,8 @@ const testState = vi.hoisted(() => ({
     ownershipScopes: [] as HistoryFacets["ownershipScopes"],
   },
   isFetching: false,
+  projectFilterActive: false,
+  preProjectFilterCount: 0,
   bridge: null as DesktopWindowsBridge | null,
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
   worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
@@ -188,6 +190,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     isFetching: testState.isFetching,
     error: null,
     hostId: "host-test",
+    projectFilterActive: testState.projectFilterActive,
+    preProjectFilterCount: testState.preProjectFilterCount,
     refetch: testState.refetch,
     fetchNextPage: testState.fetchNextPage,
     hasNextPage: false,
@@ -384,6 +388,8 @@ describe("<EpicsListPanel />", () => {
       ownershipScopes: [],
     };
     testState.isFetching = false;
+    testState.projectFilterActive = false;
+    testState.preProjectFilterCount = 0;
     testState.bridge = null;
     testState.worktreeCandidates = [];
     testState.worktreesByEpicId = new Map();
@@ -1505,5 +1511,44 @@ describe("<EpicsListPanel />", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(input);
+  });
+
+  it("points at All projects when the active project hides every chat", async () => {
+    testState.items = [];
+    testState.projectFilterActive = true;
+    testState.preProjectFilterCount = 3;
+
+    renderPanel("page", "/");
+
+    const empty = await screen.findByTestId("epics-list-project-empty");
+    expect(empty.textContent).toContain("Older chats are under All projects.");
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
+  it("keeps the plain empty state when no chats exist outside the project either", async () => {
+    testState.items = [];
+    testState.projectFilterActive = true;
+    testState.preProjectFilterCount = 0;
+
+    renderPanel("page", "/");
+
+    expect(await screen.findByTestId("epics-list-empty")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-project-empty")).toBeNull();
+  });
+
+  it("points at All projects when search matches exist only outside the project", async () => {
+    testState.items = [];
+    testState.projectFilterActive = true;
+    testState.preProjectFilterCount = 2;
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+    });
+
+    renderPanel("page", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-project-empty"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
   });
 });

@@ -1,9 +1,6 @@
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
-import {
-  selectWorkspaceFoldersBucket,
-  useWorkspaceFoldersStore,
-} from "@/stores/workspace/workspace-folders-store";
+import { readEffectiveWorkspaceSnapshot } from "@/lib/workspace/effective-workspace-folders";
 import {
   readStagedWorktreeIntent,
   type WorktreeStagingKey,
@@ -55,10 +52,7 @@ export function readSeededLaunchWorkspace(args: {
 function readGlobalWorkspaceSnapshot(
   hostId: string | null,
 ): LandingDraftWorkspaceSnapshot {
-  const bucket = selectWorkspaceFoldersBucket(
-    useWorkspaceFoldersStore.getState(),
-    hostId,
-  );
+  const bucket = readEffectiveWorkspaceSnapshot(hostId);
   return {
     folders: bucket.folders,
     folderInfoByPath: bucket.folderInfoByPath,

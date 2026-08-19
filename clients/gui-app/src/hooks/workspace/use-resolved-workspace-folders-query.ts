@@ -7,8 +7,9 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
+import { selectEffectiveWorkspaceFoldersBucket } from "@/lib/workspace/effective-workspace-folders";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
 import {
-  selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
@@ -51,12 +52,15 @@ export function useResolvedWorkspaceFolders(
   // and the resolution host must agree.
   hostId: string | null,
 ): ResolvedWorkspaceFoldersQueryResult {
-  const globalFolders = useWorkspaceFoldersStore(
-    (s) => selectWorkspaceFoldersBucket(s, hostId).folders,
+  const foldersByHost = useWorkspaceFoldersStore((s) => s.byHost);
+  const profilesByHost = useProjectProfilesStore((s) => s.byHost);
+  const effectiveBucket = selectEffectiveWorkspaceFoldersBucket(
+    { byHost: foldersByHost },
+    { byHost: profilesByHost },
+    hostId,
   );
-  const globalFolderInfoByPath = useWorkspaceFoldersStore(
-    (s) => selectWorkspaceFoldersBucket(s, hostId).folderInfoByPath,
-  );
+  const globalFolders = effectiveBucket.folders;
+  const globalFolderInfoByPath = effectiveBucket.folderInfoByPath;
   const folders = source === null ? globalFolders : source.folders;
   const folderInfoByPath =
     source === null ? globalFolderInfoByPath : source.folderInfoByPath;

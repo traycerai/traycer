@@ -369,6 +369,32 @@ describe("epic canvas store header tabs", () => {
     expect(state.canvasByTabId["tab-invalid"]).toEqual(createEmptyCanvas());
   });
 
+  it("stamps project workspace onto existing and newly opened epic tabs", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-titanos", "Titanos chat");
+    store.stampEpicWorkspaceHint("epic-titanos", {
+      worktreePaths: [],
+      linkedWorkspaces: [
+        { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+      ],
+      primaryPath: "/Users/g/work/Titanos",
+    });
+    expect(
+      useEpicCanvasStore.getState().tabsById[tabId]?.projectWorkspace,
+    ).toEqual({
+      primaryPath: "/Users/g/work/Titanos",
+      linkedWorkspaces: [
+        { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+      ],
+      worktreePaths: [],
+    });
+    const nextId = store.openEpicTab("epic-titanos", "Titanos chat 2");
+    expect(
+      useEpicCanvasStore.getState().tabsById[nextId]?.projectWorkspace
+        ?.primaryPath,
+    ).toBe("/Users/g/work/Titanos");
+  });
+
   it("persists pane activation history through canvasByTabId local storage", async () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-history", "History");
