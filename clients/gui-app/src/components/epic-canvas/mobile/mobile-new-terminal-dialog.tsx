@@ -12,6 +12,7 @@ import {
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 interface MobileNewTerminalDialogProps {
@@ -36,6 +37,9 @@ interface MobileNewTerminalDialogProps {
  */
 export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
   const { epicId, tabId, open, onOpenChange, onLaunched } = props;
+  // The same per-tab pin surface the sidebar "+" popover keys, so the phone
+  // dialog and the desktop popover remember one host pick per tab.
+  const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -76,7 +80,11 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
           </DialogDescription>
         </DialogHeader>
         {open ? (
-          <NewTerminalPickerBody epicId={epicId} onLaunch={handleLaunch} />
+          <NewTerminalPickerBody
+            epicId={epicId}
+            surfaceKey={surfaceKey}
+            onLaunch={handleLaunch}
+          />
         ) : null}
       </DialogContent>
     </Dialog>

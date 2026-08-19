@@ -59,20 +59,21 @@ function createBoundHostClient(): HostClient<HostRpcRegistry> {
     handlers: {},
     requestId: () => "request-test",
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = {
+    hostId: HOST_ID,
+    label: "Test Host",
+    kind: "mock" as const,
+    websocketUrl: "ws://host.test",
+    version: "test",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     messenger,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
   });
-  client.bind({
-    hostId: HOST_ID,
-    label: "Test Host",
-    kind: "mock",
-    websocketUrl: "ws://host.test",
-    version: "test",
-    transportDialability: "dialable",
-  });
-  return client;
+  return spine.createRequester(entry);
 }
 
 type RenameVariables = { sessionId: string; title: string };

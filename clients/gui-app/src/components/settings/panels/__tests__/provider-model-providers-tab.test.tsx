@@ -43,8 +43,8 @@ const hostMocks = vi.hoisted(() => ({
   openExternalLink: vi.fn(),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
@@ -55,6 +55,8 @@ vi.mock("@/lib/host/runtime", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-providers-list-query", () => ({

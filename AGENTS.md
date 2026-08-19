@@ -13,13 +13,13 @@ are **not** here — the CLI provisions a signed host from GitHub Releases; see
 
 ## Map
 
-| Path | Package | Role |
-|---|---|---|
-| `protocol/` | `@traycer/protocol` | Client⇄host wire contract |
+| Path                   | Package                        | Role                             |
+| ---------------------- | ------------------------------ | -------------------------------- |
+| `protocol/`            | `@traycer/protocol`            | Client⇄host wire contract        |
 | `clients/traycer-cli/` | `@traycer-clients/traycer-cli` | CLI (host install, auth, agents) |
-| `clients/shared/` | `@traycer-clients/shared` | Transport / auth / formatting |
-| `clients/gui-app/` | `@traycer-clients/gui-app` | GUI renderer |
-| `clients/desktop/` | `@traycer-clients/desktop` | Electron shell |
+| `clients/shared/`      | `@traycer-clients/shared`      | Transport / auth / formatting    |
+| `clients/gui-app/`     | `@traycer-clients/gui-app`     | GUI renderer                     |
+| `clients/desktop/`     | `@traycer-clients/desktop`     | Electron shell                   |
 
 ## Commands
 
@@ -55,7 +55,7 @@ See `protocol/README.md`.
 
 1. `hostId` is canonical; "device" is UI copy — no parallel `deviceId` field.
 2. Tabs bind a `hostId` for life (`<TabHostProvider>` → `useTabHostId()`). Never
-   use `useReactiveActiveHostId()` inside a tab. Cross-host = **clone-not-migrate**.
+   use `useAddressableHostId()` inside a tab. Cross-host = **clone-not-migrate**.
    Reachability checked at tab-open only.
 
 **Shared code** — transport/auth in `clients/shared/`; wire contract in

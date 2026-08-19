@@ -164,10 +164,31 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
    * Query scope, so work submitted while cancellation is in flight is spared.
    */
   snapshotHostTransition(hostId: string): HostTransitionAbortSnapshot {
+    const prefix = `[${JSON.stringify(hostId)},`;
+    return this.snapshotTransition((key) => key.startsWith(prefix));
+  }
+
+  /**
+   * {@link snapshotHostTransition} for EVERY host this coordinator serves.
+   *
+   * An identity transition is not a statement about one host: the request
+   * context is shared by every requester the client hands out, so work issued
+   * under the outgoing credential is stale wherever it was aimed. This is
+   * what the per-host snapshot became when the active slot was deleted
+   * (redesign D17 / P4.2) - there is no privileged host left to name, and
+   * naming one was always the narrower claim.
+   */
+  snapshotAllTransitions(): HostTransitionAbortSnapshot {
+    return this.snapshotTransition(() => true);
+  }
+
+  private snapshotTransition(
+    matches: (key: string) => boolean,
+  ): HostTransitionAbortSnapshot {
     const token = {};
     const jobs: HostTransitionJobSnapshot[] = [];
     for (const [key, queue] of this.queues) {
-      if (!key.startsWith(`[${JSON.stringify(hostId)},`)) {
+      if (!matches(key)) {
         continue;
       }
       if (queue.active !== null && queue.active.mode !== "fifo") {

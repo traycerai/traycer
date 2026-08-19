@@ -137,9 +137,11 @@ const usageSummaryCallCount = { current: 0 };
 /** Every `host.usage.summary` request payload this suite has seen, in order. */
 const usageSummaryRequests: UsageSummaryRequest[] = [];
 
-const liveHostClient = new HostClient<HostRpcRegistry>({
+const liveHostClientSpine = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
   invalidator: { invalidateHostScope: () => undefined },
+  findHostById: (hostId) =>
+    hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
   messenger: new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `req-${Math.random().toString(36).slice(2, 8)}`,
@@ -153,10 +155,10 @@ const liveHostClient = new HostClient<HostRpcRegistry>({
     },
   }),
 });
-liveHostClient.bind(mockLocalHostEntry);
-liveHostClient.setRequestContext(
+liveHostClientSpine.setRequestContext(
   createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
 );
+const liveHostClient = liveHostClientSpine.createRequester(mockLocalHostEntry);
 
 const authService = {
   revalidateCurrentContext: vi.fn(() => Promise.resolve({ kind: "valid" })),
@@ -167,13 +169,26 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostClient: () => liveHostClient,
+    // The SPINE, a separate export since redesign P2.1.
+    useHostRuntimeClient: () => liveHostClient,
     useHostBinding: () => ({ hostClient: liveHostClient }),
     useAuthService: () => authService,
   };
 });
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === HOST_ID ? liveHostClient : null,
+}));
+
+// The app-wide EFFECTIVE host, kept MOVABLE so one arm below can pull it away
+// from the Epic session's host. `EpicUsageEntryPoint` used to read this hook
+// and now reads the session's host instead; with both pinned to `HOST_ID` the
+// two are indistinguishable, and the suite would go on passing against the
+// defect it is meant to hold closed.
+const effectiveHostId = vi.hoisted(() => ({ current: "" }));
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => effectiveHostId.current,
 }));
 
 const openTransportStub = vi.hoisted(() => () => {
@@ -302,6 +317,7 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
     __setEpicStreamClientFactoryForTests(null);
     usageSummaryCallCount.current = 0;
     usageSummaryRequests.length = 0;
+    effectiveHostId.current = HOST_ID;
   });
 
   afterEach(() => {
@@ -337,6 +353,69 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(usageSummaryCallCount.current).toBe(0);
     expect(screen.queryByTestId("epic-usage-dialog")).toBeNull();
+
+    queryClient.clear();
+  });
+
+  it("stays on the RETAINED session's host while a re-point to another host establishes", async () => {
+    // The reachable divergence, driven rather than asserted: the effective
+    // host moves from A to B, `EpicSessionProvider` starts a replacement, and
+    // it does NOT complete - the second stream is never given a snapshot here,
+    // which is exactly what a slow or failed re-point looks like. Through all
+    // of it the A handle stays registered and RENDERED, and only the canvas is
+    // made inert (`epic-shell.tsx` passes `readOnly` to the tile subtree
+    // alone), so this status row remains interactive.
+    //
+    // Note the test could not create this state by starting at B: the session's
+    // host is derived FROM the effective host, so the two only diverge once a
+    // session already exists. That is why the flip happens after the first
+    // snapshot lands.
+    //
+    // ONLY A advertises the method, which is what makes the assertion decisive
+    // rather than decorative: a build reading `useEffectiveHostId()` resolves
+    // `host-elsewhere`, whose manifest has no `host.usage.summary`, and the
+    // entry point disappears.
+    recordNegotiatedHostMethods(HOST_ID, ["host.usage.summary"]);
+    const controlled = installControlledFactory();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0, staleTime: 60_000 },
+      },
+    });
+
+    const view = renderShell(queryClient);
+
+    controlled.streams()[0].callbacks.onConnectionStatus("open", null);
+    controlled
+      .streams()[0]
+      .callbacks.onSnapshot(
+        buildMeta("Live Epic", "editor"),
+        buildSnapshot("Live Epic"),
+      );
+
+    // Premise: the entry point is up on the session's own host before anything
+    // moves. Without this the assertion after the flip proves nothing - an
+    // element that was never there cannot survive.
+    await screen.findByTestId("epic-usage-entry-point");
+
+    effectiveHostId.current = "host-elsewhere";
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <EpicSessionProvider epicId={EPIC_ID} tabId={TAB_ID}>
+            <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+          </EpicSessionProvider>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    // The replacement really was started and really has not settled - a
+    // re-point that never began would leave this passing for the wrong reason.
+    await waitFor(() => {
+      expect(controlled.streams().length).toBeGreaterThan(1);
+    });
+
+    expect(screen.queryByTestId("epic-usage-entry-point")).not.toBeNull();
 
     queryClient.clear();
   });

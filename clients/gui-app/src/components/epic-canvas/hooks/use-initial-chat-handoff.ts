@@ -12,7 +12,7 @@ import {
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -39,6 +39,22 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 const CHAT_PROJECTION_DEADLINE_MS = 60_000;
 
 /**
+ * Where the seeded chat LIVES: the host `epic.create` ran on, recorded on the
+ * handoff at registration by the landing composer (`hostId` is data on the
+ * record, not part of its key). That is the truest binding for the tile -
+ * truer than the session host, which is where this canvas STREAMS the epic
+ * from and can differ from the creating host for a cloud-hydrated epic - so it
+ * comes first; the canvas (session) host is the fallback for a record that
+ * carries none. Never the app-wide pointer, which is what this used to be.
+ */
+function handoffTileHost(
+  handoff: InitialChatHandoff | null,
+  canvasHostId: string | null,
+): string | null {
+  return handoff?.hostId ?? canvasHostId;
+}
+
+/**
  * Drives the landing-page → epic-canvas chat-handoff lifecycle and is the
  * sole owner of the canvas-store `pendingCreateArtifactIds` mark for handoff
  * chats. The mark suppresses the deleted-body branch in
@@ -50,15 +66,23 @@ const CHAT_PROJECTION_DEADLINE_MS = 60_000;
  * and manages the pending-create mark.
  */
 export function useInitialChatHandoff(epicId: string, tabId: string): void {
-  const activeHostId = useReactiveActiveHostId();
+  // The CANVAS's host - the Epic session's - not the app-wide pointer. The
+  // key this scope is looked up under dropped its host segment
+  // (`initialChatHandoffKey`), so this value never decides WHETHER the handoff
+  // is found; it decides which host the seeded chat's TILE is stamped with,
+  // via `runCanvasHandoffTransition` below, and a tile carries that binding
+  // for life. Read app-wide, it stamped a chat created on the composer's
+  // placement host B with whichever host the WINDOW had moved to.
+  const canvasHostId = useCanvasHostId();
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
   const scope = useMemo<InitialChatHandoffScope>(
-    () => ({ hostId: activeHostId, userId, epicId }),
-    [activeHostId, epicId, userId],
+    () => ({ hostId: canvasHostId, userId, epicId }),
+    [canvasHostId, epicId, userId],
   );
   const handoff = useInitialChatHandoffStore((state) =>
     selectInitialChatHandoff(state, scope),
   );
+  const handoffTileHostId = handoffTileHost(handoff, canvasHostId);
   const snapshotLoaded = useEpicSnapshotLoaded();
   const connectionStatus = useEpicConnectionStatus();
   const permissionRole = useEpicPermissionRole();
@@ -209,7 +233,7 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
   // its inverse can never race within the same commit.
   useEffect(() => {
     runCanvasHandoffTransition({
-      activeHostId,
+      tileHostId: handoffTileHostId,
       handoffChatId,
       handoffStatus,
       handoffPlacement,
@@ -243,7 +267,7 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
       unmarkArtifactPendingCreate,
     });
   }, [
-    activeHostId,
+    handoffTileHostId,
     handoffChatId,
     handoffStatus,
     handoffPlacement,
@@ -299,7 +323,8 @@ function runChatProjectionTransition(
 }
 
 interface CanvasHandoffTransitionInput {
-  readonly activeHostId: string | null;
+  /** The host the opened chat tile binds to for life - see the hook. */
+  readonly tileHostId: string | null;
   readonly handoffChatId: string | null;
   readonly handoffStatus: InitialChatHandoff["status"] | null;
   readonly handoffPlacement: ConversationTilePlacement;
@@ -367,7 +392,7 @@ function runCanvasHandoffTransition(input: CanvasHandoffTransitionInput): void {
     // addressed as an Agent regardless of its Chat interface). Never the
     // "New chat" placeholder.
     name: displayTitle(input.projectedChatTitle ?? "", "agent"),
-    hostId: input.activeHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+    hostId: input.tileHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   };
   const placement = input.handoffPlacement;
   // Latch every placement kind once per handoffChatId. The ref guards

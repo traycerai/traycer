@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
@@ -61,7 +61,7 @@ export function useNotificationIndicators(
 ): SurfaceNotificationIndicators {
   const feedMode = useNotificationFeedMode();
   const isCloud = feedMode === "cloud";
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const hostIndicators = useHostNotificationIndicators({
     hostId: args.hostId,
     epicIds: args.epicIds,

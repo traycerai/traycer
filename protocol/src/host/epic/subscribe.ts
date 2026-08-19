@@ -16,8 +16,11 @@
  * Server frames:
  *
  * - `snapshot`     - initial state for the root Epic doc. Text envelope
- *                    carries `snapshotMetaEpicSchema`; a Y.Doc snapshot
- *                    rides the paired binary payload.
+ *                    carries the snapshot metadata; a Y.Doc snapshot rides
+ *                    the paired binary payload. The meta shape is the one
+ *                    field that varies by minor: `@1.0`/`@1.1` carry the
+ *                    frozen `snapshotMetaEpicSchemaV10`, while **@1.2** adds
+ *                    `roomId` (`snapshotMetaEpicSchema`).
  * - `update`       - incremental Y.Doc update for the root Epic doc.
  * - `awareness`    - awareness update (cursors, selections, presence) for
  *                    the root Epic doc.
@@ -75,6 +78,7 @@ const permissionRoleSchema = getRecordSchema(
 import {
   earlyMetaEpicSchema,
   snapshotMetaEpicSchema,
+  snapshotMetaEpicSchemaV10,
 } from "@traycer/protocol/host/epic/snapshot-meta";
 
 export const epicSubscribeOpenRequestSchema = z.object({
@@ -134,13 +138,27 @@ export type EpicCloudSyncStatus = z.infer<typeof epicCloudSyncStatusSchema>;
 // did not negotiate is the host breaking the contract, not a "graceful"
 // degrade the peer happens to drop. New frames go on a new minor's union
 // below, and the host gates their emission on the NEGOTIATED version.
-const epicSubscribeSharedServerFrameSchemasV10 = [
-  z.object({
-    kind: z.literal("snapshot"),
-    epicId: z.string(),
-    meta: snapshotMetaEpicSchema,
-    hasBinaryPayload: z.literal(true),
-  }),
+
+/**
+ * The frozen `@1.0`/`@1.1` snapshot frame.
+ *
+ * Split out of the shared array below so a later minor can swap in a grown
+ * `meta` shape without duplicating the other fourteen frame kinds and without
+ * disturbing this one - see {@link epicSubscribeSnapshotServerFrameSchemaV12}.
+ */
+const epicSubscribeSnapshotServerFrameSchemaV10 = z.object({
+  kind: z.literal("snapshot"),
+  epicId: z.string(),
+  meta: snapshotMetaEpicSchemaV10,
+  hasBinaryPayload: z.literal(true),
+});
+
+/**
+ * Every frozen `@1.0` frame EXCEPT `snapshot`, shared verbatim by `@1.0`,
+ * `@1.1` and `@1.2`: across those three minors only the snapshot frame's
+ * `meta` differs, so this remainder is defined once and spread into each.
+ */
+const epicSubscribeSharedNonSnapshotServerFrameSchemasV10 = [
   /**
    * Metadata-only frame emitted at the start of the `epic.subscribe`
    * lifecycle, BEFORE the host's Tiptap WS sync completes. Carries the
@@ -297,6 +315,16 @@ const epicSubscribeSharedServerFrameSchemasV10 = [
   }),
 ] as const;
 
+/**
+ * The complete frozen `@1.0` frame set: `snapshot` followed by the remainder,
+ * in their original order, so `@1.0`/`@1.1` union membership is byte-for-byte
+ * what shipped.
+ */
+const epicSubscribeSharedServerFrameSchemasV10 = [
+  epicSubscribeSnapshotServerFrameSchemaV10,
+  ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
+] as const;
+
 export const epicSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
   "kind",
   epicSubscribeSharedServerFrameSchemasV10,
@@ -387,8 +415,58 @@ export const epicSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
   epicSubscribeRootDirtyServerFrameSchema,
 ]);
 
+// ─── `epic.subscribe@1.2` - additive: room identity on snapshot meta ──────
+//
+// The `snapshot` frame's `meta` gains `roomId` (see `snapshotMetaEpicSchema`),
+// so the renderer's merge-vs-plain-swap seam can tell a same-room failover
+// from a migration-cutover repoint. @1.0 and @1.1 stay installed and FROZEN,
+// still carrying the pre-roomId `snapshotMetaEpicSchemaV10`.
+//
+// WHY THIS MINOR NEEDS NO EMISSION GATE, while @1.1's frames do. The two
+// kinds of additive growth are not symmetric:
+//
+//   - A new frame KIND (@1.1's `dirtySnapshot` / `artifactRoomDirty` /
+//     `rootDirty`) MUST be gated on the negotiated version, because the peer
+//     decodes with a DISCRIMINATED UNION: an unrecognized `kind` matches no
+//     variant and the whole frame fails to parse. The host therefore checks
+//     `supportsDirtyFrames()` (`epic-stream-resolver.ts`) before emitting.
+//   - A new PROPERTY on an EXISTING frame (this minor's `roomId`) needs no
+//     gate, because zod objects are non-strict: a @1.0/@1.1 peer parsing with
+//     its own frozen schema silently STRIPS the unknown key. The host may
+//     publish it unconditionally - which is what the epic resolver does, and
+//     what `agent.inbox.subscribe@1.2` established for `eventId`.
+//
+// So the version fact lives entirely in the schema, not in a resolver branch;
+// a negotiated-minor check on the producer could only ever suppress a key the
+// peer already discards.
+//
+// The grown `meta` is nonetheless a real wire-shape change on the snapshot
+// frame, which is exactly why it rides a new minor instead of being tolerated
+// on the shipped line: `.optional()` is parse-time hardening, not a
+// versioning mechanism.
+
+/**
+ * The `@1.2` snapshot frame - identical to
+ * {@link epicSubscribeSnapshotServerFrameSchemaV10} except that `meta`
+ * carries the room identity.
+ */
+const epicSubscribeSnapshotServerFrameSchemaV12 = z.object({
+  kind: z.literal("snapshot"),
+  epicId: z.string(),
+  meta: snapshotMetaEpicSchema,
+  hasBinaryPayload: z.literal(true),
+});
+
+export const epicSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
+  epicSubscribeSnapshotServerFrameSchemaV12,
+  ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
+  epicSubscribeDirtySnapshotServerFrameSchema,
+  epicSubscribeArtifactRoomDirtyServerFrameSchema,
+  epicSubscribeRootDirtyServerFrameSchema,
+]);
+
 /** The latest installed shape. Host code builds frames against this. */
-export const epicSubscribeServerFrameSchema = epicSubscribeServerFrameSchemaV11;
+export const epicSubscribeServerFrameSchema = epicSubscribeServerFrameSchemaV12;
 export type EpicSubscribeServerFrame = z.infer<
   typeof epicSubscribeServerFrameSchema
 >;
@@ -449,5 +527,13 @@ export const epicSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: epicSubscribeOpenRequestSchema,
   serverFrameSchema: epicSubscribeServerFrameSchemaV11,
+  clientFrameSchema: epicSubscribeClientFrameSchema,
+});
+
+export const epicSubscribeV12 = defineStreamRpcContract({
+  method: "epic.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: epicSubscribeOpenRequestSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV12,
   clientFrameSchema: epicSubscribeClientFrameSchema,
 });

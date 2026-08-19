@@ -251,6 +251,8 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => null,
 }));
 
 vi.mock(
@@ -263,12 +265,9 @@ vi.mock(
   }),
 );
 
-vi.mock(
-  "@/hooks/providers/use-refresh-providers-list-on-turn-default-host",
-  () => ({
-    useRefreshProvidersListOnTurnDefaultHost: () => undefined,
-  }),
-);
+vi.mock("@/hooks/providers/use-refresh-providers-list-on-turn", () => ({
+  useRefreshProvidersListOnTurn: () => undefined,
+}));
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => ({
@@ -302,11 +301,34 @@ vi.mock("@/hooks/composer/use-composer-dictation", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
-  useEpicCreate: () => ({ isPending: false }),
+  useEpicCreateForClient: () => ({ isPending: false }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgent: () => ({ isPending: false }),
+  useCreateTuiAgentForClient: () => ({ isPending: false }),
+}));
+// P1.2: the composer resolves its placement (pin ?? effective) through this
+// one hook. These suites are about paste/gating/banner behaviour, not
+// selection derivation, so it is stubbed at that single boundary - the same
+// treatment the other host-backed hooks above get.
+vi.mock("@/hooks/host/use-composer-placement", () => ({
+  useComposerPlacement: () => ({
+    pin: {
+      selection: null,
+      setSelection: () => undefined,
+      resolvedHostId: "host-test",
+      isPinned: false,
+      latchOnFirstUse: () => undefined,
+    },
+    target: {
+      resolvedHostId: "host-test",
+      client: null,
+      hostLabel: "Local",
+      isPinned: false,
+      namedHostDead: false,
+    },
+    hostLabelFor: () => "Local",
+  }),
 }));
 
 // Keep the toolbar thin so catalog/query noise does not obscure attachmentPending.

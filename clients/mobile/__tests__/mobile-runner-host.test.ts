@@ -41,6 +41,7 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     authnBaseUrl: "http://localhost:32350",
     hostLabel: "test-slot",
     relayBaseUrl: "ws://localhost:8787/attach",
+    fleetHostIds: null,
     // Push lifecycle is exercised in push-registration.test.ts; the host's
     // click sink with `null` is the dev-web no-op these tests always had.
     pushRegistration: null,
@@ -99,6 +100,7 @@ function phoneRunner(input: {
     authnBaseUrl: "http://localhost:32350",
     hostLabel: "test-slot",
     relayBaseUrl: "ws://localhost:8787/attach",
+    fleetHostIds: null,
     pushRegistration: new MobilePushRegistration({
       plugin: input.plugin,
       authnBaseUrl: "http://localhost:32350",

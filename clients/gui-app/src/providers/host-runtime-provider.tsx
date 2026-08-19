@@ -37,8 +37,17 @@ import {
   type RuntimeHostMessengerBinding,
 } from "@/lib/host/host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { acquireRendererSelectionKernel } from "@/lib/host/renderer-selection-kernel";
+import {
+  mountSelectionAuthorityBridge,
+  type SelectionAuthorityBridge,
+} from "@/lib/host/selection-authority-bridge";
 import { createSessionRetirementSweep } from "@/lib/host/session-retirement";
+import { buildHostKeyRotationSweep } from "@/lib/host/host-key-rotation-sweep";
+import { buildRuntimeChangeScopeHandler } from "@/lib/host/runtime-change-scope";
 import { appLogger } from "@/lib/logger";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { authQueryKeys } from "@/lib/query-keys";
 import {
   runnerHostQueryScopeId,
   runnerQueryKeys,
@@ -50,6 +59,29 @@ export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
   readonly hostClient: HostClient<Registry>;
   readonly directory: HostDirectoryService;
   readonly auth: AuthService;
+  /**
+   * The host `hostClient` addresses, carried HERE rather than looked up beside
+   * it — the unary twin of `StreamRuntimeBinding.hostId`, for the same reason
+   * and after the same defect.
+   *
+   * `null` means "this binding names no host": read the app-wide effective one
+   * instead. That is the APP-WIDE binding's answer, and the whole point of the
+   * field is that a re-provided binding answers something else.
+   *
+   * Before this, a subtree that re-provided a pinned `hostClient` still had its
+   * NAME read from `useEffectiveHostId()`, and `useHostClient()` composed the
+   * two — so it rebuilt a requester for the ambient host off the pinned one and
+   * handed that back. `createRequesterForHostId` is not one of the six members
+   * `createPinnedRequester` intercepts, so the call fell through `Reflect.get`
+   * to the spine and the pin was simply gone. Every host-scoped panel shipped
+   * inert: the client moved, the name did not, and the name won.
+   *
+   * Do NOT infer this from `hostClient.getActiveHostId()`. A requester answers
+   * `null` there while its directory row is unresolved, which would drop a
+   * scoped subtree onto the ambient host for exactly that window — the same
+   * defect, re-armed on a timing condition instead of a structural one.
+   */
+  readonly hostId: string | null;
 }
 
 export interface HostRuntimeState<Registry extends VersionedRpcRegistry> {
@@ -203,9 +235,46 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         remoteFetcher,
         localHostIdSeeder: () =>
           queryClient.fetchQuery(localHostIdQueryOptions(runnerHost)),
+        // F22: one liveness timer for the window. The directory's poll is it;
+        // the registered-hosts observers refetch off this invalidation
+        // through their own credential-fenced path instead of running a
+        // second 60s interval against the same endpoint.
+        onRegistryPollTick: () => {
+          void queryClient.invalidateQueries({
+            queryKey: authQueryKeys.registeredHostsAll(),
+          });
+        },
       });
 
       let runtime: HostRuntime<Registry> | null = null;
+      // Mounted with the runtime and torn down with it (below), so the
+      // window's kernel and the client it reports through can never outlive
+      // each other. It no longer writes a selection anywhere: with the active
+      // slot deleted (P4.2) the derivation lands in the authority store and is
+      // resolved from there, so this bridge publishes rather than binds.
+      let selectionBridge: SelectionAuthorityBridge | null = null;
+
+      // THE window's evidence kernel (redesign P1.3), ACQUIRED rather than
+      // constructed - it belongs to the renderer load, not to this effect.
+      //
+      // The transports below must be able to report into it from their very
+      // first dial: the buffering client DROPS evidence produced before the
+      // attach begins, and the bridge mounts only after `auth.start()` and
+      // `directory.start()` have both resolved - a window that contains those
+      // first dials. An engine deriving from an evidence vacuum is the exact
+      // failure P1.1 refused to build. The relay it binds to is module-scoped
+      // for the matching reason: the remote session POOL is (see
+      // `transport-evidence`).
+      //
+      // Owning it here was the F2 defect. `SelectionAuthorityClient` is
+      // attach-once per instance and is built once per renderer load, so
+      // StrictMode's setup -> cleanup -> setup attached a second kernel
+      // against a spent client, got `superseded`, and left the window
+      // permanently detached. `renderer-selection-kernel` matches the two
+      // lifetimes; this effect subscribes and never disposes.
+      const selectionKernel = acquireRendererSelectionKernel(
+        runnerHost.selectionAuthority,
+      );
 
       // Endpoint + bearer now ride the per-request `HostRequestAuthority` the
       // coordinator mints, so neither is closed over here. The remote branch
@@ -236,32 +305,26 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
               requestId,
               // Un-strands queries that errored while this binding's remote
               // session was still dialing (a Settings host-picker selection
-              // has no other session holder). A non-active host takes the
-              // announcing notify; an active one is invalidated directly,
-              // because the active variant emits a host-change event - which
-              // the `onChange` subscription below answers with
-              // `runtimeMessenger.reset()`, tearing this very binding down as
-              // a side effect of its own good news. Steady state for an active
-              // host is still owned by the stream-runtime wiring over the SAME
-              // shared session; this path only covers the promoted-mid-dial
-              // window, before that wiring exists to hear anything.
+              // has no other session holder). ALWAYS the silent form: the
+              // announcement's one subscriber here answers it with
+              // `runtimeMessenger.reset()`, which would tear this very binding
+              // down as a side effect of its own good news. Steady state for
+              // the effective host is still owned by the stream-runtime wiring
+              // over the SAME shared session; this path only covers the
+              // dialing window, before that wiring exists to hear anything.
+              //
+              // This used to branch on whether the recovering host was the
+              // bound one, and the branch was VACUOUS: the active arm called
+              // the silent form directly, and the other arm reached
+              // `notifyHostAvailabilityRecovered`, whose non-active path is
+              // that same silent delivery. Both arms produced one host-scope
+              // invalidation and no event. P4.2 deletes the slot the branch
+              // read; the single call below is what it always did.
               onRemoteAvailabilityRecovered: (hostId) => {
                 if (runtime === null) {
                   return;
                 }
-                const active = runtime.hostClient.getActiveHost();
-                if (active !== null && active.hostId === hostId) {
-                  // Promoted to active while this dial was still in flight, so
-                  // the active stream-runtime wiring may not have attached yet
-                  // - and it never replays, so waiting for it to own this
-                  // boundary can strand the queries forever. Deliver the
-                  // invalidation directly instead: same un-stranding, minus the
-                  // active-change announcement that would reset this binding as
-                  // a side effect of its own good news.
-                  runtime.hostClient.invalidateHostScopeForAvailability(hostId);
-                  return;
-                }
-                runtime.hostClient.notifyHostAvailabilityRecovered(hostId);
+                runtime.hostClient.invalidateHostScopeUnannounced(hostId);
               },
             })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
@@ -297,6 +360,30 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         authorityRegistry,
         schedulingPolicy,
         requestCoordinator,
+        // The window's connection-registry wiring (connection-registry §1).
+        // Both halves are READ PORTS: the registry keeps no copy of a row or
+        // a lease, so there is still exactly one directory and exactly one
+        // lease vocabulary in the app. What it adds is the per-host verdict -
+        // "did THIS host's row move" - which neither source answers, and
+        // which is what replaces the active slot's change event for
+        // consumers pinned by host id (P4.2).
+        connectionRegistry: {
+          directory: {
+            findById: (hostId) => directory.findById(hostId),
+            onDirectoryChanged: (listener) => directory.onChange(listener),
+          },
+          leases: {
+            leaseFor: (hostId) =>
+              useSelectionAuthorityStore
+                .getState()
+                .leases.find((lease) => lease.hostId === hostId) ?? null,
+            onLeasesChanged: (listener) => {
+              const unsubscribe =
+                useSelectionAuthorityStore.subscribe(listener);
+              return { dispose: unsubscribe };
+            },
+          },
+        },
       });
 
       const activeRuntime = runtime;
@@ -316,11 +403,41 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         currentContext: () => requestContextProvider.current(),
         retire: retireAllRemoteSessions,
       });
+      // SCOPED BY REASON, and it was not before - see
+      // `buildRuntimeChangeScopeHandler` for which reasons and why. The filter
+      // lives there rather than inline here so that it is a thing a test can
+      // hold: this provider's startup path has no integration coverage, so an
+      // inline closure would be unobservable (redesign P4.2).
       const runtimeTransportUnsubscribe = activeRuntime.hostClient.onChange(
-        () => {
-          runtimeMessenger?.reset();
-          sweepRetiredContextSessions();
+        buildRuntimeChangeScopeHandler({
+          resetMessenger: () => runtimeMessenger?.reset(),
+          sweepRetiredSessions: sweepRetiredContextSessions,
+        }),
+      );
+      // R-1: a remote host whose public key rotated under its OWN id was
+      // rebuilt, so everything cached for that id describes a machine that no
+      // longer exists. `bind()` swept it as a by-product of pointing at the
+      // host; P4.2 deleted the slot and nothing swept it after.
+      //
+      // UNANNOUNCED on purpose: a rotation is not an availability recovery,
+      // and the reason-scoped listener directly above would be answering an
+      // event that did not happen. Subscribed to the DIRECTORY rather than the
+      // connection registry because a registry record exists only for a host
+      // someone named and lingers only 60s past the last holder - a host with
+      // a populated scope and no live transport is exactly the case that needs
+      // the sweep. The diffing lives in its own module for the same reason the
+      // change-scope filter above does: a closure inside this provider's
+      // startup path is a thing no suite can observe.
+      const sweepRotatedHostScopes = buildHostKeyRotationSweep({
+        sweepHostScope: (hostId) => {
+          if (runtime === null) {
+            return;
+          }
+          runtime.hostClient.invalidateHostScopeUnannounced(hostId);
         },
+      });
+      const rotationSweepSubscription = directory.onChange(
+        sweepRotatedHostScopes,
       );
       void (async () => {
         let phase = "auth.start";
@@ -346,11 +463,33 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           }
           phase = "runtime.start";
           activeRuntime.start();
+          // AFTER `runtime.start()`: the runtime installs the connection
+          // registry source there, and the registry is what tells a pinned
+          // consumer its row arrived. Mounting the bridge first would publish
+          // the opening derivation into a window whose consumers have no way
+          // to hear the row that follows it.
+          phase = "selection-bridge.mount";
+          selectionBridge = mountSelectionAuthorityBridge({
+            client: runnerHost.selectionAuthority,
+            kernel: selectionKernel,
+            hostLabels: {
+              // Falls back to the id rather than to a placeholder: a move the
+              // directory has not caught up with yet is exactly when the user
+              // most needs to know WHICH host, and an id is at least true.
+              labelFor: (hostId) => directory.findById(hostId)?.label ?? hostId,
+            },
+          });
           const nextBinding = {
             runtime: activeRuntime,
             hostClient: activeRuntime.hostClient,
             directory,
             auth,
+            // THE app-wide binding, and the only one that may answer `null`
+            // here: `activeRuntime.hostClient` is the spine, which addresses no
+            // host by design (P4.2 deleted the active slot). Naming a host
+            // would pin every consumer in the window to it and make the
+            // selection layer's `effectiveHostId` unreachable.
+            hostId: null,
           };
           setLatestBindingSnapshot(nextBinding);
           setBinding(nextBinding);
@@ -360,8 +499,10 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           });
         } catch (error) {
           appLogger.error("[host-runtime] startup failed", { phase }, error);
+          selectionBridge?.dispose();
           runtimeMessenger?.dispose();
           runtimeTransportUnsubscribe();
+          rotationSweepSubscription.dispose();
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
@@ -378,8 +519,15 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
 
       return () => {
         lifecycle.disposed = true;
+        selectionBridge?.dispose();
+        // The kernel and its relay binding are NOT torn down here - they
+        // belong to the renderer load (see `acquireRendererSelectionKernel`).
+        // Releasing them on effect cleanup is what made a StrictMode remount
+        // permanently detach the window, and it is also what left warm pooled
+        // sessions reporting into a disposed kernel across any remount.
         runtimeMessenger?.dispose();
         runtimeTransportUnsubscribe();
+        rotationSweepSubscription.dispose();
         activeRuntime.dispose();
         directory.dispose();
         auth.dispose();

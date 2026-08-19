@@ -99,7 +99,7 @@ function localEntry(hostId: string): HostDirectoryEntry {
 }
 
 function busyMessage(subject: string): string {
-  return `${subject} still working on this host. Nothing was interrupted; try again when they finish. Force restart ends them immediately.`;
+  return `${subject} still keeping this host busy. Nothing was interrupted; try again when the work finishes. Force restart ends it immediately.`;
 }
 
 // A local host that resolves but is NOT dialable - `websocketUrl: null` and
@@ -356,7 +356,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
           "host.restart": () =>
             Promise.resolve({
               outcome: "busy" as const,
-              verdict: { busySessionCount },
+              verdict: { busySessionCount, blockers: null },
             }),
         },
       });
@@ -543,7 +543,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
           transitionIds.push(req.transitionId);
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           });
         },
       },
@@ -787,7 +787,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
           restartCallCount += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           });
         },
       },
@@ -859,7 +859,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
           restartCallCount += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1 },
+            verdict: { busySessionCount: 1, blockers: null },
           });
         },
       },

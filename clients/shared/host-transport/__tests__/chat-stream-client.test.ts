@@ -24,6 +24,7 @@ import {
   ChatStreamClient,
   type ChatStreamCallbacks,
 } from "../chat-stream-client";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 class StubStreamWebSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -78,6 +79,7 @@ function makeWsStreamClient(
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     hostCredentialMint: null,
+    evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 1000,
     openAckTimeoutMs: 1000,

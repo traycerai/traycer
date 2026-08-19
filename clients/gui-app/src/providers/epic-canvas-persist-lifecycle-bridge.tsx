@@ -26,7 +26,9 @@ export function EpicCanvasPersistLifecycleBridge(
 ): ReactNode {
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
-  const email = useAuthStore((state) => state.profile?.email ?? null);
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  // Only to name the pre-userId key for one-time adoption; NOT an identity.
+  const legacyEmail = useAuthStore((state) => state.profile?.email ?? null);
 
   const onTransition = useCallback(
     (transition: AuthIdentityTransition) => {
@@ -37,7 +39,9 @@ export function EpicCanvasPersistLifecycleBridge(
       ) {
         retargetPersistedStore({
           store: useEpicCanvasStore,
-          name: epicCanvasKey(transition.email),
+          name: epicCanvasKey(transition.userId),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName: legacyEmail === null ? null : epicCanvasKey(legacyEmail),
         });
         return;
       }
@@ -47,10 +51,10 @@ export function EpicCanvasPersistLifecycleBridge(
         anonymousName: epicCanvasKey(null),
       });
     },
-    [windowsBridge],
+    [windowsBridge, legacyEmail],
   );
 
-  useAuthIdentityTransition(status, email, onTransition);
+  useAuthIdentityTransition(status, userId, onTransition);
 
   return <>{props.children}</>;
 }

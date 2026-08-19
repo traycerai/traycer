@@ -17,6 +17,7 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   ALL_NOTIFICATION_CATEGORIES,
   type NotificationCategory,
@@ -55,6 +56,8 @@ import {
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 
+const reconnectEngine = createHostReconnectEngine();
+
 const notificationFeedModeRef = vi.hoisted(() => ({
   value: "local",
 }));
@@ -73,8 +76,8 @@ const directoryRef = vi.hoisted(() => ({
   } | null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdRef.value,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdRef.value,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -309,13 +312,17 @@ function openGlobalStream(): {
   readonly seed: (entries: ReadonlyArray<NotificationEntry>) => void;
 } {
   let current: NotificationsStreamCallbacks | null = null;
-  openNotificationsStream((callbacks) => {
-    current = callbacks;
-    return {
-      applyUpdate: () => {},
-      close: () => {},
-    };
-  }, null);
+  openNotificationsStream(
+    reconnectEngine,
+    (callbacks) => {
+      current = callbacks;
+      return {
+        applyUpdate: () => {},
+        close: () => {},
+      };
+    },
+    null,
+  );
   return {
     seed: (entries) => {
       if (current === null) throw new Error("stream factory not invoked");

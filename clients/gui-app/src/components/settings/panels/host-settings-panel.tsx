@@ -52,9 +52,9 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *
  * When a host cannot answer, the page says so and shows what the ACCOUNT
  * REGISTRY already knows — never a hidden local fallback. Restarting a host
- * that is down belongs to `LocalHostGate`, which owns the app-level "your host
- * isn't up" surface; that is app state, not a property of the host you happen
- * to be viewing.
+ * that is down belongs to the window narrator, which owns the app-level "your
+ * host isn't up" surface; that is app state, not a property of the host you
+ * happen to be viewing.
  */
 export function HostSettingsPanel() {
   const scope = useHostScope();
@@ -115,8 +115,8 @@ function HostSettingsPanelInner() {
   // every host from whatever source can answer for it, and says plainly when
   // that is only the account registry. Creating the first host was never
   // unique to that console anyway — the desktop auto-converges at startup
-  // (`host-launch-converge.ts`) and `LocalHostGate` owns the app-level
-  // "your host is not up" surface with its own Install. What survives of it is
+  // (`host-launch-converge.ts`) and the window narrator owns the app-level
+  // "your host is not up" surface with its own recovery actions. What survives of it is
   // the single VERB above (`localRecoveryZone`), rendered under this gate.
   const unresolved = scope.host === null || scope.status === "vanished";
 
@@ -276,8 +276,8 @@ function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
  * failed, no vanished pick) with installed local components has exactly one
  * thing left to offer — removal over the CLI bridge, which needs no host row —
  * and `LocalRecoveryDangerZone`'s contract names this page as the only
- * uninstall surface. Everything else about recovery stays `LocalHostGate`'s
- * job; this is the verb that must not vanish with the row. The caller decides
+ * uninstall surface. Everything else about recovery stays the window
+ * narrator's job; this is the verb that must not vanish with the row. The caller decides
  * whether anything is actually installed — the zone cannot know — so the
  * bridge's install record is the gate, and only the empty-account state asks.
  */

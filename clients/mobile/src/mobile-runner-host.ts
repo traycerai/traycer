@@ -56,7 +56,6 @@ import type {
   DeviceFlowSession,
   HostRestartRequestResult,
   IDeviceFlowHost,
-  IHostPicker,
   INotificationHost,
   IPushPermissionHost,
   IRunnerHost,
@@ -67,6 +66,7 @@ import type {
   LocalHostSnapshot,
   NotificationShowOutcome,
   PushPermissionState,
+  RegisteredHostsChange,
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
@@ -75,6 +75,22 @@ import type {
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  createInProcessSelectionAuthority,
+  InMemoryAuthorityIdentitySource,
+  InMemoryHostFleetSource,
+  inertLocalHostOutageSignal,
+  unavailableLocalHostEnsurePort,
+  type InProcessSelectionAuthority,
+} from "@traycer-clients/shared/host-selection/in-process-selection-authority";
+import {
+  createIncrementingIncarnationIds,
+  silentAuthorityLog,
+  systemAuthorityClock,
+  type PreferredHostSaveResult,
+  type PreferredHostStore,
+} from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { MobilePushRegistration } from "./push-registration";
 
@@ -109,6 +125,16 @@ export interface MobileRunnerHostOptions {
    * would launch an installed production app instead.
    */
   readonly returnScheme: string | null;
+  /**
+   * Overrides where the selection authority's fleet membership comes from, or
+   * `null` for the production answer (the registry list under the stored
+   * bearer). The dev entry passes the same dev-slot source the directory's
+   * `remoteFetcher` uses, so the authority can derive an effective host for a
+   * loopback dev host that is not registered in the cloud. Resolves to the
+   * fleet's host ids, or `null` on a transient failure (the current fleet is
+   * retained - a blip must not read as "you own no hosts").
+   */
+  readonly fleetHostIds: (() => Promise<readonly string[] | null>) | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -136,7 +162,6 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState = new MobileNoopTrayState();
-  readonly hostPicker: IHostPicker = new MobileHostPicker();
   readonly workspaceFolders: IWorkspaceFoldersHost = {
     // No native folder dialog on the phone - remote-host folder adds go
     // through the RPC-backed remote folder picker in gui-app.
@@ -171,11 +196,33 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly pushPermission: IPushPermissionHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   private readonly systemResume = new MobileSystemResume();
+  /**
+   * The in-window selection authority (the "shell with no main process"
+   * binding the contract names): the SAME engine desktop mounts in Electron
+   * main, behind the in-process adapter, fed by the three ports below. The
+   * phone has no local host and cannot provision one, so the ensure port
+   * refuses and the outage signal is inert - derivation only ever lands on a
+   * remote host or on ∅.
+   */
+  readonly selectionFleet = new InMemoryHostFleetSource({
+    revision: 0,
+    identityGeneration: 0,
+    localHostId: null,
+    hosts: [],
+  });
+  readonly selectionIdentity = new InMemoryAuthorityIdentitySource(null);
+  private readonly selectionPreferredStore: PreferredHostStore =
+    new MobilePreferredHostStore();
+  private readonly selectionAuthorityMount: InProcessSelectionAuthority;
+  readonly selectionAuthority: SelectionAuthorityClient;
+  private readonly fleetHostIds:
+    (() => Promise<readonly string[] | null>) | null;
 
   constructor(options: MobileRunnerHostOptions) {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.authnBaseUrl;
     this.relayBaseUrl = options.relayBaseUrl;
+    this.fleetHostIds = options.fleetHostIds;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -191,6 +238,109 @@ export class MobileRunnerHost implements IRunnerHost {
       options.hostLabel,
       options.returnScheme,
     );
+    this.selectionAuthorityMount = createInProcessSelectionAuthority({
+      fleet: this.selectionFleet,
+      identity: this.selectionIdentity,
+      // Refusing (rather than deferring) is what makes the engine's ∅
+      // definition come out right on a shell that can never provision: no
+      // usable lease AND no ensure available.
+      localHostEnsure: unavailableLocalHostEnsurePort,
+      localOutage: inertLocalHostOutageSignal,
+      preferredStore: this.selectionPreferredStore,
+      clock: systemAuthorityClock,
+      newIncarnationId: createIncrementingIncarnationIds(),
+      log: silentAuthorityLog,
+    });
+    this.selectionAuthority = this.selectionAuthorityMount.client;
+    // The identity port follows the token store: the stored credential IS the
+    // phone's signed-in identity (there is no separate auth-session process).
+    // The generation advances only when the USER changes - `syncSelectionId`
+    // compares ids before setting - so a routine token rotation never wipes
+    // the authority's evidence.
+    this.tokenStore.subscribe((change) => {
+      this.syncSelectionIdentity(change.userId);
+    });
+    // Seed both ports from whatever credential survived the last launch; the
+    // fleet publish rides behind the identity so its generation stamp is the
+    // seeded one, not the initial null's.
+    void this.tokenStore.get().then((stored) => {
+      this.syncSelectionIdentity(stored?.user.id ?? null);
+      if (stored === null) {
+        void this.refreshHostFleet();
+      }
+    });
+  }
+
+  /**
+   * Advances the identity port when the signed-in USER actually changed, and
+   * re-reads the fleet under the new identity - the same "identity change
+   * refreshes the fleet" edge the engine's own doc names.
+   */
+  private syncSelectionIdentity(userId: string | null): void {
+    if (this.selectionIdentity.current().identityKey === userId) {
+      return;
+    }
+    this.selectionIdentity.set(userId);
+    void this.refreshHostFleet();
+  }
+
+  /**
+   * `IRunnerHost.refreshHostFleet`: re-reads fleet membership and publishes it
+   * atomically. Callers are the membership mutations (a deregistration, a
+   * fresh registration observed by the directory's poll) plus the identity
+   * edge above; a duplicate call costs one refetch and can never publish
+   * something false.
+   *
+   * The generation is captured before the (async) read and re-checked after,
+   * so a fetch that raced an identity transition is dropped rather than
+   * stamped onto the new account.
+   */
+  async refreshHostFleet(): Promise<void> {
+    const identity = this.selectionIdentity.current();
+    const hostIds = await this.resolveFleetHostIds();
+    if (hostIds === null) {
+      return;
+    }
+    if (this.selectionIdentity.current().generation !== identity.generation) {
+      return;
+    }
+    this.selectionFleet.publish(
+      identity.generation,
+      null,
+      hostIds.map((hostId) => ({ hostId, kind: "remote" as const })),
+    );
+  }
+
+  /**
+   * `null`: this shell owns no registry cadence - the directory keeps its own
+   * poll timer, exactly as the browser/dev topology does. Membership changes
+   * that poll observes reach the authority through `refreshHostFleet`.
+   */
+  onRegisteredHostsChange(
+    handler: (push: RegisteredHostsChange) => void,
+  ): Disposable | null {
+    void handler;
+    return null;
+  }
+
+  private async resolveFleetHostIds(): Promise<readonly string[] | null> {
+    if (this.fleetHostIds !== null) {
+      return this.fleetHostIds();
+    }
+    const stored = await this.tokenStore.get();
+    if (stored === null) {
+      // Signed out is an answer, not a failure: an empty fleet is what lets
+      // the engine retire a previous account's derivation.
+      return [];
+    }
+    const result = await fetchRegisteredHostsViaHttp(
+      this.authnBaseUrl,
+      stored.token,
+    );
+    if (result.kind !== "ok") {
+      return null;
+    }
+    return result.response.hosts.map((host) => host.hostId);
   }
 
   beginAuthAttempt(): void {
@@ -1013,36 +1163,43 @@ class MobileNoopTrayState implements ITrayState {
   }
 }
 
-class MobileHostPicker implements IHostPicker {
-  private open = false;
-  private readonly handlers = new Set<(isOpen: boolean) => void>();
-
-  get isOpen(): boolean {
-    return this.open;
-  }
-
-  requestOpen(): void {
-    this.setOpen(true);
-  }
-
-  requestClose(): void {
-    this.setOpen(false);
-  }
-
-  onChange(handler: (isOpen: boolean) => void): Disposable {
-    this.handlers.add(handler);
-    return {
-      dispose: () => {
-        this.handlers.delete(handler);
-      },
-    };
-  }
-
-  private setOpen(open: boolean): void {
-    if (this.open === open) return;
-    this.open = open;
-    for (const handler of this.handlers) {
-      handler(open);
+/**
+ * Identity-bucketed preferred-host persistence for the in-window authority,
+ * durable across launches via `localStorage` (the WebView's storage survives
+ * app restarts; only an uninstall clears it). Bucketing by identity keeps the
+ * "another account inherits nothing" property the desktop store has.
+ *
+ * A failed READ is genuinely "no preference" (first-run answer); a failed
+ * WRITE is reported so the engine can treat the preference as unsaved.
+ */
+class MobilePreferredHostStore implements PreferredHostStore {
+  load(identityKey: string | null): string | null {
+    if (identityKey === null) return null;
+    try {
+      return window.localStorage.getItem(preferredHostKey(identityKey));
+    } catch {
+      return null;
     }
   }
+
+  save(
+    identityKey: string | null,
+    hostId: string | null,
+  ): PreferredHostSaveResult {
+    if (identityKey === null) return { ok: true };
+    try {
+      if (hostId === null) {
+        window.localStorage.removeItem(preferredHostKey(identityKey));
+      } else {
+        window.localStorage.setItem(preferredHostKey(identityKey), hostId);
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String(error) };
+    }
+  }
+}
+
+function preferredHostKey(identityKey: string): string {
+  return `traycer.mobile.preferred-host.${identityKey}`;
 }

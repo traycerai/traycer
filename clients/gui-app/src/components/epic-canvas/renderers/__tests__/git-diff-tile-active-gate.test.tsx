@@ -19,8 +19,24 @@ import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferen
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { __resetSubscriptionsForTesting } from "@/hooks/git/use-git-list-changed-files-subscription";
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-A",
+// The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
+// to, so `git.subscribeStatus` cannot ride the window's effective host while
+// carrying the tile's host id as a param. `null` is that hook's FOLLOWING
+// answer, so the tile falls back to the ambient binding this suite supplies -
+// which is what every assertion here is about. Which transport a host resolves
+// to is a different question with its own suite:
+// `use-surface-host-stream-binding.test.tsx`.
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-A",
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
@@ -28,14 +44,27 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     status: "reachable",
     hostLabel: "Host A",
   }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: () => <div data-testid="virtuoso" />,
 }));
 
+// The toolbar's "open file" now dispatches on the TAB client (D15); these tests
+// mount the tile without the whole host runtime, so the seam is stubbed the
+// same way the sibling git-diff-tile suites already stub it.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+// The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
+// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
+// mocked hook ignores the client it is handed; what this repoint pins is that
+// the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
-  useEditorOpen: () => ({
+  useEditorOpenForClient: () => ({
     mutate: vi.fn(),
     isPending: false,
   }),
@@ -48,6 +77,7 @@ vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
 }));
 
 import { GitDiffTile } from "../git-diff-tile";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 /**
  * A stream session that just tracks whether it has been closed. Unlike the
@@ -91,6 +121,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");

@@ -266,6 +266,7 @@ describe("buildWorktreeDeleteCommand command shape", () => {
         percent: null,
         bytes: null,
         totalBytes: null,
+        workUnits: null,
       },
       {
         stage: "worktree-delete",
@@ -273,6 +274,7 @@ describe("buildWorktreeDeleteCommand command shape", () => {
         percent: null,
         bytes: null,
         totalBytes: null,
+        workUnits: null,
       },
       {
         stage: "worktree-delete:stderr",
@@ -280,6 +282,7 @@ describe("buildWorktreeDeleteCommand command shape", () => {
         percent: null,
         bytes: null,
         totalBytes: null,
+        workUnits: null,
       },
     ]);
   });

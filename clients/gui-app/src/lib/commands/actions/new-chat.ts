@@ -106,6 +106,13 @@ export interface OpenNewChatInActiveTileArgs {
   readonly tabId: string;
   readonly hostId: string;
   readonly worktreeIntent: WorktreeIntent | null;
+  /** Stored title for the new chat - `""` for an ordinary empty chat (the
+   *  "no title yet" convention; AI titling fills it on the first send). The
+   *  clone flow passes a `Fork - <source> (<target host>)` title (see
+   *  `cloneChatTitle`) so a clone keeps its name even when the create
+   *  degrades to the settings-only retry, where no fork seed exists for the
+   *  host to gap-fill from. */
+  readonly title: string;
   /** Per-chat run settings to stamp on the new chat - `null` starts the chat
    *  with host defaults (today's behavior for every caller but the clone
    *  flow, which carries the source chat's own settings forward). */
@@ -117,7 +124,7 @@ export interface OpenNewChatInActiveTileArgs {
   readonly createChat: CreateChatCommand;
   readonly openWhenProjected: OpenWhenProjected;
   /** The create call failed outright (never reached `onSuccess`).
-   *  `useEpicCreateChat`'s own `onError` already toasts regardless of what
+   *  `useEpicCreateChatForHostClient`'s own `onError` already toasts regardless of what
    *  this callback does, so it exists for a caller that needs to REACT to
    *  the failure, not merely report it - the clone flow (ticket 34B1) is the
    *  one caller that does: a checkpoint-unavailable refusal retries
@@ -140,6 +147,7 @@ export function openNewChatInActiveTile(
       // the mutation fires.
       hostId: args.hostId,
       worktreeIntent: args.worktreeIntent,
+      title: args.title,
       settings: args.settings,
       forkSource: args.forkSource,
     }),
@@ -284,19 +292,22 @@ function buildCreateChatRequest(args: {
   readonly epicId: string;
   readonly hostId: string;
   readonly worktreeIntent: WorktreeIntent | null;
+  readonly title: string;
   readonly settings: ChatRunSettings | null;
   readonly forkSource: CreateChatMutationInput["forkSource"] | null;
 }): CreateChatMutationInput {
-  const { epicId, hostId, worktreeIntent, settings, forkSource } = args;
+  const { epicId, hostId, worktreeIntent, title, settings, forkSource } = args;
   return {
     epicId,
     hostId,
     parentId: null,
-    // Agents are created with an empty stored title ("no title yet"); the
-    // "Untitled agent" fallback is applied at render via the display helper,
-    // never baked into the stored title. The AI-generated title overwrites the
-    // empty store only while it is still empty.
-    title: "",
+    // Ordinary chats are created with an empty stored title ("no title yet");
+    // the "Untitled agent" fallback is applied at render via the display
+    // helper, never baked into the stored title. The AI-generated title
+    // overwrites the empty store only while it is still empty. The clone flow
+    // passes a fork-decorated source title instead, which (when non-empty)
+    // also correctly blocks AI titling from renaming the continuation.
+    title,
     chatId: uuidv4(),
     workspaceMode: deriveWorkspaceMode(1, worktreeIntent),
     worktreeIntent,

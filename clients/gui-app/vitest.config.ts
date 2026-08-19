@@ -1,6 +1,7 @@
 import path from "path";
 import os from "node:os";
 import babel from "@rolldown/plugin-babel";
+import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -23,6 +24,24 @@ export default defineConfig({
   // keeps unrelated GUI tests on their existing fast transform path.
   plugins: [
     react(),
+    // This config is ALSO what the browser regressions serve their fixtures
+    // from - every driver in `scripts/*-browser.mjs` spawns vite with
+    // `--config vitest.config.ts`. Without this plugin, `@import "tailwindcss"`
+    // at `src/index.css:1` compiles to NOTHING (there is no `postcss.config.*`
+    // here, so there is no second compile path), and the fixtures render with
+    // the utility classes present on every element and no rules behind them:
+    // `h-8` measured 24px, `DialogFooter`'s `flex` computed `display: block`,
+    // `bg-primary` computed `rgba(0, 0, 0, 0)`.
+    //
+    // That is a harness that lies in the SAFE direction. A fixture asserting
+    // two nodes share a left edge passes trivially when both are unstyled
+    // blocks at the same content edge, and one asserting a control is "filled"
+    // passes-as-transparent - on the fixed tree and the broken one alike. Any
+    // geometric or colour claim measured without this was vacuous.
+    //
+    // jsdom runs are unaffected: vitest does not process CSS by default, so
+    // this changes what the dev server serves, not what the suite transforms.
+    tailwindcss(),
     babel({
       include: REACT_COMPILER_REGRESSION_FILES,
       presets: [reactCompilerPreset()],

@@ -35,9 +35,11 @@ function transientListError(requestId: string): HostTransportFailureError {
 function createFixture(succeedsOnRequest: number): Fixture {
   const requests = { value: 0 };
   const queryClient = createAppQueryClient();
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `cloud-list-${String(requests.value + 1)}`,
@@ -54,10 +56,10 @@ function createFixture(succeedsOnRequest: number): Fixture {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
     createElement(QueryClientProvider, { client: queryClient }, props.children);
   return { client, queryClient, requests, Wrapper };
@@ -115,7 +117,7 @@ describe("useCloudChatList recovery", () => {
 
     // No retry-delay time passes. The HostClient's recovery signal invalidates
     // the active host scope and the list asks again immediately.
-    fixture.client.notifyAvailabilityRecovered();
+    fixture.client.notifyHostAvailabilityRecovered(mockLocalHostEntry.hostId);
     await flushTimers(0);
 
     expect(fixture.requests.value).toBe(2);

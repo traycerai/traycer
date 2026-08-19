@@ -126,7 +126,7 @@ function SwitcherAgentRow(props: {
   // The fallback covers a legacy chat carrying no projected host, and is the
   // active host by construction - that is precisely what `recordForChat`
   // stamped - reusing the value already in hand rather than re-subscribing the
-  // row to `useReactiveActiveHostId()`. It differs from the desktop row only
+  // row to `useAddressableHostId()`. It differs from the desktop row only
   // in the no-active-host degenerate case, where this yields the records'
   // `UNKNOWN_HOST_PLACEHOLDER` and the sidebar its own "unknown-host" literal;
   // neither is dialable. TUI rows are unaffected either way - both sides of

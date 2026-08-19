@@ -25,10 +25,14 @@ export function AppLocalNotificationsPersistLifecycleBridge(
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
     if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
-      const transitionUserId = transition.email;
+      const transitionUserId = transition.userId;
       retargetPersistedStore({
         store: useAppLocalNotificationsStore,
         name: appLocalNotificationsKey(transitionUserId),
+        // No legacy key: this bridge already watched and bucketed by the
+        // canonical `userId`. It only read it back off a field NAMED `email`,
+        // which is the naming that let the other nine disagree with it.
+        legacyName: null,
       });
       if (transitionUserId !== null) {
         // `retargetPersistedStore` rehydrates from localStorage synchronously for

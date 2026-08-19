@@ -26,6 +26,7 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { useImageAsset, type ImageAssetRequest } from "../use-image-asset";
 import type { AssetStreamFailureReason } from "@traycer-clients/shared/host-transport/asset-stream-client";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 const tabHostIdRef = vi.hoisted(() => ({ value: "host-1" }));
 const wsStreamClientRef = vi.hoisted(() => ({
@@ -172,6 +173,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");

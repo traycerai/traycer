@@ -1,6 +1,6 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
@@ -41,7 +41,7 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 export function useNotificationsServingHostEntry(): HostDirectoryEntry | null {
   const localEntry = useReactiveLocalHostEntry();
   const runnerHost = useRunnerHostOrNull();
-  const boundHostId = useReactiveActiveHostId();
+  const boundHostId = useAddressableHostId();
   // Read through the same directory every other host consumer binds through,
   // so this is the app's existing notion of "the bound host" projected as an
   // entry - not a second, independently drifting selector.
@@ -49,7 +49,7 @@ export function useNotificationsServingHostEntry(): HostDirectoryEntry | null {
   // Looked up under the empty id while a local entry exists, so a shell that
   // will never consult the fallback holds a permanently-null snapshot here
   // and cannot rebind a stream over a directory row it would discard. It does
-  // NOT make this hook inert on such a shell: `useReactiveActiveHostId` is
+  // NOT make this hook inert on such a shell: `useAddressableHostId` is
   // subscribed unconditionally, so an active-host switch still re-renders
   // consumers. That render carries no new value - the returned entry, and
   // every callback and effect keyed on it, are unchanged - so it settles

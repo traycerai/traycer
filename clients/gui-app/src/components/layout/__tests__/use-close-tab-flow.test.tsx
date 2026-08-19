@@ -46,10 +46,20 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: () => windowsBridgeState.bridge,
 }));
 
+// `peek` / `getEpicSessionHandleHostId` are here because the epic tab's
+// `build()` now PROJECTS the serving host off this registry. A partial mock of
+// this module therefore reaches the tab projection, and every close flow in
+// this file runs through `getHeaderTabs()`. `peek: () => null` is the honest
+// answer for a harness with no live session: the tab gets `hostId: null` and
+// its consumers fall back to the app-wide client.
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   epicHasUnsyncedEdits: () => false,
   releaseOpenEpicSessionIfUnused: () => undefined,
-  getOpenEpicRegistry: () => ({ subscribe: () => () => undefined }),
+  getOpenEpicRegistry: () => ({
+    subscribe: () => () => undefined,
+    peek: () => null,
+  }),
+  getEpicSessionHandleHostId: () => null,
 }));
 
 function resetStores(): void {
@@ -264,6 +274,7 @@ describe("useCloseTabFlow", () => {
         kind: "epic",
         id: b,
         epicId: "epic-b",
+        hostId: null,
         name: "Beta",
         route: `/epics/epic-b/${b}`,
         icon: null,
@@ -311,6 +322,7 @@ describe("useCloseTabFlow", () => {
         kind: "epic",
         id: a,
         epicId: "epic-a",
+        hostId: null,
         name: "Alpha",
         route: `/epics/epic-a/${a}`,
         icon: null,

@@ -32,7 +32,9 @@ export interface KillTerminalMutationContext {
  * rejecting no-op - callers gate the affordance on a resolved client + a live
  * session, matching `useHostQuery`'s null-client behavior.
  *
- * `useTerminalKill` is the default-host convenience wrapper over this hook.
+ * Every caller passes the client of the host that OWNS the session (a tile's
+ * or the Epic session's); the app-wide convenience wrapper that used to
+ * sit beside this hook had no caller left and was removed (PR #1243).
  */
 export function useTerminalKillFor(
   client: HostClient<HostRpcRegistry> | null,

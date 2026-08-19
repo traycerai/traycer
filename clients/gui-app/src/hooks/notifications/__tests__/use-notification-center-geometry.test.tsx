@@ -18,6 +18,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import {
   __resetAppLocalNotificationsStoreForTests,
@@ -53,6 +54,8 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 import * as Y from "yjs";
 
+const reconnectEngine = createHostReconnectEngine();
+
 const activeHostIdRef = vi.hoisted(() => ({
   value: null as string | null,
 }));
@@ -67,8 +70,8 @@ const hostBindingState = vi.hoisted<{ current: null }>(() => ({
   current: null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdRef.value,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdRef.value,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -117,13 +120,17 @@ function openGlobalStream(): {
   readonly seed: (entries: ReadonlyArray<NotificationEntry>) => void;
 } {
   let current: NotificationsStreamCallbacks | null = null;
-  openNotificationsStream((callbacks) => {
-    current = callbacks;
-    return {
-      applyUpdate: () => {},
-      close: () => {},
-    };
-  }, null);
+  openNotificationsStream(
+    reconnectEngine,
+    (callbacks) => {
+      current = callbacks;
+      return {
+        applyUpdate: () => {},
+        close: () => {},
+      };
+    },
+    null,
+  );
   return {
     seed: (entries) => {
       if (current === null) throw new Error("stream factory not invoked");

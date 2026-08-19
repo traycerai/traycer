@@ -15,9 +15,9 @@ import {
   parseNotificationRoomEntry,
 } from "@traycer/protocol/notifications/notification-room";
 import {
-  createHostStreamReopenScheduler,
   isReopenableNotificationsStreamClose,
-} from "@/lib/host/stream-reopen";
+  type HostReconnectEngine,
+} from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 
 /** The surface `openNotificationsStream` needs from a stream client; the
  * only two members production and test doubles both provide. */
@@ -263,6 +263,15 @@ export const useNotificationsStore = createNotificationsStore(replica);
  * the existing local replica.
  */
 export function openNotificationsStream(
+  /**
+   * THE reconnect policy for this stream's host (redesign P4.1 /
+   * connection-registry §6), acquired from the connection registry by the one
+   * place that opens these streams. This store no longer constructs its own
+   * scheduler: the constants, the terminal-close classification and the
+   * backoff shape live once, in the engine, and each stream still gets its
+   * own independent lane so a sibling stream's refusal cannot pace it.
+   */
+  reconnectEngine: HostReconnectEngine,
   factory: NotificationsStreamClientFactory,
   onAuthError: (() => void) | null,
 ): () => void {
@@ -271,7 +280,7 @@ export function openNotificationsStream(
   let currentClient: NotificationsStreamClientHandle | null = null;
   let generation = 0;
 
-  const reopenScheduler = createHostStreamReopenScheduler(() => {
+  const reopenScheduler = reconnectEngine.openReopenLane(() => {
     currentClient?.close();
     currentClient = null;
     openClient();

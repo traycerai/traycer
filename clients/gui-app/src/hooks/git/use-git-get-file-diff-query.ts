@@ -10,12 +10,22 @@ import type {
   GitGetFileDiffResponse,
   GitStage,
 } from "@traycer/protocol/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 
+/**
+ * `client` is the CALLER's, and it must be the one that addresses `args.hostId`
+ * - the tile's tab client, never the app-wide one (D15). This hook used to read
+ * `useHostClient()` here while taking `hostId` as an argument and asserting the
+ * two were "correlated 1:1"; they were not. `hostId` came from the tile and the
+ * client from the app, so a diff tile bound to host A kept its A-shaped query
+ * key while the request went to whichever host the app was pointed at.
+ */
 export function useGitGetFileDiffQuery(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly runningDir: string;
   readonly filePath: string;
@@ -28,14 +38,14 @@ export function useGitGetFileDiffQuery(args: {
   readonly byteBudget: number | null;
   readonly enabled: boolean;
 }): UseQueryResult<GitGetFileDiffResponse, HostRpcError> {
-  const client = useHostClient();
+  const { client } = args;
   const readiness = useReactiveHostReadiness(client);
 
   const enabledFromArgs = args.enabled && args.hostId !== null;
 
   return useQuery({
-    // `client` is correlated 1:1 with `args.hostId`, which is already
-    // captured in the key via `hostQueryKeys.scope(hostId)`; including
+    // The caller passes the client that addresses `args.hostId`, which is
+    // already captured in the key via `hostQueryKeys.scope(hostId)`; including
     // `client` here would cause needless refetches on client identity drift.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps
     ...queryOptions<GitGetFileDiffResponse, HostRpcError>({
@@ -58,8 +68,7 @@ export function useGitGetFileDiffQuery(args: {
           // client is captured from closure. enabled: readiness.isReady ensures it's available.
           // The enabled flag prevents this queryFn from running when client is unavailable,
           // but a defensive runtime guard is retained against future refactors.
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-          if (!client) {
+          if (client === null) {
             // A `HostRpcError` (not a bare Error): this query publicly declares
             // that error type and UI surfaces read `.code`.
             throw hostClientUnavailableError("git.getFileDiff");

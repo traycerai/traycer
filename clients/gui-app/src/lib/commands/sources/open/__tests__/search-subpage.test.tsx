@@ -12,11 +12,21 @@ interface Row {
 const state = vi.hoisted(() => ({ rows: [] as ReadonlyArray<Row> }));
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  useWorktreeListBindingsForEpic: () => ({
+  // Read on the epic's own host client since PR #1243 round 6; this suite is
+  // about which roots are listed, not which client asked.
+  useWorktreeListBindingsForEpicForClient: () => ({
     data: { rows: state.rows },
     isPending: false,
     isError: false,
   }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => ({ mockHostId: hostId }),
+}));
+
+vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
+  useActiveEpicHostId: () => "epic-host",
 }));
 
 import { useSearchOpenerItems } from "@/lib/commands/sources/open/search-subpage";

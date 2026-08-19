@@ -26,7 +26,6 @@ import { collectPanes, type TilePane } from "@/stores/epics/canvas/tile-tree";
 import { useWorkspaceFileRevealStore } from "@/stores/epics/canvas/workspace-file-reveal-store";
 
 const HOST_ID = "host-1";
-const ACTIVE_HOST_ID = "host-active";
 const OPEN_EPIC_ID = "epic-open";
 const EPIC_HANDLE = { store: { getState: vi.fn(), subscribe: vi.fn() } };
 
@@ -72,20 +71,11 @@ vi.mock("@tanstack/react-router", () => ({
   useRouter: () => null,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => ({ request: mocks.request }),
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => HOST_ID,
 }));
-
-// Distinct from `useHostClient`'s default-host client - a relative-link
-// existence probe must go through THIS one (bound to the chat tab's OWN
-// `hostId` prop), never the default, so tests can tell them apart by which
-// mock request fn actually gets invoked.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => ({ request: mocks.workspaceRequest }),
-}));
-
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => ACTIVE_HOST_ID,
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({ request: mocks.workspaceRequest }),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -211,11 +201,7 @@ function renderProvider(tabId: string, children: ReactNode) {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <ChatMarkdownLinkProvider
-        tabId={tabId}
-        hostId={HOST_ID}
-        workspaceRoots={["/repo"]}
-      >
+      <ChatMarkdownLinkProvider tabId={tabId} workspaceRoots={["/repo"]}>
         {children}
       </ChatMarkdownLinkProvider>
     </QueryClientProvider>,
@@ -355,11 +341,7 @@ describe("ChatMarkdownLinkProvider", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <ChatMarkdownLinkProvider
-          tabId={tabId}
-          hostId={HOST_ID}
-          workspaceRoots={[]}
-        >
+        <ChatMarkdownLinkProvider tabId={tabId} workspaceRoots={[]}>
           <LinkButton
             label="Open relative"
             link={{
@@ -406,7 +388,7 @@ describe("ChatMarkdownLinkProvider", () => {
     });
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
-        hostId: ACTIVE_HOST_ID,
+        hostId: HOST_ID,
         epicId: OPEN_EPIC_ID,
         filePath: SAME_EPIC_ARTIFACT_PATH,
       }),
@@ -423,7 +405,7 @@ describe("ChatMarkdownLinkProvider", () => {
       mocks.openProjectedSidebarNodeInTabWhenAvailable.mock.calls[0][0];
     expect(openArgs.tabId).toBe(tabId);
     expect(openArgs.nodeId).toBe("artifact-same");
-    expect(openArgs.fallbackHostId).toBe(ACTIVE_HOST_ID);
+    expect(openArgs.fallbackHostId).toBe(HOST_ID);
     expect(typeof openArgs.openTileInTab).toBe("function");
     expect(mocks.navigate).not.toHaveBeenCalled();
     // It claimed the click without falling through to a file preview.
@@ -470,7 +452,7 @@ describe("ChatMarkdownLinkProvider", () => {
     });
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
-        hostId: ACTIVE_HOST_ID,
+        hostId: HOST_ID,
         epicId: OPEN_EPIC_ID,
         filePath: WINDOWS_SAME_EPIC_RESOLVED_PATH,
       }),
@@ -674,11 +656,7 @@ describe("ChatMarkdownLinkProvider", () => {
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
   });
 
-  it("probes the chat tab's own host, not the app-wide active host, for a relative link's existence", async () => {
-    // The chat tab is bound to HOST_ID; `useReactiveActiveHostId` is mocked to
-    // a DIFFERENT host (ACTIVE_HOST_ID). The existence probe must go through
-    // the tab-scoped client (`useHostClientForHostId`), never the default one
-    // `useHostClient` resolves for the active host.
+  it("uses the chat tab's client for a relative link's existence probe", async () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
     renderProvider(
       tabId,
@@ -697,7 +675,6 @@ describe("ChatMarkdownLinkProvider", () => {
     const client = (args as { readonly client: { readonly request: unknown } })
       .client;
     expect(client.request).toBe(mocks.workspaceRequest);
-    expect(client.request).not.toBe(mocks.request);
   });
 
   it("opens a parent-escaping relative link end-to-end via its resolved absolute target", async () => {

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   GET_TASK_CONTEXTS_MAX_IDS,
+  isFoundTaskContext,
   type GetTaskContextsResponse,
   type ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -17,8 +18,8 @@ export interface EpicTaskContexts {
 
 /**
  * Resolves task ids to their cloud `ListTaskLight` contexts via cap-sized
- * `epic.getTaskContexts` batches. `null` responses (deleted / not permitted -
- * indistinguishable by design) are dropped from the map. Cache identity is
+ * `epic.getTaskContexts` batches. Only `found` rows enter the map; absence and
+ * unknown outcomes stay unavailable to this presentation-only caller. Cache identity is
  * scoped by `userId` because permission-dependent responses must not leak
  * across account switches; the hook stays disabled until a user is known.
  * An older host without the method degrades to an empty map, not an error.
@@ -55,8 +56,10 @@ function combineTaskContextResults(
   const tasksById = new Map<string, ListTaskLight>();
   for (const result of results) {
     if (result.data === undefined) continue;
-    for (const [taskId, task] of Object.entries(result.data.tasks)) {
-      if (task !== null) tasksById.set(taskId, task);
+    for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
+      if (isFoundTaskContext(resolution)) {
+        tasksById.set(taskId, resolution.task);
+      }
     }
   }
   return {

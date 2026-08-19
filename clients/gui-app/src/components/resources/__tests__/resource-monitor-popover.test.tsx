@@ -89,8 +89,8 @@ const streamVersionMock = vi.hoisted(() => ({
 
 const activeHostMock = vi.hoisted(() => ({ hostId: null as string | null }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostMock.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostMock.hostId,
 }));
 
 // Partial, not wholesale: the popover re-provides the real

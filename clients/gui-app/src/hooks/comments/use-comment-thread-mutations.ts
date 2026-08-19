@@ -4,8 +4,9 @@ import type {
   ListCommentThreadsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { extractUserMentionIds } from "@traycer/protocol/notifications/comment-notification-utils";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host/runtime";
+import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commentThreadsQueryKey } from "./use-epic-comment-threads";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -27,6 +28,12 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  * if the user switches hosts mid-flight, the in-flight ack would land on
  * the new host's cache while the original host's thread list stays
  * stale.
+ *
+ * Every hook here takes its `client` from the caller and there is no app-wide
+ * wrapper: both mount contexts are Epic-scoped (the collab tile's floating
+ * draft, the Epic sidebar's thread cards). An app-wide read wrote the comment
+ * to whichever host the app was pointed at, and then invalidated THAT host's
+ * cache key - so the surface the user was looking at never refreshed (D15).
  */
 interface MutationContext {
   readonly hostId: string | null;
@@ -51,15 +58,16 @@ function useThreadInvalidator(): (
   };
 }
 
-export function useCreateCommentThread() {
-  const client = useHostClient();
+export function useCreateCommentThreadForClient(
+  client: HostClient<HostRpcRegistry> | null,
+) {
   const invalidate = useThreadInvalidator();
   return useHostMutation({
     client,
     method: "epic.createCommentThread",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables: CreateCommentThreadRequest, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentCreated, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
@@ -78,15 +86,16 @@ export function useCreateCommentThread() {
   });
 }
 
-export function useReplyToCommentThread() {
-  const client = useHostClient();
+export function useReplyToCommentThreadForClient(
+  client: HostClient<HostRpcRegistry> | null,
+) {
   const invalidate = useThreadInvalidator();
   return useHostMutation({
     client,
     method: "epic.replyToCommentThread",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentReplied, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
@@ -105,15 +114,16 @@ export function useReplyToCommentThread() {
   });
 }
 
-export function useEditComment() {
-  const client = useHostClient();
+export function useEditCommentForClient(
+  client: HostClient<HostRpcRegistry> | null,
+) {
   const invalidate = useThreadInvalidator();
   return useHostMutation({
     client,
     method: "epic.editComment",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentEdited, null);
         invalidate(
@@ -130,15 +140,16 @@ export function useEditComment() {
   });
 }
 
-export function useDeleteComment() {
-  const client = useHostClient();
+export function useDeleteCommentForClient(
+  client: HostClient<HostRpcRegistry> | null,
+) {
   const invalidate = useThreadInvalidator();
   return useHostMutation({
     client,
     method: "epic.deleteComment",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         invalidate(
@@ -155,15 +166,16 @@ export function useDeleteComment() {
   });
 }
 
-export function useSetCommentThreadResolved() {
-  const client = useHostClient();
+export function useSetCommentThreadResolvedForClient(
+  client: HostClient<HostRpcRegistry> | null,
+) {
   const invalidate = useThreadInvalidator();
   return useHostMutation({
     client,
     method: "epic.setCommentThreadResolved",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(
           variables.resolved
@@ -185,8 +197,9 @@ export function useSetCommentThreadResolved() {
   });
 }
 
-export function useDeleteCommentThread() {
-  const client = useHostClient();
+export function useDeleteCommentThreadForClient(
+  client: HostClient<HostRpcRegistry> | null,
+) {
   const queryClient = useQueryClient();
   const invalidate = useThreadInvalidator();
   return useHostMutation({
@@ -194,7 +207,7 @@ export function useDeleteCommentThread() {
     method: "epic.deleteCommentThread",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         const { hostId } = ctx as MutationContext;

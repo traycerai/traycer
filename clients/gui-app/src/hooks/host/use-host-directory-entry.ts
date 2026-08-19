@@ -1,11 +1,20 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
-  hostUnavailability,
-  isRelayFuseRecoveryCandidate,
-  isRemoteHostDirectoryEntry,
-} from "@traycer-clients/shared/host-client/remote-fetcher";
+  hostDirectoryEntryEquals,
+  subscribeHostRowChanged,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import { useHostDirectory } from "@/lib/host";
+
+/**
+ * Re-exported from the connection registry, which OWNS this predicate now
+ * (redesign P4.1): it is the rule the registry uses to decide whether a
+ * host's row actually moved, and a second copy here would let the hook and
+ * the registry disagree about what "changed" means for the same row. Kept as
+ * a named export from this module because `useReactiveLocalHostEntry` imports
+ * it from here.
+ */
+export { hostDirectoryEntryEquals };
 
 /**
  * Reactively projects a single host directory entry, returning a
@@ -35,14 +44,22 @@ export function useHostDirectoryEntry(
   const cacheRef = useRef<HostDirectoryEntry | null>(null);
   const subscribe = useCallback(
     (callback: () => void) => {
+      // The registry's PER-HOST arm (redesign P4.1). It answers the question
+      // this hook is actually asking - "did host X's row move" - and it is
+      // the arm that survives P4.2. The directory arm below stays because
+      // this hook's own `getSnapshot` reads the directory directly, so a
+      // harness that supplies a directory without installing a registry
+      // source keeps working unchanged.
+      const unsubscribeRegistry = subscribeHostRowChanged(hostId, callback);
       const subscription = directory.onChange(() => {
         callback();
       });
       return () => {
         subscription.dispose();
+        unsubscribeRegistry();
       };
     },
-    [directory],
+    [directory, hostId],
   );
   const getSnapshot = useCallback(() => {
     const next = directory.findById(hostId);
@@ -54,45 +71,4 @@ export function useHostDirectoryEntry(
   }, [hostId, directory]);
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
-export function hostDirectoryEntryEquals(
-  a: HostDirectoryEntry | null,
-  b: HostDirectoryEntry | null,
-): boolean {
-  if (a === b) return true;
-  if (a === null || b === null) return false;
-  return (
-    a.hostId === b.hostId &&
-    a.label === b.label &&
-    a.kind === b.kind &&
-    a.websocketUrl === b.websocketUrl &&
-    a.version === b.version &&
-    // The DERIVED verdict, not the coarse bit — this cache decides whether
-    // consumers are told anything changed at all, and consumers now render the
-    // reason. `indeterminate` → confirmed `offline` leaves the coarse bit at
-    // `not-dialable` on both sides, so comparing it would have swallowed the
-    // moment a host actually died and pinned every banner on this entry to
-    // "we don't know" for the rest of the session. Comparing the verdict
-    // strictly subsumes the coarse bit (`dialable` ⇔ `null`).
-    hostUnavailability(a) === hostUnavailability(b) &&
-    // The recovery-dial window (F7), same reason as the service's twin: it is
-    // recomputed from `lastSeenAt` recency at every projection, so an
-    // `offline` row whose only change is aging past the 4h fuse cap flips
-    // this field while every other compared field (including the derived
-    // verdict, still `offline`) stays identical. Swallowing that flip pinned
-    // `relayFuseGrace: true` on every consumer of this hook forever -
-    // recovery dials permitted indefinitely past the documented cap.
-    isRelayFuseRecoveryCandidate(a) === isRelayFuseRecoveryCandidate(b) &&
-    // Not part of the base shape (R-1): a same-host public-key rotation
-    // (re-enrollment / corruption recovery) would otherwise be swallowed by
-    // this cache - every base field can stay byte-identical - permanently
-    // hiding the new key from every consumer of this hook (chat/terminal
-    // session registries key their durable owners on it).
-    remotePublicKeyOf(a) === remotePublicKeyOf(b)
-  );
-}
-
-function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
-  return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
 }

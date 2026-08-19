@@ -13,11 +13,10 @@ interface PrDetailTileProps {
 }
 
 /**
- * Gates on the tile's BOUND host reachability only - deliberately NOT
- * `GitDiffTile`'s `tabHostId !== activeHostId` early return, which would
- * defeat non-default-host tiles. The detail subscription hook resolves and
- * subscribes through the bound host's own client
- * (`use-pr-detail-subscription.ts`) regardless of which host is app-active.
+ * Gates on the tile's BOUND host reachability only. Git-diff tiles are
+ * tab-pinned the same way: they no longer go dead when the active host
+ * changes. The detail subscription hook resolves and subscribes through
+ * the bound host's own client (`use-pr-detail-subscription.ts`).
  */
 export function PrDetailTile(props: PrDetailTileProps): ReactNode {
   const tabHostId = useTabHostId();

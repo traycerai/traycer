@@ -67,9 +67,7 @@ export function AppearanceSettingsPanel() {
   const chatTurnMinimapSide = useSettingsStore(
     (state) => state.chatTurnMinimapSide,
   );
-  const setChatTurnMinimapSide = useSettingsStore(
-    (state) => state.setChatTurnMinimapSide,
-  );
+  const setMinimapSide = useSettingsStore((state) => state.setMinimapSide);
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
   const codeFontSize = useSettingsStore((state) => state.codeFontSize);
@@ -184,8 +182,8 @@ export function AppearanceSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Message minimap side"
-            description="Place the chat turn minimap on either transcript edge, or hide it entirely."
+            label="Minimap side"
+            description="Place chat and artifact minimaps on the left or right, or hide both."
             control={
               <Select
                 value={chatTurnMinimapSide}
@@ -198,12 +196,12 @@ export function AppearanceSettingsPanel() {
                     return;
                   }
                   trackAppearanceSetting("chatTurnMinimapSide");
-                  setChatTurnMinimapSide(value);
+                  setMinimapSide(value);
                 }}
               >
                 <SelectTrigger
                   size="sm"
-                  aria-label="Message minimap side"
+                  aria-label="Minimap side"
                   className="w-[min(40vw,8rem)]"
                 >
                   <SelectValue />

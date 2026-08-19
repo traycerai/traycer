@@ -19,26 +19,37 @@ export function WorktreeIntentMemoryPersistLifecycleBridge(
   props: WorktreeIntentMemoryPersistLifecycleBridgeProps,
 ): ReactNode {
   const status = useAuthStore((state) => state.status);
-  const email = useAuthStore((state) => state.profile?.email ?? null);
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  // Only to name the pre-userId key for one-time adoption; NOT an identity.
+  const legacyEmail = useAuthStore((state) => state.profile?.email ?? null);
 
-  const onTransition = useCallback((transition: AuthIdentityTransition) => {
-    if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
-      retargetPersistedStore({
+  const onTransition = useCallback(
+    (transition: AuthIdentityTransition) => {
+      if (
+        transition.kind === "signedIn" ||
+        transition.kind === "userSwitched"
+      ) {
+        retargetPersistedStore({
+          store: useWorktreeIntentMemoryStore,
+          name: worktreeIntentMemoryKey(transition.userId),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName:
+            legacyEmail === null ? null : worktreeIntentMemoryKey(legacyEmail),
+        });
+        return;
+      }
+      // signedOut: wipe the current user's bucket and reset to anonymous. Worktree
+      // memory carries local paths and per-epic intent, so it must not survive a
+      // user switch on a shared install.
+      clearAndResetPersistedStore({
         store: useWorktreeIntentMemoryStore,
-        name: worktreeIntentMemoryKey(transition.email),
+        anonymousName: worktreeIntentMemoryKey(null),
       });
-      return;
-    }
-    // signedOut: wipe the current user's bucket and reset to anonymous. Worktree
-    // memory carries local paths and per-epic intent, so it must not survive a
-    // user switch on a shared install.
-    clearAndResetPersistedStore({
-      store: useWorktreeIntentMemoryStore,
-      anonymousName: worktreeIntentMemoryKey(null),
-    });
-  }, []);
+    },
+    [legacyEmail],
+  );
 
-  useAuthIdentityTransition(status, email, onTransition);
+  useAuthIdentityTransition(status, userId, onTransition);
 
   return <>{props.children}</>;
 }

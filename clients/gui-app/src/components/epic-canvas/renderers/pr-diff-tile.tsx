@@ -16,6 +16,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { BoundedTileLoad } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import { usePrDetailSubscription } from "@/hooks/pr/use-pr-detail-subscription";
 import {
   isHostUnsupportedError,
@@ -420,7 +421,15 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
       }
     >
       {subscription.isPending || (target !== null && isPending) ? (
-        <DiffBundleLoadingSkeleton mode={preferences.mode} />
+        // Invariant 6: the reachability gate above covers a host the directory
+        // dropped; this covers the PR stream that simply never delivers.
+        <BoundedTileLoad
+          hostId={tabHostId}
+          subject="pull-request"
+          onRetry={null}
+          testId={`pr-diff-tile-load-${node.id}`}
+          fallback={<DiffBundleLoadingSkeleton mode={preferences.mode} />}
+        />
       ) : (
         <PrLocalDiffBody
           node={node}

@@ -90,7 +90,9 @@ const config = __TRAYCER_MOBILE_CONFIG__;
 // pid.json per request, so each directory refresh gets the live port.
 // BROWSER-TESTING SCAFFOLDING (dev entry only): a shipped build carries no
 // `devHost` and uses real remote-host discovery instead (see below).
-function buildDevHostFetcher(devHost: TraycerMobileDevHost): RemoteHostFetcher {
+function buildDevHostFetcher(
+  devHost: TraycerMobileDevHost,
+): () => Promise<RemoteHostFetchOutcome> {
   // The baked config predates the directory's dialability field; the dev
   // host is a loopback WebSocket, which is the definition of dialable.
   const bakedHost: RemoteHostFetchOutcome = {
@@ -137,8 +139,10 @@ function buildDevHostFetcher(devHost: TraycerMobileDevHost): RemoteHostFetcher {
 // (`GET /api/v3/hosts` through `MobileRunnerHost.listRegisteredHosts`)
 // projected into relay-backed `remote` entries. The same production path the
 // desktop shell is on.
-const remoteFetcher: RemoteHostFetcher | null =
+const devHostFetch: (() => Promise<RemoteHostFetchOutcome>) | null =
   config.devHost === null ? null : buildDevHostFetcher(config.devHost);
+const remoteFetcher: RemoteHostFetcher | null =
+  devHostFetch === null ? null : () => devHostFetch();
 
 function bootstrap(): void {
   document.documentElement.classList.add("traycer-mobile-client");
@@ -166,6 +170,18 @@ function bootstrap(): void {
     // entry registers nothing and must not name a scheme some other installed
     // app would answer.
     returnScheme: Capacitor.isNativePlatform() ? "traycer" : null,
+    // The selection authority's fleet rides the same dev-slot source the
+    // directory's fetcher uses, so a loopback dev host (never registered in
+    // the cloud) is still a derivation candidate. `null` = registry list.
+    fleetHostIds:
+      devHostFetch === null
+        ? null
+        : async () => {
+            const outcome = await devHostFetch();
+            return outcome.kind === "hosts"
+              ? outcome.entries.map((entry) => entry.hostId)
+              : null;
+          },
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

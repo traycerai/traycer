@@ -13,7 +13,7 @@ import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useHostClient } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
@@ -82,7 +82,7 @@ function SwitcherTerminalRow(props: {
   const { session, epicId, tabId, onClose } = props;
   const activate = useSwitcherActivate(epicId, tabId, onClose);
   const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
-  const hostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const hostId = useAddressableHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const label = terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,

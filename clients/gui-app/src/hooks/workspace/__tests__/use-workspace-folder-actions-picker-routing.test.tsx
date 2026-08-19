@@ -56,17 +56,18 @@ const REMOTE_HOST: HostDirectoryEntry = {
 };
 
 function makeBoundClient(): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) =>
+      hostId === REMOTE_HOST.hostId ? REMOTE_HOST : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "request-1",
       handlers: {},
     }),
   });
-  client.bind(REMOTE_HOST);
-  return client;
+  return spine.createRequester(REMOTE_HOST);
 }
 
 function makeWrapper() {

@@ -79,8 +79,14 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => testState.activeArtifact,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => HOST_ID,
+// The rail and panel hosts read PR presence under the CANVAS host - the Epic
+// session's - which is the key `pr-panel-body.tsx` records it under. This
+// suite used to seed the app-wide read instead; after the readers were
+// re-pointed that mock would have been stranded (installed, never read) and
+// the PR rail item would have silently vanished from every assertion below,
+// which is exactly the producer/consumer split the re-point fixed.
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => HOST_ID,
 }));
 
 const EPIC_ID = "epic-sidebar-test";

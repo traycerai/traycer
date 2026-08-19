@@ -10,7 +10,7 @@ import { create } from "zustand";
  *     Notifications / snapshots am I looking at and editing? Cheap, reversible,
  *     no effect outside Settings.
  *   - **Active for this window** (`HostDirectoryService.selectById`, read
- *     through `useReactiveActiveHostId`): which machine does this window talk
+ *     through `useAddressableHostId`): which machine does this window talk
  *     to for ambient work — notification indicators, the bell, rate limits,
  *     the resource monitor, and where newly started work lands. Consequential.
  *

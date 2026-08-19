@@ -1,8 +1,20 @@
 import { rm } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
+import {
+  isStopIntentWithin,
+  parseStopIntent,
+  type StopIntent,
+  type StopIntentReason,
+} from "@traycer/protocol/config/host-stop-intent";
 import { writeJsonAtomically } from "./lifecycle-probe";
 import { hostStopIntentPath } from "../store/paths";
 import type { Environment } from "../runner/environment";
+
+// The RECORD's shape, path and parser are shared with the host - it reads this
+// exact file at SIGTERM to tell a deliberate restart from death (D5/M1), on the
+// CLI-owned path that has no RPC leg to carry the intent. Re-exported so this
+// module stays the CLI's single entry point for stop intent.
+export type { StopIntent, StopIntentReason };
 
 /**
  * "Someone is deliberately stopping this host - do not bring it back."
@@ -37,23 +49,6 @@ import type { Environment } from "../runner/environment";
  * crash recovery.
  */
 export const STOP_INTENT_STALE_MS = 300_000;
-
-export type StopIntentReason =
-  "stop" | "restart" | "install-swap" | "uninstall";
-
-export interface StopIntent {
-  readonly v: 1;
-  readonly requestedAt: string;
-  readonly requestedByPid: number;
-  readonly reason: StopIntentReason;
-}
-
-const STOP_INTENT_REASONS: ReadonlySet<string> = new Set<StopIntentReason>([
-  "stop",
-  "restart",
-  "install-swap",
-  "uninstall",
-]);
 
 /**
  * Record intent BEFORE anything is killed.
@@ -251,42 +246,19 @@ export async function hasActionableStopIntent(
 }
 
 /**
- * Whether `intent` is recent enough to still be acted on - a SYMMETRIC window,
- * `STOP_INTENT_STALE_MS` either side of `nowMs`.
+ * Whether `intent` is recent enough for the SUPERVISOR to still act on - the
+ * shared symmetric window, bound here to `STOP_INTENT_STALE_MS`.
  *
- * The forward half is not symmetry for its own sake. A future-dated stamp is
- * still evidence someone asked for a stop (a small skew between the stopper and
- * the supervisor should not discard a real request), but an UNBOUNDED forward
- * window is a wedge with no expiry at all, which is the one thing this whole
- * sentinel must never become. A backward wall-clock jump - a VM resuming, NTP
- * correcting a bad clock - leaves the record dated hours ahead, and nothing else
- * would ever retire it: it stays "recent" for as long as the jump lasts. Every
- * automatic start that had not already seen the record would then read it as a
- * live stop and decline to spawn, holding the machine hostless for exactly that
- * long. That is this ticket's own bug, reintroduced through the guard meant to
- * prevent it.
+ * The window has to outlive stop -> kill -> settle, so a few minutes is
+ * generous; past that the supervisor resumes normal crash recovery. Why the
+ * window is symmetric rather than backward-only (an unbounded forward half
+ * would be a wedge with no expiry, which is the one thing this sentinel must
+ * never become) is argued at `isStopIntentWithin`.
  *
- * Bounding the forward half caps that at the same five minutes the backward half
- * already accepts.
+ * The host binds the SAME predicate to a much tighter window: it is only
+ * covering the gap between the CLI's write and the SIGTERM landing, and it is
+ * answering a different question with it (see the shared module's header).
  */
 export function isStopIntentFresh(intent: StopIntent, nowMs: number): boolean {
-  const requestedAtMs = Date.parse(intent.requestedAt);
-  if (Number.isNaN(requestedAtMs)) return false;
-  return Math.abs(nowMs - requestedAtMs) < STOP_INTENT_STALE_MS;
-}
-
-function parseStopIntent(value: unknown): StopIntent | null {
-  if (typeof value !== "object" || value === null) return null;
-  const record = value as Record<string, unknown>;
-  if (record.v !== 1) return null;
-  if (typeof record.requestedAt !== "string") return null;
-  if (typeof record.requestedByPid !== "number") return null;
-  if (typeof record.reason !== "string") return null;
-  if (!STOP_INTENT_REASONS.has(record.reason)) return null;
-  return {
-    v: 1,
-    requestedAt: record.requestedAt,
-    requestedByPid: record.requestedByPid,
-    reason: record.reason as StopIntentReason,
-  };
+  return isStopIntentWithin(intent, nowMs, STOP_INTENT_STALE_MS);
 }

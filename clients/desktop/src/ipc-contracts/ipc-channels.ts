@@ -8,6 +8,12 @@
  * channels are synchronous renderer -> main reads used at preload load for
  * values the renderer needs before constructing its `IRunnerHost`.
  */
+import type {
+  SelectionAuthorityEventMap,
+  SelectionAuthorityInvokeMap,
+  SelectionAuthoritySyncMap,
+} from "./selection-authority-ipc";
+
 export const RunnerHostInvoke = {
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
   // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
@@ -65,8 +71,6 @@ export const RunnerHostInvoke = {
   notificationShow: "runnerHost:notifications:show",
   traySetEpics: "runnerHost:tray:setEpics",
   traySetIndicator: "runnerHost:tray:setIndicator",
-  hostPickerRequestOpen: "runnerHost:hostPicker:requestOpen",
-  hostPickerRequestClose: "runnerHost:hostPicker:requestClose",
   workspaceFoldersPick: "runnerHost:workspaceFolders:pick",
   fileDropWriteTemporary: "runnerHost:fileDrops:writeTemporary",
   fileDropCopyTemporary: "runnerHost:fileDrops:copyTemporary",
@@ -101,6 +105,12 @@ export const RunnerHostInvoke = {
   respondToQuitRequest: "runnerHost:appLifecycle:respondToQuitRequest",
   freshUnsyncedSnapshotResponse:
     "runnerHost:appLifecycle:freshUnsyncedSnapshotResponse",
+  // The CROSS-WINDOW unsyncable set, which no renderer can compute: each one
+  // holds only its own Epic session registry, while `appUpdateInstall`
+  // restarts the whole app and its quit path deliberately skips the
+  // unsynced-edits interception. Asked before authorizing that install.
+  unsyncableWorkAcrossWindows:
+    "runnerHost:appLifecycle:unsyncableWorkAcrossWindows",
   windowsList: "runnerHost:windows:list",
   windowsRequestNew: "runnerHost:windows:requestNew",
   windowsRequestFocus: "runnerHost:windows:requestFocus",
@@ -265,6 +275,15 @@ export const RunnerHostInvoke = {
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
+  // Selection authority (host-lifecycle redesign, D16 / P1.1). The engine
+  // lives in main; windows claim an attach generation, report connection
+  // evidence, and write Activate through these. Binding rules and the
+  // request/result shapes are in `selection-authority-ipc.ts`; the constants
+  // below are type-linked to its maps by `SelectionAuthorityChannels`.
+  selectionAttach: "runnerHost:selection:attach",
+  selectionReportEvidence: "runnerHost:selection:reportEvidence",
+  selectionActivate: "runnerHost:selection:activate",
+  selectionRefreshFleet: "runnerHost:selection:refreshFleet",
   zoomGet: "runnerHost:zoom:get",
   zoomSet: "runnerHost:zoom:set",
   zoomStepIn: "runnerHost:zoom:stepIn",
@@ -292,7 +311,6 @@ export const RunnerHostEvent = {
   notificationForegroundDisplay:
     "runnerHost:event:notificationForegroundDisplay",
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
-  hostPickerChange: "runnerHost:event:hostPickerChange",
   quitRequested: "runnerHost:event:quitRequested",
   getFreshUnsyncedSnapshot: "runnerHost:event:getFreshUnsyncedSnapshot",
   windowsChange: "runnerHost:event:windows:change",
@@ -315,8 +333,22 @@ export const RunnerHostEvent = {
   // active (see `host-controller-status-broadcast.ts`), so every open
   // window's gate/banner/Settings/tray stay in lockstep.
   hostControllerStatusChange: "runnerHost:event:host:controllerStatusChange",
+  // ONE registry read per app, fanned out to every window (redesign P4.1/F22,
+  // connection registry §1b/§6). The 60s `GET /api/v3/hosts` cadence used to
+  // be a per-window renderer timer, so N windows meant N timers and N fetches
+  // against one endpoint; main owns the cadence now and pushes the rows it
+  // already fetches for the selection authority's fleet port. The renderer
+  // keeps its own timer ONLY where there is no main process to own one
+  // (browser/dev, the single-window topology D16 names).
+  registeredHostsChange: "runnerHost:event:host:registeredHostsChange",
   zoomChange: "runnerHost:event:zoom:change",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",
+  // Selection-authority broadcasts. THREE kinds, each emission carrying its
+  // own unique authority revision, so one high-water mark per client totally
+  // orders all three (see `selection-authority-ipc.ts`).
+  selectionChanged: "runnerHost:event:selection:selectionChanged",
+  selectionLeasesChanged: "runnerHost:event:selection:leasesChanged",
+  selectionReattachRequired: "runnerHost:event:selection:reattachRequired",
 } as const;
 
 /**
@@ -329,6 +361,10 @@ export const RunnerHostSync = {
   authRedirectUri: "runnerHost:sync:authRedirectUri",
   windowId: "runnerHost:sync:windowId",
   sentryRendererDsn: "runnerHost:sync:sentryRendererDsn",
+  // The attach generation for this preload load, allocated ENGINE-side (the
+  // same pattern that serves `windowId`). No preload-local counter exists, so
+  // a reloaded preload can never repeat or reset the sequence.
+  selectionAttachSeq: "runnerHost:sync:selectionAttachSeq",
 } as const;
 
 export type RunnerHostInvokeChannel =
@@ -337,3 +373,32 @@ export type RunnerHostEventChannel =
   (typeof RunnerHostEvent)[keyof typeof RunnerHostEvent];
 export type RunnerHostSyncChannel =
   (typeof RunnerHostSync)[keyof typeof RunnerHostSync];
+
+/**
+ * The selection-authority channel set, TYPE-LINKED to the binding maps in
+ * `selection-authority-ipc.ts`: the `satisfies` clause below requires exactly
+ * one channel constant per map member, so renaming or adding a member there
+ * fails this module's compile instead of drifting into a channel that no
+ * handler serves. Both the main registration and the preload bridge read the
+ * names from here rather than from a second list.
+ */
+export const SelectionAuthorityChannels = {
+  sync: {
+    selectionAttachSeq: RunnerHostSync.selectionAttachSeq,
+  },
+  invoke: {
+    attach: RunnerHostInvoke.selectionAttach,
+    reportEvidence: RunnerHostInvoke.selectionReportEvidence,
+    activate: RunnerHostInvoke.selectionActivate,
+    refreshFleet: RunnerHostInvoke.selectionRefreshFleet,
+  },
+  event: {
+    selectionChanged: RunnerHostEvent.selectionChanged,
+    leasesChanged: RunnerHostEvent.selectionLeasesChanged,
+    reattachRequired: RunnerHostEvent.selectionReattachRequired,
+  },
+} as const satisfies {
+  sync: Record<keyof SelectionAuthoritySyncMap, RunnerHostSyncChannel>;
+  invoke: Record<keyof SelectionAuthorityInvokeMap, RunnerHostInvokeChannel>;
+  event: Record<keyof SelectionAuthorityEventMap, RunnerHostEventChannel>;
+};

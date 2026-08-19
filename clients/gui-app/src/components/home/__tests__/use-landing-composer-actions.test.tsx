@@ -1,4 +1,6 @@
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
@@ -69,18 +71,39 @@ vi.mock("@/lib/host", () => ({
 // seed a host bucket the code never reads. Pin it to the SAME host id
 // `landingMocks.getActiveHostId()` returns, so the two ways this suite's
 // production code resolves "the active host" agree.
+// `activeHostIdOrNull` is what `ensureSubmissionDraft` reads for the run-
+// settings bucket now: the spine accessor below answers `null` for every host
+// since P4.2/D17 deleted the active slot, so the id has to come from the
+// authority's projection instead. Both are driven by the SAME knob, so a test
+// that moves the host still moves it everywhere this suite reaches.
 vi.mock("@/lib/host/runtime", () => ({
+  activeHostIdOrNull: () => landingMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
   }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgent: () => ({
+  useCreateTuiAgentForClient: () => ({
     create: landingMocks.createTerminalAgent,
     isPending: false,
   }),
 }));
+
+/**
+ * The composer's resolved placement (redesign P1.2). These tests exercise the
+ * READY arm - `resolveLandingPlacement`'s own refusals have their own unit
+ * suite - so the target names the same host the mocked client addresses.
+ */
+function useTestPlacementTarget(): LandingPlacementTarget {
+  return {
+    resolvedHostId: landingMocks.getActiveHostId(),
+    client: useHostClient(),
+    hostLabel: "Local",
+    isPinned: false,
+    namedHostDead: false,
+  };
+}
 
 vi.mock("sonner", () => ({
   toast: {
@@ -270,9 +293,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -311,9 +337,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -354,9 +383,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -422,9 +454,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -452,9 +487,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -492,9 +530,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.selectTerminalAgent(
@@ -542,9 +583,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.selectTerminalAgent(
@@ -584,9 +628,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -625,9 +672,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -701,9 +751,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -737,7 +790,7 @@ describe("useLandingComposerActions", () => {
   // Creating on B with A's paths would bind the epic to a machine the user
   // never composed against and file its remembered intent under a host that
   // will never read it.
-  it("refuses to create when the active device changes mid-submission", async () => {
+  it("does not trip the drift refusal when the binding flips mid-await - placement and context are both captured at submit", async () => {
     setSingleWorkspace();
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     const imageGate = deferred<Uint8Array | undefined>();
@@ -745,9 +798,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -758,7 +814,12 @@ describe("useLandingComposerActions", () => {
       });
     });
 
-    // The host moves while the IndexedDB read is in flight.
+    // The app binding moves while the IndexedDB read is in flight. Under the
+    // frozen-placement model the placement target AND the workspace context
+    // were both captured at submit, so the flip cannot make them diverge -
+    // the fail-closed divergence guard stays silent and the flow proceeds to
+    // the create attempt (which this suite's stub client then rejects; that
+    // host-error toast is the non-vacuity signal the flow really ran).
     landingMocks.getActiveHostId.mockReturnValue("host-switched");
     await act(async () => {
       imageGate.resolve(HELLO_BYTES);
@@ -766,17 +827,15 @@ describe("useLandingComposerActions", () => {
     });
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        "Couldn't create epic.",
-        expect.objectContaining({
-          description:
-            "The active device changed while this was being prepared. Try again.",
-        }),
-      );
+      expect(toast.error).toHaveBeenCalled();
     });
-    expect(
-      landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
-    ).toBe(false);
+    expect(toast.error).not.toHaveBeenCalledWith(
+      "Couldn't create epic.",
+      expect.objectContaining({
+        description:
+          "The active device changed while this was being prepared. Try again.",
+      }),
+    );
 
     landingMocks.getActiveHostId.mockReturnValue(TEST_HOST_ID);
     queryClient.clear();
@@ -789,9 +848,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -831,9 +893,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -867,9 +932,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -902,9 +970,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     // Two synchronous submits before the async IndexedDB read resolves. The second
     // hits the in-flight guard; without it, both would resolve and finalize → two
@@ -972,9 +1043,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1059,9 +1133,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1161,9 +1238,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1253,9 +1333,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1331,9 +1414,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1385,9 +1471,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1433,9 +1522,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1499,9 +1591,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1550,9 +1645,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1615,9 +1713,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1671,9 +1772,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1735,9 +1839,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1802,9 +1909,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1876,9 +1986,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -1947,9 +2060,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -2011,9 +2127,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.selectTerminalAgent(
@@ -2062,9 +2181,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -2112,9 +2234,12 @@ describe("useLandingComposerActions", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const { result } = renderHook(() => useLandingComposerActions(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
 
     act(() => {
       result.current.submit({
@@ -2144,6 +2269,109 @@ describe("useLandingComposerActions", () => {
       ],
     ).toEqual(stagedIntent);
     queryClient.clear();
+  });
+
+  /**
+   * `isPending`, the field `landing-composer.tsx`'s `isSubmitting` now reads
+   * (`runtimeState.isSubmitting || actions.isPending`). Before that change
+   * the composer built its OWN `useEpicCreateForClient` /
+   * `useCreateTuiAgentForClient` pair and read `isPending` off THOSE - two
+   * observers nobody ever called `.mutate()` on, so the read was permanently
+   * `false` no matter what a create in flight was actually doing. These pins
+   * are on the hook that now backs it, exercising the REAL
+   * `useEpicCreateForClient(target.client)` mutation this suite's harness
+   * already wires (a deferred `landingMocks.request`, not a mocked
+   * `isPending`), so a regression back to a second, uncalled observer would
+   * fail this rather than pass silently the way it did before.
+   */
+  describe("isPending", () => {
+    it("is false before any submit", () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      expect(result.current.isPending).toBe(false);
+      queryClient.clear();
+    });
+
+    it("goes true while epic.create is in flight, and false again once it settles", async () => {
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+      expect(result.current.isPending).toBe(false);
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some(
+            (call) => call[0] === "epic.create",
+          ),
+        ).toBe(true);
+      });
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(true);
+      });
+
+      createGate.resolve({ roomInfo: null });
+
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(false);
+      });
+      queryClient.clear();
+    });
+
+    it("goes false again after epic.create REJECTS - a failed create must not strand the composer disabled", async () => {
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(true);
+      });
+
+      createGate.reject(new Error("create rejected"));
+
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(false);
+      });
+      queryClient.clear();
+    });
   });
 });
 

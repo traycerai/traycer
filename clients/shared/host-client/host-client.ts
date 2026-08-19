@@ -8,12 +8,7 @@ import type {
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
-import { hasReadyRemoteSession } from "../host-transport/remote/active-remote-sessions";
 import type { HostDirectoryEntry } from "./host-directory";
-import {
-  isConfirmedTransportRefusal,
-  isRemoteHostDirectoryEntry,
-} from "./remote-fetcher";
 import {
   HostBindingAuthorityRegistry,
   StaleHostBindingAuthorityError,
@@ -53,12 +48,13 @@ export interface HostClientChangeEvent {
   readonly reason: HostClientChangeReason;
 }
 
-export type HostClientChangeReason =
-  | "auth-changed"
-  | "host-bound"
-  | "host-updated"
-  | "host-unbound"
-  | "availability-recovered";
+/**
+ * Two reasons, and there used to be five. `host-bound` / `host-updated` /
+ * `host-unbound` were the active slot announcing itself; the slot is gone
+ * (redesign D17 / P4.2) and a host becoming effective is a fact the selection
+ * layer publishes, not an event this client emits.
+ */
+export type HostClientChangeReason = "auth-changed" | "availability-recovered";
 
 export interface HostClientOptions<Registry extends VersionedRpcRegistry> {
   readonly registry: Registry;
@@ -134,7 +130,6 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   private readonly requestCoordinator: HostRequestCoordinator<Registry>;
   private readonly ownsRequestCoordinator: boolean;
 
-  private activeHost: HostDirectoryEntry | null = null;
   private requestContext: RequestContext | null = null;
   private readonly changeHandlers = new Set<
     (event: HostClientChangeEvent) => void
@@ -158,12 +153,11 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       });
     this.authorityRegistry =
       options.authorityRegistry ?? new HostBindingAuthorityRegistry();
-    this.findHostById =
-      options.findHostById ??
-      ((hostId) =>
-        this.activeHost !== null && this.activeHost.hostId === hostId
-          ? this.activeHost
-          : null);
+    // No fallback to a bound host: there is none. A client built without a
+    // directory lookup resolves nothing, which is the honest answer now that
+    // nothing is implicitly a host - and it is what makes an unrouted request
+    // fail loudly at the preflight instead of landing on whatever was bound.
+    this.findHostById = options.findHostById ?? (() => null);
   }
 
   /** Returns the registry this client was constructed with (for type callers). */
@@ -171,12 +165,23 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     return this.registry;
   }
 
+  /**
+   * ∅ — this client addresses no host, and both accessors say so.
+   *
+   * They are not vestigial. Every requester is a Proxy over THIS object
+   * (see {@link createPinnedRequester}) and intercepts these two, so the
+   * members must exist for `HostClient` to be the type a requester is handed
+   * out as. What is gone is the field they used to read: the spine owns the
+   * messenger, the coordinator, the authority registry and the request
+   * context, and none of those is a host. Asking the spine which host it is
+   * on is the question redesign D17 removed, and ∅ is the answer.
+   */
   getActiveHost(): HostDirectoryEntry | null {
-    return this.activeHost;
+    return null;
   }
 
   getActiveHostId(): string | null {
-    return this.activeHost === null ? null : this.activeHost.hostId;
+    return null;
   }
 
   /**
@@ -222,18 +227,97 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     // holding it stays open. Each property access resolves the current entry;
     // the creation-time one only serves once the host leaves the directory,
     // where capture rejects it as stale either way.
-    const resolveEntry = (): HostDirectoryEntry =>
-      this.findHostById(entry.hostId) ?? entry;
+    //
+    // The id stays FROZEN even then: a surface pinned to this host must keep
+    // announcing which host it addresses while the row is missing, or a
+    // placement re-validation reads `null` and mistakes a momentarily absent
+    // row for "the caller moved".
+    return this.createPinnedRequester(
+      () => this.findHostById(entry.hostId) ?? entry,
+      () => entry.hostId,
+    );
+  }
+
+  /**
+   * THE uniform `hostId -> client` resolution (redesign D17). Identical
+   * machinery to {@link createRequester} - one pinned requester, one live
+   * entry lookup per access - reached by ID rather than by a captured row, so
+   * a window-global consumer resolves the selection layer's `effectiveHostId`
+   * through exactly the path a pinned consumer resolves its own host through.
+   * Nothing here reads the active slot, which is what lets P4.2 delete the
+   * slot without a second resolution path having to be built first.
+   *
+   * `null` is ∅ - "no host is effective" - not "follow whatever is bound".
+   * The id-pinned requester also reports `getActiveHostId() === null` while
+   * the named row is UNRESOLVED, and its requests reject with the same
+   * preflight error an unbound client has always produced. That is deliberate
+   * rather than incidental: `HostDirectoryService.selectById` binds `null` for
+   * an id it cannot resolve, so this reproduces the answer the active slot
+   * gave, and a consumer gating on "is a host addressable yet" keeps gating on
+   * the same value. A pinned requester freezes its id instead, because it was
+   * handed a row that existed; this one was handed an intent that may not have
+   * landed.
+   *
+   * Unresolved is not a dead end, and how it un-sticks is SETTLED (P4.1).
+   * The requester re-reads the row on every access, so one that ARRIVES late
+   * is picked up with nothing to re-resolve - but a React consumer still has
+   * to be told to look again. That signal used to be `bind()`'s change event,
+   * which is the active slot; it is now
+   * `host-connection-registry.ts`'s `subscribeHostRowChanged` (per host) /
+   * `subscribeAnyHostRowChanged` (for consumers that resolve their own id at
+   * read time, which is every reactive projection over a pinned requester -
+   * they cannot name the host at subscribe time, because the row not existing
+   * yet is the thing they are waiting on).
+   *
+   * P4.2 DID THIS, and it was a deletion rather than a migration. The three
+   * reactive projections (`useReactiveHostReadiness`,
+   * `useReactiveOwnerIdentityKey`, and `stream-runtime.tsx`'s
+   * `useReactiveHostTransportKey`) each subscribed to BOTH arms; the
+   * `client.onChange` arm came out of all three and the registry arm already
+   * carried them. It was proved rather than asserted: neutering `bind()`'s two
+   * `emitChange` calls and re-running the row-arrival regression CAUGHT before
+   * P4.1 and SURVIVED after, which is what made the arm removable.
+   */
+  createRequesterForHostId(hostId: string | null): HostClient<Registry> {
+    const resolveEntry = (): HostDirectoryEntry | null =>
+      hostId === null ? null : this.findHostById(hostId);
+    return this.createPinnedRequester(resolveEntry, () =>
+      resolveEntry() === null ? null : hostId,
+    );
+  }
+
+  /**
+   * The one requester mechanism both entry points above are built from.
+   *
+   * Every request-shaped member is re-pointed at its `...For` sibling with the
+   * resolved entry supplied explicitly; everything else binds to this client,
+   * which owns the messenger, the coordinator, the authority registry and the
+   * request context. A requester is therefore a ROUTING view over one client,
+   * never a second client - and the entry is resolved at property-access time
+   * so an activation that lands mid-chain cannot silently redirect a call the
+   * caller already aimed.
+   */
+  private createPinnedRequester(
+    resolveEntry: () => HostDirectoryEntry | null,
+    readActiveHostId: () => string | null,
+  ): HostClient<Registry> {
     return new Proxy(this, {
       get: (target, property, receiver) => {
         if (property === "getActiveHost") {
           return () => resolveEntry();
         }
         if (property === "getActiveHostId") {
-          return () => entry.hostId;
+          return readActiveHostId;
         }
         if (property === "request") {
-          return target.requestFor.bind(target, resolveEntry());
+          // A closure rather than a `bind` only because the trailing `signal`
+          // cannot be pre-bound; the entry is still captured HERE, at property
+          // access, so all four request members resolve at the same instant.
+          const entry = resolveEntry();
+          return <Method extends keyof Registry & string>(
+            method: Method,
+            params: RequestOfMethod<Registry, Method>,
+          ) => target.requestForWithSignal(entry, method, params, undefined);
         }
         if (property === "requestWithSignal") {
           return target.requestForWithSignal.bind(target, resolveEntry());
@@ -244,6 +328,9 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
             resolveEntry(),
           );
         }
+        if (property === "cancelActiveRead") {
+          return target.cancelActiveReadFor.bind(target, resolveEntry());
+        }
         const value = Reflect.get(target, property, receiver);
         return typeof value === "function" ? value.bind(target) : value;
       },
@@ -251,136 +338,82 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * Selects a host (or clears selection with `null`). When the active host
-   * id changes, invalidates the host-scoped cache for the previous host
-   * (so stale entries are dropped) and notifies subscribers.
-   */
-  bind(entry: HostDirectoryEntry | null): void {
-    const previous = this.activeHost;
-    if (sameHostId(previous, entry)) {
-      this.activeHost = entry;
-      if (!sameHostTransport(previous, entry)) {
-        if (entry !== null) {
-          this.cancelThenAbortHost(entry.hostId, () => {
-            // Mint only after Query observers consumed cancellation. The
-            // registry's previous token is aborted as this new binding is made.
-            this.authorityRegistry.capture(entry, entry);
-          });
-          // The GUI's invalidator adapter skips the harness-catalog methods on
-          // this sweep entirely - it does not even mark them stale, since an
-          // invalidated entry re-probes at the next picker mount and that just
-          // moves the burst. They recover at the picker's own intent edges
-          // instead: a transport flap is exactly what a busy-host storm
-          // produces, and refetching catalogs here would fan provider probes
-          // back out mid-storm (traycer#912).
-          this.invalidator.invalidateHostScope(entry.hostId, {
-            refetchActive: true,
-          });
-        }
-        this.emitChange({
-          previousHostId: previous === null ? null : previous.hostId,
-          currentHostId: entry === null ? null : entry.hostId,
-          reason: "host-updated",
-        });
-      }
-      return;
-    }
-
-    this.activeHost = entry;
-    if (previous !== null) {
-      this.cancelThenAbortHost(previous.hostId, () => undefined);
-    }
-    this.invalidator.invalidateHostScope(
-      previous === null ? null : previous.hostId,
-      { refetchActive: false },
-    );
-    if (entry !== null) {
-      this.invalidator.invalidateHostScope(entry.hostId, {
-        refetchActive: true,
-      });
-    }
-    this.emitChange({
-      previousHostId: previous === null ? null : previous.hostId,
-      currentHostId: entry === null ? null : entry.hostId,
-      reason: entry === null ? "host-unbound" : "host-bound",
-    });
-  }
-
-  /**
-   * Reports that an endpoint the client already selected has just recovered
-   * availability. Invalidates host-scoped cache so active observers refetch
-   * against the recovered endpoint. No-op when no host is bound.
+   * Reports that an endpoint recovered availability, for a NAMED host.
+   *
+   * The announcing form: it invalidates that host's scope so active observers
+   * refetch, and emits the `"availability-recovered"` change event.
+   *
+   * There used to be a no-argument sibling that read the active slot to
+   * decide whose queries to un-strand, and this method delegated to it when
+   * the named host happened to be the bound one. Both are gone with the slot
+   * (redesign P4.2). That is not a simplification for its own sake: the
+   * no-arg form would have become a permanent no-op the moment nothing was
+   * bound, and its one production caller - the app-wide stream's recovery
+   * wiring - would have stopped un-stranding queries entirely, silently, with
+   * nothing failing anywhere. Naming the host is what makes the recovery
+   * expressible at all now.
    *
    * Delivery is coalesced per host per microtask tick (see
-   * {@link deliverAvailabilityRecovered}): one shared remote session's ready
-   * boundary fans out to every consumer wiring (app-wide stream, one per
-   * durable tab transport, the runtime messenger), each of which reports it
-   * here in the same tick with its own cooldown state - without coalescing,
-   * an active host with a few open tabs turns every reconnect boundary into
-   * that many duplicate host-scope invalidations plus change-event fanouts
-   * (each of which resets the runtime messenger's binding).
-   */
-  notifyAvailabilityRecovered(): void {
-    if (this.activeHost === null) {
-      return;
-    }
-    this.deliverAvailabilityRecovered(this.activeHost.hostId, true);
-  }
-
-  /**
-   * {@link notifyAvailabilityRecovered} for an explicitly-named host. Tabs
-   * bind a `hostId` for life, so a durable per-tab stream can heartbeat (and
-   * observe recovering) a host that is NOT the active one - that host's
-   * stranded unary queries are keyed by ITS id and would never be reached by
-   * the active-host variant. For the active host this delegates (including
-   * the change event); for any other host it invalidates that host's scope so
-   * active observers refetch, without announcing an active-host change.
+   * {@link deliverHostScopeSweep}): one shared remote session's ready
+   * boundary fans out to every consumer wiring, each of which reports it here
+   * in the same tick with its own cooldown state.
    */
   notifyHostAvailabilityRecovered(hostId: string): void {
-    if (this.activeHost !== null && this.activeHost.hostId === hostId) {
-      this.notifyAvailabilityRecovered();
-      return;
-    }
-    this.deliverAvailabilityRecovered(hostId, false);
+    this.deliverHostScopeSweep(hostId, true);
   }
 
   /**
-   * The un-stranding half of {@link notifyHostAvailabilityRecovered} WITHOUT
-   * the active-host change announcement - the same host-scope invalidation the
-   * non-active branch above performs, for a host that happens to be active.
+   * Sweeps one host's query scope WITHOUT announcing it - the same host-scope
+   * invalidation {@link notifyHostAvailabilityRecovered} performs, with no
+   * `"availability-recovered"` change event behind it.
    *
-   * Exists for one caller: a remote binding that owes a ready boundary for a
-   * host which became active while its first dial was still in flight. Routing
-   * that through the active-host path would emit a `"availability-recovered"`
-   * change event, and the runtime answers a change by resetting the very
-   * binding delivering the news. Dropping it instead is not an option either -
-   * `subscribeAvailabilityRecovered` reports a RECOVERY, not current state, so
-   * the active stream runtime attaching afterwards to an already-ready session
-   * gets no replay and the queries stranded by that dial never refetch.
+   * TWO callers, and neither is reporting an availability recovery. The name
+   * says what the method does rather than why any one caller wants it, which
+   * is what lets both of them share it honestly:
+   *
+   *  1. A remote binding that owes a ready boundary for a host whose first
+   *     dial was still in flight. Routing that through the announcing form
+   *     would emit `"availability-recovered"`, and the runtime answers a
+   *     change by resetting the very binding delivering the news. Dropping it
+   *     instead is not an option either - `subscribeAvailabilityRecovered`
+   *     reports a RECOVERY, not current state, so a stream runtime attaching
+   *     afterwards to an already-ready session gets no replay and the queries
+   *     stranded by that dial never refetch.
+   *  2. A same-host public-key ROTATION (R-1): the host was rebuilt under its
+   *     own id, so everything cached for it describes a machine that is gone.
+   *     Nothing recovered availability there - the rotation rebuilds transport
+   *     on its own - and a reason-scoped consumer woken by an
+   *     `"availability-recovered"` it can only read as true would be acting on
+   *     an event that did not happen.
+   *
+   * This used to be `invalidateHostScopeForAvailability`, documented as
+   * existing for one caller. It has two, and a name naming one of their
+   * reasons would have to be replaced by the next one.
    */
-  invalidateHostScopeForAvailability(hostId: string): void {
-    this.deliverAvailabilityRecovered(hostId, false);
+  invalidateHostScopeUnannounced(hostId: string): void {
+    this.deliverHostScopeSweep(hostId, false);
   }
 
   /**
-   * The choke point every availability-recovered report funnels through, so
-   * one physical ready boundary reaching N wirings costs ONE host-scope
-   * invalidation and at most one change event. Reports for the same host in
-   * the same microtask tick merge; a merged report emits the change event if
-   * ANY of its callers asked for one (the active-host variants do, the
-   * messenger's deliberately does not), and reads the active host at
-   * delivery time so a same-tick unbind cannot announce a stale identity.
+   * The choke point every host-scope sweep funnels through, so one physical
+   * trigger reaching N wirings costs ONE host-scope invalidation and at most
+   * one change event. Reports for the same host in the same microtask tick
+   * merge; a merged report emits the change event if ANY of its callers asked
+   * for one (the availability report does, the unannounced sweep deliberately
+   * does not). A rotation sweep landing in the same tick as a genuine
+   * availability recovery therefore still announces, and that is correct: the
+   * availability caller asked, and its announcement is true.
    */
-  private readonly pendingAvailabilityByHost = new Map<
+  private readonly pendingHostScopeSweeps = new Map<
     string,
     { emitChangeEvent: boolean }
   >();
 
-  private deliverAvailabilityRecovered(
+  private deliverHostScopeSweep(
     hostId: string,
     emitChangeEvent: boolean,
   ): void {
-    const pending = this.pendingAvailabilityByHost.get(hostId);
+    const pending = this.pendingHostScopeSweeps.get(hostId);
     if (pending !== undefined) {
       if (emitChangeEvent) {
         pending.emitChangeEvent = true;
@@ -388,17 +421,17 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       return;
     }
     const entry = { emitChangeEvent };
-    this.pendingAvailabilityByHost.set(hostId, entry);
+    this.pendingHostScopeSweeps.set(hostId, entry);
     queueMicrotask(() => {
-      this.pendingAvailabilityByHost.delete(hostId);
+      this.pendingHostScopeSweeps.delete(hostId);
       this.invalidator.invalidateHostScope(hostId, {
         refetchActive: true,
       });
-      if (
-        entry.emitChangeEvent &&
-        this.activeHost !== null &&
-        this.activeHost.hostId === hostId
-      ) {
+      // No active-host gate: there is no active host. The event carries the
+      // host it is about, and consumers that care which one filter on
+      // `currentHostId` - which is what the gate was standing in for while a
+      // privileged binding existed.
+      if (entry.emitChangeEvent) {
         this.emitChange({
           previousHostId: hostId,
           currentHostId: hostId,
@@ -425,17 +458,19 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       return;
     }
     this.requestContext = ctx;
-    const currentHostId =
-      this.activeHost === null ? null : this.activeHost.hostId;
-    this.invalidator.invalidateHostScope(currentHostId, {
-      refetchActive: false,
-    });
-    if (currentHostId !== null) {
-      this.cancelThenAbortHost(currentHostId, () => undefined);
-    }
+    // SCOPE-FREE, and that is the truthful statement rather than a widening.
+    // An identity transition invalidates work on every host this client
+    // serves, not on a privileged one: the context is shared by every
+    // requester handed out, so a request issued under the outgoing credential
+    // is stale wherever it was aimed. This used to name the bound host
+    // because a bound host existed; with the slot gone there is no host to
+    // name, and `null` is what both ports already document as "all
+    // host-scoped".
+    this.invalidator.invalidateHostScope(null, { refetchActive: false });
+    this.cancelThenAbortAll();
     this.emitChange({
-      previousHostId: currentHostId,
-      currentHostId,
+      previousHostId: null,
+      currentHostId: null,
       reason: "auth-changed",
     });
   }
@@ -489,7 +524,9 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     signal: AbortSignal | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.requestForWithSignal(this.activeHost, method, params, signal);
+    // ∅: the spine addresses no host, so an unrouted request rejects at the
+    // preflight. Callers reach a host through a requester.
+    return this.requestForWithSignal(null, method, params, signal);
   }
 
   /**
@@ -501,11 +538,28 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): void {
-    if (this.activeHost === null || this.requestContext === null) {
+    // ∅ — see `request`. A cancel with no host named releases nothing.
+    this.cancelActiveReadFor(null, method, params);
+  }
+
+  /**
+   * {@link cancelActiveRead} for an explicitly named host, so a requester
+   * cancels the read IT issued rather than one on whatever the slot happens
+   * to hold. The coordinator's cancellation key is `(hostId, userId, method,
+   * params)`, so routing this through the slot would let a pinned surface's
+   * cancel land on another host's identical read - or, once its own host
+   * stopped being effective, on nothing at all.
+   */
+  cancelActiveReadFor<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+  ): void {
+    if (entry === null || this.requestContext === null) {
       return;
     }
     this.requestCoordinator.cancelActiveRead(
-      this.activeHost.hostId,
+      entry.hostId,
       this.requestContext.identity.userId,
       method,
       params,
@@ -532,7 +586,8 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       );
     }
     return this.requestForWithResponseTimeout(
-      this.activeHost,
+      // ∅ — see `request`.
+      null,
       method,
       params,
       responseTimeoutMs,
@@ -654,10 +709,23 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     return this.schedulingPolicy.joinResponseTimeoutMs(method);
   }
 
-  private cancelThenAbortHost(hostId: string, afterCancel: () => void): void {
-    const transition = this.requestCoordinator.snapshotHostTransition(hostId);
+  /**
+   * Cancels every host-scoped observer, then aborts the read jobs that
+   * existed when the identity transition began.
+   *
+   * The ORDER is the contract and predates this change: Query observers must
+   * consume cancellation before the coordinator aborts their jobs, or a
+   * cancelled read settles as a failure the caller sees. What changed is the
+   * SCOPE — this was `cancelThenAbortHost(hostId)`, reachable only through
+   * the active slot, and the slot's deletion (redesign D17 / P4.2) leaves no
+   * host to name. Nothing is lost by widening: the one surviving caller is
+   * the identity transition, and a credential change invalidates work on
+   * every host at once. The snapshot is still taken BEFORE the cancel so
+   * work submitted while cancellation is in flight is spared.
+   */
+  private cancelThenAbortAll(): void {
+    const transition = this.requestCoordinator.snapshotAllTransitions();
     const finishTransition = (): void => {
-      afterCancel();
       this.requestCoordinator.abortHostTransition(transition);
     };
     const cancel = this.invalidator.cancelHostScope;
@@ -665,7 +733,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       finishTransition();
       return;
     }
-    void cancel(hostId).finally(() => {
+    void cancel(null).finally(() => {
       finishTransition();
     });
   }
@@ -720,80 +788,4 @@ function createLatestSchedulingPolicy<
     modeFor: () => "latest",
     joinResponseTimeoutMs: () => null,
   };
-}
-
-function sameHostId(
-  previous: HostDirectoryEntry | null,
-  next: HostDirectoryEntry | null,
-): boolean {
-  if (previous === null && next === null) {
-    return true;
-  }
-  if (previous === null || next === null) {
-    return false;
-  }
-  return previous.hostId === next.hostId;
-}
-
-/**
- * Transport identity is compared by its CONNECTION fields (hostId, kind,
- * `websocketUrl`, version, public key) plus whether the directory positively
- * REFUSES the route (`isConfirmedTransportRefusal`) - never by the raw liveness
- * verdict. Liveness is now a relay-attachment lease the cloud pushes into the
- * one `connectivity` word (the 20s host beat, and the `busy`/`busySessionCount`
- * it carried, are deleted), and that verdict flaps for reasons that do not move
- * the transport: a degraded read surfaces as `unknown`, and a lease lapse the
- * relay fuse is still riding out surfaces as `offline` with `relayFuseGrace`.
- * Keying the comparison on the raw verdict would cancel and abort every
- * in-flight request on the bound host, sweep its whole query scope with
- * `refetchActive`, and announce `host-updated` to every subscriber, for a host
- * that never stopped being dialable. Only crossing INTO or OUT OF a confirmed
- * refusal changes what a caller can do with this entry. This is the third
- * member of the family that decision belongs to, alongside the GUI's transport
- * key and the authority registry's snapshot.
- *
- * `publicKey` is compared separately from the base fields (R-1): a remote
- * host's static Noise key can rotate (re-enrollment / corruption recovery -
- * `registerOrAdoptHost` overwrites the key on the same `hostId`) while every
- * base field - including `websocketUrl`, since every remote host shares one
- * fixed relay attach URL - stays identical. Treating that as "same transport"
- * would swallow the `host-updated` `emitChange` this rotation must fire,
- * leaving every `onChange` subscriber (the app-wide stream provider, the
- * reactive active-host-id projection, the epic session mount) permanently
- * pinned to the stale key with no signal that anything changed.
- *
- * The coarse dialability bit is NOT compared, and that is a decision rather
- * than an omission. `bind()` reacts to a `false` here by cancelling every
- * in-flight host-scoped query, aborting the binding generation and refetching
- * the active ones — the right response to the route moving, and a gratuitous
- * storm otherwise. A failed liveness read flips the bit without moving
- * anything, so comparing it made one degraded cloud read invalidate the whole
- * host scope. What is compared instead is the directory positively REFUSING
- * the route (`isConfirmedTransportRefusal`), which is the same gate
- * `hostTransportKey` dials on: the sweep now fires exactly when a re-dial
- * would be refused.
- */
-function sameHostTransport(
-  previous: HostDirectoryEntry | null,
-  next: HostDirectoryEntry | null,
-): boolean {
-  if (previous === null || next === null) {
-    return previous === next;
-  }
-  return (
-    previous.hostId === next.hostId &&
-    previous.kind === next.kind &&
-    previous.websocketUrl === next.websocketUrl &&
-    previous.version === next.version &&
-    isConfirmedTransportRefusal(
-      previous,
-      hasReadyRemoteSession(previous.hostId),
-    ) ===
-      isConfirmedTransportRefusal(next, hasReadyRemoteSession(next.hostId)) &&
-    remotePublicKeyOf(previous) === remotePublicKeyOf(next)
-  );
-}
-
-function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
-  return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
 }

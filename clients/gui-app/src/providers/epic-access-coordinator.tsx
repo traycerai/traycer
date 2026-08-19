@@ -5,7 +5,7 @@ import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transp
 import { removeDeletedEpicsFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { epicAccessToast } from "@/lib/toast/channels";
 import { subscribeDeletedEpicNotifications } from "@/lib/epics/deleted-epic-events";
-import { isUnavailableEpicReason } from "@/lib/epics/unavailable-epic";
+import { isUnavailableEpicCode } from "@/lib/epics/unavailable-epic";
 import { liveEpicTitleFromHandle } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
@@ -27,8 +27,8 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
  *
  *  - **Revoke** - `permissionChanged(null)` → `accessLost` on the session.
  *  - **Delete** - a remote `epicDeleted` frame → `epicDeleted` on the session.
- *  - **Unavailable on open** - a `snapshotFetchError` whose message matches
- *    {@link isUnavailableEpicReason} (deleted/removed room discovered when the
+ *  - **Unavailable on open** - a `snapshotFetchError` with the `NOT_FOUND`
+ *    protocol code (deleted/removed room discovered when the
  *    session reconnects or is opened offline). Because that signal cannot tell
  *    a delete apart from a revoke, it gets a neutral "no longer available"
  *    toast rather than asserting either cause.
@@ -287,7 +287,7 @@ function deadEpicReason(state: OpenEpicState): DeadEpicReason | null {
   }
   if (
     state.snapshotFetchError !== null &&
-    isUnavailableEpicReason(state.snapshotFetchError.message)
+    isUnavailableEpicCode(state.snapshotFetchError.code)
   ) {
     // The host could not return a live room on (re)open. This surfaces a
     // delete OR a revoke indistinguishably, so the cause is left neutral.

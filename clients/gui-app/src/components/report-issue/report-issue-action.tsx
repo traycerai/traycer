@@ -53,11 +53,18 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
   if (!reportIssueAvailable) return null;
 
   const handleClick = () => {
-    Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
-      source: "direct_ui",
-    });
+    // Resolved BEFORE the track call so the event can name the surface. Both
+    // still happen inside this one click, so the builder's whole reason for
+    // being lazy - reading a support-registry snapshot that trails render -
+    // is unaffected.
     const context =
       typeof props.context === "function" ? props.context() : props.context;
+    Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
+      source: "direct_ui",
+      surface: isReportIssueDraftContext(context)
+        ? context.publicPrefill.source
+        : context.source,
+    });
     if (isReportIssueDraftContext(context)) {
       openReportIssueDraft(context);
     } else {

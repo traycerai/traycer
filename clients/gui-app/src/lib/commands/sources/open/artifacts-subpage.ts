@@ -6,17 +6,22 @@
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openerExistingLeaf } from "@/lib/commands/sources/open/open-leaf";
-import { useActiveEpicProjection } from "@/lib/commands/sources/open/use-active-epic-projection";
+import {
+  useActiveEpicHostId,
+  useActiveEpicProjection,
+} from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { isOpenableEpicNodeKind } from "@/stores/epics/canvas/types";
 
 export function useArtifactsOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const defaultHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  // The tile binds for life to the host that serves this epic's projection -
+  // never the app-wide host, which may already point elsewhere mid re-point.
+  const defaultHostId =
+    useActiveEpicHostId(ctx.activeEpicId) ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {

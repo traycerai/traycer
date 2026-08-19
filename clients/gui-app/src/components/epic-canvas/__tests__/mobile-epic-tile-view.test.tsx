@@ -69,8 +69,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({ status: "reachable", hostLabel: "host-A" }),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => null,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => null,
 }));
 
 vi.mock("@/lib/host", () => ({

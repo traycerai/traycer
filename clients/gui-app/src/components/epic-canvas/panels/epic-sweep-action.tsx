@@ -4,7 +4,8 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
-import { useTaskWorktreeMetadata } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import {
   computeTaskMergeRollup,
   taskMergeRollupLabel,
@@ -49,7 +50,12 @@ function EpicSweepActionBody(props: {
 }): ReactNode {
   const { epicId, tabId } = props;
   const epicIds = useMemo(() => [epicId], [epicId]);
-  const metadata = useTaskWorktreeMetadata(epicIds);
+  // Worktrees are per HOST. This row sits inside the Epic session, so the
+  // rollup it shows and the sweep it opens both describe the SESSION's host -
+  // not the app-wide one, which already answers B while an A-backed Epic is
+  // still rendered through a re-point.
+  const sessionHostClient = useEpicSessionHostClient();
+  const metadata = useTaskWorktreeMetadataForClient(sessionHostClient, epicIds);
   const entries = metadata.worktreesByEpicId.get(epicId) ?? EMPTY_ENTRIES;
   const rollup = useMemo(() => computeTaskMergeRollup(entries), [entries]);
   const tabName = useEpicCanvasStore((s) => {
@@ -104,6 +110,7 @@ function EpicSweepActionBody(props: {
       </TooltipWrapper>
       <SweepWorktreesDialog
         epicIds={sweepOpen ? epicIds : null}
+        hostClient={sessionHostClient}
         taskTitle={tabName}
         onOpenChange={(open) => {
           if (!open) setSweepOpen(false);

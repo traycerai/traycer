@@ -76,12 +76,22 @@ export type HostRegistryKind = "personal" | "sandbox";
  * waits out the lease TTL — on the order of 15 minutes.
  */
 export type HostConnectivity =
-  | "connectable"
-  | "offline"
-  | "local-only"
-  | "unknown";
+  "connectable" | "offline" | "local-only" | "unknown";
 
-/** This client's own probe result at tab-open / on-demand (S2). */
+/**
+ * TOMBSTONED (redesign P3.4). Was "this client's own probe result at
+ * tab-open / on-demand (S2)". The probe was never built: the server has
+ * always sent `"unknown"` and, as of P3.4, no client reads the field at all.
+ *
+ * It stays on the wire because it CANNOT be removed unilaterally in either
+ * direction - `hostStatusDtoSchema` is `.strict()` and this key is required,
+ * so a server that stopped sending it would fail every released client's
+ * parse of `GET /api/v3/hosts`, and a client that dropped it from the schema
+ * would reject the payloads the server still sends. Dropping it is a
+ * two-release sequence: (1) this release stops reading it, (2) once the
+ * support floor is past a client that tolerates its absence, the server stops
+ * emitting and the key leaves the schema. Do not skip step 1's soak.
+ */
 export type HostViewerReachability = "ok" | "failing" | "unknown";
 
 /** Whether this client is online at all. */
@@ -89,12 +99,7 @@ export type HostClientCloudState = "ok" | "down";
 
 /** Update lifecycle surfaced per host (Architecture §7 & §13). */
 export type HostUpdateState =
-  | "current"
-  | "available"
-  | "pending"
-  | "updating"
-  | "failed"
-  | "required";
+  "current" | "available" | "pending" | "updating" | "failed" | "required";
 
 /**
  * Per-host update policy (Architecture §13, T16). `manual` (default) means
@@ -111,7 +116,7 @@ export type HostUpdatePolicy = "manual" | "auto";
 export type HostStatusDTO = {
   /** The single liveness word, from the relay lease. */
   connectivity: HostConnectivity;
-  /** This client's probe of its own path to the host (S2). */
+  /** Tombstoned; parsed and ignored. See {@link HostViewerReachability}. */
   viewerReachability: HostViewerReachability;
   /** Is this client online at all. */
   clientCloud: HostClientCloudState;

@@ -125,8 +125,13 @@ describe("reportableErrorToast", () => {
     reportableErrorToast("Couldn't load", undefined, SAFE_CONTEXT);
     clickErrorReportAction();
 
+    // `surface` is the report context's own name for the failing area, and it
+    // is the half that separates two Report buttons on one frame. `source`
+    // stays the entry point - asserting both together is what stops a future
+    // change re-valuing one into the other's job.
     expect(track).toHaveBeenCalledWith(AnalyticsEvent.ReportIssueOpened, {
       source: "notification",
+      surface: "Epic list",
     });
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual(
       SAFE_CONTEXT,

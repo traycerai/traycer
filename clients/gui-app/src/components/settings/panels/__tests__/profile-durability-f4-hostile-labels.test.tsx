@@ -185,8 +185,8 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
   useRefreshProviderRateLimitsOnMount: () => {},
 }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({
@@ -203,6 +203,13 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 }));
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
+}));
+// The refresh button resolves a client PINNED to its host id rather than the
+// app-wide one, and that resolution dereferences `useHostClient()` during
+// render - which the `@/lib/host` stub below makes `null`. Stub the pinned
+// resolution too, matching the other host-less panel suites.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();

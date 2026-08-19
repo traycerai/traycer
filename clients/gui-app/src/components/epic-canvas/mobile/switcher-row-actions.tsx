@@ -21,7 +21,8 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
-import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
+import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
+import { useHostClient } from "@/lib/host";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -63,7 +64,11 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const deleteChat = useEpicDeleteChat();
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact();
-  const killTerminal = useTerminalKill();
+  const killTerminal = useTerminalKillFor(
+    useHostClient(),
+    "Couldn't close the terminal.",
+    true,
+  );
 
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(

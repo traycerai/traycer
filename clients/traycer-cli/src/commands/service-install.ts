@@ -59,6 +59,7 @@ export function buildServiceInstallCommand(
             percent: null,
             bytes: null,
             totalBytes: null,
+            workUnits: null,
           });
           takeover = await controller.takeoverDesktopRegistration(label);
           ctx.runtime.logger.info("Service install takeover step completed", {
@@ -73,6 +74,7 @@ export function buildServiceInstallCommand(
           percent: null,
           bytes: null,
           totalBytes: null,
+          workUnits: null,
         });
         await controller.install({
           label,

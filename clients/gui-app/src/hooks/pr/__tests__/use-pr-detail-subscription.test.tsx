@@ -27,7 +27,7 @@ import {
  * Test (a) - non-default-host subscription.
  *
  * `usePrDetailSubscription` resolves its transport from `useTabHostId()` ->
- * `useHostStreamClientFor`, NEVER from `useReactiveActiveHostId()` /
+ * `useHostStreamClientFor`, NEVER from `useAddressableHostId()` /
  * `StreamRuntimeContext` (the app-wide default-host client) - unlike
  * `GitDiffTile`, which gates on `tabHostId === activeHostId`. This file
  * mocks `useTabHostId` directly (no `<TabHostProvider>` needed for a
@@ -74,6 +74,7 @@ import {
   usePrDetailSubscription,
   __resetPrDetailSubscriptionsForTesting,
 } from "../use-pr-detail-subscription";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 /**
  * Mock stream session for `pr.subscribeDetail`. Frame fields ride directly
@@ -142,6 +143,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");
@@ -263,7 +265,7 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
   it("subscribes through whatever client useTabHostId resolves to, for a bound host that is NOT any app-wide 'active host', with exact open-request params, and tears down on unmount", async () => {
     // "host2" stands in for a tab bound to a host that differs from whatever
     // the app's default/active host happens to be. The hook has no
-    // `useReactiveActiveHostId` (or any comparable) input to compare
+    // `useAddressableHostId` (or any comparable) input to compare
     // against - this file never even imports/mocks that concept - so a
     // successful subscribe here is a direct proof of its absence.
     tabHostIdRef.value = "host2";

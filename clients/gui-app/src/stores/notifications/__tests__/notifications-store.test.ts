@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   NOTIFICATION_EVENT_TYPES,
   type NotificationEntry,
@@ -15,6 +16,8 @@ import {
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+
+const reconnectEngine = createHostReconnectEngine();
 
 interface FakeHandle {
   readonly callbacks: NotificationsStreamCallbacks;
@@ -88,7 +91,7 @@ describe("notifications store", () => {
 
   it("projects a snapshot into entries via the shared schema", () => {
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     handle().callbacks.onSnapshot(
       { schemaVersion: "2" },
       buildSnapshotBytes([
@@ -106,7 +109,7 @@ describe("notifications store", () => {
 
   it("derives unread count from entries whose readAt is null", () => {
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     handle().callbacks.onSnapshot(
       { schemaVersion: "2" },
       buildSnapshotBytes([
@@ -123,7 +126,7 @@ describe("notifications store", () => {
 
   it("keeps the projected entry id array stable across read-state-only changes", () => {
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     handle().callbacks.onSnapshot(
       { schemaVersion: "2" },
       buildSnapshotBytes([
@@ -144,7 +147,7 @@ describe("notifications store", () => {
 
   it("markAsRead mutates readAt on the typed entry map and emits upstream", () => {
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     handle().callbacks.onSnapshot(
       { schemaVersion: "2" },
       buildSnapshotBytes([invitedEntry("mar-1", 1, null, "epic-mar")]),
@@ -159,7 +162,7 @@ describe("notifications store", () => {
 
   it("markAllAsRead sets readAt on every unread entry", () => {
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     handle().callbacks.onSnapshot(
       { schemaVersion: "2" },
       buildSnapshotBytes([
@@ -177,7 +180,7 @@ describe("notifications store", () => {
 
   it("clearAll empties the Y.Array via a local transaction", () => {
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     handle().callbacks.onSnapshot(
       { schemaVersion: "2" },
       buildSnapshotBytes([
@@ -192,7 +195,7 @@ describe("notifications store", () => {
 
   it("reset clears entries, snapshot meta, and replaces the doc", () => {
     const { factory, handle } = fakeFactory();
-    const disposer = openNotificationsStream(factory, null);
+    const disposer = openNotificationsStream(reconnectEngine, factory, null);
     handle().callbacks.onSnapshot(
       { schemaVersion: "2" },
       buildSnapshotBytes([invitedEntry("r1", 1, null, "e1")]),
@@ -210,7 +213,7 @@ describe("notifications store", () => {
   it("invokes onAuthError when the host closes the stream with UNAUTHORIZED", () => {
     const { factory, handle } = fakeFactory();
     let count = 0;
-    const disposer = openNotificationsStream(factory, () => {
+    const disposer = openNotificationsStream(reconnectEngine, factory, () => {
       count += 1;
     });
 
@@ -231,7 +234,7 @@ describe("notifications store", () => {
   it("does not invoke onAuthError on caller-initiated close or other fatal errors", () => {
     const { factory, handle } = fakeFactory();
     let count = 0;
-    const disposer = openNotificationsStream(factory, () => {
+    const disposer = openNotificationsStream(reconnectEngine, factory, () => {
       count += 1;
     });
 
@@ -253,7 +256,11 @@ describe("notifications store", () => {
   it("sign-out + sign-in as a different user does not replay prior entries", () => {
     // User A signs in and receives notifications.
     const userA = fakeFactory();
-    const disposerA = openNotificationsStream(userA.factory, null);
+    const disposerA = openNotificationsStream(
+      reconnectEngine,
+      userA.factory,
+      null,
+    );
     userA
       .handle()
       .callbacks.onSnapshot(
@@ -272,7 +279,7 @@ describe("notifications store", () => {
 
     // User B signs in. Their host delivers an empty snapshot first.
     const userB = fakeFactory();
-    openNotificationsStream(userB.factory, null);
+    openNotificationsStream(reconnectEngine, userB.factory, null);
     userB
       .handle()
       .callbacks.onSnapshot({ schemaVersion: "2" }, buildSnapshotBytes([]));

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
   HostConnectivity,
-  HostListItem,
   HostStatusDTO,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
@@ -9,16 +8,12 @@ import {
   deriveHostPresence,
   deriveUpdateAffordance,
   deriveUpdatePill,
-  formatHostMeta,
   formatLastSeen,
   liveBusySessionCount,
   settledBusySessionCount,
-  type HostPresenceView,
+  type DtoPresenceView,
   type LiveBusySessionCountOptions,
-  type ViewerReachabilityCheckLike,
 } from "@/components/settings/panels/my-hosts-model";
-
-const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 
 function statusDto(overrides: Partial<HostStatusDTO>): HostStatusDTO {
   return {
@@ -33,31 +28,41 @@ function statusDto(overrides: Partial<HostStatusDTO>): HostStatusDTO {
 }
 
 /**
- * Wraps `deriveHostPresence` for the "core DTO-driven logic, host identity
- * irrelevant" tests below — always the LOCAL branch (no relay sub-states, no
- * live-session override, no viewer check).
+ * Wraps `deriveHostPresence` for the "core DTO-driven logic" tests below — no
+ * live session, so every answer comes from the DTO itself.
  */
-function deriveLocal(status: HostStatusDTO): HostPresenceView {
-  return deriveHostPresence({
-    status,
-    isViewerLocalHost: true,
-    hasLiveSession: false,
-    viewerCheck: null,
-    nowMs: NOW,
-  });
+function deriveLocal(status: HostStatusDTO): DtoPresenceView {
+  return deriveHostPresence({ status, hasLiveSession: false });
 }
 
 describe("deriveHostPresence", () => {
-  it("renders Online with a live dot for connectable", () => {
+  /**
+   * F26, at the exact line that produced the overclaim.
+   *
+   * This test used to read "renders Online with a live dot for connectable"
+   * and assert `showLiveDot: true`. It was pinning a violation of the
+   * invariant stated at the top of the module it tests — "NO green dot without
+   * live evidence" — because the invariant's own wording exempted the thing it
+   * meant to exclude ("a live session OR a `connectable` lease"). The lease is
+   * a cloud reading with a 15-minute TTL; a host that died dirty kept the
+   * green dot for a quarter of an hour, and the 60s keep-warm linger extended
+   * it further.
+   *
+   * Nothing about a never-dialled host has changed except our honesty about
+   * it. A live session still lights the dot — from the override below, where
+   * the evidence actually is.
+   */
+  it("renders Reported reachable, with NO dot, for a connectable lease nothing has dialled", () => {
     const view = deriveLocal(statusDto({ connectivity: "connectable" }));
-    expect(view.tone).toBe("online");
-    expect(view.label).toBe("Online");
-    expect(view.showLiveDot).toBe(true);
+    expect(view.reading).toBe("reported-reachable");
+    expect(view.label).toBe("Reported reachable");
+    expect(view.label).not.toBe("Online");
+    expect(view.showLiveDot).toBe(false);
   });
 
   it("renders Offline (no dot) for offline connectivity", () => {
     const view = deriveLocal(statusDto({ connectivity: "offline" }));
-    expect(view.tone).toBe("offline");
+    expect(view.reading).toBe("offline");
     expect(view.label).toBe("Offline");
     expect(view.showLiveDot).toBe(false);
   });
@@ -66,11 +71,24 @@ describe("deriveHostPresence", () => {
     const view = deriveLocal(
       statusDto({ connectivity: "connectable", clientCloud: "down" }),
     );
-    expect(view.tone).toBe("client-offline");
+    expect(view.reading).toBe("client-offline");
     expect(view.showLiveDot).toBe(false);
   });
 
-  describe("connectivity → tone mapping, and the never-false-Offline invariant", () => {
+  describe("connectivity → reading mapping, and the never-false-Offline invariant", () => {
+    /**
+     * The invariant, stated the way it was always meant and never was.
+     *
+     * This assertion previously read `toBe(connectivity === "connectable")`,
+     * which is the vacuity: it claimed to enforce "no dot without live
+     * evidence" while explicitly REQUIRING the dot for the one case that has
+     * no live evidence behind it. The test could not have failed for the bug
+     * it was named after, because it encoded the bug.
+     *
+     * With no live session, NO cloud connectivity value lights the dot. The
+     * `hasLiveSession` override below is the only thing that can, which is
+     * what makes the sentence true.
+     */
     it("never shows a live dot without live evidence, across every connectivity value", () => {
       const values: HostConnectivity[] = [
         "connectable",
@@ -80,15 +98,15 @@ describe("deriveHostPresence", () => {
       ];
       for (const connectivity of values) {
         const view = deriveLocal(statusDto({ connectivity }));
-        expect(view.showLiveDot).toBe(connectivity === "connectable");
+        expect(view.showLiveDot).toBe(false);
       }
     });
 
     it("renders local-only as its own tone, labelled Local only, and NEVER Offline", () => {
       const view = deriveLocal(statusDto({ connectivity: "local-only" }));
-      expect(view.tone).toBe("local-only");
+      expect(view.reading).toBe("local-only");
       expect(view.label).toBe("Local only");
-      expect(view.tone).not.toBe("offline");
+      expect(view.reading).not.toBe("offline");
     });
 
     it("NEVER renders a false Offline when coordination is blind (moved from the envelope's presenceHealth to connectivity: 'unknown')", () => {
@@ -99,77 +117,28 @@ describe("deriveHostPresence", () => {
       // asserting the negative explicitly, is what keeps the invariant from
       // quietly disappearing when its carrier moved.
       const view = deriveLocal(statusDto({ connectivity: "unknown" }));
-      expect(view.tone).toBe("unknown");
+      expect(view.reading).toBe("unknown");
       expect(view.label).toBe("Status unknown");
-      expect(view.tone).not.toBe("offline");
+      expect(view.reading).not.toBe("offline");
     });
   });
 
-  describe("remote-host connection-issue sub-state (R4-B5)", () => {
-    it("renders connection-issue with a timestamped provenance when the viewer's own check failed", () => {
-      const check: ViewerReachabilityCheckLike = {
-        result: "failing",
-        checkedAtMs: NOW - 2 * 60_000,
-      };
-      const view = deriveHostPresence({
-        status: statusDto({ connectivity: "connectable" }),
-        isViewerLocalHost: false,
-        hasLiveSession: false,
-        viewerCheck: check,
-        nowMs: NOW,
-      });
-      expect(view.tone).toBe("connection-issue");
-      expect(view.label).toBe("Reachable, connection issue (checked 2m ago)");
-      // Still a live signal — the host itself is reachable, only this
-      // viewer's path is degraded.
-      expect(view.showLiveDot).toBe(true);
-    });
-
-    it("ignores a stale-ok viewer check and renders plain Online", () => {
-      const check: ViewerReachabilityCheckLike = {
-        result: "ok",
-        checkedAtMs: NOW - 60_000,
-      };
-      const view = deriveHostPresence({
-        status: statusDto({ connectivity: "connectable" }),
-        isViewerLocalHost: false,
-        hasLiveSession: false,
-        viewerCheck: check,
-        nowMs: NOW,
-      });
-      expect(view.tone).toBe("online");
-    });
-
-    it("never applies the connection-issue sub-state to a local host, even with a failing viewer check", () => {
-      const check: ViewerReachabilityCheckLike = {
-        result: "failing",
-        checkedAtMs: NOW,
-      };
-      const view = deriveHostPresence({
-        status: statusDto({ connectivity: "connectable" }),
-        isViewerLocalHost: true,
-        hasLiveSession: false,
-        viewerCheck: check,
-        nowMs: NOW,
-      });
-      expect(view.tone).toBe("online");
-    });
-  });
+  // The "remote-host connection-issue sub-state (R4-B5)" suite lived here: a
+  // `connectable` host whose per-viewer probe reported `failing` rendered
+  // "Reachable, connection issue (checked 2m ago)". Deleted with its subject
+  // in P3.4 — the probe that would have written that verdict was never built
+  // (audit F9: a store with a getter and no writer), so the arm was
+  // unreachable and these three tests only ever proved that a hand-supplied
+  // input produced a hand-written label. Nothing user-visible is uncovered by
+  // their removal, because nothing user-visible could reach the state.
 
   describe("live-session-evidence override (R4-B5)", () => {
-    it("renders Online regardless of an offline connectivity or a failing viewer check", () => {
-      const check: ViewerReachabilityCheckLike = {
-        result: "failing",
-        checkedAtMs: NOW,
-      };
+    it("renders Online regardless of an offline connectivity", () => {
       const view = deriveHostPresence({
         status: statusDto({ connectivity: "offline" }),
-        isViewerLocalHost: false,
         hasLiveSession: true,
-        viewerCheck: check,
-        nowMs: NOW,
       });
-      expect(view.tone).toBe("online");
+      expect(view.reading).toBe("online");
       expect(view.label).toBe("Online");
       expect(view.showLiveDot).toBe(true);
     });
@@ -178,24 +147,18 @@ describe("deriveHostPresence", () => {
       for (const connectivity of ["local-only", "unknown"] as const) {
         const view = deriveHostPresence({
           status: statusDto({ connectivity }),
-          isViewerLocalHost: false,
           hasLiveSession: true,
-          viewerCheck: null,
-          nowMs: NOW,
         });
-        expect(view.tone).toBe("online");
+        expect(view.reading).toBe("online");
       }
     });
 
     it("does not override You're offline (the client itself has no path to claim anything)", () => {
       const view = deriveHostPresence({
         status: statusDto({ connectivity: "connectable", clientCloud: "down" }),
-        isViewerLocalHost: false,
         hasLiveSession: true,
-        viewerCheck: null,
-        nowMs: NOW,
       });
-      expect(view.tone).toBe("client-offline");
+      expect(view.reading).toBe("client-offline");
     });
   });
 });
@@ -242,72 +205,13 @@ describe("formatLastSeen", () => {
   });
 });
 
-describe("formatHostMeta", () => {
-  const now = Date.parse("2026-07-03T12:00:00.000Z");
-
-  function listItem(
-    status: HostStatusDTO,
-    platform: string | null,
-  ): HostListItem {
-    return {
-      hostId: "host-1",
-      displayName: "prod-devbox",
-      platform,
-      kind: "personal",
-      publicKey: "pk",
-      createdAt: "2026-07-01T12:00:00.000Z",
-      status,
-      updatePolicy: "manual",
-    };
-  }
-
-  it("joins platform and version for a live host", () => {
-    const status = statusDto({
-      connectivity: "connectable",
-      appVersion: "1.4.2",
-    });
-    const item = listItem(status, "Ubuntu");
-    expect(formatHostMeta(item, deriveLocal(status), now)).toBe(
-      "Ubuntu · v1.4.2",
-    );
-  });
-
-  it("prefers the last-seen hint for an offline host", () => {
-    const status = statusDto({
-      connectivity: "offline",
-      appVersion: "1.1.0",
-      lastSeenAt: "2026-07-03T10:00:00.000Z",
-    });
-    const item = listItem(status, "Ubuntu");
-    expect(formatHostMeta(item, deriveLocal(status), now)).toBe(
-      "last seen 2h ago",
-    );
-  });
-
-  it("prefers the last-seen hint for unknown too — a blind read leaves last-seen the only true fact", () => {
-    const status = statusDto({
-      connectivity: "unknown",
-      appVersion: "1.1.0",
-      lastSeenAt: "2026-07-03T10:00:00.000Z",
-    });
-    const item = listItem(status, "Ubuntu");
-    expect(formatHostMeta(item, deriveLocal(status), now)).toBe(
-      "last seen 2h ago",
-    );
-  });
-
-  it("does NOT show last-seen for local-only — nothing there is stale or missing", () => {
-    const status = statusDto({
-      connectivity: "local-only",
-      appVersion: "1.1.0",
-      lastSeenAt: "2026-07-03T10:00:00.000Z",
-    });
-    const item = listItem(status, "Ubuntu");
-    expect(formatHostMeta(item, deriveLocal(status), now)).toBe(
-      "Ubuntu · v1.1.0",
-    );
-  });
-});
+// The `formatHostMeta` block that sat here is gone with the function. It was
+// the identity meta line under a host name, built for the My Hosts row that
+// `HostIdentityCard` replaced; the card assembles those facts itself and reads
+// last-seen out of `health.detail`. The census at deletion found no production
+// reader — 7 references repo-wide, one being the definition and six being
+// these tests. They are recorded as a coverage DELETION, not a port: nothing
+// else asserts that mapping, because nothing else runs it.
 
 describe("deriveUpdateAffordance", () => {
   // The `showUpdateNowInput` cases that sat here are gone with the free-text

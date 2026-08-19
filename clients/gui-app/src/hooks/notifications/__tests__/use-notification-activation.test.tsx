@@ -13,6 +13,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { NotificationNavigate } from "@/lib/notifications";
 
 type CapturedNavigate = {
@@ -41,11 +42,23 @@ const explicitNavigate: NotificationNavigate = (options) => {
 const activeHostIdStub: { value: string | null } = vi.hoisted(() => ({
   value: "stub-host",
 }));
+/**
+ * `createRequesterForHostId` is not optional decoration: production resolves
+ * the app-wide host through the spine's id-pinned requester (redesign P4.2),
+ * so a stub without it takes the subject down at first render rather than
+ * failing an assertion. One host per fixture means the requester IS the
+ * client, which is what makes the self-return honest here.
+ */
+interface StubActivationHostClient {
+  readonly getActiveHostId: () => string | null;
+  readonly createRequesterForHostId: (
+    hostId: string | null,
+  ) => StubActivationHostClient;
+}
+
 const bindingState = vi.hoisted<{
   current: {
-    readonly hostClient: {
-      readonly getActiveHostId: () => string | null;
-    };
+    readonly hostClient: StubActivationHostClient;
     readonly directory: IHostDirectoryService;
   } | null;
 }>(() => ({ current: null }));
@@ -95,20 +108,40 @@ function createWrapper(): (props: {
   };
 }
 
+/**
+ * Moves the app-wide pointer the way the authority does.
+ *
+ * SEEDED, not stubbed: the origin-host guard reads this store live, and a
+ * fixture that mocked the reader instead would leave the guard comparing the
+ * mock against itself - it could never catch a real pointer move again. This
+ * is the one thing the guard asks about, so it is the one thing the fixture
+ * supplies.
+ */
+function setEffectiveHost(hostId: string | null): void {
+  useSelectionAuthorityStore.getState().applyKernelSnapshot({
+    attached: true,
+    preferredHostId: hostId,
+    targetHostId: hostId,
+    effectiveHostId: hostId,
+    leases: [],
+    selectionRevision: 1,
+  });
+}
+
 function bindStubClient(): void {
+  const hostClient: StubActivationHostClient = {
+    getActiveHostId: () => activeHostIdStub.value,
+    createRequesterForHostId: () => hostClient,
+  };
   bindingState.current = {
-    hostClient: {
-      getActiveHostId: () => activeHostIdStub.value,
-    },
-    directory: createTestDirectory([], () => undefined),
+    hostClient,
+    directory: createTestDirectory([]),
   };
 }
 
 function createTestDirectory(
   entries: readonly HostDirectoryEntry[],
-  onSelect: (hostId: string) => void,
 ): IHostDirectoryService {
-  let selected: HostDirectoryEntry | null = null;
   return {
     list: () => Promise.resolve(entries),
     findById: (hostId) =>
@@ -116,15 +149,6 @@ function createTestDirectory(
     refresh: () => Promise.resolve(entries),
     refreshForEra: () => Promise.resolve(entries),
     invalidateInFlightRefresh: () => undefined,
-    getSelected: () => selected,
-    selectById: (hostId) => {
-      selected =
-        hostId === null
-          ? null
-          : (entries.find((entry) => entry.hostId === hostId) ?? null);
-      if (selected !== null) onSelect(selected.hostId);
-    },
-    onSelectionChange: () => ({ dispose: () => undefined }),
   };
 }
 
@@ -135,6 +159,10 @@ describe("useNotificationActivation", () => {
     navigateSpy.mockImplementation(() => undefined);
     explicitNavigateCalls.mockReset();
     activeHostIdStub.value = "stub-host";
+    // The guard compares the client's captured id against the LIVE pointer;
+    // a fixture that seeds only one of them reports a host move on every
+    // activation. These cases are not about moving, so they agree.
+    setEffectiveHost("stub-host");
     bindStubClient();
     useEpicCanvasStore.setState({
       tabsById: {},
@@ -764,8 +792,11 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
       messenger,
+      // Resolves whichever host the pointer names; there is no bound host to
+      // fall back on since P4.2 deleted the slot.
+      findHostById: (hostId) => (hostId === hostA.hostId ? hostA : hostB),
     });
-    client.bind(hostA);
+    setEffectiveHost(hostA.hostId);
     client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -774,10 +805,7 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     );
     bindingState.current = {
       hostClient: client,
-      directory: createTestDirectory([hostA, hostB], (hostId) => {
-        const entry = hostId === hostA.hostId ? hostA : hostB;
-        client.bind(entry);
-      }),
+      directory: createTestDirectory([hostA, hostB]),
     };
     useEpicCanvasStore.setState({
       tabsById: {},
@@ -789,16 +817,20 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
 
   it("reports failure when the active host rebinds during routing for a host feed", () => {
     const onResult = vi.fn();
-    // Capture-before-route / check-after-route: rebind as a side effect of
-    // navigate so the post-route active-host check sees host B.
+    // Capture-before-route / check-after-route: move the APP-WIDE POINTER as
+    // a side effect of navigate, so the post-route check sees host B. Before
+    // P4.2 this drove `client.bind(hostB)` - the same event expressed against
+    // the slot that used to carry it.
     navigateSpy.mockImplementation(() => {
-      client.bind(hostB);
+      setEffectiveHost(hostB.hostId);
     });
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
 
-    expect(client.getActiveHostId()).toBe(hostA.hostId);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      hostA.hostId,
+    );
 
     act(() => {
       hook.result.current.activate({
@@ -809,7 +841,9 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       });
     });
 
-    expect(client.getActiveHostId()).toBe(hostB.hostId);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      hostB.hostId,
+    );
     expect(navigateSpy).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith("failure");
@@ -836,7 +870,9 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       });
     });
 
-    expect(client.getActiveHostId()).toBe(hostA.hostId);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      hostA.hostId,
+    );
     expect(navigateSpy).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith("success");
@@ -847,61 +883,56 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     ).toBe(false);
   });
 
-  it("selects an approval's origin host before routing to its exact tile", () => {
-    const store = useEpicCanvasStore.getState();
-    const tabId = store.openEpicTab("epic-origin", "Origin B");
-    store.openTileInTab(tabId, {
-      id: "chat-origin",
-      instanceId: "host-b-chat",
-      type: "chat",
-      name: "Host B chat",
-      hostId: hostB.hostId,
-    });
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
-    if (canvas === undefined || canvas.activePaneId === null) {
-      throw new Error("expected host B canvas");
-    }
+  it("reports success when the pointer moved between render and the click, with no further move during routing", () => {
     const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
 
+    // Move the pointer AFTER render but BEFORE the click, with no
+    // intervening re-render - `hook.result.current.activate` still closes
+    // over the render-time host. The "before" read must go to the live
+    // store rather than that stale closure, or this reports "failure" for a
+    // move that happened before routing ever started (no move occurs during
+    // routing itself, so a correct guard sees no move at all).
+    setEffectiveHost(hostB.hostId);
+
     act(() => {
       hook.result.current.activate({
-        payload: {
-          kind: "approval",
-          epicId: "epic-origin",
-          chatId: "chat-origin",
-          approvalId: "approval-origin",
-          sessionId: undefined,
-          artifactId: undefined,
-        },
-        receivedAt: 101,
-        feedId: "cloud:approval-origin",
-        originHostId: hostB.hostId,
+        payload: { kind: "epic", epicId: "epic-shared" },
+        receivedAt: 100,
+        feedId: "host:n-1",
         onResult,
       });
     });
 
-    expect(client.getActiveHostId()).toBe(hostB.hostId);
-    expect(navigateSpy.mock.calls[0]?.[0]).toMatchObject({
-      params: { epicId: "epic-origin", tabId },
-      search: {
-        focusPaneId: canvas.activePaneId,
-        focusTileInstanceId: "host-b-chat",
-      },
-    });
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  it("fails closed before routing an approval whose origin is unavailable", () => {
-    bindingState.current = {
-      hostClient: client,
-      directory: createTestDirectory(
-        [{ ...hostB, transportDialability: "not-dialable" }],
-        () => undefined,
-      ),
-    };
+  // "selects an approval's origin host before routing to its exact tile" is
+  // deleted: its subject, `ensureOriginHostSelected`, no longer exists.
+  // Activation does not move the app-wide selection at all now (redesign
+  // P1.2, D7) - a notification click routes against whatever host the target
+  // surface already resolves through.
+  //
+  // The fail-closed half of that guard came BACK, one limb narrower, and the
+  // pin below is it. Deleting the function took the refusal along with the
+  // selection write, and only the write was the D7 violation: an origin-
+  // required prompt that routed through the wrong host still reported
+  // SUCCESS, so the popover closed and marked it read. What is refused now is
+  // the acknowledgment, never the navigation, and only on positive evidence
+  // that the route went elsewhere - routability itself remains the caller's
+  // decision, not this hook's.
+
+  it("declines to ACKNOWLEDGE a cloud approval that routed through a host other than its origin", () => {
+    // Host A is effective, the approval was raised on host B, and no B-bound
+    // tile is open - so routing falls through to the hostless epic intent and
+    // resolves through A. The prompt is only answerable on B, and the feed is
+    // a CLOUD one, so `hostFeedStayedOnOrigin` (host feeds only) cannot catch
+    // it: without this, activation reported success and the row was marked
+    // read for a prompt that was never opened on its host.
     const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
@@ -912,47 +943,26 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
         payload: {
           kind: "approval",
           epicId: "epic-origin",
-          chatId: "chat-origin",
-          approvalId: "approval-origin",
+          chatId: "chat-elsewhere",
+          approvalId: "approval-host-b",
           sessionId: undefined,
           artifactId: undefined,
         },
-        receivedAt: 102,
-        feedId: "cloud:approval-origin",
+        receivedAt: 105,
+        feedId: "cloud:approval-host-b",
         originHostId: hostB.hostId,
         onResult,
       });
     });
 
-    expect(navigateSpy).not.toHaveBeenCalled();
+    // Navigation still happened - opening the epic is useful either way.
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith("failure");
-  });
-
-  it("fails closed before routing an approval with no origin host", () => {
-    const onResult = vi.fn();
-    const hook = renderHook(() => useNotificationActivation(), {
-      wrapper: createWrapper(),
-    });
-
-    act(() => {
-      hook.result.current.activate({
-        payload: {
-          kind: "approval",
-          epicId: "epic-origin",
-          chatId: "chat-origin",
-          approvalId: "approval-origin",
-          sessionId: undefined,
-          artifactId: undefined,
-        },
-        receivedAt: 103,
-        feedId: null,
-        originHostId: null,
-        onResult,
-      });
-    });
-
-    expect(navigateSpy).not.toHaveBeenCalled();
-    expect(onResult).toHaveBeenCalledWith("failure");
+    // ...and the app-wide pointer did NOT move to satisfy the origin (D7).
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      hostA.hostId,
+    );
   });
 
   it("does not reuse a host B tile for a host A approval", () => {
@@ -987,7 +997,9 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       });
     });
 
-    expect(client.getActiveHostId()).toBe(hostA.hostId);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      hostA.hostId,
+    );
     expect(navigateSpy).toHaveBeenCalledTimes(1);
     const search = navigateSpy.mock.calls.at(0)?.at(0)?.search;
     if (search === undefined) {

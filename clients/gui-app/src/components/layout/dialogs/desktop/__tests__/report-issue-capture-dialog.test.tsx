@@ -16,6 +16,7 @@ import {
 } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import { toast } from "sonner";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -202,6 +203,9 @@ function createSupportBridgeHarness(overrides: {
 
 function createBaseRunnerHost(): IRunnerHost {
   return {
+    selectionAuthority: createInertSelectionAuthorityClient(),
+    refreshHostFleet: () => Promise.resolve(),
+    onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
@@ -246,14 +250,6 @@ function createBaseRunnerHost(): IRunnerHost {
       setEpics: () => Promise.resolve(),
       setIndicator: () => Promise.resolve(),
       onEpicSelected: () => ({ dispose: () => undefined }),
-    },
-    hostPicker: {
-      get isOpen() {
-        return false;
-      },
-      requestOpen: () => undefined,
-      requestClose: () => undefined,
-      onChange: () => ({ dispose: () => undefined }),
     },
     workspaceFolders: {
       canPickNatively: true,

@@ -78,9 +78,11 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
   // `host status` is now a runner-aware command (Native Packaging
   // cutover): it emits the shared NDJSON envelope and integrates Core
   // Flow 7 auto-bootstrap. Desktop always passes `--no-bootstrap` here
-  // because Setup splash and Settings → Host drive the install
-  // pipeline explicitly - host-status from Desktop is informational
-  // only and must never implicitly install the host.
+  // because the launch reconciler (`HostController`) and Settings → Host
+  // drive the install pipeline explicitly - host-status from Desktop is
+  // informational only (the renderer's boot card reads it for its
+  // `Show details` bootstrap.log tail) and must never implicitly install
+  // the host.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostStatus, async () => {
     return runTraycerCliJson(["host", "status", "--no-bootstrap"]);
   });

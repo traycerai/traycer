@@ -30,14 +30,25 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
   return client;
 }
 
+// Both layers, and BOTH hooks on each: an `importActual` spread hands back
+// the REAL spine hook (`useHostRuntimeClient`, a separate export since
+// redesign P2.1), which throws outside a provider.
 vi.mock("@/lib/host", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => requireHostClient() };
+  return {
+    ...actual,
+    useHostClient: () => requireHostClient(),
+    useHostRuntimeClient: () => requireHostClient(),
+  };
 });
 
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => requireHostClient() };
+  return {
+    ...actual,
+    useHostClient: () => requireHostClient(),
+    useHostRuntimeClient: () => requireHostClient(),
+  };
 });
 
 // The indicator hook resolves its own client from a host id (so the surfaces
@@ -47,8 +58,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => requireHostClient(),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mockLocalHostEntry.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mockLocalHostEntry.hostId,
 }));
 
 vi.mock("sonner", () => ({
@@ -248,9 +259,11 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
   const forkEvent = { value: initialEvent };
   const calls: string[] = [];
   let requestId = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -280,11 +293,10 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
-  hostClientRef.current = client;
+  hostClientRef.current = spine.createRequester(mockLocalHostEntry);
   recordNegotiatedHostMethods(mockLocalHostEntry.hostId, ["host.chatFork.get"]);
   useAuthStore.setState({
     contextMetadata: { userId: "user-a", username: "user-a" },

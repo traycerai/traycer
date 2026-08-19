@@ -32,14 +32,13 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import {
-  useHostBinding,
-  useHostClient,
-  type HostRpcRegistry,
-} from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
@@ -56,7 +55,8 @@ import {
   usePendingRemoveBindingEntryPaths,
 } from "@/hooks/workspace/use-workspace-binding-remove-entry-mutation";
 import { useWorkspaceBindingAddFolderForClient } from "@/hooks/workspace/use-workspace-binding-add-folder-mutation";
-import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
@@ -253,7 +253,7 @@ interface HostWorkspaceSelectorProps {
 
 export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
   const directoryList = useHostDirectoryList();
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const directoryEntries = directoryList.data ?? [];
   const activeEntry =
     directoryEntries.find((entry) => entry.hostId === activeHostId) ?? null;
@@ -301,8 +301,9 @@ interface HomeSurfaceProps {
 function HomeSurface(props: HomeSurfaceProps) {
   // Must be the SAME host `ActiveHostWorkspaceControls` resolves for an
   // "active" scope below - the staged slot and the folder rows it stages into
-  // have to agree on which machine they describe.
-  const landingHostId = useReactiveActiveHostId();
+  // have to agree on which machine they describe. That resolution is the
+  // composer surface pin (pin ?? effective), so read the same primitive.
+  const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
@@ -325,12 +326,19 @@ function HomeSurface(props: HomeSurfaceProps) {
 }
 
 /**
- * Host-only dropdown + Workspace rail/panel folder picker, bound to the
- * ACTIVE host and a staging key. Shared by every surface that picks (but has
- * not yet created) a chat/agent's host + folders + worktree intent: the
- * landing composer, the terminal-agent launcher submenu, and the fork-chat
- * dialog. Writes the per-folder choices to the staging store under
- * `stagingKey`; the launch/send handler reads them back from the same key.
+ * Host-only dropdown + Workspace rail/panel folder picker, bound to a staging
+ * key and to whichever host its `hostScope` names. Shared by every surface
+ * that picks (but has not yet created) a chat/agent's host + folders +
+ * worktree intent: the landing composer, the terminal-agent launcher submenu,
+ * and the fork-chat dialog. Writes the per-folder choices to the staging store
+ * under `stagingKey`; the launch/send handler reads them back from the same
+ * key.
+ *
+ * Two host scopes, and the name is now historical: `fixed` addresses a
+ * caller-supplied host with an inert picker, and what used to be the "active"
+ * scope is the composer's window-keyed SURFACE PIN (selection model §2), which
+ * resolves to `pin ?? effective` and follows the effective host only until the
+ * user names one. Neither scope writes the app-wide selection any more.
  */
 type ActiveHostWorkspaceControlsProps = {
   readonly stagingKey: WorktreeStagingKey;
@@ -365,18 +373,39 @@ export function ActiveHostWorkspaceControls(
   const directoryList = useHostDirectoryList();
   const disabled = props.disabled;
   const directoryEntries = directoryList.data ?? [];
-  const reactiveActiveHostId = useReactiveActiveHostId();
+  // The composer is PLACEMENT, and placement is a per-surface pin (redesign
+  // P1.2, selection model §2/§54) - not the app-wide selection, which is
+  // Settings ▸ Activate's alone now. A scope that NAMES a host (`fixed`, or
+  // #1227's dialog-local `selected`) wins outright; the follow arm resolves
+  // the composer's own pin - `pin ?? effective` - and the picker below writes
+  // the pin. Nothing here moves the window.
+  const composerPin = useComposerSurfaceHostPin();
   const scopeHostId = hostWorkspaceControlsScopeHostId(props.hostScope);
-  const activeHostId = scopeHostId ?? reactiveActiveHostId;
+  const activeHostId = scopeHostId ?? composerPin.resolvedHostId;
   const activeEntry =
     directoryEntries.find((entry) => entry.hostId === activeHostId) ?? null;
+  // "Local" is the neutral pre-directory default, and it is only honest while
+  // this surface is FOLLOWING: a pin naming a host the directory does not
+  // carry is a real unavailable state (D6), not a slow first paint.
   const hostLabel =
-    activeEntry?.label ?? (scopeHostId === null ? "Local" : "Unavailable");
-  const binding = useHostBinding();
-  const defaultHostClient = useHostClient();
+    activeEntry?.label ??
+    (scopeHostId === null && !composerPin.isPinned ? "Local" : "Unavailable");
+  // `pin.selection`, NOT `pin.resolvedHostId`: a FOLLOWING surface must keep
+  // using the app-wide bound client (which the authority bridge holds on the
+  // effective host) rather than a transient requester, so nothing about the
+  // unpinned path changes. Only a pin resolves its own host's requester - and
+  // that is what stops a pinned composer from sending to the machine the
+  // window happens to be bound to.
+  // `honoredSelection`, not `selection`: a deposed pin still NAMES the dead
+  // host in `selection` (sticky return), but must not READ through it - the
+  // chip auto-follows, and the rows must describe the machine the chip shows
+  // (the same F3 rule `use-composer-placement.ts` applies).
+  const pinResolvedHostClient = useHostClientForHostId(
+    composerPin.honoredSelection,
+  );
   const activeHostClient =
     props.hostScope.kind === "active"
-      ? defaultHostClient
+      ? pinResolvedHostClient
       : props.hostScope.hostClient;
   // The picker's rows come from the merged host list, not from the directory
   // this component reads for the chip label: a host the account owns but this
@@ -418,8 +447,8 @@ export function ActiveHostWorkspaceControls(
         : homeWorkspaceSource,
     [disabled, homeWorkspaceSource],
   );
-  // Resolve repo-identifier → path against the scope-correct host: the
-  // default host in active scope, the source agent's FIXED host in the
+  // Resolve repo-identifier → path against the scope-correct host: this
+  // composer's pinned (or followed) host, the source agent's FIXED host in the
   // terminal-agent fork dialog (else paths resolve on the wrong machine).
   const resolved = useResolvedWorkspaceFolders(
     workspaceSource.source,
@@ -437,15 +466,16 @@ export function ActiveHostWorkspaceControls(
   const handleSelectHost = (hostId: string): void => {
     if (disabled) return;
     if (props.hostScope.kind === "fixed") return;
-    // A `selected` scope owns the choice itself. The app-wide rebind below is
-    // NOT a fallback for it: routing a dialog-local target through the
-    // directory is the bug this scope exists to remove.
+    // A `selected` scope owns the choice itself - routing a dialog-local
+    // target through any app/window-wide seam is the bug this scope removes.
     if (props.hostScope.kind === "selected") {
       props.hostScope.onSelect(hostId);
       return;
     }
-    if (binding === null) return;
-    binding.directory.selectById(hostId);
+    // Writes THIS surface's pin and nothing else. Before P1.2 this called
+    // `binding.directory.selectById(hostId)` - moving the whole app to place
+    // one chat, which is the defect the surface-pin model exists to end.
+    composerPin.setSelection(hostId);
   };
 
   if (props.layout === "stacked") {
@@ -471,6 +501,10 @@ export function ActiveHostWorkspaceControls(
           isLoading={hostOptions.isLoading}
           listsFailed={hostOptions.listsFailed}
           onRetryLists={hostOptions.retryLists}
+          // `pin`, not `bind`: since P1.2 a pick here writes this composer's
+          // surface pin and never rebinds the window. (The two intents gate
+          // rows identically; only `view` differs.)
+          intent="pin"
         />
         <section
           aria-label="Workspaces"
@@ -533,11 +567,13 @@ function HomeWorkspaceRows(props: {
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
   /**
-   * Passed separately from the client because it is the only one of the two
-   * that MOVES on a host swap. `HostClient.bind()` rebinds in place, so the
-   * active-scope client is one object for the app's lifetime - reading its host
-   * id inside a memo keyed on the client alone would pin the first host's
-   * answer. See `rowsIntentKey`.
+   * Passed separately from the client. The original reason no longer holds:
+   * `HostClient.bind()` rebound in place, so the active-scope client was ONE
+   * object for the app's lifetime and a memo keyed on it alone would pin the
+   * first host's answer. P4.2 deleted that - the app-wide client is now a
+   * requester rebuilt when the effective host changes, so it does move. The
+   * id stays an explicit input because it is also non-null in states where
+   * the client is null. See `rowsIntentKey`.
    */
   readonly activeHostId: string | null;
   /** Display label for the selected host — used in absent-path row copy. */
@@ -1796,16 +1832,26 @@ interface InEpicSurfaceProps {
 // eslint-disable-next-line complexity
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
+  // Held for the clone handler below, which needs the DIRECTORY and the spine,
+  // not a host-resolved client.
   const binding = useHostBinding();
   const sourceChatRecord = useChatById(
     surface.kind === "chat" ? surface.ownerId : null,
   );
   // Ticket 37: the owner this surface is showing for the chat it would clone,
-  // resolved through the same hook the dead-tile banner uses. Read off the
-  // app-wide binding rather than `props.hostClient` so it shares the cloud
-  // list already fetched elsewhere in the app.
+  // resolved through the same hook the dead-tile banner uses. APP-WIDE BY
+  // INTENT, and this is the strongest case of it in the app: the surface
+  // already HOLDS a host client (`props.hostClient`) and deliberately declines
+  // it, because sharing the cloud list already fetched elsewhere is the whole
+  // point. Not the spine either, which stopped naming a host when P4.2 deleted
+  // the active slot.
+  const appEffectiveHostId = useEffectiveHostId();
+  const appHostClient = useMemo(
+    () => resolveAppWideHostClient(binding, appEffectiveHostId),
+    [binding, appEffectiveHostId],
+  );
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
-    client: binding?.hostClient ?? null,
+    client: appHostClient,
     epicId: surface.epicId,
     chatId: surface.kind === "chat" ? surface.ownerId : null,
   });
@@ -1833,7 +1879,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ownerId: surface.ownerId,
     ownerKind,
   });
-  const createChat = useEpicCreateChat();
   const folderActions = useWorkspaceFolderActionsForClient(props.hostClient);
   const bindingEntries = surface.binding?.entries ?? EMPTY_BINDING_ENTRIES;
   // ANTI-REVERT — render THIS owner's binding entries ONLY; never an epic-wide
@@ -1899,8 +1944,14 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const [pendingCloneHostId, setPendingCloneHostId] = useState<string | null>(
     null,
   );
+  // The clone lands on the TARGET host and no longer moves the app-wide
+  // selection (redesign P1.2, D6), so the create runs on that host's own
+  // client - the app-wide variant would reject it as a host mismatch, which
+  // is exactly the check that used to be satisfied by rebinding the window.
+  const cloneTargetClient = useHostClientForHostId(pendingCloneHostId);
+  const createChat = useEpicCreateChatForHostClient(cloneTargetClient);
   // In-epic surfaces address their bound owner host (`props.activeHostId` is
-  // `surface.hostId` here), which is also the host whose remembered defaults
+  // `surface.hostId` there), which is also the host whose remembered defaults
   // this picker may read and write.
   const ownerHostId = props.activeHostId;
   const rememberFolderIntent = useWorktreeIntentMemoryStore(
@@ -2215,6 +2266,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       sourceChatId: surface.ownerId,
       sourceOwnerUserId,
       sourceHostId: surface.hostId,
+      sourceTitle: sourceChatRecord?.title ?? "",
       targetHostId: pendingCloneHostId,
       directory: binding.directory,
       sourceSettings: sourceChatRecord?.settings ?? null,
@@ -2233,8 +2285,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       },
       // No local "in flight" state to clear here - the confirm dialog
       // already closes unconditionally below, before the async result is
-      // known. `useEpicCreateChat`'s own `onError` still toasts a terminal
-      // failure.
+      // known. `useEpicCreateChatForHostClient`'s own `onError` still toasts
+      // a terminal failure.
       onCloneFailed: () => undefined,
       navigateNestedFocus,
       createChat: (request, callbacks) => {

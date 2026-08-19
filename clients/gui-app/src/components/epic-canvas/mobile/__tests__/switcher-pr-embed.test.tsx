@@ -27,8 +27,8 @@ vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   isMobileViewport: () => viewportState.isMobile,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => HOST_ID,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => HOST_ID,
 }));
 
 const tileNavigationMocks = vi.hoisted(() => ({

@@ -4,6 +4,7 @@ import {
   epicSubscribeServerFrameSchema,
   epicSubscribeServerFrameSchemaV10,
   epicSubscribeServerFrameSchemaV11,
+  epicSubscribeServerFrameSchemaV12,
   epicSubscribeV10,
 } from "@traycer/protocol/host/epic/subscribe";
 
@@ -18,7 +19,7 @@ import {
 
 describe("epic.subscribe@1.0 server frames", () => {
   it("parses a binary-bearing snapshot frame", () => {
-    const parsed = epicSubscribeServerFrameSchema.parse({
+    const parsed = epicSubscribeServerFrameSchemaV10.parse({
       kind: "snapshot",
       epicId: "epic-1",
       meta: {
@@ -124,6 +125,85 @@ describe("epic.subscribe@1.0 server frames", () => {
         hasBinaryPayload: true,
       }),
     ).toThrow();
+  });
+});
+
+describe("epic.subscribe@1.2 snapshot room identity (@1.0/@1.1 meta frozen)", () => {
+  const snapshotWithRoomId = {
+    kind: "snapshot",
+    epicId: "epic-1",
+    meta: {
+      schemaVersion: "1.0.0",
+      roomId: "room-x",
+      epicLight: null,
+      permissionRole: "owner",
+      repos: [],
+      workspaces: [],
+      repoMapping: [],
+      workspaceFolders: [],
+      unresolvedRepos: [],
+      hostStateVectorBase64: "AQ==",
+    },
+    hasBinaryPayload: true,
+  };
+
+  it("strips roomId when a snapshot frame carrying it is parsed under the frozen @1.0 meta shape", () => {
+    const parsed = epicSubscribeServerFrameSchemaV10.parse(snapshotWithRoomId);
+    if (parsed.kind !== "snapshot") {
+      throw new Error("expected snapshot frame");
+    }
+    // A @1.0 peer discards what a @1.2 host sends - exactly why the host
+    // needs no emission gate for this key (`subscribe.ts`).
+    expect("roomId" in parsed.meta).toBe(false);
+  });
+
+  it("strips roomId when a snapshot frame carrying it is parsed under the frozen @1.1 meta shape", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse(snapshotWithRoomId);
+    if (parsed.kind !== "snapshot") {
+      throw new Error("expected snapshot frame");
+    }
+    expect("roomId" in parsed.meta).toBe(false);
+  });
+
+  it("retains an optional room identity on a snapshot frame", () => {
+    const parsed = epicSubscribeServerFrameSchemaV12.parse(snapshotWithRoomId);
+
+    if (parsed.kind !== "snapshot") {
+      throw new Error("expected snapshot frame");
+    }
+    expect(parsed.meta.roomId).toBe("room-x");
+  });
+
+  it("parses a snapshot frame with no roomId at all under @1.2", () => {
+    // Pins `.optional()` on `roomId`. The GUI client parses every server
+    // frame with the LATEST schema regardless of the negotiated minor
+    // (`epic-stream-client.ts`), so an @1.0/@1.1 host's snapshot frame -
+    // which never carries this key - must stay parseable at a @1.2-capable
+    // client. If `roomId` were ever tightened to required, that frame would
+    // fail to parse, and the client's parse-failure path returns silently,
+    // leaving the canvas stuck on its loading skeleton forever. This test is
+    // what catches a future "tighten roomId to required" edit.
+    const parsed = epicSubscribeServerFrameSchemaV12.parse({
+      kind: "snapshot",
+      epicId: "epic-1",
+      meta: {
+        schemaVersion: "1.0.0",
+        epicLight: null,
+        permissionRole: "owner",
+        repos: [],
+        workspaces: [],
+        repoMapping: [],
+        workspaceFolders: [],
+        unresolvedRepos: [],
+        hostStateVectorBase64: "AQ==",
+      },
+      hasBinaryPayload: true,
+    });
+
+    if (parsed.kind !== "snapshot") {
+      throw new Error("expected snapshot frame");
+    }
+    expect(parsed.meta.roomId).toBeUndefined();
   });
 });
 
@@ -563,7 +643,21 @@ describe("epic.subscribe dirtySnapshot + dirty deltas version gate (@1.0 frozen,
     ).toThrow();
   });
 
-  it("@1.1 still accepts every @1.0 frame kind - additive, nothing dropped", () => {
+  it("@1.2 still accepts dirtySnapshot, artifactRoomDirty and rootDirty - additive over @1.1", () => {
+    const artifactRoomDirty = epicSubscribeServerFrameSchemaV12.parse(
+      artifactRoomDirtyFrame,
+    );
+    expect(artifactRoomDirty.kind).toBe("artifactRoomDirty");
+
+    const rootDirty = epicSubscribeServerFrameSchemaV12.parse(rootDirtyFrame);
+    expect(rootDirty.kind).toBe("rootDirty");
+
+    const dirtySnapshot =
+      epicSubscribeServerFrameSchemaV12.parse(dirtySnapshotFrame);
+    expect(dirtySnapshot.kind).toBe("dirtySnapshot");
+  });
+
+  it("@1.1 and @1.2 still accept every @1.0 frame kind - additive, nothing dropped", () => {
     const v10Fixtures: ReadonlyArray<Record<string, unknown>> = [
       {
         kind: "snapshot",
@@ -580,6 +674,20 @@ describe("epic.subscribe dirtySnapshot + dirty deltas version gate (@1.0 frozen,
           hostStateVectorBase64: "AQ==",
         },
         hasBinaryPayload: true,
+      },
+      {
+        kind: "earlyMeta",
+        epicId: "epic-1",
+        meta: {
+          epicLight: null,
+          permissionRole: "owner",
+          repos: [],
+          workspaces: [],
+          repoMapping: [],
+          workspaceFolders: [],
+          unresolvedRepos: [],
+        },
+        hasBinaryPayload: false,
       },
       { kind: "update", epicId: "epic-1", hasBinaryPayload: true },
       { kind: "awareness", epicId: "epic-1", hasBinaryPayload: true },
@@ -657,6 +765,12 @@ describe("epic.subscribe dirtySnapshot + dirty deltas version gate (@1.0 frozen,
       ).not.toThrow();
       expect(() =>
         epicSubscribeServerFrameSchemaV11.parse(fixture),
+      ).not.toThrow();
+      // The @1.2 union was built by splicing a new snapshot frame in front of
+      // the shared non-snapshot frames - this proves nothing was lost in
+      // that splice.
+      expect(() =>
+        epicSubscribeServerFrameSchemaV12.parse(fixture),
       ).not.toThrow();
     }
   });

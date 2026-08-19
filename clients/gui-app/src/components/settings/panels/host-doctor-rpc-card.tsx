@@ -31,10 +31,12 @@ import {
   splitDoctorIssuesByVantage,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import { busyRestartVerdictSentence } from "@/components/host/host-restart-copy";
 import { useHostDoctorRun } from "@/components/settings/panels/host-overview-rpc";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastHostRestartRequested } from "@/lib/host-restart-toast";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { cn } from "@/lib/utils";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -236,11 +238,11 @@ export function HostDoctorRpcCard(props: {
                   armedFixRestartIdRef.current = null;
                   if (response.outcome === "busy") {
                     toast.message(
-                      `Not restarted — ${response.verdict.busySessionCount} session${response.verdict.busySessionCount === 1 ? " is" : "s are"} still working.`,
+                      `Not restarted. ${busyRestartVerdictSentence(response.verdict)}`,
                     );
                     return;
                   }
-                  toast.success(`Restarting ${hostName}`);
+                  toastHostRestartRequested();
                 },
                 onError: (error) =>
                   toastFromHostError(error, "Couldn't restart this host."),

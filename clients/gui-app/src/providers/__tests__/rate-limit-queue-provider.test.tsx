@@ -16,7 +16,7 @@ type ConfiguredFixture = {
 
 type MockState = {
   hostId: string | null;
-  client: { request: () => Promise<unknown> } | null;
+  client: { requestWithResponseTimeout: () => Promise<unknown> } | null;
   configured: ReadonlyArray<ConfiguredFixture>;
   profileSelection: {
     activeChatSettings: null;
@@ -26,16 +26,18 @@ type MockState = {
 
 const mocks = vi.hoisted<MockState>(() => ({
   hostId: "host-a",
-  client: { request: () => Promise.resolve({}) },
+  client: { requestWithResponseTimeout: () => Promise.resolve({}) },
   configured: [],
   profileSelection: { activeChatSettings: null, lastProfileByHarness: {} },
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mocks.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mocks.hostId,
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.client,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mocks.client,
 }));
 // Normalizes each fixture with the defaults a real `ConfiguredRateLimitProvider`
 // always carries (`profiles`, `fetchEligibility`), so most existing test bodies
@@ -153,7 +155,9 @@ describe("<RateLimitQueueProvider />", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.hostId = "host-a";
-    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
+    mocks.client = {
+      requestWithResponseTimeout: vi.fn(() => Promise.resolve({})),
+    };
     mocks.configured = [];
     mocks.profileSelection = {
       activeChatSettings: null,
@@ -324,7 +328,9 @@ describe("<RateLimitQueueProvider /> background profile polling", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.hostId = "host-a";
-    mocks.client = { request: vi.fn(() => Promise.resolve({})) };
+    mocks.client = {
+      requestWithResponseTimeout: vi.fn(() => Promise.resolve({})),
+    };
     mocks.configured = [];
     mocks.profileSelection = {
       activeChatSettings: null,

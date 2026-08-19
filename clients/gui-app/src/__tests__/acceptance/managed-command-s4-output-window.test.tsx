@@ -66,6 +66,10 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     status: mocks.reachability.value,
     hostLabel: `host ${hostId}`,
   }),
+  resolvedHostLabel: (r: {
+    readonly status: string;
+    readonly hostLabel: string;
+  }) => (r.status === "checking" ? null : r.hostLabel),
 }));
 
 vi.mock(
@@ -89,10 +93,16 @@ vi.mock(
 
 // Dialing the real durable transport from a test would be a silent fall-through
 // past the factory override; make it unmissable instead.
+//
+// Hoisted to ONE instance so the opener is referentially stable across renders,
+// matching the real hook — see the note at
+// `lib/registries/__tests__/chat-session-registry.test.ts` for what a
+// fresh-closure-per-render mock does to the effects that depend on it.
+const refuseDurableTransport = vi.hoisted(() => () => {
+  throw new Error("acceptance: the real stream transport must not be dialed");
+});
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => () => {
-    throw new Error("acceptance: the real stream transport must not be dialed");
-  },
+  useDurableStreamTransportFactory: () => refuseDurableTransport,
 }));
 
 const EPIC_ID = "epic-s4";

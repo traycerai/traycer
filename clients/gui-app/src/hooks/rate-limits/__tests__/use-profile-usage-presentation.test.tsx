@@ -90,9 +90,11 @@ function buildHostScope(
 ): {
   readonly scope: RunTargetHost;
 } {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = { ...mockLocalHostEntry, hostId };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -101,10 +103,10 @@ function buildHostScope(
       },
     }),
   });
-  client.bind({ ...mockLocalHostEntry, hostId });
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(entry);
   const scope: RunTargetHost = {
     hostId,
     client,
@@ -377,6 +379,7 @@ describe("useProfileUsagePresentation", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-a",
+        force: true,
       },
     ]);
   });

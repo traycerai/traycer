@@ -28,7 +28,6 @@ function makeRouter(history: RouterHistory): AppRouter {
     context: {
       queryClient: new QueryClient(),
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () => null,
       getHostClient: () => null,
     },
   });

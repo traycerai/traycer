@@ -575,9 +575,11 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     readonly client: HostClient<HostRpcRegistry>;
     readonly rerender: () => void;
   } {
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-retention",
@@ -587,10 +589,10 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok" }),
     );
+    const client = spine.createRequester(mockLocalHostEntry);
     hostScopeMocks.client = client;
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -730,9 +732,11 @@ function renderNotificationsSettings(
     resolveTest = resolve;
   });
 
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -771,13 +775,13 @@ function renderNotificationsSettings(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "tok-1",
     }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -817,9 +821,11 @@ function renderNotificationsSettingsWithDeferredRefetch(): {
   const refetchPromise = new Promise<NotificationConfig>((resolve) => {
     resolveRefetch = resolve;
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -838,13 +844,13 @@ function renderNotificationsSettingsWithDeferredRefetch(): {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "tok-1",
     }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -884,9 +890,11 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
   });
 
   it("disarms a pending hook delete when the scoped host changes", async () => {
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-scope",
@@ -898,10 +906,10 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
+    const client = spine.createRequester(mockLocalHostEntry);
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },

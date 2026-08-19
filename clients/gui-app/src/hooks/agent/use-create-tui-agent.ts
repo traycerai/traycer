@@ -15,7 +15,7 @@ import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-laun
 import { useValidateTuiForkProfile } from "@/hooks/agent/use-validate-tui-fork-profile-mutation";
 import { useTuiForkProfileSupported } from "@/hooks/agent/use-tui-fork-profile-support";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
@@ -226,8 +226,7 @@ export function useCreateTuiAgent(): {
   // so the bound host id is not yet known. Stamp the renderer's current
   // default; once the projection lands, the per-tile binding rides on the
   // `TuiAgentProjection.hostId` rather than this placeholder value.
-  const placeholderHostId =
-    useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const placeholderHostId = useAddressableHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   return useCreateTuiAgentForClient(hostClient, placeholderHostId);
 }
 

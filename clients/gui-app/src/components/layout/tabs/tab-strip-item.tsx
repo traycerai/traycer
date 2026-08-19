@@ -42,7 +42,8 @@ import {
 import { displayTitle } from "@/lib/display-title";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { getAppHostClientSnapshot } from "@/lib/host/runtime";
+import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
@@ -64,6 +65,8 @@ import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
@@ -113,6 +116,34 @@ export interface HeaderTabDndConfig {
   readonly stripItemId: string;
   readonly index: number;
   readonly isDropSlot: boolean;
+}
+
+/**
+ * The client an epic rename should be sent on.
+ *
+ * `null` host - no live session for that epic - keeps the app-wide client,
+ * which is what this surface used before tabs carried a host at all. A NAMED
+ * host resolves that host's own requester, and returning `null` when it cannot
+ * be built is deliberate: the caller reports a failure rather than falling
+ * back, because "rename the epic on the machine that holds it" and "rename it
+ * on whichever machine this window happens to be pointed at" are different
+ * requests, and silently substituting the second is how a rename lands against
+ * a host that never had the epic.
+ *
+ * Built through `buildTransientHostClient` - the same builder every other
+ * explicit-host consumer uses - rather than a second construction path.
+ */
+function epicRenameClient(
+  hostId: string | null,
+): HostClient<HostRpcRegistry> | null {
+  const appClient = getAppHostClientSnapshot();
+  if (appClient === null) return null;
+  if (hostId === null || hostId === appClient.getActiveHostId()) {
+    return appClient;
+  }
+  const entry = appClient.resolveHostById(hostId);
+  if (entry === null) return null;
+  return buildTransientHostClient(appClient, entry);
 }
 
 export const TabItem = memo(function TabItem(props: TabItemProps) {
@@ -193,6 +224,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     (next: string) => {
       if (tab.kind !== "epic") return;
       const epicId = tab.epicId;
+      const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
       const previousTitle =
         handle?.store.getState().epic.title ?? resolvedTabName;
@@ -203,10 +235,22 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         handle?.store.getState().setEpicTitle(previousTitle);
       };
       // The header strip is app-global and not guaranteed to sit inside a
-      // HostRuntimeProvider, so reach the host client through the binding
-      // snapshot rather than a render-time hook.
-      const binding = getHostBindingSnapshot();
-      if (binding === null) {
+      // HostRuntimeProvider, so reach the host client through the snapshot
+      // rather than a render-time hook. It is the app-wide client, already
+      // pinned to the effective host: this rename used to be issued on the
+      // SPINE, which answered from the active slot, so the call landed on
+      // whichever host was bound at the instant it was dispatched. Post-P4.2
+      // the client addresses the host it resolved, and `hostId` below is that
+      // same resolution rather than a second, independently-timed read.
+      //
+      // HOST-SCOPED where the tab knows its host. An epic served by a session
+      // on host B was renamed through the app-wide client - host A - purely
+      // because the strip had no way to know about B. `tab.hostId` is that
+      // session's own answer projected onto the tab, so the rename now goes
+      // where the epic actually lives. `null` (no live session) keeps the
+      // app-wide client, which is all this surface ever had.
+      const client = epicRenameClient(tabHostId);
+      if (client === null) {
         rollback();
         reportableErrorToast(
           "Couldn't reach the host to rename the epic.",
@@ -220,9 +264,9 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         );
         return;
       }
-      const hostId = binding.hostClient.getActiveHostId();
-      const userId = binding.hostClient.getRequestContextUserId();
-      void binding.hostClient
+      const hostId = client.getActiveHostId();
+      const userId = client.getRequestContextUserId();
+      void client
         .request("epic.updateTitle", {
           epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
         })

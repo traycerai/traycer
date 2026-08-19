@@ -9,13 +9,13 @@ import type {
   PrLightItem,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useRecordPrPresence } from "@/hooks/pr/use-pr-presence-probe";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
@@ -35,7 +35,7 @@ import {
 } from "@/stores/epics/left-panel-store";
 
 /**
- * Pull Requests panel body. Subscribes in foreground mode on the default-host
+ * Pull Requests panel body. Subscribes in foreground mode on the canvas host
  * stream client with an explicit visibility gate:
  *   enabled = surface showing this body ∧ method supported
  *
@@ -58,10 +58,10 @@ import {
  * full row, placed directly under the superproject it shipped with (see
  * `orderRepoGroupKeys`).
  *
- * Host switcher: omitted (list follows the app active host). See PrPanelActions.
+ * Host switcher: omitted (list follows the canvas-serving host). See PrPanelActions.
  */
 export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
-  const hostId = useReactiveActiveHostId();
+  const hostId = useCanvasHostId();
   const mainCollapsed = useMainPanelCollapsed(props.tabId);
   const sectionCollapsed = useLeftPanelSectionCollapsed("pull-requests");
   const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");

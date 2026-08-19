@@ -27,7 +27,7 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import {
   selectPrScopeHasItems,
@@ -114,7 +114,7 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   // sidebar that owns the same panels. It also has to match the writer: the
   // panel body and the probe both record under this same host, and a reader on
   // a different scope key could never see what they wrote.
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const hasRecordedPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(activeHostId, epicId),
   );

@@ -42,6 +42,27 @@
   }
 }
 
+/* Indeterminate host-progress bar: a segment sweeping across the track, for a
+   stage that is RUNNING but reports no percentage (verify, extract, swap,
+   service-start). Plain CSS for the same reason as the shimmer above - no motion
+   runtime, so it animates regardless of the LazyMotion provider.
+
+   It must MOVE. A static full-width fill was the previous behaviour here and it
+   was a lie: the progress carry-forward used to leak a completed download's 100%
+   into the next stage, so the card sat at a full bar for minutes of real work. A
+   motionless indeterminate bar would be that same claim in a new costume.
+
+   `transform` only, so it composites without laying out - this runs for the whole
+   multi-minute extract. */
+@keyframes host-progress-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
 @keyframes prompt-stash-count-flash {
   0%,
   72% {

@@ -123,8 +123,8 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   useTerminalList: () => ({ data: { sessions: holder.sessions } }),
 }));
 vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-A",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-A",
 }));
 vi.mock("@/lib/terminals/terminal-session-filters", () => ({
   isVisibleEpicTerminalSession: () => true,
