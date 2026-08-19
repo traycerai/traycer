@@ -483,6 +483,50 @@ describe("labels and helpers", () => {
     }
   });
 
+  it("speaks a blocking certification on the CURRENT row, whose chip slot `Current` owns", () => {
+    // `versionRowChip` hands `Current` the chip unconditionally, so a current
+    // version that is later withdrawn has nowhere else to say so. Non-current
+    // blocked rows wear the certification AS their chip and must not get a
+    // second copy here.
+    for (const certification of [
+      "yanked",
+      "below-security-floor",
+      "host-ineligible",
+    ] as const) {
+      const current = version({
+        version: "1.0.0",
+        current: true,
+        certification,
+        installState: { status: "installed" },
+      });
+      expect(versionRowChip(current)?.label).toBe("Current");
+      expect(versionTroubleLine(current)).toBe(
+        certificationMetaLine(certification),
+      );
+
+      const sibling = version({
+        version: "0.9.0",
+        current: false,
+        certification,
+        installState: { status: "installed" },
+      });
+      expect(versionRowChip(sibling)?.tone).toBe("blocked");
+      expect(versionTroubleLine(sibling)).toBeNull();
+    }
+    // `uncertified` is NOT blocking (D8): a current copy the channel stopped
+    // listing stays usable and must stay quiet.
+    expect(
+      versionTroubleLine(
+        version({
+          version: "1.0.0",
+          current: true,
+          certification: "uncertified",
+          installState: { status: "installed" },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("finds the recommended version from managed state", () => {
     expect(
       findRecommendedVersion(

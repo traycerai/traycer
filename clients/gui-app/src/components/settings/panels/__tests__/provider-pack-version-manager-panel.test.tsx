@@ -870,6 +870,65 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
   });
 
+  it("disarms a delete when the settings scope follows to another host carrying the same version", async () => {
+    // The panel is mounted unkeyed under a scope whose host can auto-follow
+    // while the popover is open. If the arming were a bare version string it
+    // would survive the move, and the new host's identical row would mount
+    // already armed — one press from deleting on a machine nothing was armed
+    // on. Same pack, same version, different host: must NOT be armed.
+    const user = userEvent.setup();
+    const rows = [
+      version({ version: "1.5.0", installState: { status: "installed" } }),
+    ];
+    const view = render(
+      <ProviderPackVersionManagerPanel
+        hostId="host-1"
+        packId="opencode"
+        packDisplayName="opencode CLI"
+        managedVersions={managed(rows, null)}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Delete", "1.5.0") }),
+    );
+    expect(screen.getByTestId("version-delete-confirm-1.5.0")).toBeTruthy();
+
+    view.rerender(
+      <ProviderPackVersionManagerPanel
+        hostId="host-2"
+        packId="opencode"
+        packDisplayName="opencode CLI"
+        managedVersions={managed(rows, null)}
+      />,
+    );
+
+    expect(screen.queryByTestId("version-delete-confirm-1.5.0")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: rowActionName("Delete", "1.5.0") }),
+    ).toBeTruthy();
+    expect(mocks.removeMutate).not.toHaveBeenCalled();
+  });
+
+  it("says why the CURRENT version is blocked, since its chip slot is taken by Current", () => {
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "1.5.0",
+          current: true,
+          certification: "yanked",
+          installState: { status: "installed" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    expect(screen.getByText("Current")).toBeTruthy();
+    const trouble = screen.getByTestId("version-row-trouble");
+    expect(trouble.textContent).toContain("Withdrawn");
+  });
+
   it("disarms an armed delete when another row's action runs", async () => {
     const user = userEvent.setup();
     renderPanel({

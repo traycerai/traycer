@@ -383,6 +383,14 @@ export function installErrorReasonLabel(
  * `quarantined` is deliberately included even though its bytes are intact: the
  * disabled Delete's tooltip says the same thing, and a tooltip is not where a
  * row should first admit it is being held.
+ *
+ * The CURRENT row is the one other place a blocking fact has nowhere to go.
+ * `versionRowChip` gives `Current` the chip slot unconditionally — the version
+ * in use has to be identifiable before anything else — so a current version
+ * that is later withdrawn, dropped below the security floor, or outgrown by
+ * this Traycer release shows `Current`, dims, and says nothing. The hover card
+ * used to carry that sentence; this line does now. Non-current blocked rows
+ * already wear the certification as their chip, so they get no second copy.
  */
 export function versionTroubleLine(
   version: ProviderPackVersion,
@@ -395,6 +403,9 @@ export function versionTroubleLine(
     // underlying operator-facing detail and can carry raw filesystem or
     // network text; it must never reach this surface.
     return installErrorReasonLabel(version.installState.reason);
+  }
+  if (version.current && isBlockingCertification(version.certification)) {
+    return certificationMetaLine(version.certification);
   }
   return null;
 }

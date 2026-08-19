@@ -105,6 +105,27 @@ type BannerNotice = {
 };
 
 /**
+ * The row whose Delete is armed — identified by WHERE it is, not just which
+ * version, so the arming cannot outlive the host and pack it was made on.
+ */
+type ArmedDelete = {
+  readonly hostId: string | null;
+  readonly packId: string;
+  readonly version: string;
+};
+
+/** The armed version, but only while the panel still shows the host and pack it was armed on. */
+function armedVersionWithin(
+  armed: ArmedDelete | null,
+  hostId: string | null,
+  packId: string,
+): string | null {
+  if (armed === null) return null;
+  if (armed.hostId !== hostId || armed.packId !== packId) return null;
+  return armed.version;
+}
+
+/**
  * Per-pack version manager panel (B5-T2).
  *
  * Three regions, in the order a reader needs them: what is true of the pack
@@ -184,7 +205,16 @@ export function ProviderPackVersionManagerPanel(
   // without fake timers and, worse, can disarm between a user deciding and
   // clicking. It disarms on any other action in the panel (via `clearNotice`)
   // and on unmount, which closing the popover does.
-  const [armedDelete, setArmedDelete] = useState<string | null>(null);
+  //
+  // Keyed by host and pack as well as version, because this panel is mounted
+  // unkeyed under a settings scope whose host can AUTO-FOLLOW to another
+  // machine while the popover is open. A bare version string would survive
+  // that move, and if the new host also carries `1.5.0` its row would mount
+  // already armed — one press from deleting something on a machine the user
+  // never armed anything on. Matching the full key makes the move disarm for
+  // free, with no effect and no remount.
+  const [armedDelete, setArmedDelete] = useState<ArmedDelete | null>(null);
+  const armedVersion = armedVersionWithin(armedDelete, hostId, packId);
 
   // Tell the mutation hooks this panel is on screen to render outcomes. While
   // it is, refusals draw inline below, anchored to what they are about; once
@@ -313,9 +343,9 @@ export function ProviderPackVersionManagerPanel(
   const onArmDelete = useCallback(
     (version: string) => {
       clearNotice();
-      setArmedDelete(version);
+      setArmedDelete({ hostId, packId, version });
     },
-    [clearNotice],
+    [clearNotice, hostId, packId],
   );
 
   const onDelete = useCallback(
@@ -452,7 +482,7 @@ export function ProviderPackVersionManagerPanel(
                 ? rowNotice
                 : null
             }
-            deleteArmed={armedDelete === row.version}
+            deleteArmed={armedVersion === row.version}
             downloadPending={
               pendingVersion === row.version && install.isPending
             }
