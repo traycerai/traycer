@@ -3,6 +3,7 @@ import {
   filterHeaderStripItemIdsForProject,
   headerTabMatchesProject,
   headerTabProjectBadge,
+  historyItemProjectBadge,
   resolveEpicWorkspaceHint,
   resolveOwningProjectProfile,
   stampedWorkspaceHintForEpic,
@@ -178,6 +179,40 @@ describe("headerTabProjectBadge", () => {
       color: "blue",
       name: "CRM",
     });
+  });
+});
+
+describe("historyItemProjectBadge", () => {
+  const profiles = [TITANOS, CRM];
+  const titanosOnly = {
+    epicId: "old-titanos",
+    worktreePaths: [] as const,
+    linkedWorkspaces: [
+      { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+    ],
+  };
+  const fanOut = {
+    epicId: "issue-1180",
+    worktreePaths: [] as const,
+    linkedWorkspaces: [
+      { hostId: "host-a", workspacePath: "/Users/g/work/Titanos" },
+      { hostId: "host-a", workspacePath: "/Users/g/work/CRM" },
+    ],
+  };
+
+  it("puts Titanos color and name on an owned History row in All projects", () => {
+    expect(historyItemProjectBadge(null, profiles, titanosOnly)).toEqual({
+      color: "orange",
+      name: "Titanos",
+    });
+  });
+
+  it("hides the History badge while a project is active", () => {
+    expect(historyItemProjectBadge(TITANOS, profiles, titanosOnly)).toBeNull();
+  });
+
+  it("hides the History badge on a fan-out row with no single owner", () => {
+    expect(historyItemProjectBadge(null, profiles, fanOut)).toBeNull();
   });
 });
 

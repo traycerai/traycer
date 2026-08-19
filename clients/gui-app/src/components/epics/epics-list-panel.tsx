@@ -91,7 +91,16 @@ import {
 } from "@/hooks/home/use-history-query";
 import { historyListEmptyState } from "@/lib/workspace/history-item-matches-project";
 import { claimEpicOnActiveProfile } from "@/lib/workspace/claim-epic-on-active-profile";
-import { workspaceHintFromHistoryItem } from "@/lib/workspace/header-tab-matches-project";
+import {
+  historyItemProjectBadge,
+  workspaceHintFromHistoryItem,
+} from "@/lib/workspace/header-tab-matches-project";
+import {
+  selectActiveProjectProfile,
+  selectProjectProfilesBucket,
+  useProjectProfilesStore,
+} from "@/stores/workspace/project-profiles-store";
+import { PROJECT_PROFILE_COLOR_DOT } from "@/components/layout/header/project-profile-colors";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
@@ -1264,6 +1273,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     hostId,
     projectFilterActive,
   } = props;
+  const projectBadge = useHistoryRowProjectBadge(hostId, item);
   const isPhase = item.taskType === "phase";
   const rowSweep = useHistoryRowSweep({
     item,
@@ -1519,6 +1529,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       {rowInteractionLayer}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <HistoryRowProjectLabel badge={projectBadge} />
           <HistoryRowLeadingIcon item={item} />
           {isRenaming ? (
             <input
@@ -1645,6 +1656,47 @@ function HistoryPinControl(props: {
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
+  );
+}
+
+function useHistoryRowProjectBadge(
+  hostId: string | null,
+  item: Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
+) {
+  return useProjectProfilesStore(
+    useShallow((state) =>
+      historyItemProjectBadge(
+        selectActiveProjectProfile(state, hostId),
+        selectProjectProfilesBucket(state, hostId).profiles,
+        item,
+      ),
+    ),
+  );
+}
+
+function HistoryRowProjectLabel(props: {
+  readonly badge: {
+    readonly color: keyof typeof PROJECT_PROFILE_COLOR_DOT;
+    readonly name: string;
+  } | null;
+}): ReactNode {
+  if (props.badge === null) return null;
+  return (
+    <span
+      data-testid="epics-list-row-project"
+      className="flex shrink-0 items-center gap-1.5 text-muted-foreground"
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-2 rounded-full",
+          PROJECT_PROFILE_COLOR_DOT[props.badge.color],
+        )}
+      />
+      <span className="max-w-[8rem] truncate text-ui-xs font-medium">
+        {props.badge.name}
+      </span>
+    </span>
   );
 }
 

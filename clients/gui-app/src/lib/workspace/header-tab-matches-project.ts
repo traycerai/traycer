@@ -163,6 +163,21 @@ export function headerTabProjectBadge(
   return { color: owner.color, name: owner.name };
 }
 
+export function historyItemProjectBadge(
+  activeProfile: ProjectProfile | null,
+  profiles: ReadonlyArray<ProjectProfile>,
+  item: Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
+): { readonly color: ProjectProfile["color"]; readonly name: string } | null {
+  return headerTabProjectBadge(
+    activeProfile,
+    resolveOwningProjectProfile(
+      profiles,
+      item.epicId,
+      workspaceHintFromHistoryItem(item),
+    ),
+  );
+}
+
 export function filterHeaderStripItemIdsForProject(input: {
   readonly itemIds: ReadonlyArray<string>;
   readonly items: ReadonlyArray<StripItem>;
