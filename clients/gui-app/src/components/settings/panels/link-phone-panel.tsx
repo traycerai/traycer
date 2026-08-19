@@ -286,6 +286,7 @@ function ApprovedCard(props: { readonly onRestart: () => void }) {
  * panel cannot change height as a code arrives or rotates away.
  */
 const CODE_BOX_CLASS =
+  // muted-fill-ok: weak tint delimited by its own border-border/60
   "w-full rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-center font-mono text-ui-xs break-all select-all";
 
 /**

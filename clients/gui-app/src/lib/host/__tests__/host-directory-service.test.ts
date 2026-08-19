@@ -609,11 +609,11 @@ describe("HostDirectoryService", () => {
     expect(directory.isRefreshing()).toBe(false);
     expect(observed).toEqual([true, false]);
 
-    // The orphaned request still settles, and a window it no longer owns is
-    // not its to announce: the invalidation already ended it.
+    // The orphaned request still settles, and must not announce a window it no
+    // longer owns as anything other than the current answer.
     deferred.settle({ kind: "hosts", entries: [mockRemoteHostEntry] });
     await orphaned;
-    expect(observed).toEqual([true, false]);
+    expect(observed).toEqual([true, false, false]);
   });
 
   it("collapses a REJECTED fetcher into the failed outcome - refresh() resolves, prior remote entries are retained, and the next refresh recovers", async () => {

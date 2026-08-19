@@ -1,11 +1,16 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostSessionConnectivity } from "@/lib/host/session-connectivity";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 
-const mocks = vi.hoisted(() => ({
-  connectivity: "ready" as HostSessionConnectivity,
+interface StripMocks {
+  connectivity: HostSessionConnectivity;
+  readonly wake: Mock;
+}
+
+const mocks = vi.hoisted((): StripMocks => ({
+  connectivity: "ready",
   wake: vi.fn(),
 }));
 
