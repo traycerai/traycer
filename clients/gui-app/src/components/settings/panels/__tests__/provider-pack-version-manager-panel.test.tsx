@@ -837,6 +837,39 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
   });
 
+  it("keeps focus on the delete control across the arming swap, named by version", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({ version: "1.5.0", installState: { status: "installed" } }),
+        version({ version: "2.0.0", installState: { status: "installed" } }),
+      ],
+      managedOverrides: null,
+    });
+
+    // Keyboard activation, because that is the path that breaks: arming
+    // unmounts the trash button, so without the mount-focus the second press
+    // lands on <body> and the two-step flow is unreachable without a mouse.
+    const trash = screen.getByRole("button", {
+      name: rowActionName("Delete", "1.5.0"),
+    });
+    trash.focus();
+    await user.keyboard("{Enter}");
+
+    const confirm = screen.getByTestId("version-delete-confirm-1.5.0");
+    expect(document.activeElement).toBe(confirm);
+    expect(confirm.getAttribute("aria-label")).toBe("Confirm delete 1.5.0");
+
+    await user.keyboard("{Enter}");
+
+    expect(mocks.removeMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.removeMutate.mock.calls[0]?.[0]).toEqual({
+      packId: "opencode",
+      version: "1.5.0",
+    });
+  });
+
   it("disarms an armed delete when another row's action runs", async () => {
     const user = userEvent.setup();
     renderPanel({

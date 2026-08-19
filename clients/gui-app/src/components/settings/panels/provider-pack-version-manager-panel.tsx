@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
 import {
   Check,
   Download,
@@ -953,17 +960,12 @@ function DeleteAction(props: {
 }): JSX.Element {
   if (props.armed && props.eligibility.allowed) {
     return (
-      <Button
-        type="button"
-        size="xs"
-        variant="destructive"
-        data-testid={`version-delete-confirm-${props.version}`}
+      <ArmedDeleteButton
+        version={props.version}
+        pending={props.pending}
         disabled={props.actionsDisabled}
-        onClick={() => props.onConfirm(props.version)}
-      >
-        Delete?
-        {props.pending ? <MutedAgentSpinner /> : null}
-      </Button>
+        onConfirm={props.onConfirm}
+      />
     );
   }
 
@@ -979,6 +981,50 @@ function DeleteAction(props: {
       testId={props.eligibility.allowed ? undefined : "delete-disabled-blocked"}
       onClick={() => props.onArm(props.version)}
     />
+  );
+}
+
+/**
+ * The armed half of the two-step delete, split out for the focus effect.
+ *
+ * Arming REPLACES a DOM node rather than restyling one: the trash
+ * `ActionButton` (tooltip → span → button) unmounts and this button mounts in
+ * its place. Whatever the pointer does, that drops a keyboard user's focus to
+ * `<body>`, so the second press of a two-press flow has nothing to land on and
+ * the state change is never announced — the confirmation step becomes a
+ * mouse-only affordance. Focusing on mount is what keeps the two presses on one
+ * control, and it is imperative because `jsx-a11y` forbids the `autoFocus` prop.
+ *
+ * The visible word can't carry the version the way the icon buttons' labels do
+ * ("Delete?" has to stay short), so the accessible name restates it: in a
+ * five-row list an unqualified "Delete?" names no version at all.
+ */
+function ArmedDeleteButton(props: {
+  readonly version: string;
+  readonly pending: boolean;
+  readonly disabled: boolean;
+  readonly onConfirm: (version: string) => void;
+}): JSX.Element {
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    confirmRef.current?.focus();
+  }, []);
+
+  return (
+    <Button
+      ref={confirmRef}
+      type="button"
+      size="xs"
+      variant="destructive"
+      data-testid={`version-delete-confirm-${props.version}`}
+      disabled={props.disabled}
+      aria-label={`Confirm delete ${props.version}`}
+      onClick={() => props.onConfirm(props.version)}
+    >
+      Delete?
+      {props.pending ? <MutedAgentSpinner /> : null}
+    </Button>
   );
 }
 
