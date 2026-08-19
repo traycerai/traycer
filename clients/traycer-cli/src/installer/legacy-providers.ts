@@ -112,8 +112,16 @@ export async function preserveLegacyProviders(
           // that pack had before this provision existed.
           await rename(join(source, entry.name), join(dest, entry.name));
           moved += 1;
-        } catch {
+        } catch (cause) {
           skipped += 1;
+          // Name the pack and the cause: until its registry download lands,
+          // a skipped pack is a provider this user cannot run, and the
+          // summary count below cannot say which one.
+          logger.warn("Host install carryover could not move a provider pack", {
+            pack: entry.name,
+            source,
+            message: cause instanceof Error ? cause.message : String(cause),
+          });
         }
       }
     }

@@ -4,9 +4,10 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -110,6 +111,18 @@ describe("preserveLegacyProviders", () => {
     writeRootFile(oldResources, "providers", "PROVIDERS.json", "{}");
     writePack(newResources, "providers", "ripgrep", "14.0.0");
 
+    // Captured BEFORE the move: a same-inode comparison after is what proves
+    // this is a rename (the same bytes on disk, just re-linked), not a copy
+    // that happens to leave the source behind. `ino` is not a meaningful
+    // identity on win32 (NTFS via Node reports it inconsistently across
+    // rename), so that half of the assertion is skipped there.
+    const originalIno =
+      platform() === "win32"
+        ? null
+        : statSync(
+            join(oldResources, "providers", "codex", PLATFORM_ARCH, "codex"),
+          ).ino;
+
     await preserveLegacyProviders(oldInstall, newInstall, noopLogger);
 
     expect(
@@ -138,6 +151,13 @@ describe("preserveLegacyProviders", () => {
 
     // The move is a rename, not a copy - the old pack dir is gone afterward.
     expect(existsSync(join(oldResources, "providers", "codex"))).toBe(false);
+
+    if (originalIno !== null) {
+      const movedIno = statSync(
+        join(newResources, "legacy-providers", "codex", PLATFORM_ARCH, "codex"),
+      ).ino;
+      expect(movedIno).toBe(originalIno);
+    }
   });
 
   it("chains a carryover forward: packs the old install itself inherited (its own legacy-providers) ride along too", async () => {
@@ -219,6 +239,51 @@ describe("preserveLegacyProviders", () => {
     expect(
       existsSync(
         join(newResources, "legacy-providers", "codex", PLATFORM_ARCH),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns with the pack's name and keeps moving the rest when one pack's move fails", async () => {
+    const oldInstall = join(sandboxRoot, "old-install");
+    const newInstall = join(sandboxRoot, "new-install");
+    const oldResources = wrappedResources(oldInstall);
+    const newResources = wrappedResources(newInstall);
+
+    writePack(oldResources, "providers", "codex", "1.2.3");
+    writePack(oldResources, "providers", "opencode", "0.9.0");
+    writePack(newResources, "providers", "ripgrep", "14.0.0");
+
+    // Pre-seed the destination slot a "codex" move would land in with a FILE,
+    // not a directory: `rename()` of a directory onto an existing
+    // non-directory path fails (ENOTDIR/EISDIR depending on platform), which
+    // is the one failure this best-effort loop must survive without
+    // aborting the packs after it.
+    const dest = join(newResources, "legacy-providers");
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "codex"), "not a directory");
+
+    const { logger, warnings } = capturingLogger();
+    await expect(
+      preserveLegacyProviders(oldInstall, newInstall, logger),
+    ).resolves.toBeUndefined();
+
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]?.message).toBe(
+      "Host install carryover could not move a provider pack",
+    );
+    expect(warnings[0]?.fields.pack).toBe("codex");
+
+    // codex's move failed - its source dir is untouched, and the collided
+    // destination slot is still the plain file it was.
+    expect(
+      existsSync(join(oldResources, "providers", "codex", PLATFORM_ARCH)),
+    ).toBe(true);
+    expect(existsSync(join(dest, "codex", PLATFORM_ARCH))).toBe(false);
+
+    // opencode has no collision and moves fine despite codex's failure.
+    expect(
+      existsSync(
+        join(newResources, "legacy-providers", "opencode", PLATFORM_ARCH),
       ),
     ).toBe(true);
   });
