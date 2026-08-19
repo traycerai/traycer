@@ -65,15 +65,27 @@ import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutatio
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 
-function makeError(code: RpcErrorCode): HostRpcError {
+function makeError(code: RpcErrorCode, message: string): HostRpcError {
   return new HostRpcError({
     code,
-    message: "test",
+    message,
     requestId: "test",
     method: "epic.createChat",
     fatalDetails: null,
   });
 }
+
+/**
+ * Verbatim shape of what the host puts on the wire when the requested worktree
+ * could not be made: `WorktreeCreateFailedError` joins each failed entry's own
+ * `git worktree add` stderr, and `dispatchRpc` answers 409 `RPC_ERROR` with
+ * that string as the message - no dedicated wire code, by design. The reason
+ * exists NOWHERE else the user can reach, which is why this arm forwards it.
+ */
+const WORKTREE_CREATE_FAILED_MESSAGE =
+  "git worktree add failed for traycer/tidy-badger at " +
+  "/Users/x/.traycer/worktrees/repo-tidy-badger: " +
+  "fatal: a branch named 'traycer/tidy-badger' already exists";
 
 function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
   const queryClient = new QueryClient({
@@ -117,7 +129,7 @@ const VARIABLES: CreateChatMutationInput = {
   },
 };
 
-describe("useEpicCreateChatForHostClient inline fork refusal", () => {
+describe("useEpicCreateChatForHostClient error policy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const method of Object.keys(capturedMutations)) {
@@ -129,7 +141,10 @@ describe("useEpicCreateChatForHostClient inline fork refusal", () => {
     renderHook(() => useEpicCreateChatForHostClient(null), {
       wrapper: makeWrapper(),
     });
-    getCreateOnError()(makeError("E_FORK_BOUNDARY_NOT_PUBLISHED"), VARIABLES);
+    getCreateOnError()(
+      makeError("E_FORK_BOUNDARY_NOT_PUBLISHED", "test"),
+      VARIABLES,
+    );
     expect(toast.error).not.toHaveBeenCalled();
     expect(clearPendingChatCreation).toHaveBeenCalledWith("e", "c");
   });
@@ -138,7 +153,38 @@ describe("useEpicCreateChatForHostClient inline fork refusal", () => {
     renderHook(() => useEpicCreateChatForHostClient(null), {
       wrapper: makeWrapper(),
     });
-    getCreateOnError()(makeError("RPC_ERROR"), VARIABLES);
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
+    getCreateOnError()(makeError("RPC_ERROR", "test"), VARIABLES);
+    expect(toast.error).toHaveBeenCalledWith("Couldn't create agent. test");
+  });
+
+  // The staging finding: the 409 carried "…a branch named 'traycer/tidy-badger'
+  // already exists" and the user was shown "Couldn't create agent." alone, with
+  // the reason reachable only by opening host.log.
+  it("names the worktree failure the host reported, not just 'Couldn't create agent.'", () => {
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    getCreateOnError()(
+      makeError("RPC_ERROR", WORKTREE_CREATE_FAILED_MESSAGE),
+      VARIABLES,
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      `Couldn't create agent. ${WORKTREE_CREATE_FAILED_MESSAGE}`,
+    );
+  });
+
+  // The other half of forwarding detail: an error the toast mapper already has
+  // written-for-a-person copy for must NOT gain a raw host suffix.
+  it("leaves a mapped code's copy alone rather than appending the raw message", () => {
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    getCreateOnError()(
+      makeError("E_HOST_UNSUPPORTED", "epic.createChat@12.0 not supported"),
+      VARIABLES,
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "This needs a newer Traycer host. Update the host to continue.",
+    );
   });
 });
