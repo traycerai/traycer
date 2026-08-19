@@ -713,6 +713,7 @@ describe.skipIf(process.platform === "win32")(
         allowSelfInvocation: false,
         noServiceRegister: true,
         ifIdle: false,
+        force: false,
       })(commandContext());
       const pid = writePid({});
       const recordA = await readHostInstallRecord(ENV);

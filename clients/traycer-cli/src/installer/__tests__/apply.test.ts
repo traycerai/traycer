@@ -31,7 +31,7 @@ function stagedDirFor(environment: Environment): string {
 const mocks = vi.hoisted(() => ({
   platformOverride: null as "win32" | null,
   busyOverride: null as "busy" | null,
-  lifecycleCalls: [] as Array<{ bootstrap: unknown }>,
+  lifecycleCalls: [] as Array<{ bootstrap: unknown; force: boolean }>,
   lifecycleBeforeSwapShouldThrow: false,
   lifecyclePostSwapAction: "restart" as
     "restart" | "start" | "install" | "none",
@@ -66,8 +66,14 @@ vi.mock("../../host/busy-check", () => ({
 }));
 
 vi.mock("../../service/install-lifecycle", () => ({
-  createServiceInstallLifecycle: (options: { bootstrap: unknown }) => {
-    mocks.lifecycleCalls.push({ bootstrap: options.bootstrap });
+  createServiceInstallLifecycle: (options: {
+    bootstrap: unknown;
+    force: boolean;
+  }) => {
+    mocks.lifecycleCalls.push({
+      bootstrap: options.bootstrap,
+      force: options.force,
+    });
     const state = {
       priorState: "running" as const,
       stoppedBeforeSwap: false,
@@ -373,6 +379,11 @@ describe("applyHost", () => {
     });
 
     expect(result.outcome).toBe("applied");
+    // `--force` is not just the busy-check bypass above - it also has to
+    // reach the service lifecycle's pre-swap stop (service/install-
+    // lifecycle.ts's `beforeSwap`), or a busy Desktop-managed host would
+    // still deny the cooperative shutdown claim and abort anyway.
+    expect(mocks.lifecycleCalls).toEqual([{ bootstrap: null, force: true }]);
   });
 
   it("--no-service skips the busy check and the service lifecycle entirely, reporting runningActivated: false", async () => {
