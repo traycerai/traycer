@@ -124,6 +124,8 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("notifications-filter")).toBe(
       "traycer-gui-app:notifications-filter",
     );
+    // Source: src/stores/workspace/project-notes-store.ts
+    expect(persistKey("project-notes")).toBe("traycer-gui-app:project-notes");
   });
 
   it("emits the current localStorage key for each scoped persistence family", () => {
