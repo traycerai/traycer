@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -29,38 +29,39 @@ export function NoteEditor(props: {
     body: string;
     scope: NoteScope;
   } | null>(null);
-
+  const identityRef = useRef({ hostId, noteId: note.id });
   useEffect(() => {
-    setTitle(note.title);
-    setBody(note.body);
-    setScopeValue(scopeToValue(note.scope));
-  }, [note.id]);
+    identityRef.current = { hostId, noteId: note.id };
+  }, [hostId, note.id]);
 
-  const flush = () => {
+  const flushPending = useCallback(() => {
     const pending = pendingRef.current;
     if (pending === null) return;
     pendingRef.current = null;
-    useProjectNotesStore.getState().updateNote(hostId, note.id, {
-      title: pending.title,
-      body: pending.body,
-      scope: pending.scope,
-    });
-  };
+    useProjectNotesStore.getState().updateNote(
+      identityRef.current.hostId,
+      identityRef.current.noteId,
+      pending,
+    );
+  }, []);
 
   useEffect(() => {
-    const scope = valueToScope(scopeValue);
-    pendingRef.current = { title, body, scope };
-    const timer = window.setTimeout(flush, AUTOSAVE_MS);
+    pendingRef.current = {
+      title,
+      body,
+      scope: valueToScope(scopeValue),
+    };
+    const timer = window.setTimeout(flushPending, AUTOSAVE_MS);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [title, body, scopeValue, hostId, note.id]);
+  }, [title, body, scopeValue, flushPending]);
 
   useEffect(() => {
     return () => {
-      flush();
+      flushPending();
     };
-  }, [note.id]);
+  }, [flushPending]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="note-editor">
@@ -71,7 +72,7 @@ export function NoteEditor(props: {
           size="icon-sm"
           aria-label="Back to notes"
           onClick={() => {
-            flush();
+            flushPending();
             onBack();
           }}
         >
@@ -134,9 +135,10 @@ export function NoteEditor(props: {
         actionLabel="Delete"
         isPending={false}
         onConfirm={() => {
-          flush();
           pendingRef.current = null;
-          useProjectNotesStore.getState().deleteNote(hostId, note.id);
+          useProjectNotesStore
+            .getState()
+            .deleteNote(identityRef.current.hostId, identityRef.current.noteId);
           setDeleteOpen(false);
           onBack();
         }}

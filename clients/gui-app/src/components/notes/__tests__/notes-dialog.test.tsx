@@ -106,9 +106,7 @@ describe("<NotesHeaderControl />", () => {
     fireEvent.click(screen.getByTestId("notes-button"));
     fireEvent.click(screen.getByTestId("notes-new"));
     expect(screen.getByTestId("note-editor")).toBeTruthy();
-    expect(
-      (screen.getByTestId("note-scope") as HTMLSelectElement).value,
-    ).toBe(titanos);
+    expect(screen.getByTestId("note-scope")).toHaveProperty("value", titanos);
   });
 
   it("keeps a newer title when the store echoes the previous save", () => {
@@ -117,22 +115,20 @@ describe("<NotesHeaderControl />", () => {
     mount();
     fireEvent.click(screen.getByTestId("notes-button"));
     fireEvent.click(screen.getByRole("button", { name: "Ads budget" }));
+    const notes = useProjectNotesStore.getState().byHost[HOST].notes;
     const noteId =
-      useProjectNotesStore
-        .getState()
-        .byHost[HOST]?.notes.find((note) => note.title === "Ads budget")?.id ??
-      "";
-    const title = screen.getByTestId("note-title") as HTMLInputElement;
+      notes.find((note) => note.title === "Ads budget")?.id ?? "";
+    const title = screen.getByTestId("note-title");
     fireEvent.change(title, { target: { value: "First" } });
     fireEvent.change(title, { target: { value: "Second" } });
     act(() => {
-      useProjectNotesStore.getState().updateNote(HOST, noteId ?? "", {
+      useProjectNotesStore.getState().updateNote(HOST, noteId, {
         title: "First",
         body: "cut spend",
         scope: { kind: "project", profileId: titanos ?? "" },
       });
     });
-    expect(title.value).toBe("Second");
+    expect(title).toHaveProperty("value", "Second");
   });
 
   it("asks before deleting and keeps the note on cancel", () => {
@@ -144,10 +140,7 @@ describe("<NotesHeaderControl />", () => {
     fireEvent.click(screen.getByTestId("note-delete"));
     expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
     fireEvent.click(screen.getByTestId("confirm-cancel"));
-    expect(
-      useProjectNotesStore
-        .getState()
-        .byHost[HOST]?.notes.some((note) => note.title === "Ads budget"),
-    ).toBe(true);
+    const notes = useProjectNotesStore.getState().byHost[HOST].notes;
+    expect(notes.some((note) => note.title === "Ads budget")).toBe(true);
   });
 });

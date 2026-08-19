@@ -131,7 +131,6 @@ export const useProjectNotesStore = create<ProjectNotesStore>()(
       reassignProjectNotesToGeneral: (hostId, profileId) => {
         if (hostId === null) return;
         const bucket = selectProjectNotesBucket(get(), hostId);
-        let changed = false;
         const now = Date.now();
         const notes = bucket.notes.map((note) => {
           if (
@@ -140,14 +139,15 @@ export const useProjectNotesStore = create<ProjectNotesStore>()(
           ) {
             return note;
           }
-          changed = true;
           return {
             ...note,
             scope: { kind: "general" as const },
             updatedAt: now,
           };
         });
-        if (!changed) return;
+        if (notes.every((note, index) => note === bucket.notes[index])) {
+          return;
+        }
         set({
           byHost: {
             ...get().byHost,
@@ -182,7 +182,7 @@ function scopesEqual(left: NoteScope, right: NoteScope): boolean {
 
 function isValidScope(value: NoteScope): boolean {
   if (value.kind === "general") return true;
-  return value.kind === "project" && value.profileId.trim().length > 0;
+  return value.profileId.trim().length > 0;
 }
 
 function parsePersistedByHost(
