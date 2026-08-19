@@ -43,7 +43,7 @@ function scaledRect(layoutTop: number, layoutHeight: number): DOMRect {
   );
 }
 
-function installOpeningZoomGeometry(): () => void {
+function installOpeningZoomGeometry() {
   let listScrollTop = 0;
   const scrollTop = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -116,12 +116,15 @@ function installOpeningZoomGeometry(): () => void {
       }
     });
 
-  return () => {
-    boundingRect.mockRestore();
-    scrollIntoView.mockRestore();
-    restorePrototype("scrollTop", scrollTop);
-    restorePrototype("clientHeight", clientHeight);
-    restorePrototype("scrollHeight", scrollHeight);
+  return {
+    restore: () => {
+      boundingRect.mockRestore();
+      scrollIntoView.mockRestore();
+      restorePrototype("scrollTop", scrollTop);
+      restorePrototype("clientHeight", clientHeight);
+      restorePrototype("scrollHeight", scrollHeight);
+    },
+    scrollIntoView,
   };
 }
 
@@ -142,7 +145,7 @@ describe("MinimapListCard", () => {
   });
 
   it("keeps a far-down current row inside the popover viewport while the opening zoom is applied", () => {
-    const restore = installOpeningZoomGeometry();
+    const { restore, scrollIntoView } = installOpeningZoomGeometry();
     try {
       const items = Array.from({ length: ITEM_COUNT }, (_unused, index) => ({
         key: `item-${String(index)}`,
@@ -170,6 +173,7 @@ describe("MinimapListCard", () => {
         throw new Error("missing minimap list scroller");
       }
 
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
       const top = rowLayoutTop(current);
       const bottom = top + ROW_HEIGHT;
       expect(top).toBeGreaterThanOrEqual(list.scrollTop);
