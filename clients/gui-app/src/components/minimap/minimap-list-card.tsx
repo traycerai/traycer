@@ -32,19 +32,10 @@ export function MinimapListCard({
   title,
 }: MinimapListCardProps) {
   const currentRowRef = useRef<HTMLButtonElement | null>(null);
-  const listRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<number, HTMLButtonElement>());
 
   useLayoutEffect(() => {
-    const row = currentRowRef.current;
-    const list = listRef.current;
-    if (row === null || list === null) return;
-    const rowRect = row.getBoundingClientRect();
-    const listRect = list.getBoundingClientRect();
-    const above = rowRect.top - listRect.top;
-    const below = rowRect.bottom - listRect.bottom;
-    if (above >= 0 && below <= 0) return;
-    list.scrollTop = Math.max(0, list.scrollTop + (above < 0 ? above : below));
+    currentRowRef.current?.scrollIntoView({ block: "nearest" });
   }, [currentIndex]);
 
   const moveFocus = (index: number): void => {
@@ -88,10 +79,7 @@ export function MinimapListCard({
       <div className="px-3 pt-3 pb-1 text-ui-xs font-medium tracking-wide text-muted-foreground/70 uppercase">
         {title}
       </div>
-      <div
-        className="min-h-0 overflow-y-auto overscroll-contain p-2 pt-1"
-        ref={listRef}
-      >
+      <div className="min-h-0 overflow-y-auto overscroll-contain p-2 pt-1">
         <div className="flex flex-col gap-0.5">
           {items.map((item, index) => {
             const current = index === currentIndex;
