@@ -90,23 +90,47 @@ export function workspaceHintFromSnapshotFolders(
   };
 }
 
+function hintWorkspacePaths(
+  hint: EpicWorkspaceHint | null,
+): ReadonlyArray<string> {
+  if (hint === null) return [];
+  const paths: string[] = [];
+  const push = (value: string | null | undefined): void => {
+    if (value === undefined || value === null || value.length === 0) return;
+    if (paths.includes(value)) return;
+    paths.push(value);
+  };
+  push(hint.primaryPath);
+  for (const workspace of hint.linkedWorkspaces) {
+    push(workspace.workspacePath);
+  }
+  for (const worktree of hint.worktreePaths) {
+    push(worktree);
+  }
+  return paths;
+}
+
+function pathOwnedByProfile(path: string, profile: ProjectProfile): boolean {
+  return historyItemMatchesProject(
+    {
+      epicId: "",
+      linkedWorkspaces: path.includes(TRAYCER_WORKTREES_MARKER)
+        ? []
+        : [{ hostId: "", workspacePath: path }],
+      worktreePaths: path.includes(TRAYCER_WORKTREES_MARKER) ? [path] : [],
+    },
+    { ...profile, epicIds: [] },
+  );
+}
+
 function epicOwnedByProfile(
   epicId: string,
   hint: EpicWorkspaceHint | null,
   profile: ProjectProfile,
 ): boolean {
-  const primary = hintPrimaryPath(hint);
-  if (primary === null) return profile.epicIds.includes(epicId);
-  return historyItemMatchesProject(
-    {
-      epicId: "",
-      linkedWorkspaces: primary.includes(TRAYCER_WORKTREES_MARKER)
-        ? []
-        : [{ hostId: "", workspacePath: primary }],
-      worktreePaths: primary.includes(TRAYCER_WORKTREES_MARKER) ? [primary] : [],
-    },
-    { ...profile, epicIds: [] },
-  );
+  const paths = hintWorkspacePaths(hint);
+  if (paths.length === 0) return profile.epicIds.includes(epicId);
+  return paths.every((path) => pathOwnedByProfile(path, profile));
 }
 
 export function headerTabMatchesProject(
