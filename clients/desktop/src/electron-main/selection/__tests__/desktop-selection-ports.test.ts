@@ -1630,6 +1630,28 @@ describe("createDesktopLocalHostEnsurePort", () => {
     await expect(port.ensureReady()).resolves.toEqual({ ok: true });
   });
 
+  it("refuses to call a REMOVED host alive, even though its converge answers ok", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
+    // The exact short-circuit `HostController.convergeReady` returns while the
+    // removal sentinel stands: `ok`, because nothing failed - and `running:
+    // false`, because by consent nothing ran either. The engine reads a bare
+    // `ok` as FIRSTHAND proof of life (`onHostProvedAlive` clears the refusal
+    // streak and makes the lease usable), so mapping this one to `{ok: true}`
+    // handed failover a host that is not installed, and re-cleared that streak
+    // every pacing hold. Now it is a plain failure - and NOT deferred, because
+    // nothing here changes on its own until the user reinstalls.
+    controller.outcome = {
+      kind: "ok",
+      value: { running: false, version: null },
+    };
+    await expect(port.ensureReady()).resolves.toEqual({
+      ok: false,
+      reason: "removed-by-user",
+      deferred: false,
+    });
+  });
+
   it("maps a busy outcome to {ok: true} - a host with work in progress is a running host", async () => {
     const controller = new FakeHostController();
     const port = createDesktopLocalHostEnsurePort(controller);

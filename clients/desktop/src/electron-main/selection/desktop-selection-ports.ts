@@ -692,7 +692,29 @@ export function createDesktopLocalHostEnsurePort(
   return {
     ensureReady: async () => {
       const outcome = await hostController.convergeReady(false);
-      if (outcome.kind === "ok") return { ok: true };
+      if (outcome.kind === "ok") {
+        // `ok` ALONE IS NOT PROOF OF LIFE, and the engine reads this answer as
+        // exactly that (`onHostProvedAlive`: it clears the refusal streak and
+        // makes the lease usable). `HostController.convergeReady`
+        // short-circuits `ok {running:false}` while the removal sentinel
+        // stands - it starts nothing, by consent - so collapsing every `ok`
+        // credited a host the user had removed with being alive. Harmless
+        // while the ensure only fired for a WANTED local host; since it fires
+        // whichever host is effective, a machine whose fleet still names its
+        // removed local host (enrollment or a lingering `pid.json` outlives
+        // the uninstall, and the fleet snapshot outlives both until it
+        // refreshes) would hand failover a host that is not installed, and
+        // every 30s the same no-op ensure would clear the refusal streak that
+        // failing to dial it had just built.
+        //
+        // `running: false` reaches here from that short-circuit alone - every
+        // other `ok` path returns a version it just proved reachable - so the
+        // honest mapping is a plain failure: not deferred (nothing is going to
+        // change on its own), and paced by the engine's cooldown, whose retry
+        // costs one sentinel read until the user reinstalls.
+        if (outcome.value.running) return { ok: true };
+        return { ok: false, reason: "removed-by-user", deferred: false };
+      }
       // `busy` is a HOST that is up with active work: the converge wanted to
       // swap its bytes and declined to disrupt it. For the engine that IS the
       // answer it asked for - "is the local host running?" - so it resolves
