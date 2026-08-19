@@ -45,6 +45,9 @@ export const RPC_ERROR_CODES = [
   // FORBIDDEN whose "check Task access" guidance would mislead here.
   "E_ROLE_FORBIDDEN",
   "TERMINAL_ID_TAKEN",
+  // A durable terminal is mid-delete. 409, not 500: the caller can retry
+  // after the marker settles. Additive and degrade-safe like E_INVALID_ARGUMENT.
+  "TERMINAL_DELETING",
   // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
   // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
   "MESSAGE_TOO_LARGE",
@@ -54,6 +57,20 @@ export const RPC_ERROR_CODES = [
   // yet. A precondition on the CALLER's chosen source, not a server fault -
   // same additive degrade story as E_INVALID_ARGUMENT.
   "E_FORK_CHECKPOINT_UNAVAILABLE",
+  // A fork named a boundary the source chat's cloud publication does not
+  // cover yet: the host could only reach the source through the cloud (or
+  // doc) tier - a cross-host fork, where the target holds no local
+  // transcript - and the requested assistant message is newer than what the
+  // source host has published. RETRYABLE, and the only fork refusal that is:
+  // the same call succeeds once the source's next publish sweep lands, so
+  // callers should keep the surface open and offer a retry rather than
+  // treating it as a dead end. Distinct from
+  // E_FORK_CHECKPOINT_UNAVAILABLE (no assistant record to fork from at all)
+  // and from the caller-bug slice errors (boundary is not an assistant
+  // message, no turn key, interview block missing), which are permanent and
+  // must never be reported as "still syncing". Same additive degrade story
+  // as E_INVALID_ARGUMENT.
+  "E_FORK_BOUNDARY_NOT_PUBLISHED",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];
@@ -253,9 +270,10 @@ export type VersionEntry<
    * pattern). Without this, the registry validator rejects response-side
    * value growth on a minor - an old peer's schema REFUSES such values,
    * and for state-controlled response data that refusal poisons every
-   * old peer with no opt-out. Declaring it is a reviewed claim about the
-   * EMITTER, which the validator cannot check; structural additivity is
-   * still enforced regardless.
+   * old peer with no opt-out. It also permits replacing a dropped union arm
+   * when that same projection supplies the older arm to older callers.
+   * Declaring it is a reviewed claim about the EMITTER, which the validator
+   * cannot check; other structural reductions remain forbidden.
    */
   readonly responseGrowthProjectionGated?: true;
 };

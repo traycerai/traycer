@@ -250,7 +250,7 @@ function railButtonClassName(state: {
     "relative flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
     state.active
       ? "bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/25 hover:bg-primary/15 hover:text-foreground"
-      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
     state.degraded
       ? "opacity-60 hover:opacity-80 data-[active=true]:opacity-75"
       : "",

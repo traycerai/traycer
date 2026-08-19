@@ -1,3 +1,11 @@
+import {
+  NO_TRANSPORT_EVIDENCE,
+  type TransportEvidenceReporter,
+} from "@traycer-clients/shared/host-selection/transport-evidence";
+import type {
+  SelectionIncompatibility,
+  SelectionTransportKind,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -40,6 +48,7 @@ import {
   WsRpcClient,
 } from "../ws-rpc-client";
 import {
+  getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "../negotiated-manifest-registry";
@@ -222,6 +231,7 @@ function makeClient(options: {
     dialTimeoutMs: options.dialTimeoutMs,
     frameTimeoutMs: options.frameTimeoutMs,
     hostAttestationWindowMs: options.hostAttestationWindowMs ?? 0,
+    evidence: NO_TRANSPORT_EVIDENCE,
   });
   return new BoundWsRpcClient(inner, authorityForToken(options.authToken));
 }
@@ -239,6 +249,7 @@ async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
     dialTimeoutMs: 1_000,
     frameTimeoutMs: 1_000,
     hostAttestationWindowMs: 0,
+    evidence: NO_TRANSPORT_EVIDENCE,
   });
   const authCalls = { count: 0 };
   const authAware = createAuthAwareMessenger<typeof testRegistry>(raw, {
@@ -360,6 +371,182 @@ function openAckWithOnlyOptionalHostEcho(version: {
   };
 }
 
+/** One recorded call to a `TransportEvidenceReporter` method, keyed by name. */
+type RecordedEvidenceCall =
+  | {
+      readonly method: "sessionEstablished";
+      readonly hostId: string;
+      readonly sessionId: string;
+      readonly transportKind: SelectionTransportKind;
+    }
+  | {
+      readonly method: "sessionLost";
+      readonly hostId: string;
+      readonly sessionId: string;
+      readonly transportKind: SelectionTransportKind;
+    }
+  | {
+      readonly method: "reportDialSuccess";
+      readonly hostId: string;
+      readonly attemptId: string;
+      readonly transportKind: SelectionTransportKind;
+    }
+  | {
+      readonly method: "reportDialRefusal";
+      readonly hostId: string;
+      readonly attemptId: string;
+      readonly transportKind: SelectionTransportKind;
+      readonly refusalDetail: "plan-restricted" | null;
+    }
+  | {
+      readonly method: "reportDialTimeout";
+      readonly hostId: string;
+      readonly attemptId: string;
+      readonly transportKind: SelectionTransportKind;
+    }
+  | {
+      readonly method: "reportDialIndeterminate";
+      readonly hostId: string;
+      readonly attemptId: string;
+      readonly transportKind: SelectionTransportKind;
+    }
+  | {
+      readonly method: "reportCompatVerdict";
+      readonly input: {
+        readonly hostId: string;
+        readonly probedOnSessionId: string | null;
+        readonly hostVersion: string | null;
+        readonly incompatibility: SelectionIncompatibility | null;
+      };
+    }
+  | {
+      readonly method: "reportRestartIntent";
+      readonly hostId: string;
+      readonly tombstoneId: string;
+      readonly expiresAt: number | null;
+    };
+
+/**
+ * Records every call a transport makes into a `TransportEvidenceReporter`, in
+ * arrival order, so a test can assert on sequences and per-method counts
+ * rather than only on the latest call (the shape a plain `vi.fn` gives).
+ */
+class RecordingEvidence implements TransportEvidenceReporter {
+  readonly calls: RecordedEvidenceCall[] = [];
+
+  sessionEstablished(
+    hostId: string,
+    sessionId: string,
+    transportKind: SelectionTransportKind,
+  ): void {
+    this.calls.push({
+      method: "sessionEstablished",
+      hostId,
+      sessionId,
+      transportKind,
+    });
+  }
+
+  sessionLost(
+    hostId: string,
+    sessionId: string,
+    transportKind: SelectionTransportKind,
+  ): void {
+    this.calls.push({
+      method: "sessionLost",
+      hostId,
+      sessionId,
+      transportKind,
+    });
+  }
+
+  reportDialSuccess(
+    hostId: string,
+    attemptId: string,
+    transportKind: SelectionTransportKind,
+  ): void {
+    this.calls.push({
+      method: "reportDialSuccess",
+      hostId,
+      attemptId,
+      transportKind,
+    });
+  }
+
+  reportDialRefusal(
+    hostId: string,
+    attemptId: string,
+    transportKind: SelectionTransportKind,
+    refusalDetail: "plan-restricted" | null,
+  ): void {
+    this.calls.push({
+      method: "reportDialRefusal",
+      hostId,
+      attemptId,
+      transportKind,
+      refusalDetail,
+    });
+  }
+
+  reportDialTimeout(
+    hostId: string,
+    attemptId: string,
+    transportKind: SelectionTransportKind,
+  ): void {
+    this.calls.push({
+      method: "reportDialTimeout",
+      hostId,
+      attemptId,
+      transportKind,
+    });
+  }
+
+  reportDialIndeterminate(
+    hostId: string,
+    attemptId: string,
+    transportKind: SelectionTransportKind,
+  ): void {
+    this.calls.push({
+      method: "reportDialIndeterminate",
+      hostId,
+      attemptId,
+      transportKind,
+    });
+  }
+
+  reportCompatVerdict(input: {
+    readonly hostId: string;
+    readonly probedOnSessionId: string | null;
+    readonly hostVersion: string | null;
+    readonly incompatibility: SelectionIncompatibility | null;
+  }): void {
+    this.calls.push({ method: "reportCompatVerdict", input });
+  }
+
+  /** Every recorded call for one method name, narrowed to its own shape. */
+  callsNamed<Method extends RecordedEvidenceCall["method"]>(
+    method: Method,
+  ): (RecordedEvidenceCall & { readonly method: Method })[] {
+    return this.calls.filter(
+      (call): call is RecordedEvidenceCall & { readonly method: Method } =>
+        call.method === method,
+    );
+  }
+
+  reportRestartIntent(
+    hostId: string,
+    tombstoneId: string,
+    expiresAt: number | null,
+  ): void {
+    this.calls.push({
+      method: "reportRestartIntent",
+      hostId,
+      tombstoneId,
+      expiresAt,
+    });
+  }
+}
+
 describe("WsRpcClient", () => {
   it("walks dial → open → openAck → request → response → close on the happy path", async () => {
     const { factory, sockets } = makeFactory();
@@ -428,6 +615,7 @@ describe("WsRpcClient", () => {
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
       hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
     });
     const lifetime = new AbortController();
     const pending = client.request(
@@ -452,6 +640,373 @@ describe("WsRpcClient", () => {
       code: 1000,
       reason: "authority-aborted",
     });
+  });
+
+  /**
+   * C5. A socket that never opened reports a dial REFUSAL on close, which is
+   * correct only when the host is the one that closed it. Every teardown we
+   * initiate - an authority abort, or the `finally` close - also produces a
+   * close event, and reporting those attributes our own decision to the host.
+   *
+   * The consequence is not cosmetic: refusals feed the selection authority's
+   * death detection, and a healthy host was measured accumulating three
+   * suppressed refusals - exactly the death threshold - so there is no
+   * headroom for manufactured ones.
+   */
+  describe("self-closed sockets are not host refusals (C5)", () => {
+    function makeDialScenario(requestId: string): {
+      readonly sockets: RecordedSocket[];
+      readonly recorder: RecordingEvidence;
+      readonly client: WsRpcClient<typeof testRegistry>;
+    } {
+      const { factory, sockets } = makeFactory();
+      const recorder = new RecordingEvidence();
+      const client = new WsRpcClient<typeof testRegistry>({
+        registry: testRegistry,
+        requestId: () => requestId,
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+        hostAttestationWindowMs: 0,
+        evidence: recorder,
+      });
+      return { sockets, recorder, client };
+    }
+
+    /**
+     * Every dial verdict, in order. Asserting on the whole outcome list rather
+     * than on the absence of one method keeps a fix that merely swaps refusal
+     * for a different manufactured verdict from passing.
+     */
+    function dialOutcomes(recorder: RecordingEvidence): string[] {
+      return recorder.calls
+        .map((call) => call.method)
+        .filter(
+          (method) =>
+            method === "reportDialSuccess" ||
+            method === "reportDialRefusal" ||
+            method === "reportDialTimeout" ||
+            method === "reportDialIndeterminate",
+        );
+    }
+
+    function requestWithSignal(
+      client: WsRpcClient<typeof testRegistry>,
+      signal: AbortSignal,
+    ): Promise<ResponseOfMethod<typeof testRegistry, "host.echo">> {
+      return client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: signal,
+        },
+      );
+    }
+
+    it("an authority abort before open reports no dial outcome - the close event is ours", async () => {
+      const { sockets, recorder, client } = makeDialScenario("req-abort-dial");
+      const lifetime = new AbortController();
+      const pending = requestWithSignal(client, lifetime.signal);
+      await flush();
+      expect(sockets).toHaveLength(1);
+
+      lifetime.abort("host-replaced");
+      await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
+      // A socket we tore down still delivers a close event, exactly as a real
+      // one does. Nothing about it is evidence concerning the host.
+      sockets[0].socket.fireClose(1000, "authority-aborted", true);
+
+      // Indeterminate, not silence: the attempt happened and owes one
+      // outcome, and the kernel documents this verdict as inert - it advances
+      // no counter - so it is diagnostics without death-detection weight.
+      expect(dialOutcomes(recorder)).toEqual(["reportDialIndeterminate"]);
+    });
+
+    // Boundary pin, not a defect repro: this one passes on the unfixed tree.
+    // It records WHY C5 is reachable only mid-dial, so a refactor that moves
+    // the early abort check reddens here instead of silently widening C5.
+    it("an already-aborted authority never dials, so it cannot report against a host", async () => {
+      const { sockets, recorder, client } = makeDialScenario("req-abort-early");
+      const lifetime = new AbortController();
+      lifetime.abort("host-replaced");
+
+      const pending = requestWithSignal(client, lifetime.signal);
+      await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
+
+      // `throwIfAuthorityAborted` runs before the socket is built, so the
+      // synchronous `onAbort()` at session construction covers only the race
+      // between that check and the listener registration - never a fresh dial.
+      expect(sockets).toEqual([]);
+      expect(dialOutcomes(recorder)).toEqual([]);
+    });
+
+    it("a host-initiated close before open is still reported as a refusal", async () => {
+      const { sockets, recorder, client } = makeDialScenario("req-refused");
+      const pending = requestWithSignal(client, new AbortController().signal);
+      await flush();
+      expect(sockets).toHaveLength(1);
+
+      // Nobody on this side asked for this: the connection was refused, or
+      // something answered and hung up before the handshake.
+      sockets[0].socket.fireClose(1006, "connection refused", false);
+
+      await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
+      expect(dialOutcomes(recorder)).toEqual(["reportDialRefusal"]);
+    });
+
+    // Blink race, not a hypothetical: a pre-open `error` event fires, the
+    // rejection it produces is awaited by `request()`'s own `finally` (see
+    // `session.close(1000, "ok")` in `ws-rpc-client.ts`), and only THEN does
+    // `close` arrive for the same failed dial. `selfInitiated` reads as true
+    // at that point - our own `close()` ran first - so without
+    // `erroredBeforeOpen` this refusal is misreported as `indeterminate` and
+    // silently dropped from death detection.
+    it("a pre-open error, followed by our own close() reacting to it, is still reported as a refusal", async () => {
+      const { sockets, recorder, client } = makeDialScenario(
+        "req-error-then-own-close",
+      );
+      const pending = requestWithSignal(client, new AbortController().signal);
+      await flush();
+      expect(sockets).toHaveLength(1);
+
+      sockets[0].socket.fireError("connection refused");
+      // Awaiting the rejection lets `request()`'s `finally` run to completion,
+      // which calls `session.close()` and sets `closed = true` before the
+      // socket's own `close` event below ever fires.
+      await expect(pending).rejects.toBeInstanceOf(RetryableTransportError);
+
+      sockets[0].socket.fireClose(1006, "connection refused", false);
+
+      expect(dialOutcomes(recorder)).toEqual(["reportDialRefusal"]);
+    });
+  });
+
+  it("refcounts the local logical session to one host: overlapping RPCs announce and retract exactly once, on the 0->1 and 1->0 edges only", async () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = new RecordingEvidence();
+    let nextRequestId = 0;
+    const client = new WsRpcClient<typeof testRegistry>({
+      registry: testRegistry,
+      requestId: () => `req-${(nextRequestId += 1)}`,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: recorder,
+    });
+    const authority = authorityForToken("token-abc");
+
+    // Fire two overlapping RPCs to the SAME host - neither awaited before the
+    // next is started, so both sockets are open at once.
+    const pending1 = client.request("host.echo", { message: "one" }, authority);
+    await flush();
+    const pending2 = client.request("host.echo", { message: "two" }, authority);
+    await flush();
+    expect(sockets).toHaveLength(2);
+
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[1].socket.fireOpen();
+    await flush();
+
+    // Only the 0 -> 1 refcount edge (the first socket's open) announces - the
+    // second socket opening while one is already live must NOT re-announce.
+    expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
+    expect(recorder.callsNamed("sessionLost")).toHaveLength(0);
+
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const req0 = expectRequestFrame(sockets[0].sent[1]);
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: req0.requestId,
+      method: req0.method,
+      schemaVersion: req0.schemaVersion,
+      result: { echoed: "ONE" },
+      error: null,
+    });
+    await expect(pending1).resolves.toEqual({ echoed: "ONE" });
+
+    // The other socket is still open (refcount 1 -> 0 has not happened yet) -
+    // no retraction on the first completion.
+    expect(recorder.callsNamed("sessionLost")).toHaveLength(0);
+
+    sockets[1].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const req1 = expectRequestFrame(sockets[1].sent[1]);
+    sockets[1].socket.fireMessage({
+      kind: "response",
+      requestId: req1.requestId,
+      method: req1.method,
+      schemaVersion: req1.schemaVersion,
+      result: { echoed: "TWO" },
+      error: null,
+    });
+    await expect(pending2).resolves.toEqual({ echoed: "TWO" });
+
+    // Only the 1 -> 0 edge (the LAST open socket closing) retracts - one pair
+    // total across both RPCs, not one pair per RPC.
+    expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
+    expect(recorder.callsNamed("sessionLost")).toHaveLength(1);
+  });
+
+  it("two client INSTANCES never announce the same local session id - a rebuilt runtime's socket is not retracted by the old socket's close", async () => {
+    // Codex #1243: the evidence kernel is renderer-lifetime and keys sessions
+    // by id. A per-instance counter restarting at zero made a replacement
+    // client announce the same `local-ws:s1` the old one held; the authority
+    // deduplicated it, and the old socket's `lost` then tombstoned the shared
+    // id - retracting the NEW socket's live evidence.
+    const { factory, sockets } = makeFactory();
+    const recorder = new RecordingEvidence();
+    let nextRequestId = 0;
+    const makeClient = () =>
+      new WsRpcClient<typeof testRegistry>({
+        registry: testRegistry,
+        requestId: () => `req-${(nextRequestId += 1)}`,
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+        hostAttestationWindowMs: 0,
+        evidence: recorder,
+      });
+    const authority = authorityForToken("token-abc");
+
+    // Old instance: one socket open, session announced.
+    const oldClient = makeClient();
+    const pendingOld = oldClient.request(
+      "host.echo",
+      { message: "old" },
+      authority,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+
+    // Runtime rebuilt: a NEW instance opens its own socket to the same host
+    // while the old one is still open.
+    const newClient = makeClient();
+    const pendingNew = newClient.request(
+      "host.echo",
+      { message: "new" },
+      authority,
+    );
+    await flush();
+    sockets[1].socket.fireOpen();
+    await flush();
+
+    const established = recorder.calls.filter(
+      (call) => call.method === "sessionEstablished",
+    );
+    expect(established).toHaveLength(2);
+    const [oldSession, newSession] = established;
+    if (oldSession === undefined || newSession === undefined) {
+      throw new Error("expected two announcements");
+    }
+    // The load-bearing claim: distinct ids across instances.
+    expect(newSession.sessionId).not.toBe(oldSession.sessionId);
+
+    // The old socket closes: only ITS id is retracted.
+    sockets[0].socket.fireClose(1006, "old socket gone", false);
+    await expect(pendingOld).rejects.toBeInstanceOf(RetryableTransportError);
+    const lost = recorder.calls.filter((call) => call.method === "sessionLost");
+    expect(lost).toHaveLength(1);
+    expect(lost[0]?.sessionId).toBe(oldSession.sessionId);
+    expect(lost[0]?.sessionId).not.toBe(newSession.sessionId);
+
+    // Leave the new socket's request settled so nothing dangles.
+    sockets[1].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const req = expectRequestFrame(sockets[1].sent[1]);
+    sockets[1].socket.fireMessage({
+      kind: "response",
+      requestId: req.requestId,
+      method: req.method,
+      schemaVersion: req.schemaVersion,
+      result: { echoed: "NEW" },
+      error: null,
+    });
+    await expect(pendingNew).resolves.toEqual({ echoed: "NEW" });
+  });
+
+  it("a socket aborted after opening decrements the refcount without leaking it - the next RPC to the same host still gets a fresh 0->1 announcement", async () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = new RecordingEvidence();
+    let nextRequestId = 0;
+    const client = new WsRpcClient<typeof testRegistry>({
+      registry: testRegistry,
+      requestId: () => `req-${(nextRequestId += 1)}`,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: recorder,
+    });
+    const lifetime = new AbortController();
+    const pending = client.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        endpoint: {
+          hostId: mockLocalHostEntry.hostId,
+          websocketUrl: mockLocalHostEntry.websocketUrl,
+        },
+        bearer: new MutableBearerLease("token-abc", "test-user"),
+        abortSignal: lifetime.signal,
+      },
+    );
+    await flush();
+    expect(sockets).toHaveLength(1);
+    sockets[0].socket.fireOpen();
+    await flush();
+    expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
+
+    lifetime.abort("host-replaced");
+    await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
+
+    // The socket had genuinely opened (raised the refcount) before the abort
+    // closed it - the abort path must still decrement it, or the count would
+    // stay stuck at 1 and no later RPC would ever re-announce.
+    expect(recorder.callsNamed("sessionLost")).toHaveLength(1);
+
+    const pending2 = client.request(
+      "host.echo",
+      { message: "hi again" },
+      authorityForToken("token-abc"),
+    );
+    await flush();
+    expect(sockets).toHaveLength(2);
+    sockets[1].socket.fireOpen();
+    await flush();
+
+    // A fresh 0 -> 1 edge, not a no-op on an already-nonzero count.
+    expect(recorder.callsNamed("sessionEstablished")).toHaveLength(2);
+
+    sockets[1].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const req1 = expectRequestFrame(sockets[1].sent[1]);
+    sockets[1].socket.fireMessage({
+      kind: "response",
+      requestId: req1.requestId,
+      method: req1.method,
+      schemaVersion: req1.schemaVersion,
+      result: { echoed: "HI AGAIN" },
+      error: null,
+    });
+    await expect(pending2).resolves.toEqual({ echoed: "HI AGAIN" });
+    expect(recorder.callsNamed("sessionLost")).toHaveLength(2);
   });
 
   it("rejects before dialing when no authenticated request context is available", async () => {
@@ -489,6 +1044,7 @@ describe("WsRpcClient", () => {
         dialTimeoutMs: 1000,
         frameTimeoutMs: 1000,
         hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
       }),
       authorityForBearer(ctx.credentials),
     );
@@ -989,6 +1545,7 @@ describe("WsRpcClient", () => {
         dialTimeoutMs: 1_000,
         frameTimeoutMs: options.frameTimeoutMs,
         hostAttestationWindowMs: options.hostAttestationWindowMs,
+        evidence: NO_TRANSPORT_EVIDENCE,
       });
       const authCalls = { count: 0 };
       const authAware = createAuthAwareMessenger<typeof testRegistry>(raw, {
@@ -1740,6 +2297,7 @@ describe("WsRpcClient", () => {
         dialTimeoutMs: 1_000,
         frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+        evidence: NO_TRANSPORT_EVIDENCE,
       });
       const pending = client.request(
         "host.echo",
@@ -1780,6 +2338,7 @@ describe("WsRpcClient", () => {
         dialTimeoutMs: 1_000,
         frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+        evidence: NO_TRANSPORT_EVIDENCE,
       });
       const pending = client.request(
         "host.echo",
@@ -2107,6 +2666,7 @@ describe("WsRpcClient", () => {
         dialTimeoutMs: 1000,
         frameTimeoutMs: 1000,
         hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
       }),
       authorityForBearer(ctx.credentials),
     );
@@ -2196,6 +2756,7 @@ describe("WsRpcClient", () => {
         dialTimeoutMs: 1000,
         frameTimeoutMs: 1000,
         hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
       }),
       authorityForBearer(ctx.credentials),
     );
@@ -2312,6 +2873,7 @@ describe("WsRpcClient", () => {
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
           hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         }),
         authorityForBearer(ctx.credentials),
       );
@@ -2610,6 +3172,7 @@ describe("WsRpcClient", () => {
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
           hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
         }),
         authorityForBearer(ctx.credentials),
       );
@@ -3102,5 +3665,52 @@ describe("WsRpcClient negotiated-manifest publication", () => {
     expect(
       [...(getNegotiatedHostMethods(mockLocalHostEntry.hostId) ?? [])].sort(),
     ).toEqual(["host.echo", "host.status"]);
+  });
+
+  /**
+   * The version half of the same publish. A2/critique finding 5: a V12
+   * request to a V11 host Zod-strips `sourceOwnerUserId` silently, so a
+   * caller needs the EXACT negotiated `{major, minor}` per method, not just
+   * presence, to gate on same-major feature support.
+   */
+  it("records the exact negotiated version from the openAck manifest", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-1",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    expect(
+      getNegotiatedHostMethodVersion(mockLocalHostEntry.hostId, "host.echo"),
+    ).toBeNull();
+
+    const pending = client.request("host.echo", { message: "hi" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    await flush();
+    stub.fireMessage(openAckWithOptionalHostEcho({ major: 2, minor: 3 }));
+    await flush();
+
+    expect(
+      getNegotiatedHostMethodVersion(mockLocalHostEntry.hostId, "host.echo"),
+    ).toEqual({ major: 2, minor: 3 });
+    expect(
+      getNegotiatedHostMethodVersion(mockLocalHostEntry.hostId, "host.status"),
+    ).toEqual({ major: 1, minor: 0 });
+
+    stub.fireMessage({
+      kind: "response",
+      requestId: "req-1",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ echoed: "HI" });
   });
 });

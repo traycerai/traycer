@@ -19,6 +19,7 @@ import type {
 } from "../ws-stream-factory";
 import { TerminalStreamClient } from "../terminal-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 class StubStreamWebSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -90,6 +91,7 @@ function makeClient(
     bearer: () => context.credentials,
     auth: null,
     hostCredentialMint: null,
+    evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 1_000,
     openAckTimeoutMs: 1_000,

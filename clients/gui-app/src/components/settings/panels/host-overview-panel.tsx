@@ -3,12 +3,19 @@ import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import {
+  busyRestartMessage,
+  HOST_CHANGED_DESCRIPTION,
+} from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import {
   InstallationDetailsDisclosure,
   type InstallationDetailsRecord,
 } from "@/components/settings/panels/host-settings-installation-details";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
+import { useHostLease } from "@/hooks/host/use-host-lease";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
@@ -18,7 +25,6 @@ import {
   HostOverviewNameAction,
   HostOverviewNotice,
   HostOverviewUpdateProgress,
-  HostRestartBusyNotice,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
@@ -37,6 +43,8 @@ import {
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
+import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
+import { useRunnerReinstallTraycer } from "@/hooks/runner/use-runner-reinstall-traycer-mutation";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,7 +66,10 @@ import {
 } from "@/components/settings/panels/host-service-write-latch-store";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
+import {
+  toastHostRestartDeclined,
+  toastHostRestartRequested,
+} from "@/lib/host-restart-toast";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -69,6 +80,7 @@ import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-s
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
+import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
 
@@ -122,31 +134,66 @@ export function HostOverviewPanel(props: {
   const compact = useSettingsDensity() === "compact";
   const host = scope.host;
 
-  // The BINDING rather than `useHostClient()`: same context, re-provided by the
-  // panel above for an explicit pick, but `null` instead of a throw when there
-  // is no host runtime at all. Every read below is null-gated.
-  const client = useHostBinding()?.hostClient ?? null;
+  // THE SCOPE'S OWN CLIENT, read directly rather than through the ambient
+  // binding.
+  //
+  // This was `useHostBinding()?.hostClient`, and that was CORRECT — but only
+  // because of something two files away. `HostSettingsPanel` wraps this
+  // subtree in `<HostRuntimeContext.Provider value={scopedBinding}>` (`:148`),
+  // so the binding read here was already the scoped host's. The wrapper is the
+  // load-bearing part and it is not greppable from the words its old comment
+  // used: searching `HostBindingProvider|HostRuntimeProvider` finds nothing,
+  // because it is only ever spelled as the context's own `.Provider`. A
+  // correct mechanism that reads as absent is one a future refactor removes
+  // without noticing.
+  //
+  // Reading `scope.client` is behaviour-equivalent in both reachable arms —
+  // under `ready` it is the same client the wrapper re-provides, and under
+  // `following` `use-host-scope.ts:190` makes it the ambient one — and it
+  // removes the dependency: this panel now addresses the host it names whether
+  // or not anything above it re-provides. That matters because of what hangs
+  // off this value. Eight reads, and three of them WRITE:
+  // `host.identity.set` renames a machine, `host.restart` ends its sessions,
+  // and the drain-gate force ends them without waiting. The rule they owe is
+  // stated once, in `host-scope-status.ts`: "a visible host name must always
+  // match the client used by every read, stream and mutation beneath it."
+  //
+  // `host-overview-scoped-client.test.tsx` is the guard, and it works by
+  // forcing exactly the divergence the wrapper would otherwise hide.
+  //
+  // Still nullable, so the null-gating below is unchanged: `scope.client` is
+  // null for `connecting`, `unreachable` and `vanished` — the states
+  // `isHostScopeUsable` already refuses.
+  const client = scope.client;
+  // The ambient BINDING, still read here — but ONLY for `directory`, never
+  // for a client. `#1253`'s local-restart flow needs THIS machine's own entry
+  // (`:315`), and `useScopedHostBinding` overrides only `hostClient`, so
+  // `binding.directory` stays ambient and `getLocalEntry()` keeps meaning this
+  // machine rather than the scoped one. Deliberately NOT `binding.hostClient`:
+  // that is precisely the read the line above replaced, and taking it back
+  // would re-point every write below at whatever host happens to be bound.
+  const binding = useHostBinding();
   // MOUNTING, not rendering. A query hook mounted under a non-ready scope still
   // fires against the ambient host and caches the answer under this page's key,
   // however well a gate hides the result.
   const usable = isHostScopeUsable(scope.status) && client !== null;
-  // THIS machine's host, affirmatively down, with the bridge right here to
-  // revive it. The one state where the RPC-only rule would strand a user: the
-  // page can describe the host from the registry but nothing on it could
-  // start the process back up. `unreachable` only — while `connecting` the
-  // route may still resolve, and offering Start against a host that is about
-  // to answer would race the very process it spawns. This is what remains of
-  // the recovery console's Start/doctor half (its uninstall half lives on the
-  // empty-account path); `LocalHostGate` no longer renders in production, so
-  // Settings cannot delegate this state upstream.
-  const localRecovery =
+  // THIS machine's host, affirmatively down, with the bridge right here.
+  // `unreachable` only — while `connecting` the route may still resolve. What
+  // this state gets is NOT a Start verb: this machine's host is brought back
+  // automatically whichever host the window is pointed at (the desktop's
+  // launch reconciler and retrying boot actor, the selection authority's
+  // ensure, the health monitor's crash respawn, the OS service manager), so a
+  // button here was a second actor for the same process and read as "the app
+  // forgot to start my host". It gets the bridge doctor, and — in the one
+  // state the automation deliberately leaves alone, the user having removed
+  // Traycer from this computer — the consent-reversing Reinstall.
+  const localDown =
     scope.status === "unreachable" &&
     (host?.isLocalMachine ?? false) &&
     props.hasLocalBridge;
 
   const [doctorOpen, setDoctorOpen] = useState(false);
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
-  const [restartBusyCount, setRestartBusyCount] = useState<number | null>(null);
   // The id of a restart whose DISPATCH OUTCOME IS UNKNOWN - the transport threw
   // after the host may already have granted the claim. `host.restart` is
   // claim-gated, so the retry has to carry that same id to adopt the claim it
@@ -216,17 +263,39 @@ export function HostOverviewPanel(props: {
   // stays the default path for every host; force is the explicit consent to
   // end the sessions the claim protects.
   const management = useRunnerHostOrNull()?.hostManagement ?? null;
-  // Variables carry the INITIATING host's id and name (host-swap rule:
-  // capture the host with the mutation, never read it back from whichever
-  // render is live when it settles). The user can scope this page to another
-  // host while the bridge is still killing and relaunching; the settle
-  // callbacks below must neither clear that other host's busy notice nor
-  // toast under its name.
-  const forceRestart = useMutation<
-    HostRestartRequestResult,
-    Error,
-    { readonly hostId: string; readonly hostName: string }
-  >({
+  // The busy verdict, as the offer it is: `host.restart` refused, and force is
+  // the explicit consent to end the sessions it refused to interrupt.
+  //
+  // It renders through `HostBusyForceDeferDialog` — the SAME second modal the
+  // menu/tray restart flow shows for the same answer (`LocalHostRestartFlow`).
+  // What it replaces was an inline amber band on the card whose Force button
+  // dispatched the respawn on the first press, so the identical verdict was
+  // strictly more destructive answered here than from the Help menu. One
+  // verdict, one affordance, one force/defer decision.
+  //
+  // Held as the OFFER rather than a boolean so the count the dialog states is
+  // the count the force is sized from - captured when the verdict lands, not
+  // re-read from whatever the page shows when the button is pressed.
+  //
+  // `hostId` is the host that PRODUCED the verdict, and it is carried because
+  // the respawn is not host-scoped: `restartHost()` kills whichever host this
+  // machine has local at the moment it runs. An offer that outlived a local
+  // host identity change would therefore state A's session count above a button
+  // that kills B - whose claim was never asked and whose sessions were never
+  // counted. Both guards below compare against it, exactly as
+  // `LocalHostRestartFlow` does; an id nothing checked would be worse than no
+  // id at all. `null` is "no offer open".
+  const [forceRestartOffer, setForceRestartOffer] = useState<{
+    readonly hostId: string;
+    readonly hostName: string;
+    readonly verdict: HostRestartBusyVerdict;
+  } | null>(null);
+  // No variables: the unified toast wording (`toastHostRestartRequested` /
+  // `toastHostRestartDeclined`, host-restart-toast.ts) dropped the host name
+  // from the message entirely - the surface the click came from already
+  // names the host being restarted - so there is nothing left for the settle
+  // callbacks to need carried past the mutation boundary.
+  const forceRestart = useMutation<HostRestartRequestResult>({
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => {
       if (management === null) {
@@ -234,28 +303,24 @@ export function HostOverviewPanel(props: {
       }
       return management.restartHost();
     },
-    onSuccess: (result, variables) => {
-      if (variables.hostId === scope.hostId) {
-        setRestartBusyCount(null);
-      }
+    onSuccess: (result) => {
+      // The offer is answered either way — a `declined` respawn performed
+      // nothing, but it did ANSWER, and the toast below carries what happened.
+      // Leaving the dialog up would re-offer a decision already made.
+      setForceRestartOffer(null);
       // `declined` survives even a forced respawn (removed-by-user, another
       // process holds the management lock) - informational, not an error.
       if (result.kind === "declined") {
         toastHostRestartDeclined(result.message);
         return;
       }
-      toast.success(`Restarting ${variables.hostName}`);
+      toastHostRestartRequested();
     },
     onError: (error) => {
+      setForceRestartOffer(null);
       toastFromRunnerError(error, "Couldn't restart host");
     },
   });
-  // Pending for THIS page's busy notice only when this host initiated it;
-  // the page-wide write gate (`corePending`) includes the unscoped pending
-  // instead, since a bridge respawn recycles the local host process and no
-  // lifecycle write should dispatch beside that regardless of scope.
-  const forceRestartPendingHere =
-    forceRestart.isPending && forceRestart.variables.hostId === scope.hostId;
   // CACHE-derived, not observer-derived, for the page-wide gate. The panel's
   // inner tree is keyed per scope, so switching hosts unmounts this
   // component and a remounted `useMutation` observer starts idle even while
@@ -265,15 +330,31 @@ export function HostOverviewPanel(props: {
   // under this key, which survives any number of remounts.
   const forceRestartInFlight =
     useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
-  // The id the force offer would act on, or null when no offer can be made.
-  // Carrying the id (not a boolean) is what lets the mutate call below pass
-  // a `string` without re-narrowing `scope.hostId`'s `string | null`.
-  const forceRestartHostId =
-    (host?.isLocalMachine ?? false) &&
+  // The host a force offer would be ABOUT, or `null` when this page has no
+  // force route at all: the respawn goes over THIS machine's CLI bridge, so it
+  // exists for the local host with a bridge attached and for nothing else. A
+  // remote host has no transport that can kill its process.
+  //
+  // One value rather than a boolean gate beside an id, because the two must
+  // never disagree - the id IS the reason the route exists, and reading them
+  // apart is how an offer ends up pinned to a host the gate already refused.
+  const forceRestartLocalHostId =
+    host !== null &&
+    host.isLocalMachine &&
     props.hasLocalBridge &&
     management !== null
-      ? scope.hostId
+      ? host.hostId
       : null;
+  // The live local host at the instant of a CLICK, not as of the last committed
+  // render. A host identity change arrives as a store update, so a press
+  // processed against the previous render would compare stale against stale and
+  // sail through - the same reason the menu/tray flow re-reads here.
+  // `getLocalEntry()` is synchronous and current.
+  const liveLocalHostIdNow = (): string | null => {
+    if (binding === null) return null;
+    const entry = binding.directory.getLocalEntry();
+    return entry === null ? null : entry.hostId;
+  };
 
   // Save and Reset are the SAME write with a different argument — `null` clears
   // the override and falls the name back to the host's own default. Sharing the
@@ -450,6 +531,34 @@ export function HostOverviewPanel(props: {
   if (restartConfirmOpen && anyPending && !restart.isPending) {
     setRestartConfirmOpen(false);
   }
+  // The force offer has the same window and a sharper reason to close in it: no
+  // lifecycle write on this page may dispatch beside a bridge respawn, and an
+  // offer left answerable while one arms walks straight through that rule. Two
+  // exclusions, both for writes that ARE this action rather than a competing
+  // one — the `host.restart` whose busy answer OPENS the offer, and the respawn
+  // the offer itself dispatched (which is what puts `forceRestartInFlight` into
+  // `anyPending` to begin with).
+  if (
+    forceRestartOffer !== null &&
+    anyPending &&
+    !restart.isPending &&
+    !forceRestartInFlight
+  ) {
+    setForceRestartOffer(null);
+  }
+  // The other way the offer goes stale: the host it describes stopped being the
+  // one the respawn would hit. `forceRestartLocalHostId` goes null the moment
+  // this page's host is no longer this machine's - which is exactly a local
+  // host identity change under an open dialog - and non-null it can only be
+  // this host's own id, since that is where it comes from. Drop the offer
+  // rather than leave a kill button over a count that no longer describes its
+  // target; `⋯ → Restart` re-asks the new host cooperatively.
+  if (
+    forceRestartOffer !== null &&
+    forceRestartOffer.hostId !== forceRestartLocalHostId
+  ) {
+    setForceRestartOffer(null);
+  }
 
   // The name edits in place, exactly as a tab title does — same hook, so Enter
   // commits, Escape reverts, blur settles once, and the input can never commit
@@ -499,20 +608,30 @@ export function HostOverviewPanel(props: {
 
   const registryItem = host.item;
 
+  // The two facts the window modal's own update gate reduces to, asked once
+  // here rather than inside the JSX. Force-provisioning is the BUNDLED host's
+  // lifecycle on this computer: `hostManagement` is the bridge that can run it,
+  // and `isLocalMachine` is whether this row is the machine it would run
+  // against. Either one false means there is no update this app can perform,
+  // and the row falls back to naming the problem without offering a control
+  // that cannot reach it.
+  const canManageHost = host.isLocalMachine && management !== null;
+
   // The header cluster, withheld entirely when there is no route rather than
   // rendered and disabled. Every one of its verbs needs a live host to answer,
   // so on an unreachable host they would be dead controls under a card that
   // already says the host cannot be reached — and "disabled" would wrongly
   // imply a capability verdict rather than a connectivity one. What survives
   // an outage is the account-backed half below: the update policy, which
-  // needs no route at all. The ONE exception is this computer's own stopped
-  // host, whose revival verbs run over the CLI bridge and need no route by
-  // construction.
+  // needs no route at all. The ONE exception is this computer's own down
+  // host, whose doctor (and, after a removal, Reinstall) run over the CLI
+  // bridge and need no route by construction.
   let headerActions: ReactNode = null;
-  if (localRecovery) {
+  if (localDown) {
     headerActions = (
-      <LocalHostRecoveryActions
+      <LocalHostDownActions
         hostName={displayName}
+        settingUp={host.settingUp}
         onOpenDoctor={() => setDoctorOpen(true)}
       />
     );
@@ -538,12 +657,10 @@ export function HostOverviewPanel(props: {
             : () => submitRename(null)
         }
         resetNameDegrade={renameDegrade}
-        onRestart={() => {
-          setRestartBusyCount(null);
-          setRestartConfirmOpen(true);
-        }}
+        onRestart={() => setRestartConfirmOpen(true)}
         onOpenDoctor={() => setDoctorOpen(true)}
         onMakeActive={() => scope.makeActive(host.hostId)}
+        activateBusy={scope.isActivating}
         onCopyHostId={() => hostIdCopy.copy(host.hostId)}
       />
     );
@@ -597,38 +714,14 @@ export function HostOverviewPanel(props: {
           )
         }
         actions={headerActions}
+        healthAction={
+          <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
+        }
       >
         {view.updateProgress === null ? null : (
           <HostOverviewUpdateProgress
             state={view.updateProgress.state}
             error={view.updateProgress.error}
-          />
-        )}
-        {restartBusyCount === null ? null : (
-          <HostRestartBusyNotice
-            busySessionCount={restartBusyCount}
-            retryPending={restart.isPending}
-            onRetry={() => {
-              setRestartBusyCount(null);
-              setRestartConfirmOpen(true);
-            }}
-            onDismiss={() => setRestartBusyCount(null)}
-            onForceRestart={
-              forceRestartHostId === null
-                ? null
-                : () =>
-                    forceRestart.mutate({
-                      hostId: forceRestartHostId,
-                      hostName: displayName,
-                    })
-            }
-            forcePending={forceRestartPendingHere}
-            // `anyPending` is the page's FULL write gate (core lifecycle
-            // writes, service register/deregister, an accepted-but-unsettled
-            // update install) - the same one the restart confirm and rename
-            // already honor. Passing anything narrower would let Force
-            // restart recycle the host beside one of those writes.
-            pageGatePending={anyPending}
           />
         )}
         {/* The update ANSWER, on the card that describes the host — not under a
@@ -736,10 +829,28 @@ export function HostOverviewPanel(props: {
                 if (response.outcome === "busy") {
                   // Not an error: the host closed admission, found work in
                   // flight, and reopened it. Nothing was interrupted.
-                  setRestartBusyCount(response.verdict.busySessionCount);
+                  //
+                  // Where a force route exists, the verdict IS the offer, and
+                  // it opens the force/defer dialog below. Where none does —
+                  // a remote host, or this machine with no CLI bridge — there
+                  // is no second choice to put in a modal, so it is REPORTED:
+                  // `toastHostRestartDeclined` is the same "deliberately not
+                  // restarted, this clears on its own" register the declined
+                  // respawn uses, deliberately not an error toast.
+                  if (forceRestartLocalHostId === null) {
+                    toastHostRestartDeclined(
+                      busyRestartMessage(response.verdict, false),
+                    );
+                    return;
+                  }
+                  setForceRestartOffer({
+                    hostId: forceRestartLocalHostId,
+                    hostName: displayName,
+                    verdict: response.verdict,
+                  });
                   return;
                 }
-                toast.success(`Restarting ${displayName}`);
+                toastHostRestartRequested();
               },
               onError: (error) => {
                 setRestartConfirmOpen(false);
@@ -752,6 +863,48 @@ export function HostOverviewPanel(props: {
           );
         }}
       />
+      {/* The busy verdict's whole affordance, and the SAME dialog the menu/tray
+          restart flow shows for the same answer: Defer or Force restart, with
+          the session count stated where the decision is made. Deferring ends
+          the action exactly as it does there — Restart is one menu item away,
+          and re-asking a host that may have drained since is the honest retry.
+          The amber band with an inline one-press Force that used to sit on the
+          card is gone; see `host-overview-status-card.tsx`. */}
+      <HostBusyForceDeferDialog
+        open={forceRestartOffer !== null}
+        message={
+          forceRestartOffer === null
+            ? ""
+            : busyRestartMessage(forceRestartOffer.verdict, true)
+        }
+        // CACHE-derived, matching what the menu/tray flow passes here
+        // (`forceRestart.isPending || respawnInFlight`), and for its reason
+        // rather than the page gate's: menu, tray and Settings all submit
+        // respawns under ONE mutation key against ONE bridge lane, and each
+        // surface's own observer sees only its own dispatches. So this goes
+        // inert for ANY respawn in flight, not just the one pressed here —
+        // deliberately, so a second respawn cannot be stacked on the first.
+        isForcing={forceRestartInFlight}
+        forceLabel="Force restart"
+        onForce={() => {
+          if (forceRestartOffer === null) return;
+          // Refuse on a POSITIVE mismatch only. `null` here is "cannot tell"
+          // (no binding, or the local entry went away because the host is
+          // down) - not evidence of a swap, and the state where a respawn is
+          // most legitimate - so it falls through to the dispatch exactly as
+          // the menu/tray flow does.
+          const liveHostId = liveLocalHostIdNow();
+          if (liveHostId !== null && liveHostId !== forceRestartOffer.hostId) {
+            setForceRestartOffer(null);
+            toast.info("Host changed", {
+              description: HOST_CHANGED_DESCRIPTION,
+            });
+            return;
+          }
+          forceRestart.mutate();
+        }}
+        onDefer={() => setForceRestartOffer(null)}
+      />
       <DoctorSheet
         open={doctorOpen}
         onOpenChange={setDoctorOpen}
@@ -761,7 +914,7 @@ export function HostOverviewPanel(props: {
           // report this machine's bridge produces IS about the machine the
           // page names — the misattribution the rpc-only rule guards against
           // cannot happen when the subject is this computer.
-          localRecovery
+          localDown
             ? { kind: "bridge" }
             : {
                 kind: "rpc",
@@ -780,61 +933,152 @@ export function HostOverviewPanel(props: {
 }
 
 /**
+ * The "Update host" remedy, mounted beside the health word that names the
+ * problem (rider 1: Settings renders `dead(incompatible)` with its affordance).
+ *
+ * GATED ON BOTH the rendered health state and the lease, and the conjunction is
+ * the point rather than belt-and-braces. `health.state` respects the derivation
+ * precedence — this machine's own stopped service outranks the authority's
+ * verdict — so a local host that is BOTH incompatible and not running reads
+ * "Stopped", and offering "Update host" beside that word would answer a
+ * question the card is not asking. The lease is then what carries the
+ * structured skew the action needs, which `health` deliberately does not.
+ *
+ * The lane is `convergeReady({ force: true })` — the SAME mutation and the same
+ * `runnerMutationKeys.hostConvergeReady()` key the window modal's "Update host"
+ * drives through `forceProvisioning`, and the same one `LocalHostDownActions`
+ * below drives (with `force: false`) for a Reinstall. So a click here is
+ * narrated by the existing
+ * actor-agnostic progress lane ("Applying the host update…") with no second
+ * observer and no new key; nothing about this surface needed a mechanism of its
+ * own, which is why it does not have one.
+ */
+export function HostUpdateRequiredSlot(props: {
+  readonly host: HostScopeOption;
+  readonly canManageHost: boolean;
+}): ReactNode {
+  const lease = useHostLease(props.host.hostId);
+  const convergeReady = useRunnerConvergeReady();
+  if (props.host.health.state !== "update-required") return null;
+  if (lease === null || lease.status !== "dead") return null;
+  if (lease.dead.reason !== "incompatible") return null;
+  return (
+    <HostUpdateRequiredAction
+      detail={lease.dead.detail}
+      canManageHost={props.canManageHost}
+      pending={convergeReady.isPending}
+      onUpdateHost={() => {
+        convergeReady.mutate(
+          { force: true },
+          {
+            onSuccess: () => {
+              toast.success(`Updating ${props.host.name}…`);
+            },
+            onError: (error) =>
+              toastFromRunnerError(
+                error,
+                `Couldn't update ${props.host.name}.`,
+              ),
+          },
+        );
+      }}
+    />
+  );
+}
+
+/**
  * The header cluster for this computer's host when it is affirmatively DOWN.
  *
- * Two verbs, both bridge-backed and so both honest without a route: Start
- * (`convergeReady` — install + register + start, the same intent the post-auth
- * gate uses) and the bridge doctor. Success needs no explicit refresh here:
- * the host coming up flips the scope status through its ordinary reactivity
- * and the live cluster replaces this one.
+ * NO START VERB, by decision (2026-08-19). The local host's lifecycle is
+ * automatic and independent of which host a window is pointed at: launch
+ * converge and the retrying boot actor (main), the selection authority's
+ * ensure, the health monitor's crash respawn, and the OS service manager
+ * between them bring this machine's host back. A Start button here was a
+ * second process actor for the same host and read as "the app forgot to start
+ * my host" - which is exactly how it was reported. Two things remain, both
+ * bridge-backed and so both honest without a route:
+ *
+ *  - REINSTALL, only when the user removed Traycer from this computer. That is
+ *    the one down state the automation deliberately leaves alone (consent),
+ *    and the danger-zone dialog promises "you can reinstall anytime from
+ *    Settings" - this is where. It clears the removal sentinel and converges;
+ *    `convergeReady` under the sentinel short-circuits `ok {running:false}`
+ *    without installing, which is why the old Start button was a silent no-op
+ *    in precisely this state (`useRunnerReinstallTraycer` does both steps).
+ *  - the bridge doctor, which diagnoses without a route. Disabled while this
+ *    machine's lifecycle lane is busy (`settingUp`, actor-agnostic): a CLI
+ *    inspecting an installation the converge is mid-rewrite reports (and
+ *    offers to fix) states that are simply "not done yet".
+ *
+ * Success needs no explicit refresh here: the host coming up flips the scope
+ * status through its ordinary reactivity and the live cluster replaces this
+ * one.
  */
-function LocalHostRecoveryActions(props: {
+function LocalHostDownActions(props: {
   readonly hostName: string;
+  readonly settingUp: boolean;
   readonly onOpenDoctor: () => void;
 }): ReactNode {
-  const convergeReady = useRunnerConvergeReady();
+  const management = useRunnerHostOrNull()?.hostManagement ?? null;
+  const removal = useRunnerHostRemovalStateQuery({
+    enabled: management !== null,
+  });
+  const reinstall = useRunnerReinstallTraycer();
+  const removed = removal.data?.removedByUser === true;
+  // The verb SURVIVES ITS OWN FAILURE. `reinstall` clears the removal
+  // sentinel first and converges second, so a converge that comes back
+  // `failed`/`deferred` leaves the sentinel already cleared - `removed` flips
+  // to false, and this cluster would drop the only affordance for a machine
+  // that still has no host. Nothing else picks it up in this session either:
+  // main's boot actor settled at launch on the sentinel it saw then. Keeping
+  // the button on `isError` makes the retry the user's to take now; the next
+  // launch sees a cleared sentinel and boots on the ladder without them.
+  //
+  // `isPending` is in here for the RETRY, and its absence was a real hole: a
+  // second click flips the mutation error -> pending, so with the sentinel
+  // already cleared BOTH other terms go false and the button unmounted for
+  // the length of the attempt - taking its own spinner with it. The first
+  // attempt never showed that, because `removed` is still true until the
+  // sentinel refetch lands, which is why it needs its own test.
+  const removalRepairable = removed || reinstall.isError || reinstall.isPending;
+  const busy = props.settingUp || reinstall.isPending;
   return (
     <div className="flex shrink-0 items-center gap-1.5">
-      <Button
-        type="button"
-        variant="default"
-        size="sm"
-        disabled={convergeReady.isPending}
-        data-testid="host-overview-start-local"
-        onClick={() => {
-          convergeReady.mutate(
-            { force: false },
-            {
+      {removalRepairable ? (
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          disabled={busy}
+          data-testid="host-overview-reinstall-local"
+          onClick={() => {
+            reinstall.mutate(undefined, {
               onSuccess: () => {
-                toast.success(`Starting ${props.hostName}…`);
+                toast.success(`Reinstalling Traycer on ${props.hostName}…`);
               },
               onError: (error) =>
                 toastFromRunnerError(
                   error,
-                  `Couldn't start ${props.hostName}.`,
+                  `Couldn't reinstall Traycer on ${props.hostName}.`,
                 ),
-            },
-          );
-        }}
-      >
-        {convergeReady.isPending ? (
-          <AgentSpinningDots
-            className="mr-2 size-3"
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-        Start host
-      </Button>
+            });
+          }}
+        >
+          {reinstall.isPending ? (
+            <AgentSpinningDots
+              className="mr-2 size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Reinstall Traycer
+        </Button>
+      ) : null}
       <Button
         type="button"
         variant="outline"
         size="sm"
-        // Same overlap rule as the live host's page-wide gate: opening the
-        // sheet mounts a doctor card that dispatches immediately, and a CLI
-        // inspecting the installation converge is mid-rewrite would report
-        // (and offer to fix) states that are simply "not done yet".
-        disabled={convergeReady.isPending}
+        disabled={busy}
         data-testid="host-overview-recovery-doctor"
         onClick={props.onOpenDoctor}
       >

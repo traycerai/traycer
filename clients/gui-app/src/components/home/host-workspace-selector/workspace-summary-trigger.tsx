@@ -89,7 +89,7 @@ export function WorkspaceSummaryTrigger(
             />
           </span>
           {extraCount > 0 ? (
-            <span className="shrink-0 rounded-md bg-muted/80 px-1.5 py-0.5 text-overline font-medium text-current">
+            <span className="shrink-0 rounded-md bg-foreground/7 px-1.5 py-0.5 text-overline font-medium text-current">
               +{extraCount}
             </span>
           ) : null}

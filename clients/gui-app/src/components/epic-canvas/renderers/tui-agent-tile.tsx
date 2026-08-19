@@ -22,7 +22,12 @@ import {
   useTerminalTileBootstrap,
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  useHostReachability,
+  resolvedHostLabel,
+} from "@/hooks/agent/use-host-reachability";
+import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { TileHostLoadState } from "./tile-host-load-state";
 import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
@@ -133,6 +138,15 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const hostId = useTabHostId();
   const epicId = useOpenEpicId();
   const reachability = useHostReachability(hostId);
+  // Bounded, worded pre-bootstrap wait - see `terminal-tile.tsx` for the same
+  // gate; the two tile families must not describe one host two ways.
+  const hostLoad = useBoundedHostLoad({
+    hostId,
+    hostLabel: resolvedHostLabel(reachability),
+    pending:
+      reachability.status === "checking" ||
+      reachability.status === "host-starting",
+  });
   const crashReportedRef = useRef(false);
   const reportCrashExit = useCallback(() => {
     if (crashReportedRef.current) return;
@@ -214,6 +228,11 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     // so nothing closed and a persisted "closed" entry would be a lie an
     // upgrade immediately contradicts.
     if (reachability.unavailability === "plan-restricted") return;
+    // And the same basis gate: since F4 this verdict also arrives from a
+    // starting host that overran its budget, which is the UI's patience
+    // expiring rather than proof the agent's session ended. The tile stops
+    // waiting; the persisted notification still needs directory evidence.
+    if (reachability.basis !== "directory") return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
       hostId,
@@ -231,6 +250,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     reachability.status,
     reachability.hostLabel,
     reachability.unavailability,
+    reachability.basis,
     epicId,
     hostId,
     props.node.id,
@@ -250,11 +270,11 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     );
   }
   // "host-starting": local host not published yet (boot/ensure/wake) - show
-  // the loading shell, never the permanently-closed banner.
-  if (
-    reachability.status === "checking" ||
-    reachability.status === "host-starting"
-  ) {
+  // the loading shell, never the permanently-closed banner. The shell and its
+  // worktree notice stay; only the wordless skeleton inside it is retired for
+  // a bounded state that names the host it is waiting on (audit S5, and
+  // invariant 6 for the end of the wait).
+  if (hostLoad.kind !== "ready") {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
@@ -264,7 +284,12 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
           layout="bar"
         />
         <div className="flex min-h-0 flex-1 items-center justify-center">
-          <TerminalLoadingSkeleton />
+          <TileHostLoadState
+            load={hostLoad}
+            subject="agent"
+            onRetry={null}
+            testId={`terminal-agent-tile-load-${props.tileId}`}
+          />
         </div>
       </TerminalAgentTileShell>
     );
@@ -817,32 +842,45 @@ function TerminalAgentPreLaunchToolbar(
     poll: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
+  // Same host the fork dialog below is handed, so the slot this toolbar
+  // stages into is the one that dialog reads back.
+  const toolbarHostId = props.hostId;
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "owner",
+      hostId: toolbarHostId,
       epicId: props.epicId,
       ownerKind: "terminal-agent",
       ownerId: props.agent.id,
     }),
-    [props.agent.id, props.epicId],
+    [props.agent.id, props.epicId, toolbarHostId],
   );
   const sourceStagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(sourceStagingKey)] ?? null,
   );
   const pendingForkStagingKey = useMemo(
-    () => pendingForkTerminalAgentStagingKey(props.epicId),
-    [props.epicId],
+    () => pendingForkTerminalAgentStagingKey(toolbarHostId, props.epicId),
+    [props.epicId, toolbarHostId],
   );
   const clearStagedIntent = useWorktreeIntentStagingStore((s) => s.clear);
   const forkWorkspaceSeed = useMemo(() => {
     const seed = buildForkWorkspaceSeed({
       binding,
       stagedIntent: sourceStagedIntent,
+      hostId: toolbarHostId,
     });
     return seed.intent === null
-      ? buildForkWorkspaceSeedFromWorkspaceFolders(props.agent.workspaceFolders)
+      ? buildForkWorkspaceSeedFromWorkspaceFolders(
+          props.agent.workspaceFolders,
+          toolbarHostId,
+        )
       : seed;
-  }, [binding, props.agent.workspaceFolders, sourceStagedIntent]);
+  }, [
+    binding,
+    props.agent.workspaceFolders,
+    sourceStagedIntent,
+    toolbarHostId,
+  ]);
   const forkDisabled =
     props.hostClient === null ||
     props.agent.harnessSessionId === null ||
@@ -1163,6 +1201,8 @@ function TerminalAgentHeaderControls(props: {
           >
             <Users aria-hidden className="size-3.5" />
             Agents
+            {/* muted-fill-ok: chip on TerminalAgentTileShell bg-canvas;
+                --canvas never equals --muted */}
             <span className="rounded bg-muted px-1 text-ui-xs">
               {runningCount}
             </span>

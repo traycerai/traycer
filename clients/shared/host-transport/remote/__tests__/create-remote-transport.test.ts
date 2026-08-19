@@ -1,3 +1,4 @@
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { describe, expect, it } from "vitest";
 import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -34,6 +35,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
       },
     },
     requestId: () => "req-1",
+    evidence: NO_TRANSPORT_EVIDENCE,
   });
 }
 

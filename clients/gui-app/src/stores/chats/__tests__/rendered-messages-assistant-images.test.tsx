@@ -144,6 +144,7 @@ function toolCallWithImages(args: {
     ...toolCallInputFields("image_generation", { prompt: "a cat" }),
     error: null,
     agentMessageSend: null,
+    managedCommand: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
@@ -719,5 +720,88 @@ describe("useRenderedMessages image resolution stable-row identity", () => {
           (tool as { assistantImageContext?: unknown }).assistantImageContext
         : undefined,
     ).toBeUndefined();
+  });
+});
+
+/**
+ * An assistant record persisted before `imageResolutions` existed, shaped the
+ * way one actually reaches this projection at runtime.
+ *
+ * A snapshot delivered on the live schema line takes `ChatStreamClient`'s
+ * SHALLOW parse path, which validates `chat.messages` with
+ * `z.custom<Message>(isStructuralRecord)` - a structural check that runs none of
+ * the zod defaults, so `imageResolutions: z.array(...).default([])` never fills.
+ * (The DEEP path does fill it, which is why only the live line is exposed; both
+ * halves of that contract are pinned in `chat-stream-client.test.ts`.) The value
+ * arrives typed as present and genuinely `undefined`.
+ *
+ * The single assertion below is how a test states that: the declared type says
+ * the field is always there, and the whole point of this fixture is a runtime
+ * value that disagrees.
+ */
+function assistantMessageWithoutImageResolutions(
+  turnId: string,
+  timestamp: number,
+  blocks: ReadonlyArray<ContentBlock>,
+): Extract<Message, { role: "assistant" }> {
+  const preImage: Omit<
+    Extract<Message, { role: "assistant" }>,
+    "imageResolutions"
+  > = {
+    role: "assistant",
+    messageId: turnId,
+    sender: ASSISTANT_SENDER,
+    blocks: [...blocks],
+    startedAt: timestamp,
+    timestamp,
+    turnId,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    // Deliberately no `imageResolutions` key.
+  };
+  return preImage as Extract<Message, { role: "assistant" }>;
+}
+
+describe("useRenderedMessages pre-image assistant records", () => {
+  it("projects a record whose imageResolutions the shallow snapshot path never filled", () => {
+    const source = "/generated/cat.png";
+    const assistant = assistantMessageWithoutImageResolutions(
+      "turn-pre-image",
+      2000,
+      [textBlock("text-1", 2001, `![cat](${source})`)],
+    );
+
+    // Before the fix this threw "Invalid value used as weak map key" out of
+    // `imageResolutionsIdentityToken` - `WeakMap.set(undefined, …)` - and the
+    // chat tile came down through its error boundary. Rendering at all is the
+    // regression guard; the assertions pin that it degrades to "no resolutions"
+    // rather than to a row that silently drops its prose.
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0]?.role).toBe("assistant");
+    expect(result.current[0]?.id).toContain("turn-pre-image");
+    const context = textSegmentContext(result.current[0]?.segments ?? []);
+    expect(context?.deduplicatedTargetsBySource.get(source)).toBeUndefined();
+  });
+
+  it("keeps a stable memo signature across re-renders when the field is absent", () => {
+    // `imageResolutionsIdentityToken` keys a WeakMap to build the memo
+    // signature, so the absent case has to resolve to ONE shared array. A fresh
+    // `[]` per read would mint a new identity on every projection, changing the
+    // signature each time and defeating the cache - a silent re-render loop
+    // rather than a crash, which is why it gets its own assertion.
+    const assistant = assistantMessageWithoutImageResolutions(
+      "turn-stable",
+      2000,
+      [textBlock("text-1", 2001, "Hello")],
+    );
+
+    const view = renderRenderedMessages({ messages: [assistant] });
+    const first = view.result.current;
+    view.patch({ runStatus: "idle" });
+
+    expect(view.result.current).toBe(first);
   });
 });

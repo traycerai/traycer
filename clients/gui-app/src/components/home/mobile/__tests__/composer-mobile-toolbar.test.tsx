@@ -26,6 +26,7 @@ function makeStore(modelSlug: string) {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    hostId: null,
   });
 }
 

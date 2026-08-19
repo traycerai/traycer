@@ -15,6 +15,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { Command, CommandList } from "@/components/ui/command";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { PaletteQueryProvider } from "@/lib/commands/palette-query-context";
 import type { CommandContext } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -66,6 +67,9 @@ interface MockState {
   // Records keys that bubbled PAST the cmdk Command to the outer wrapper, so a
   // test can assert cmdk isolation (Enter/arrows stopped, Escape allowed).
   readonly outerKeyDown: Mock<(key: string) => void>;
+  // The host owning the surrounding Epic session. `null` models the window
+  // before the session resolves, where the component must still render.
+  sessionHostId: string | null;
 }
 
 const IDLE: MockQueryResult = { data: undefined, isError: false, error: null };
@@ -90,11 +94,19 @@ const state = vi.hoisted<MockState>(() => ({
   artifactIssued: [],
   artifactIndex: {},
   outerKeyDown: vi.fn<(key: string) => void>(),
+  sessionHostId: "session-host",
 }));
 
-vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "default-host",
+// Mocked at the hooks the component actually reads. It used to stub
+// `useHostClient` / `useAddressableHostId`, which resolved the APP-WIDE
+// pointer; those two now name modules this component no longer imports, so
+// they stubbed nothing and the suite stamped every opened tile with the
+// unknown-host placeholder while still passing.
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => null,
+}));
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => state.sessionHostId,
 }));
 vi.mock("@/hooks/workspace/use-workspace-search-text-query", () => ({
   useWorkspaceSearchText: (args: UseWorkspaceSearchTextArgs) => {
@@ -208,6 +220,7 @@ beforeEach(() => {
   state.codeIssued.length = 0;
   state.artifactIssued.length = 0;
   state.artifactIndex = {};
+  state.sessionHostId = "session-host";
 });
 
 afterEach(() => {
@@ -534,6 +547,50 @@ describe("SearchRunView - artifact target (workspace.searchText)", () => {
     // Authoritative artifact open - NOT a workspace-file reveal of the mirror.
     expect(state.setReveal).not.toHaveBeenCalled();
     expect(state.toast).not.toHaveBeenCalled();
+  });
+
+  it("stamps the opened artifact with the EPIC SESSION's host, not the app-wide pointer", () => {
+    // A retained Epic stays bound to the machine its session runs on, while
+    // Settings ▸ Activate moves the app-wide pointer out from under it. The
+    // artifact mirror this result came from belongs to the session's host, so
+    // stamping the opened tile with the pointer hands the tab a host that
+    // never held the artifact.
+    state.sessionHostId = "session-host";
+    state.artifactIndex = {
+      "tickets/known": { id: "art-1", kind: "ticket", title: "Known" },
+    };
+    state.artifactResult = artifactResponse(
+      "ready",
+      [artifactMatch("tickets/known")],
+      false,
+    );
+    renderView(ARTIFACT_TARGET, "body");
+
+    fireEvent.click(screen.getByRole("option"));
+
+    const opened = state.openTileIntoTargetGroup.mock.calls.at(0)?.[0];
+    expect(opened?.ref.hostId).toBe("session-host");
+  });
+
+  it("still opens before the Epic session resolves, with no host to stamp", () => {
+    // `useEpicSessionHostId` is null until the session handle exists. The
+    // placeholder is the honest answer there - what must NOT happen is falling
+    // back to whatever host the window happens to be pointing at.
+    state.sessionHostId = null;
+    state.artifactIndex = {
+      "tickets/known": { id: "art-1", kind: "ticket", title: "Known" },
+    };
+    state.artifactResult = artifactResponse(
+      "ready",
+      [artifactMatch("tickets/known")],
+      false,
+    );
+    renderView(ARTIFACT_TARGET, "body");
+
+    fireEvent.click(screen.getByRole("option"));
+
+    const opened = state.openTileIntoTargetGroup.mock.calls.at(0)?.[0];
+    expect(opened?.ref.hostId).toBe(UNKNOWN_HOST_PLACEHOLDER);
   });
 
   it("fails safe when re-resolution returns null (stale/deleted OR ambiguous)", () => {

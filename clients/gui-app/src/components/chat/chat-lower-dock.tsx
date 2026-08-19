@@ -35,8 +35,16 @@ export interface ChatLowerDockProps {
    * `chatBackgroundSectionVisible`.
    */
   readonly runningManagedCommandCount: number;
+  /**
+   * This chat's held shells, counted by the parent for the same reason - and
+   * counted separately because the hold a human has to clear sits on a shell
+   * that has FINISHED, which the running count above will never see. A chat
+   * whose only background state is a hold opens the section on this alone.
+   */
+  readonly heldManagedCommandCount: number;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;
+  readonly backgroundSessionStopPending: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly canAct: boolean;
   readonly queueResumeRequested: boolean;
@@ -58,6 +66,7 @@ export interface ChatLowerDockProps {
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
+  readonly onBackgroundSessionStop: () => string | null;
 }
 
 export function ChatLowerDock(props: ChatLowerDockProps) {
@@ -72,6 +81,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount: props.runningManagedCommandCount,
+    heldManagedCommandCount: props.heldManagedCommandCount,
   });
 
   if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {
@@ -198,11 +208,14 @@ function BackgroundSection(props: {
       readOnly={dock.readOnly}
       pendingStopTaskIds={dock.backgroundStopPendingTaskIds}
       stopAllPending={dock.backgroundStopAllPending}
+      sessionStopPending={dock.backgroundSessionStopPending}
+      turnActive={dock.activeTurnStatus !== null}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
       separated={props.separated}
       onItemClick={dock.onBackgroundItemClick}
       onStopItem={dock.onBackgroundItemStop}
       onStopAll={dock.onBackgroundItemsStopAll}
+      onStopSession={dock.onBackgroundSessionStop}
     />
   );
 }

@@ -1,4 +1,47 @@
-import type { ProviderRateLimits, ProviderRateLimitWindow } from "./schemas";
+import type {
+  ProviderRateLimits,
+  ProviderRateLimitWindow,
+  RateLimitUnavailableReason,
+} from "./schemas";
+
+/**
+ * Reasons a rate-limit read can fail that describe THIS attempt rather than the
+ * account: `usage_fetch_failed` is the CLI's usage HTTP fetch failing (e.g. a
+ * server-side 429 on Anthropic's `/api/oauth/usage` with a multi-minute penalty
+ * window), `timeout`/`connection_failed` its probe-level analogues. Every other
+ * reason (`rate_limits_not_available`, `cli_not_found`, `sdk_incompatible`, ...)
+ * is authoritative - it says something about the account or the setup, not "try
+ * again shortly".
+ *
+ * The distinction is load-bearing on BOTH sides of the wire and must not drift,
+ * which is why it lives here rather than in either peer: the host's gauge cache
+ * keeps its last known reading across a transient failure (and lets an
+ * authoritative one replace it), and the GUI's renderer envelope retains
+ * `lastGood` under exactly the same rule so the two never disagree about
+ * whether a reading is still worth showing.
+ */
+const TRANSIENT_RATE_LIMIT_UNAVAILABLE_REASONS: ReadonlySet<RateLimitUnavailableReason> =
+  new Set(["usage_fetch_failed", "timeout", "connection_failed"]);
+
+export function isTransientRateLimitUnavailableReason(
+  reason: RateLimitUnavailableReason,
+): boolean {
+  return TRANSIENT_RATE_LIMIT_UNAVAILABLE_REASONS.has(reason);
+}
+
+/**
+ * Snapshot-level form of `isTransientRateLimitUnavailableReason`: whether this
+ * whole reading is a failed attempt that a previously captured reading should
+ * survive. An `available: true` snapshot is never transient - it IS the reading.
+ */
+export function isTransientProviderRateLimitFailure(
+  rateLimits: ProviderRateLimits,
+): boolean {
+  return (
+    !rateLimits.available &&
+    isTransientRateLimitUnavailableReason(rateLimits.reason)
+  );
+}
 
 export type ProviderRateLimitSeverity =
   "healthy" | "running_low" | "limited" | "unknown";
@@ -70,6 +113,14 @@ export function providerRateLimitWindows(
       // severity/rollup path. A period-less snapshot (tier + dates only, no
       // usage percentage) carries no window.
       return rateLimits.period !== null ? [rateLimits.period] : [];
+    case "cursor":
+      // Hybrid arm, like grok's: the synthesized per-bucket windows ("Cursor
+      // Models" / "Other Models", mirroring Cursor's Spending page) feed the
+      // shared severity/rollup path. A snapshot whose usage could not be
+      // measured (no bucket percentages reported) carries no windows.
+      return [rateLimits.cursorModels, rateLimits.otherModels].filter(
+        (window): window is ProviderRateLimitWindow => window !== null,
+      );
     case "opencode":
       return [rateLimits.fiveHour, rateLimits.weekly, rateLimits.monthly];
     case "openrouter":

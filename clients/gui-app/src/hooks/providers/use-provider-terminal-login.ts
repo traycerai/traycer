@@ -11,6 +11,7 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { recordProviderLoginTerminal } from "@/stores/providers/provider-login-terminals";
+import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
 
 /**
  * The tile's `cwd` is display-only for a sign-in terminal: the host chose the
@@ -98,17 +99,37 @@ export function useProviderTerminalLogin(args: {
           result.replacedSessionId,
         );
         if (replaced !== null) {
+          // Provider-login terminals are host-spawned and import-exempt, so
+          // their presentation close is always legacy/local. The mutation's
+          // onSuccess deliberately survives its initiating component: if that
+          // component unmounted while the RPC was in flight, the tab strip's
+          // component-scoped authority registration is gone too. Temporarily
+          // register the host-confirmed predecessor so the fail-closed generic
+          // store boundary can still retire it without weakening that boundary
+          // for arbitrary unregistered terminal refs.
+          const unregister = registerEpicTerminalCloseAuthority({
+            instanceId: replaced.instanceId,
+            hostId,
+            terminalId: result.replacedSessionId,
+            capability: "legacy",
+            canMutate: false,
+            close: () => Promise.resolve(),
+          });
           // Its own `navigateNested` rather than one composed with the open
           // below: `prepare` runs synchronously inside the call, so the close
           // still lands before the open, and the open's target - committed
           // second - is the one the route ends on.
-          navigateNested(epicId, viewTabId, () =>
-            prepareCloseCanvasTabFocusTarget(
-              viewTabId,
-              replaced.paneId,
-              replaced.instanceId,
-            ),
-          );
+          try {
+            navigateNested(epicId, viewTabId, () =>
+              prepareCloseCanvasTabFocusTarget(
+                viewTabId,
+                replaced.paneId,
+                replaced.instanceId,
+              ),
+            );
+          } finally {
+            unregister();
+          }
         }
       }
       if (

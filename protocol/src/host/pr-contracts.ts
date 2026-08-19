@@ -20,8 +20,8 @@ import {
   prGetLocalDiffRequestSchema,
   prGetLocalDiffResponseSchema,
   prGetLocalDiffSummaryRequestSchema,
-  prGetLocalDiffSummaryResponseSchema,
-  prGetLocalFileDiffRequestSchema,
+  prGetLocalDiffSummaryResponseV11Schema,
+  prGetLocalFileDiffRequestV11Schema,
   prGetLocalFileDiffResponseSchema,
 } from "./pr-schemas";
 
@@ -41,10 +41,10 @@ export const prSubscribeListForEpicV10 = defineStreamRpcContract({
 
 /**
  * `pr.subscribeDetail@1.0` - streaming RPC for a single PR's heavy detail
- * (canvas tile). `epicId` is carried for authorization only - the resolver
- * verifies the requested PR is in that epic's derived set before any `gh`
- * invocation; `hostId` is never an argument, always derived from the
- * connection's host context.
+ * (canvas tile). `epicId` authorizes access to the task surface but does not
+ * constrain the requested GitHub coordinates: any PR may be opened there.
+ * `hostId` is never an argument, always derived from the connection's host
+ * context.
  */
 export const prSubscribeDetailV10 = defineStreamRpcContract({
   method: "pr.subscribeDetail",
@@ -101,8 +101,9 @@ export const prGetLocalDiffSummaryV10 = defineRpcContract({
   method: "pr.getLocalDiffSummary",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: prGetLocalDiffSummaryRequestSchema,
-  responseSchema: prGetLocalDiffSummaryResponseSchema,
+  responseSchema: prGetLocalDiffSummaryResponseV11Schema,
 });
+
 
 /**
  * `pr.getLocalFileDiff@1.0` - one file's patch from a range
@@ -121,6 +122,6 @@ export const prGetLocalDiffSummaryV10 = defineRpcContract({
 export const prGetLocalFileDiffV10 = defineRpcContract({
   method: "pr.getLocalFileDiff",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: prGetLocalFileDiffRequestSchema,
+  requestSchema: prGetLocalFileDiffRequestV11Schema,
   responseSchema: prGetLocalFileDiffResponseSchema,
 });

@@ -41,8 +41,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 function imageResult(
@@ -362,6 +362,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
       <ChatExpansionTestProviders tileInstanceId="img-tool-tile">
         <ToolSegment
           headerFindUnitId={null}
+          managedCommand={null}
           id="tool-img-route"
           toolName="image_generation"
           inputSummary={deriveToolInputSummary("image_generation", {
@@ -395,6 +396,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
       <ChatExpansionTestProviders tileInstanceId="img-tool-tile">
         <ToolSegment
           headerFindUnitId={null}
+          managedCommand={null}
           id="tool-other"
           toolName="read_file"
           inputSummary={deriveToolInputSummary("read_file", {

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useHostClient } from "@/lib/host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 const WORKSPACE_FILE_TREE_MAX_FILES = 25_000;
 
@@ -13,11 +13,20 @@ const WORKSPACE_FILE_TREE_MAX_FILES = 25_000;
  * `use-workspace-search-paths-query`. Delete this hook when the old-host
  * fallback is retired.
  */
-export function useWorkspaceListFileTree(
-  workspacePath: string | null,
-  enabled: boolean,
-) {
-  const client = useHostClient();
+export function useWorkspaceListFileTree(args: {
+  /**
+   * The host whose filesystem this lists. Its ONE caller is a host-pinned
+   * surface, and this used to be absent entirely - the query took the app-wide
+   * client while the panel around it was pinned elsewhere, so the fallback tree
+   * listed the wrong machine's files under the pinned host's name and stamped
+   * that host onto every ref opened from it.
+   */
+  readonly hostId: string | null;
+  readonly workspacePath: string | null;
+  readonly enabled: boolean;
+}) {
+  const { workspacePath, enabled } = args;
+  const client = useHostClientForHostId(args.hostId);
   const params = useMemo(
     () => ({
       workspacePath: workspacePath ?? "",

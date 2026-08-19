@@ -15,9 +15,13 @@ import {
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import {
+  getEpicSessionHandleHostId,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
+import { getAppHostClientSnapshot } from "@/lib/host/runtime";
 import { queryClient } from "@/lib/query-client";
+import { rejectClosedPlainTerminalRestore } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import {
   cloudChatViewerIdSnapshot,
   readCloudKnownChatIds,
@@ -138,8 +142,20 @@ function preservedTileRecordIsLive(
       ? (id: string) =>
           Object.hasOwn(epicHandle.store.getState().tree.nodeById, id)
       : () => true;
+  // The host whose projection supplies `hasLiveRecord`: the Epic SESSION's
+  // stamped host, falling back to the app-wide effective host only when no
+  // session is live (the imperative twin of `useCanvasHostId`, and the same
+  // identity `useEpicRouteSynchronization` polices with). The two differ for
+  // the whole of a re-point that is establishing or one that failed - the
+  // provider keeps the previous handle rendered, so `records` are still host
+  // A's while the app-wide pointer says B. Reading B here would (a) trip
+  // `isTileRefRecordLive`'s cross-host exemption for every A-bound chat, so the
+  // record check this guard exists to run never runs, and (b) ask the
+  // cloud-known cache under B, a slot no writer for this Epic fills any more.
   const activeHostId =
-    getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null;
+    (epicHandle === null ? null : getEpicSessionHandleHostId(epicHandle)) ??
+    getAppHostClientSnapshot()?.getActiveHostId() ??
+    null;
   const recordListAuthorizesChatAbsence =
     epicHandle?.store.getState().chatRecordListAuthoritative ?? false;
   return isTileRefRecordLive(
@@ -216,6 +232,15 @@ function reopenClosedTilePreview(href: string): void {
   }
   if (state.selfDeletedArtifactIds.has(preserved.node.id)) {
     state.discardClosedTilePayload(epicTab.tabId, nestedTarget.tileInstanceId);
+    return;
+  }
+  if (
+    rejectClosedPlainTerminalRestore({
+      queryClient,
+      epicId: epicTab.epicId,
+      node: preserved.node,
+    })
+  ) {
     return;
   }
   if (

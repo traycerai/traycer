@@ -739,6 +739,7 @@ function HostEnvironmentGroup(props: {
         />
         <div
           className={cn(
+            // muted-fill-ok: /15 wash under its own border-b border-border/40
             "flex flex-wrap items-center justify-between gap-3 border-b border-border/40 bg-muted/15",
             props.compact ? "px-4 py-2.5" : "px-5 py-3",
           )}
@@ -810,8 +811,8 @@ function TransientSaveIndicator(props: {
 function ShellCardSkeleton() {
   return (
     <div className="space-y-3">
-      <div className="h-20 animate-pulse rounded-md bg-muted/40" />
-      <div className="h-9 animate-pulse rounded-md bg-muted/30" />
+      <div className="h-20 animate-pulse rounded-md bg-foreground/10" />
+      <div className="h-9 animate-pulse rounded-md bg-foreground/10" />
     </div>
   );
 }

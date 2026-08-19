@@ -46,14 +46,20 @@ import { useAnimationFrameThrottle } from "@/hooks/use-animation-frame-throttle"
 import {
   isPlainBoundaryKey,
   isPlatformModifiedBoundaryKey,
+  type ChordString,
 } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
 import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
 import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
 import { getOrCreateActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import { getOrCreateA2AOpenStore } from "@/stores/chats/a2a-open-store-context";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
+import {
+  ChatTranscriptProvider,
+  type ChatTranscriptIdentity,
+} from "@/components/chat/chat-transcript-context";
 import {
   chatTabPersistenceChatKey,
   type ChatTabPersistenceIdentity,
@@ -89,6 +95,8 @@ import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import type { ChatAnnouncementKind } from "@/stores/chats/chat-announcements";
+import { useChatAnnouncements } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
@@ -114,6 +122,12 @@ interface ChatMessagesProps {
   hostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
+  /**
+   * `ChatSessionState.transcriptBaselineEpoch` - which connection's snapshot
+   * established these rows. The polite-announcement deriver needs it to tell
+   * a live arrival from (re)hydrated history without guessing from row shape.
+   */
+  baselineEpoch: number;
   /** Live host-owned background items; undefined means the connected host lacks support. */
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   getMessageActions: (message: ChatMessageModel) => ChatMessageActions | null;
@@ -408,34 +422,68 @@ function sharesCanvasPane(tile: HTMLElement, target: Node): boolean {
   return paneId !== null && canvasPaneIdOf(target) === paneId;
 }
 
-function chatKeyboardScrollAction(
+function hasConfiguredKeybinding(chord: ChordString): boolean {
+  return Object.values(useKeybindingStore.getState().bindings).some(
+    (binding) => binding === chord,
+  );
+}
+
+function isMacCommandArrow(event: globalThis.KeyboardEvent): boolean {
+  return (
+    isMac() &&
+    (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+    event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+/** Chromium's macOS document-boundary chord, unless a user binding owns it. */
+function macCommandArrowBoundaryScrollAction(
   event: globalThis.KeyboardEvent,
 ): ChatKeyboardScrollAction | null {
-  if (event.key === "PageUp") return "page-up";
-  if (event.key === "PageDown") return "page-down";
-  // Plain arrows step the transcript. The transcript rows are not focusable, so
-  // the browser never adopts the scroller as its default keyboard scroller and
-  // would otherwise scroll nothing at all. Targets that own the arrows
-  // themselves keep them (see `ownsArrowKeys`), and any modifier makes it an
-  // editor/selection chord we must not claim.
+  if (!isMacCommandArrow(event) || ownsArrowKeys(event.target)) return null;
+  const chord: ChordString =
+    event.key === "ArrowUp" ? "mod+arrowup" : "mod+arrowdown";
+  if (hasConfiguredKeybinding(chord)) return null;
+  return event.key === "ArrowUp" ? "top" : "bottom";
+}
+
+function plainArrowScrollAction(
+  event: globalThis.KeyboardEvent,
+): ChatKeyboardScrollAction | null {
   if (
-    (event.key === "ArrowUp" || event.key === "ArrowDown") &&
-    isUnmodified(event) &&
-    !ownsArrowKeys(event.target)
+    (event.key !== "ArrowUp" && event.key !== "ArrowDown") ||
+    !isUnmodified(event) ||
+    ownsArrowKeys(event.target)
   ) {
-    return event.key === "ArrowUp" ? "line-up" : "line-down";
+    return null;
   }
-  // Plain Home/End scroll the transcript. On macOS they scroll even from the
-  // composer (Cocoa editors never use them for caret movement - that's
-  // Cmd+arrows); elsewhere an editable target keeps them for line navigation
-  // and the modified chord (Ctrl+Home/End) is the always-available form. The
-  // minimap rail keeps both forms for its own first/last-turn navigation.
+  return event.key === "ArrowUp" ? "line-up" : "line-down";
+}
+
+function homeEndBoundaryScrollAction(
+  event: globalThis.KeyboardEvent,
+): ChatKeyboardScrollAction | null {
   if (ownsBoundaryKeys(event.target)) return null;
   const boundary =
     isPlatformModifiedBoundaryKey(event) ||
     (isPlainBoundaryKey(event) && (isMac() || !isEditableTarget(event.target)));
   if (!boundary) return null;
   return event.key === "Home" ? "top" : "bottom";
+}
+
+function chatKeyboardScrollAction(
+  event: globalThis.KeyboardEvent,
+): ChatKeyboardScrollAction | null {
+  if (event.key === "PageUp") return "page-up";
+  if (event.key === "PageDown") return "page-down";
+  const macCommandBoundary = macCommandArrowBoundaryScrollAction(event);
+  if (macCommandBoundary !== null) return macCommandBoundary;
+  const plainArrow = plainArrowScrollAction(event);
+  if (plainArrow !== null) return plainArrow;
+  return homeEndBoundaryScrollAction(event);
 }
 
 /** The relative steps - `top`/`bottom` are absolute and carry no delta. */
@@ -712,6 +760,17 @@ export function ChatMessages(props: ChatMessagesProps) {
     chatId: props.taskId,
     hostId: props.hostId,
   }));
+  // The transcript's own chat, for segments that ask its live session whether
+  // a shell still exists. Memoised so the provider does not re-render every
+  // consumer per transcript render; `null` with no bound host, where no live
+  // session can exist to ask.
+  const transcriptIdentity = useMemo<ChatTranscriptIdentity | null>(
+    () =>
+      props.hostId === null
+        ? null
+        : { chatId: props.taskId, hostId: props.hostId },
+    [props.hostId, props.taskId],
+  );
   // Ticket 15 review round 3: opening a chat clears its own tombstone (a
   // prior deletion is over; this is the SAME chatId only if the host has
   // genuinely recreated it, which mints a fresh chatId in practice - this
@@ -730,9 +789,11 @@ export function ChatMessages(props: ChatMessagesProps) {
     clearReadingPositionTombstones(readingPositionIdentityForChat(identity));
   }, [identity]);
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded A2A
-  // cards survive the chat tile's full remount on tab switch (decision #17) -
-  // evicted only when the tab permanently closes (canvas store's
-  // tile-removal subscriber), never on a mere remount.
+  // cards survive a remount of this SAME instance - retention-cap or top-level
+  // eviction, or a hosted-eligibility flip; no longer an inner tab switch
+  // (decision #17 was reversed by pane chat retention) - and are evicted when
+  // the tab permanently closes (canvas store's tile-removal subscriber), never
+  // on a mere remount. A reopen is a new instance, not a revival of this one.
   //
   // Ticket 15 review round 3 (mandated simplification): no longer commits
   // to durable on its OWN unmount - the canvas close sweep's promotion
@@ -745,7 +806,9 @@ export function ChatMessages(props: ChatMessagesProps) {
   return (
     <A2AOpenStoreProvider store={a2aOpenStore}>
       <ChatFindForceStoreProvider tileInstanceId={props.instanceId}>
-        <ChatMessagesInner {...props} identity={identity} />
+        <ChatTranscriptProvider value={transcriptIdentity}>
+          <ChatMessagesInner {...props} identity={identity} />
+        </ChatTranscriptProvider>
       </ChatFindForceStoreProvider>
     </A2AOpenStoreProvider>
   );
@@ -802,10 +865,25 @@ function resolvePendingMeasuredFreeRestore(
   };
 }
 
+function announcementTextFor(
+  taskTitle: string,
+  kind: ChatAnnouncementKind,
+): string {
+  switch (kind) {
+    case "turn-completed":
+      return `${taskTitle} finished responding.`;
+    case "background-update":
+      return `${taskTitle} received a background update.`;
+    default:
+      return `${taskTitle} received a background completion.`;
+  }
+}
+
 function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const {
     getMessageActions,
     backgroundItems,
+    baselineEpoch,
     composerOverlayHeight,
     identity,
     instanceId,
@@ -1482,7 +1560,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, []);
 
   // Persist the reading position on unmount and synchronously on transcript
-  // pointerdown. Chat tiles fully remount per tab switch (decision #17), and
+  // pointerdown. This tile can still be unmounted without warning (evicted past
+  // its pane's chat retention cap or with its top-level surface, closed, or its
+  // hosted eligibility flipped - no longer merely an inner tab switch), and
   // inline artifact/A2A navigation can hand control to browser history in the
   // same interaction; the eager capture guarantees Back observes the source
   // viewport even if unmount ordering changes. The unmount capture remains
@@ -1598,9 +1678,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   });
 
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded
-  // activity groups survive the chat tile's full remount on tab switch
-  // (decision #17) - evicted only when the tab permanently closes (canvas
-  // store's tile-removal subscriber), never on a mere remount.
+  // activity groups survive a remount of this SAME instance - retention-cap or
+  // top-level eviction, or a hosted-eligibility flip; no longer an inner tab
+  // switch (decision #17 was reversed by pane chat retention) - and are evicted
+  // when the tab permanently closes (canvas store's tile-removal subscriber),
+  // never on a mere remount. A reopen is a new instance, not a revival.
   //
   // Ticket 15 review round 3: no longer commits to durable on its own
   // unmount - see the matching comment on `a2aOpenStore` above.
@@ -2064,8 +2146,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // Fixup (fix-top-level-task-tab-scroll-restoration): `ChatMessages` stays
   // mounted while its top-level task/epic pane hides (`TopLevelTabHost`'s
-  // keep-alive) - unlike a same-pane inner chat-tab switch, which fully
-  // unmounts and restores through the mount-time path above. A hide
+  // keep-alive). A same-pane inner chat-tab switch now takes THIS path too
+  // (pane chat retention, which reversed decision #17); the mount-time path
+  // above is reached only by a real remount - retention-cap or top-level
+  // eviction, a close, or a hosted-eligibility flip. A hide
   // eventually zeroes this tile's measured geometry (`PaneVisibilityContext`'s
   // own doc comment: "size-measuring surfaces... read a 0x0 box while
   // hidden"), so this effect never TRUSTS a live DOM read on the transition -
@@ -2322,52 +2406,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // --- Accessibility (decision #24): polite turn-completion announcement ----
 
-  const [turnCompletionAnnouncement, setTurnCompletionAnnouncement] = useState<{
-    readonly key: string;
+  // Liveness is NOT inferred here: `useChatAnnouncements` reads the store's
+  // transcript baseline (which connection hydrated these rows) and reports
+  // the semantic transition. This layer only renders it.
+  const announcement = useChatAnnouncements({ messages, baselineEpoch });
+  // The rendered sentence is FROZEN when the announcement is made, not
+  // recomputed per render: `taskTitle` is live (a chat is auto-titled right
+  // after its first turn, and can be renamed any time). Recomputing would
+  // rewrite the text inside the already-announced live-region node, and a
+  // screen reader re-announces on content change - a phantom completion for
+  // a rename. A later announcement re-freezes with the title current then.
+  const [renderedAnnouncement, setRenderedAnnouncement] = useState<{
+    readonly sequence: number;
     readonly text: string;
   } | null>(null);
-  const assistantCompletionByIdRef = useRef<ReadonlyMap<string, number | null>>(
-    new Map(),
-  );
+  if (
+    announcement !== null &&
+    renderedAnnouncement?.sequence !== announcement.sequence
+  ) {
+    setRenderedAnnouncement({
+      sequence: announcement.sequence,
+      text: announcementTextFor(taskTitle, announcement.kind),
+    });
+  }
   useLayoutEffect(() => {
-    const previous = assistantCompletionByIdRef.current;
-    const current = new Map<string, number | null>();
-    for (const message of messages) {
-      if (message.role !== "assistant") continue;
-      current.set(message.id, message.completedAt);
-    }
-    const replacedIncompleteAssistant = [...previous].some(
-      ([id, completedAt]) => completedAt === null && !current.has(id),
-    );
-    let completedAssistant: ChatMessageModel | null = null;
-    for (const message of messages) {
-      if (message.role !== "assistant") continue;
-      if (
-        (previous.get(message.id) === null ||
-          (replacedIncompleteAssistant && !previous.has(message.id))) &&
-        message.completedAt !== null &&
-        !message.stopped
-      ) {
-        completedAssistant = message;
-      }
-    }
-    assistantCompletionByIdRef.current = current;
-    if (completedAssistant !== null) {
-      const announcement = {
-        key: `${completedAssistant.id}:${completedAssistant.completedAt}`,
-        text: `${taskTitle} finished responding.`,
-      };
-      // Decision #10/#16: turn completion below the fold stays anchored - no
-      // auto-reveal. The pill flips to "New reply" instead, unless the
-      // reader is already at the tail (nothing to signal).
-      const hasUnseenCompletion =
-        timelineScrollModeRef.current !== "following-end";
-      queueMicrotask(() => {
-        setTurnCompletionAnnouncement(announcement);
-        if (hasUnseenCompletion) setHasUnseenTurnCompletion(true);
-      });
-    }
-  }, [messages, taskTitle]);
+    if (announcement === null) return;
+    // Decision #10/#16: turn completion below the fold stays anchored - no
+    // auto-reveal. The pill flips to "New reply" instead, unless the reader
+    // is already at the tail (nothing to signal).
+    if (timelineScrollModeRef.current === "following-end") return;
+    setHasUnseenTurnCompletion(true);
+  }, [announcement]);
 
   // --- Stateful scroll-to-end pill (decision #16) ----------------------------
 
@@ -2441,7 +2510,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 viewportRef={transcriptContainerRef}
                 bottomInset={endInset}
                 onSelect={onMinimapItemSelect}
-                identity={identity}
                 side={chatTurnMinimapSide}
               />
             </div>
@@ -2464,9 +2532,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           ) : null}
         </div>
         <div aria-live="polite" className="sr-only">
-          {turnCompletionAnnouncement === null ? null : (
-            <span key={turnCompletionAnnouncement.key}>
-              {turnCompletionAnnouncement.text}
+          {renderedAnnouncement === null ? null : (
+            // Keyed by the deriver's monotonic sequence so consecutive
+            // identical announcements still mutate the live region.
+            <span key={renderedAnnouncement.sequence}>
+              {renderedAnnouncement.text}
             </span>
           )}
         </div>

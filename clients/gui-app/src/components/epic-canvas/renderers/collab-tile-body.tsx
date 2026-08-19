@@ -11,7 +11,11 @@ import {
   type ArtifactCommentAction,
   type CollabUser,
 } from "@/editor-core";
-import { useEpicCommentThreads } from "@/hooks/comments/use-epic-comment-threads";
+import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
+import { collabTileNotice } from "./collab-tile-availability-copy";
+import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 import {
   EPIC_NODE_PLACEHOLDER_TEXT,
@@ -46,6 +50,7 @@ import {
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
@@ -55,11 +60,13 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
   type UIEvent,
 } from "react";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { ArtifactChildIndex } from "./artifact-child-index";
+import { ArtifactHeadingMinimap } from "./artifact-heading-minimap";
 import {
   resolveArtifactEditorBackgroundFocusPosition,
   shouldHandleArtifactEditorBackgroundFocus,
@@ -133,16 +140,25 @@ export function CollabTileBody(props: CollabTileBodyProps) {
   const snapshotLoaded = useEpicSnapshotLoaded();
   const fragmentDoc = fragment?.doc ?? null;
 
-  if (
+  const bodyPending =
     !snapshotLoaded ||
     fragment === null ||
     fragmentDoc === null ||
-    artifactRoomAwareness === null
-  ) {
+    artifactRoomAwareness === null;
+  // Invariant 6. The artifact room is doc-scoped rather than host-scoped, so
+  // this bounds on the node itself rather than reaching for a host lease -
+  // there is no host here whose name would tell the reader anything.
+  const loadBudgetElapsed = useLoadDeadline(
+    bodyPending ? props.node.id : null,
+    TILE_CONTENT_BUDGET_MS,
+  );
+
+  if (bodyPending) {
     return (
       <CollabTileSkeleton
         testId={props.testId}
         bodyAvailability={bodyAvailability}
+        budgetElapsed={loadBudgetElapsed}
       />
     );
   }
@@ -157,22 +173,53 @@ export function CollabTileBody(props: CollabTileBodyProps) {
   );
 }
 
+/**
+ * The three pre-editor states, which used to be ONE.
+ *
+ * `unavailable` and `loading` rendered byte-identical markup - the same three
+ * pulsing bars - distinguished only by a `data-testid` suffix no reader can
+ * see. So a document whose room the host had refused looked exactly like a
+ * document that was about to appear, and the only way to tell them apart was
+ * to keep waiting: indefinitely, since neither state ended.
+ *
+ * Now each says which one it is, and the wait has a deadline (invariant 6).
+ * The pulsing bars are kept for the short, genuinely-loading window - they
+ * are a good placeholder for content that is coming - and retired the moment
+ * the answer is anything else.
+ */
 function CollabTileSkeleton(props: {
   readonly testId: string;
   readonly bodyAvailability: EpicArtifactRoomAvailability;
+  readonly budgetElapsed: boolean;
 }) {
   const testIdSuffix =
     props.bodyAvailability === "unavailable" ? "unavailable" : "loading";
+  const notice = collabTileNotice(props.bodyAvailability, props.budgetElapsed);
 
   return (
     <div
       data-testid={`${props.testId}-${testIdSuffix}`}
       data-artifact-room-availability={props.bodyAvailability}
+      data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
       className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
     >
-      <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
-      <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
-      <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+      {notice === null ? (
+        <>
+          {/* muted-fill-ok: tile body renders on the epic canvas, and
+              --canvas never equals --muted in any theme */}
+          <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+        </>
+      ) : (
+        <p
+          role="status"
+          aria-live="polite"
+          className="text-ui-sm text-muted-foreground"
+        >
+          {notice}
+        </p>
+      )}
     </div>
   );
 }
@@ -196,6 +243,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     null,
   );
   const editorRootRef = useRef<HTMLDivElement>(null);
+  const headingMinimapRefreshRef = useRef<() => void>(() => undefined);
   const epicId = useOpenEpicId();
   const artifactLinkOpener = useArtifactLinkOpener({
     epicId,
@@ -221,12 +269,18 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const hoverThreadId = useHoverThreadId(epicId);
   const flashThread = useFlashThread(epicId);
   const draft = useDraftRange(epicId);
-  const threadsQuery = useEpicCommentThreads(
+  // The artifact this tile edits is served by the TAB's host, so its threads
+  // are read (and its comments written) on that client - never the app-wide
+  // one, which answers a different machine mid re-point (D15). Resolved once
+  // here and handed to both comment popovers so all three share one cache key.
+  const tabHostClient = useTabHostClient();
+  const threadsQuery = useEpicCommentThreadsForClient({
+    client: tabHostClient,
     epicId,
-    commentArtifactKind ?? "spec",
-    node.id,
-    { enabled: commentsSupported },
-  );
+    artifactType: commentArtifactKind ?? "spec",
+    artifactId: node.id,
+    options: { enabled: commentsSupported },
+  });
   const setActivePanelIdAndExpand = useLeftPanelStore(
     (s) => s.setActivePanelIdAndExpand,
   );
@@ -474,6 +528,10 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const onScroll = useCallback(
     (event: UIEvent<HTMLDivElement>): void => {
       onScrollRestoration(event);
+      // Pure arithmetic against the rail's cached heading offsets - kept on
+      // this existing handler so the rail never attaches a scroll listener of
+      // its own (the lesson the chat rail's own consolidation encodes).
+      headingMinimapRefreshRef.current();
       if (editor === null || ownedDraftRange !== null || linkPopoverOpen) {
         return;
       }
@@ -485,78 +543,121 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     [editor, linkPopoverOpen, onScrollRestoration, ownedDraftRange],
   );
 
+  // The heading rail is a sibling of the scroller, not a child: the scroller is
+  // its own positioning context, so an overlay inside it would scroll away with
+  // the document instead of holding the tile edge.
   return (
-    <div
-      ref={setScrollContainerRef}
-      data-testid={testId}
-      data-node-id={node.id}
-      className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
-      onScroll={onScroll}
-    >
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-        <div className="tc-editor-surface">
-          <div
-            className="tc-editor-body"
-            {...artifactPasteHandlers(
-              artifactImagePaste.supported && editable,
-              artifactImagePaste.paste,
-            )}
-          >
-            {editor !== null && isEpicArtifactKind(node.type) ? (
-              <ArtifactFindAdapterRegistration editor={editor} node={node} />
+    <div className="relative flex h-full min-h-0 w-full flex-col">
+      <ArtifactHeadingMinimapMount
+        editor={editor}
+        node={node}
+        refreshRef={headingMinimapRefreshRef}
+        scroller={scrollContainer}
+      />
+      <div
+        ref={setScrollContainerRef}
+        data-testid={testId}
+        data-node-id={node.id}
+        className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
+        onScroll={onScroll}
+      >
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+          <div className="tc-editor-surface">
+            <div
+              className="tc-editor-body"
+              {...artifactPasteHandlers(
+                artifactImagePaste.supported && editable,
+                artifactImagePaste.paste,
+              )}
+            >
+              {editor !== null && isEpicArtifactKind(node.type) ? (
+                <ArtifactFindAdapterRegistration editor={editor} node={node} />
+              ) : null}
+              <EditorContent editor={editor} />
+            </div>
+            {editor !== null ? (
+              <ArtifactToolbar
+                editor={editor}
+                className={undefined}
+                scrollTarget={scrollContainer}
+                commentAction={commentAction}
+                suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
+              />
             ) : null}
-            <EditorContent editor={editor} />
           </div>
-          {editor !== null ? (
-            <ArtifactToolbar
-              editor={editor}
-              className={undefined}
-              scrollTarget={scrollContainer}
-              commentAction={commentAction}
-              suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
+          {isEpicArtifactKind(node.type) ? (
+            <ArtifactChildIndex
+              epicId={epicId}
+              parentId={node.id}
+              viewTabId={viewTabId}
+              hostId={node.hostId}
             />
           ) : null}
         </div>
-        {isEpicArtifactKind(node.type) ? (
-          <ArtifactChildIndex
-            epicId={epicId}
-            parentId={node.id}
-            viewTabId={viewTabId}
-            hostId={node.hostId}
+        {editor !== null && commentArtifactKind !== null ? (
+          <>
+            <FloatingDraftPopover
+              epicId={epicId}
+              hostClient={tabHostClient}
+              artifactType={commentArtifactKind}
+              artifactId={node.id}
+              tileId={tileId}
+              editor={editor}
+              onCreated={onActivateThread}
+            />
+            <ThreadAnchorHoverPopover
+              epicId={epicId}
+              hostClient={tabHostClient}
+              artifactType={commentArtifactKind}
+              artifactId={node.id}
+              editor={editor}
+              resolvedThreadIds={resolvedThreadIds}
+              onActivateThread={onActivateThread}
+            />
+          </>
+        ) : null}
+        {editor !== null ? (
+          <ArtifactLinkPopover
+            editor={editor}
+            editable={editable}
+            scrollContainer={scrollContainer}
+            openLink={artifactLinkOpener.openLink}
+            openLinkPending={artifactLinkOpener.isExternalPending}
+            onOpenChange={setLinkPopoverOpen}
           />
         ) : null}
       </div>
-      {editor !== null && commentArtifactKind !== null ? (
-        <>
-          <FloatingDraftPopover
-            epicId={epicId}
-            artifactType={commentArtifactKind}
-            artifactId={node.id}
-            tileId={tileId}
-            editor={editor}
-            onCreated={onActivateThread}
-          />
-          <ThreadAnchorHoverPopover
-            epicId={epicId}
-            artifactType={commentArtifactKind}
-            artifactId={node.id}
-            editor={editor}
-            resolvedThreadIds={resolvedThreadIds}
-            onActivateThread={onActivateThread}
-          />
-        </>
-      ) : null}
-      {editor !== null ? (
-        <ArtifactLinkPopover
-          editor={editor}
-          editable={editable}
-          scrollContainer={scrollContainer}
-          openLink={artifactLinkOpener.openLink}
-          openLinkPending={artifactLinkOpener.isExternalPending}
-          onOpenChange={setLinkPopoverOpen}
-        />
-      ) : null}
     </div>
+  );
+}
+
+/**
+ * Gate for the heading rail, kept out of `CollabTileBodyEditor` so its two
+ * conditions do not count against that component's complexity ceiling. Only
+ * artifact kinds get an outline - a workspace file tile shares this body but
+ * is not a document with a heading skeleton.
+ */
+function ArtifactHeadingMinimapMount(props: {
+  readonly editor: Editor | null;
+  readonly node: EpicNodeRef;
+  readonly refreshRef: RefObject<() => void>;
+  readonly scroller: HTMLElement | null;
+}) {
+  const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  if (
+    props.editor === null ||
+    !isEpicArtifactKind(props.node.type) ||
+    side === "hide"
+  ) {
+    return null;
+  }
+  return (
+    <ArtifactHeadingMinimap
+      editor={props.editor}
+      refreshRef={props.refreshRef}
+      scroller={props.scroller}
+      side={side}
+    />
   );
 }
 

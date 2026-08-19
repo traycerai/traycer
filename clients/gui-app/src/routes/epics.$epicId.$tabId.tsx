@@ -36,8 +36,8 @@ export const Route = createFileRoute("/epics/$epicId/$tabId")({
     });
   },
   loader: ({ context }) => {
-    const hostId = context.getActiveHostId();
     const client = context.getHostClient();
+    const hostId = client?.getActiveHostId() ?? null;
     const auth = context.getAuthSnapshot();
     if (hostId === null || client === null) return;
     if (auth.status !== "signed-in") return;

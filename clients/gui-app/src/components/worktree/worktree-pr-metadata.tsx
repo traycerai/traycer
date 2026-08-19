@@ -138,7 +138,7 @@ function WorktreePrOverflow(props: {
       <Badge
         asChild
         variant="outline"
-        className="cursor-pointer border-border bg-background font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="cursor-pointer border-border bg-background font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
       >
         <PopoverTrigger
           aria-label={`Show ${count} more pull request${count === 1 ? "" : "s"}`}
@@ -216,7 +216,14 @@ function WorktreePrAnchor(props: {
   const openExternalLink = useRunnerOpenExternalLink();
   const openPr = (event: MouseEvent<HTMLAnchorElement>): void => {
     event.stopPropagation();
-    if (props.openPrInApp !== null && hasNativePrCoordinates(props.reference)) {
+    // Cmd/Ctrl-click is the platform gesture for "open this where it actually
+    // lives" — it bypasses the in-app PR view and goes straight to the host.
+    const wantsExternal = event.metaKey || event.ctrlKey;
+    if (
+      !wantsExternal &&
+      props.openPrInApp !== null &&
+      hasNativePrCoordinates(props.reference)
+    ) {
       event.preventDefault();
       props.openPrInApp(props.reference);
       return;

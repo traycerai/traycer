@@ -23,6 +23,7 @@ import {
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
+import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
@@ -119,6 +120,7 @@ export function buildRawHostMessengerForTarget<
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: params.requestId,
+      evidence: transportEvidenceRelay,
     });
     if (remoteTransport === null) return null;
     return {
@@ -134,6 +136,7 @@ export function buildRawHostMessengerForTarget<
       webSocketFactory: browserWebSocketFactory,
       dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
       frameTimeoutMs: DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS,
+      evidence: transportEvidenceRelay,
       // The GUI's response deadline matches the host's post-`openAck`
       // deadline, so which overdue timer runs first is up to scheduling (or a
       // sleep/resume - and a stalled host fires its timer late, well past
@@ -273,6 +276,7 @@ class RuntimeHostMessenger<
       webSocketFactory: browserWebSocketFactory,
       dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
       frameTimeoutMs: DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS,
+      evidence: transportEvidenceRelay,
       // Same post-`openAck` attestation grace as the standalone builder above.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
     });

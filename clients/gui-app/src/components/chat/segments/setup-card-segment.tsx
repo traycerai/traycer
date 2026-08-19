@@ -37,6 +37,7 @@ import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query
 import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
 import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
+import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
@@ -367,6 +368,7 @@ export function SetupCardSegment(props: {
         <span aria-hidden className="h-px flex-1 bg-border/60" />
       </div>
       {expanded ? (
+        // muted-fill-ok: card variant renders only in a canvas chat tile (inline variant is the Popover arm)
         <div className="mx-auto w-full max-w-[min(90vw,42rem)] rounded-md border border-border/60 bg-muted/30 p-3">
           {workspaceDetail}
         </div>
@@ -469,7 +471,11 @@ function WorkspaceSetupDetail(
               focusTerminal(
                 entry.terminalSessionId,
                 entry.worktreePath ?? entry.workspacePath,
-                null,
+                {
+                  name: DEFAULT_EPIC_NODE_NAMES.terminal,
+                  origin: "setup",
+                  originProviderId: undefined,
+                },
               )
             }
           />

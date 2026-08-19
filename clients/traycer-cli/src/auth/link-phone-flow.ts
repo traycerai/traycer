@@ -230,6 +230,7 @@ async function printCode(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
 }
 

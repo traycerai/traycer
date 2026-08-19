@@ -21,8 +21,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { NewTerminalPickerBody } from "@/components/epic-canvas/sidebar/new-terminal-picker-body";
+import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import {
-  buildTerminalTileRef,
+  mintNewEpicTerminalTile,
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
@@ -48,6 +49,7 @@ interface NewTerminalPickerProps {
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const { epicId, onBeforeOpen, onLaunched, tabId } = props;
+  const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
   const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const setIsOpen = useCallback(
@@ -84,7 +86,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
       navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, buildTerminalTileRef(target)),
+        prepareOpenTileInTabFocusTarget(tabId, mintNewEpicTerminalTile(target)),
       );
       setIsOpen(false);
       if (onLaunched !== null) onLaunched();
@@ -132,7 +134,11 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         {isOpen ? (
-          <NewTerminalPickerBody epicId={epicId} onLaunch={handleLaunch} />
+          <NewTerminalPickerBody
+            epicId={epicId}
+            surfaceKey={surfaceKey}
+            onLaunch={handleLaunch}
+          />
         ) : null}
       </PopoverContent>
     </Popover>

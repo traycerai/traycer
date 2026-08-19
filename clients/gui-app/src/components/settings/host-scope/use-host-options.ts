@@ -1,16 +1,21 @@
 import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostInstalledRecord,
+  MutationKind,
+} from "@traycer-clients/shared/platform/runner-host";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostLeases } from "@/hooks/host/use-host-lease";
+import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
 import { deriveStatus } from "@/components/settings/panels/host-settings-panel-model";
-import { getViewerReachabilityCheck } from "@/lib/host/viewer-reachability-store";
 import { useHostBinding } from "@/lib/host";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
@@ -85,10 +90,46 @@ function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
   return Promise.reject(new Error("host management bridge unavailable"));
 }
 
+/**
+ * Whether a mutation lane's KIND brings the local host UP - the sense M5's
+ * row means by "setting up or starting". `deregister`, `uninstallHost` and
+ * `removeTraycer` are TEARDOWN lanes: they are just as busy, but crediting
+ * them with "setting up" tells the person watching the row the opposite of
+ * what is happening to their machine.
+ *
+ * Exhaustive over `MutationKind` (not an exclude-list) so a new lane kind
+ * fails to compile here naming its missing arm, rather than silently
+ * defaulting to one reading or the other.
+ */
+function mutationBringsHostUp(kind: MutationKind): boolean {
+  switch (kind) {
+    case "ensure":
+    case "apply":
+    case "activate":
+    case "install":
+    case "register":
+    case "respawn":
+    case "recoverIfDown":
+    case "freePortAndRestart":
+      return true;
+    case "deregister":
+    case "uninstallHost":
+    case "removeTraycer":
+      return false;
+  }
+}
+
 export function useHostOptions(): HostOptions {
   const binding = useHostBinding();
   const runnerHost = useRunnerHost();
-  const activeHostId = useReactiveActiveHostId();
+  // The SELECTION, not addressability. `useAddressableHostId()` answers
+  // "is the derived host addressable yet" and goes `null` while its directory
+  // row is still resolving; every picker here is narrating which host the
+  // authority chose, so the tag and the sort must not blink off for the length
+  // of a directory round trip. That distinction is P4.2's, written at the
+  // hook - narrators take this one, gates take that one - and this file is a
+  // narrator in all four of its consumers.
+  const activeHostId = useEffectiveHostId();
   const nowMs = useNowMs();
 
   const directoryQuery = useHostDirectoryList();
@@ -120,11 +161,12 @@ export function useHostOptions(): HostOptions {
   }, [directory, binding]);
 
   // The installed record is what separates "stopped" from "not installed" — the
-  // two local states a person can actually act on. Without it `deriveStatus`
-  // can only answer `running` or `undefined`, and a stopped local host falls
-  // through to its registry lease and reads "Offline · last seen 3h ago": true
-  // of the lease, useless to someone whose host is sitting there stopped with a
-  // Start button one click away.
+  // two local states worth telling apart (one is being restarted for the user,
+  // the other installed; a removed one gets Reinstall). Without it
+  // `deriveStatus` can only answer `running` or `undefined`, and a stopped
+  // local host falls through to its registry lease and reads "Offline · last
+  // seen 3h ago": true of the lease, useless to someone whose host is sitting
+  // right there on this machine.
   //
   // Same query key as the Host panel's, so the two share one request rather
   // than doubling it, and `enabled` keeps shells without the CLI bridge on the
@@ -166,6 +208,38 @@ export function useHostOptions(): HostOptions {
   );
   const hasLiveSession = useRemoteSessionsPollReadiness(scopeHostIds);
 
+  // M5's "setting up" row state, sourced HERE rather than in the row component.
+  // Every picker suite mocks this module wholesale, so a runner-host read down
+  // in the row sat below that boundary and threw in each of them while
+  // production was fine - the fact belongs where its siblings
+  // (`connectable`, `health`) are built. Actor-agnostic by construction: the
+  // lane is the host controller's own, so it is busy whether the desktop's
+  // launch reconciler, the authority's ensure, or a user's Retry asked.
+  //
+  // Read the SAME status source `useHostProvisioningProgress` reads (the
+  // controller status query), not that hook itself: its view answers "what
+  // copy names this lane", which is total over every kind including the
+  // teardown ones, and going through it here would lose the KIND this row
+  // needs to tell "being installed or started" apart from "being removed".
+  const provisioningLaneKind =
+    useRunnerHostControllerStatusQuery().data?.mutation?.kind ?? null;
+  const localHostSettingUp =
+    provisioningLaneKind !== null && mutationBringsHostUp(provisioningLaneKind);
+
+  // The authority's own verdicts, and the flag that says whether it has
+  // reached any. These are what make every row below say the same thing the
+  // tiles say: `use-host-lease.ts` has carried the rule as a doc comment since
+  // P3.3 - all status UI derives from the lease vocabulary, no surface reads
+  // sockets, probe caches or the cloud DTO directly - and until this read
+  // existed, Settings and the pickers were the sentence's counterexample.
+  //
+  // `attached` is threaded beside the leases rather than inferred from an
+  // empty array: before the bridge mounts EVERY host has no lease, and a
+  // derivation that could not tell that apart from a real verdict would blank
+  // the fleet on every cold start.
+  const leases = useHostLeases();
+  const authorityAttached = useSelectionAuthorityAttached();
+
   const hosts = useMemo(
     () =>
       buildHostScopeOptions({
@@ -175,8 +249,10 @@ export function useHostOptions(): HostOptions {
         activeHostId,
         localService,
         hasLiveSession,
-        viewerCheck: getViewerReachabilityCheck,
+        leases,
+        authorityAttached,
         remoteHostsPlanRestricted,
+        localHostSettingUp,
         nowMs,
       }),
     [
@@ -186,6 +262,9 @@ export function useHostOptions(): HostOptions {
       activeHostId,
       localService,
       hasLiveSession,
+      leases,
+      authorityAttached,
+      localHostSettingUp,
       remoteHostsPlanRestricted,
       nowMs,
     ],

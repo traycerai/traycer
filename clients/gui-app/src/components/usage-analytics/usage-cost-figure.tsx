@@ -9,6 +9,7 @@ import {
   type UsageServedBy,
   type UsageSummaryTotals,
 } from "@/lib/usage-analytics/cost-format";
+import { USAGE_EXPORT_REDACT_ATTRIBUTE } from "@/lib/usage-analytics/usage-export-image";
 
 export interface UsageCostFigureProps {
   readonly totals: UsageSummaryTotals;
@@ -21,7 +22,12 @@ export interface UsageCostFigureProps {
    * subject is the same work wherever it ran).
    */
   readonly hostScopeName: string | null;
-  readonly size: "compact" | "default";
+  /**
+   * `display` is the epic usage dialog's hero treatment: one step larger,
+   * proportional figures. `default` (Settings' hero, the chat dialog) and
+   * `compact` are untouched by it.
+   */
+  readonly size: "compact" | "default" | "display";
 }
 
 /**
@@ -42,10 +48,23 @@ export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
   const tooltip =
     totals.factCount === 0 ? null : usageCostTooltip(totals, coverage);
   const scopeNote = servedByScopeNote(servedBy, hostScopeName);
-  const compact = size === "compact";
+  // Only the host-filter branch of the note embeds a workspace-internal
+  // name, and a shared image must not carry it. The local-plane note names
+  // no host AND wins over the filter, so this mirrors `servedByScopeNote`'s
+  // branch order rather than testing `hostScopeName` alone - otherwise the
+  // export would rewrite a note that never leaked anything.
+  const redactedScopeNote =
+    servedBy !== "local" && hostScopeName !== null
+      ? "Selected host only — your other hosts aren't included."
+      : null;
   const amountClassName = cn(
-    "font-semibold tabular-nums text-foreground",
-    compact ? "text-ui-sm" : "text-title-md",
+    "font-semibold text-foreground",
+    size === "compact" && "text-ui-sm tabular-nums",
+    size === "default" && "text-title-md tabular-nums",
+    // No `tabular-nums` at display size on purpose: tabular figures give
+    // every digit a zero's width, which reads loose on a standalone hero
+    // number - they are for columns that must align, not display type.
+    size === "display" && "text-title-lg",
   );
 
   return (
@@ -86,6 +105,9 @@ export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
         <p
           className="text-ui-xs text-muted-foreground/80"
           data-testid="usage-served-by-local-note"
+          {...(redactedScopeNote === null
+            ? {}
+            : { [USAGE_EXPORT_REDACT_ATTRIBUTE]: redactedScopeNote })}
         >
           {scopeNote}
         </p>

@@ -6,13 +6,14 @@ import type {
   AgentMessageSend,
   BackgroundTaskOutput,
   ImageGenerationResult,
+  ToolCallManagedCommand,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicAgentReference, useOpenEpicId } from "@/lib/epic-selectors";
 import {
   resolveToolInputDetail,
@@ -48,10 +49,15 @@ import {
 } from "@/stores/chats/open-store-scope";
 import { ElapsedTime } from "./segment-elapsed";
 import { ImageGenerationCard } from "./image-generation-card";
+import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
+import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 
 interface ToolSegmentProps {
   id: string;
   toolName: string;
+  // The shell a `traycer_run_shell` call created, stamped on the block at
+  // completion. Non-null routes this call to the shell start card.
+  managedCommand: ToolCallManagedCommand | null;
   // Precomputed on the host (raw input not persisted): the ≤80-char header
   // line and the optional expand body.
   inputSummary: string | null;
@@ -271,7 +277,46 @@ export function ToolSegment(props: ToolSegmentProps) {
   if (props.agentMessageSend !== null) {
     return <A2ASendToolSegment {...props} send={props.agentMessageSend} />;
   }
+  // A shell is not a tool call that finished - it is an object that outlives
+  // the turn - so the call site renders it as one, live status and all. Keyed
+  // off the stamped payload rather than the tool name: the name alone would
+  // also match a call from a host too old to correlate, which has no shell to
+  // point at and belongs in the generic row. A restart is the other kind of
+  // stamped call: not the shell's live card but the immutable record of one
+  // relaunch, at the place in the transcript where it happened.
+  if (props.managedCommand !== null) {
+    if (props.managedCommand.event === "restarted") {
+      return (
+        <ManagedCommandRestartSegment
+          id={props.id}
+          restart={props.managedCommand}
+          variant={props.variant}
+          headerFindUnitId={props.headerFindUnitId}
+        />
+      );
+    }
+    return (
+      <ManagedCommandStartSegment
+        id={props.id}
+        managedCommand={props.managedCommand}
+        command={runShellCommand(props.inputDetail)}
+        variant={props.variant}
+        headerFindUnitId={props.headerFindUnitId}
+      />
+    );
+  }
   return <GenericToolSegment {...props} />;
+}
+
+/**
+ * The command a `traycer_run_shell` call asked for, off the block's own input.
+ * `deriveToolInputDetail` short-circuits on the `command` field for this tool,
+ * so the detail is always the `command` kind when the input was captured at
+ * all - anything else is a block from before that, and has no command to show.
+ */
+function runShellCommand(detail: ToolInputDetail | null): string | null {
+  if (detail === null || detail.kind !== "command") return null;
+  return detail.command;
 }
 
 function GenericToolSegment(props: ToolSegmentProps) {
@@ -362,6 +407,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
     // the tool reports no progress.
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}
@@ -626,7 +672,7 @@ function A2ASendToolSegment(
     isStopped: false,
   });
   const receiverNode = useEpicAgentReference(send.receiverAgentId);
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useTabHostId();
   const epicId = useOpenEpicId();
   const tileNavigation = useEpicTileNavigation();
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
@@ -702,6 +748,7 @@ function A2ASendToolSegment(
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}

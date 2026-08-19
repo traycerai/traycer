@@ -1,7 +1,10 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { ChatLowerSurfaceTopSpacing } from "@/components/chat/chat-pinned-stack";
 
 /**
@@ -28,6 +31,8 @@ vi.mock(
     useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
+    useManagedCommandDeliverHeld: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeldIsPending: () => false,
   }),
 );
 
@@ -94,10 +99,20 @@ const RUNNING_MONITOR: ManagedCommand = {
   id: "cmd-monitor",
   monitoring: true,
   description: "deploy watcher",
+  command: "tail -f deploy.log",
+  cwd: "/work/repo",
+  cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: CHAT_ID,
   createdAtMs: 10,
   updatedAtMs: 10,
+};
+
+/** A finished shell's last output, fenced by a committed Stop. */
+const HELD_UPDATE: HeldManagedCommandUpdate = {
+  commandId: "cmd-migration",
+  description: "db migration",
+  heldAtMs: 20,
 };
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
@@ -158,6 +173,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       onCancelEdit: () => undefined,
       onStopBackgroundItem: () => null,
       onStopAllBackgroundItems: () => null,
+      onStopBackgroundSession: () => null,
       onReorder: () => undefined,
       onSteerNow: () => undefined,
     },
@@ -181,6 +197,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
     backgroundItems: [],
     backgroundStopPendingTaskIds: new Set(),
     backgroundStopAllPending: false,
+    backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
   };
 }
@@ -250,6 +267,49 @@ describe("background section and composer spacing", () => {
 
     act(() => {
       chatSession.setCommands([]);
+    });
+
+    expect(screen.queryByTestId("chat-lower-dock")).toBeNull();
+    expect(composerTopSpacing()).toBe("normal");
+  });
+
+  // The case the whole Deliver affordance exists for, and the one the gate used
+  // to close: one shell ran, finished, and a committed Stop fence is holding
+  // its last output. The harness reports no background work, and a hold lingers
+  // only on a shell that has FINISHED - so both counts the gate used to read
+  // are zero, the dock returned null, and the only button that clears a hold
+  // was off screen while the hold itself survived restarts.
+  //
+  // Asserted from here rather than against the panel directly because every
+  // panel suite mounts `BackgroundItemsPanel` itself and so never crosses the
+  // gate, which is exactly why nothing caught this.
+  it("opens the Background section for a hold with nothing running at all", () => {
+    renderSurfaces();
+
+    act(() => {
+      chatSession.setCommands([]);
+      chatSession.setHeldUpdates([HELD_UPDATE]);
+    });
+
+    expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
+    expect(screen.getByTestId("background-items-panel")).not.toBeNull();
+    expect(screen.getByTestId("background-deliver-held")).not.toBeNull();
+    // ...and the surfaces below agree with the dock about it, or the frame the
+    // dock draws flush against them is an open-bottomed box.
+    expect(composerTopSpacing()).toBe("connected");
+  });
+
+  it("closes it again once the hold is delivered", () => {
+    renderSurfaces();
+
+    act(() => {
+      chatSession.setCommands([]);
+      chatSession.setHeldUpdates([HELD_UPDATE]);
+    });
+    expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
+
+    act(() => {
+      chatSession.setHeldUpdates([]);
     });
 
     expect(screen.queryByTestId("chat-lower-dock")).toBeNull();

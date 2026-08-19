@@ -6,6 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import { NewTerminalPickerBody } from "@/components/epic-canvas/sidebar/new-terminal-picker-body";
 import {
   buildTerminalTileRef,
@@ -36,6 +37,7 @@ interface MobileNewTerminalDialogProps {
  */
 export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
   const { epicId, tabId, open, onOpenChange, onLaunched } = props;
+  const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -76,7 +78,11 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
           </DialogDescription>
         </DialogHeader>
         {open ? (
-          <NewTerminalPickerBody epicId={epicId} onLaunch={handleLaunch} />
+          <NewTerminalPickerBody
+            epicId={epicId}
+            surfaceKey={surfaceKey}
+            onLaunch={handleLaunch}
+          />
         ) : null}
       </DialogContent>
     </Dialog>

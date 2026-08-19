@@ -54,10 +54,34 @@ import {
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import { queryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { emptyPlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
 import type {
   DesktopProcessMetric,
   DesktopProcessMetricsSnapshot,
 } from "@/lib/resources/desktop-app-resource-usage";
+import {
+  dispatchAction,
+  type KeybindingRouter,
+} from "@/lib/keybindings/dispatch";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+
+const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
 
 const streamVersionMock = vi.hoisted(() => ({
   version: null as { readonly major: number; readonly minor: number } | null,
@@ -65,8 +89,8 @@ const streamVersionMock = vi.hoisted(() => ({
 
 const activeHostMock = vi.hoisted(() => ({ hostId: null as string | null }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostMock.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostMock.hostId,
 }));
 
 // Partial, not wholesale: the popover re-provides the real
@@ -802,9 +826,27 @@ afterEach(() => {
   globalResourcesUnsupportedMock.unsupported = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
+  queryClient.clear();
 });
 
 describe("ResourceMonitorPopover", () => {
+  it("opens through the Resource Monitor keybinding action", () => {
+    installStubFactory();
+    renderPopover();
+
+    expect(
+      screen.queryByRole("searchbox", { name: "Search resources" }),
+    ).toBeNull();
+    act(() => {
+      expect(dispatchAction("app.resources.open", DYNAMIC_ACTION_ROUTER)).toBe(
+        true,
+      );
+    });
+    expect(
+      screen.getByRole("searchbox", { name: "Search resources" }),
+    ).not.toBeNull();
+  });
+
   it("focuses resource search when the popover opens", () => {
     installStubFactory();
     renderPopover();
@@ -813,6 +855,17 @@ describe("ResourceMonitorPopover", () => {
 
     expect(document.activeElement).toBe(
       screen.getByRole("searchbox", { name: "Search resources" }),
+    );
+  });
+
+  it("shows the current Resource Monitor shortcut in its tooltip", async () => {
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.focus(screen.getByRole("button", { name: "Resources" }));
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      `Resources (${formatChordForDisplay("shift+escape")})`,
     );
   });
 
@@ -1469,6 +1522,53 @@ describe("ResourceMonitorPopover", () => {
       hostId: "host-1",
       pids: [100],
     });
+  });
+
+  it("cycles search results, opens with Enter, and confirms a kill with a distinct key", () => {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    const search = screen.getByRole("searchbox", { name: "Search resources" });
+    const ownerRow = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Terminal Alpha/,
+    });
+
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(ownerRow);
+
+    // Delete arms but does not run; Escape dismisses the inline switch.
+    resourcesKillMock.mutate.mockClear();
+    fireEvent.keyDown(ownerRow, { key: "Delete" });
+    const firstConfirm = screen.getByRole("button", {
+      name: "Confirm kill Terminal Alpha",
+    });
+    expect(document.activeElement).toBe(firstConfirm);
+    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
+    fireEvent.keyDown(firstConfirm, { key: "Escape" });
+    expect(
+      screen.queryByRole("button", { name: "Confirm kill Terminal Alpha" }),
+    ).toBeNull();
+
+    // Backspace uses the same arm path; Enter is the separate confirmation.
+    fireEvent.keyDown(ownerRow, { key: "Backspace" });
+    const secondConfirm = screen.getByRole("button", {
+      name: "Confirm kill Terminal Alpha",
+    });
+    fireEvent.keyDown(secondConfirm, { key: "Enter" });
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [100],
+    });
+
+    // The panel stays open after the action; Enter on the selected result
+    // follows its owner and closes the popover.
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(ownerRow, { key: "Enter" });
+    expect(navigateNestedMock).toHaveBeenCalled();
   });
 
   it("enters multi-select mode and reveals row checkboxes", () => {
@@ -2222,6 +2322,8 @@ describe("ResourceMonitorPopover", () => {
             hostId: "host-1",
             cwd: "/work/background",
           },
+          // A tile the human kept once already: reopening it is a return.
+          preview: false,
         },
       }),
     );
@@ -2230,6 +2332,114 @@ describe("ResourceMonitorPopover", () => {
       expect.objectContaining({ tabId: "tab-closed" }),
       undefined,
     );
+  });
+
+  it("cannot reopen a resource owner after terminal invalidation prunes its closed payload", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    // The canvas store is mocked here, so the real invalidation fanout cannot
+    // reach it. Terminal invalidation having already pruned the tile's closed
+    // payload is the precondition under test - stated directly rather than
+    // written and then deleted, which read as pruning but was a no-op pair.
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {};
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-tombstoned",
+              },
+              harnessId: null,
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.queryByText("Tombstoned Build")).toBeNull();
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^make/,
+    });
+    expect(row.disabled).toBe(true);
+    fireEvent.click(row);
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("cannot reopen a closed terminal while a retained Query tombstone is still present", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {
+      "tile-term-tombstoned": {
+        node: {
+          id: "term-tombstoned",
+          instanceId: "tile-term-tombstoned",
+          type: "terminal",
+          name: "Tombstoned Build",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work/background",
+        },
+        pendingCreate: false,
+      },
+    };
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals("host-1", {
+        kind: "epic",
+        epicId: "epic-2",
+      }),
+      {
+        ...emptyPlainTerminalCollection(),
+        deletedRevisionById: { "term-tombstoned": 2 },
+        projectionSequence: 1,
+      },
+    );
+    expect(
+      canvasMock.state.closedTilePayloadsByTabId["tab-closed"][
+        "tile-term-tombstoned"
+      ],
+    ).toBeDefined();
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-tombstoned",
+              },
+              harnessId: null,
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.queryByText("Tombstoned Build")).toBeNull();
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^make/,
+    });
+    expect(row.disabled).toBe(true);
+    fireEvent.click(row);
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
   });
 
   it("reopens a closed terminal tile of the CURRENT tab through the same-route boundary", async () => {
@@ -3386,6 +3596,11 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
 
     fireEvent.click(
       screen.getByRole("button", { name: "Stop Monitor · deploy watcher" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Confirm stop Monitor · deploy watcher",
+      }),
     );
 
     expect(managedCommandStopMock.mutate).toHaveBeenCalledWith({

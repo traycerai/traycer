@@ -20,6 +20,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 
 const EPIC_ID = "epic-gate";
 const TAB_ID = "tab-gate";
+const HOST_ID = "host-gate";
 
 describe("useTerminalAgentWorktreeGate", () => {
   beforeEach(() => {
@@ -37,7 +38,7 @@ describe("useTerminalAgentWorktreeGate", () => {
 
   it("forwards a null intent straight through to useCreateTuiAgent.create", () => {
     const { result } = renderHook(() =>
-      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID),
+      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID, HOST_ID),
     );
 
     act(() => {
@@ -72,7 +73,7 @@ describe("useTerminalAgentWorktreeGate", () => {
       placement: { kind: "active-tile" },
     });
     expect(
-      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID),
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, HOST_ID),
     ).toBeNull();
   });
 
@@ -95,7 +96,7 @@ describe("useTerminalAgentWorktreeGate", () => {
       ],
     };
     const { result } = renderHook(() =>
-      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID),
+      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID, HOST_ID),
     );
 
     act(() => {
@@ -119,7 +120,7 @@ describe("useTerminalAgentWorktreeGate", () => {
       terminalAgentArgs: "--full-auto",
     });
     expect(
-      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID),
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, HOST_ID),
     ).toEqual(intent);
   });
 
@@ -134,9 +135,11 @@ describe("useTerminalAgentWorktreeGate", () => {
         },
       ],
     };
-    useWorktreeIntentMemoryStore.getState().setEpicIntent(EPIC_ID, previous, 1);
+    useWorktreeIntentMemoryStore
+      .getState()
+      .setEpicIntent(EPIC_ID, HOST_ID, previous, 1);
     const { result } = renderHook(() =>
-      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID),
+      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID, HOST_ID),
     );
 
     act(() => {
@@ -152,14 +155,14 @@ describe("useTerminalAgentWorktreeGate", () => {
     });
 
     expect(
-      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID),
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, HOST_ID),
     ).toEqual(previous);
   });
 
   it("exposes the underlying mutation's isPending flag", () => {
     gateMocks.isPending = true;
     const { result } = renderHook(() =>
-      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID),
+      useTerminalAgentWorktreeGate(EPIC_ID, TAB_ID, HOST_ID),
     );
 
     expect(result.current.isPending).toBe(true);

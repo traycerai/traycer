@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { PrLightItem, PrState } from "@traycer/protocol/host/pr-schemas";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
 import { Badge } from "@/components/ui/badge";
 import { DropLine } from "@/components/ui/drop-line";
@@ -26,7 +27,6 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import {
   formatPrBaseFromHead,
@@ -165,10 +165,9 @@ export function PrRow(props: {
   // (`useIsActiveEpicArtifact`); a PR tile is renderer-only, so it matches on
   // the tile id instead of an artifact record.
   const isActive = useIsActiveTile(props.tabId, props.entry.tileId);
-  // The panel is an app-wide surface, so the reactive active host IS its
-  // answer for a legacy owner with no recorded host. A canvas tile must
-  // nominate its own bound host instead - see `PrOwnerBadges.fallbackHostId`.
-  const activeHostId = useReactiveActiveHostId();
+  // The panel is canvas-serving, so its host follows the selection authority.
+  // A tile still nominates its own bound host - see `PrOwnerBadges.fallbackHostId`.
+  const activeHostId = useCanvasHostId();
 
   const handleActivate = useCallback((): void => {
     onOpen?.();

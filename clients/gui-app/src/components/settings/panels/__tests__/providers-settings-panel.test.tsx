@@ -533,8 +533,17 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostBinding: () => null,
+    // The SAME binding the `@/lib/host/runtime` mock below supplies, because
+    // `@/lib/host` re-exports that symbol and the two must not disagree. They
+    // used to: this returned `null` while the runtime mock returned the
+    // ambient binding, and nothing noticed because the panel read the runtime
+    // path. It now re-provides through `useScopedHostBinding`, which reads
+    // this one - so a fixture answering `null` here silently withholds the
+    // wrapper and the selected-host refresh lands on the ambient host.
+    useHostBinding: () => providerMocks.ambientBinding,
     useHostClient: () => null,
+    // The SPINE, a separate export since redesign P2.1.
+    useHostRuntimeClient: () => null,
   };
 });
 
@@ -551,8 +560,8 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 // The Traycer provider mounts the subscription card; stub its credits query so
@@ -606,12 +615,19 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
     isRefreshing: false,
   }),
 }));
+// The section also asks whether a read we stopped waiting for still has its
+// delayed follow-up coming. That reads the queue registry through
+// `useRateLimitQueueScope`, which needs the QueryClient this harness has none
+// of; no target is ever enqueued here, so an idle answer is the truthful one.
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
+  useIsRateLimitReadFollowUpExhausted: () => false,
+}));
 
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`
 // returns null without a `<HostRuntimeProvider>`.
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "local",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -630,6 +646,18 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
+}));
+
+// Once a sign-in-intent dialog closes itself on a same-account reconnect, the
+// toast is the ONLY surviving success signal - so it has to be assertable
+// rather than a real Sonner store write with no `<Toaster />` to land in.
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+  },
 }));
 
 // The profile-scoped section's `ProfileDropdown` renders through Radix's real
@@ -699,6 +727,7 @@ import {
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "sonner";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -943,6 +972,56 @@ function firstSubmitLoginCodeCall(): readonly [
   const call = providerMocks.submitLoginCodeMutate.mock.calls.at(0);
   if (call === undefined) throw new Error("Expected submit login code call.");
   return call;
+}
+
+/** An oauth-only codex with the ambient row plus one managed "Work" profile,
+ *  so a test can hand it a different `managed-1` before and after a sign-in
+ *  and drive the reauth panel's changed-account branch. */
+function codexWithManaged(managed: ProviderProfile): ProviderCliState {
+  return {
+    ...providerState({
+      providerId: "codex",
+      selected: { kind: "bundled" },
+      candidates: [],
+      envOverrides: [],
+      profiles: [
+        profile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+          email: "ambient@example.test",
+          tier: null,
+          authStatus: "authenticated",
+          duplicateOfProfileId: null,
+          ambientDriftNotice: null,
+        }),
+        managed,
+      ],
+    }),
+    loginCapability: {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    },
+  };
+}
+
+/** `managed-1` as a given account. The pre-sign-in address is the signed-OUT
+ *  row (that is the state the row is in when its "Sign in" button shows); any
+ *  other address is the authenticated result of a sign-in. */
+function workProfileSignedInAs(email: string): ProviderProfile {
+  return profile({
+    profileId: "managed-1",
+    kind: "managed",
+    label: "Work",
+    email,
+    tier: "Pro",
+    authStatus:
+      email === "work@example.test" ? "unauthenticated" : "authenticated",
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+  });
 }
 
 function codePasteReauthProviderState(): ProviderCliState {
@@ -1236,6 +1315,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    vi.mocked(toast.success).mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
     hostScopeMocks.host = undefined;
@@ -5283,6 +5363,13 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("button", { name: "Keep new account" }),
     ).toBeDefined();
+    // Sign-in intent, but a CHANGED account: the acknowledgment survives the
+    // same-account auto-close, because this notice is the only thing telling
+    // the user the profile was rebound. Nothing settled, so no toast either.
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+    expect(toast.success).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
 
@@ -5315,6 +5402,350 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the whole dialog with a toast when a sign-in-intent reconnect returns the same account", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    // The row's own "Sign in" button - sign-in intent, so the dialog exists
+    // for the sign-in and nothing else.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: {
+          profiles: [
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              // The same account the signed-out row already named.
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Sign in to Work" }),
+      ).toBeNull();
+    });
+    // Not merely skipped on the way out - never rendered. The acknowledgment
+    // confirmed something the host had already persisted, then stranded the
+    // user on an edit form whose only exit was Cancel.
+    expect(screen.queryByText("Signed in as")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
+    expect(toast.success).toHaveBeenCalledWith(
+      `Signed in as ${redactEmail("work@example.test")}`,
+    );
+  });
+
+  it("freezes the entry row so the header and the changed-account notice survive the list committing the new identity", async () => {
+    providerMocks.listResult.data = {
+      providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+
+    // Production ordering, which a static fixture would otherwise hide:
+    // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row
+    // into the `providers.list` cache, and query-core AWAITS that before the
+    // flow's own per-call `onSuccess` settles the step. So the row this panel
+    // reads ALREADY names the new account by the first render of the settled
+    // step - it cannot be the "before" side of the comparison.
+    //
+    // The re-render is the load-bearing half: mutating the fixture alone
+    // changes nothing, because the settle below re-renders only the panel
+    // LEAF, while the profile row is a prop from an ancestor. `setQueryData`
+    // is what re-renders that ancestor in production.
+    providerMocks.listResult.data = {
+      providers: [
+        codexWithManaged(workProfileSignedInAs("personal@example.test")),
+      ],
+    };
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [workProfileSignedInAs("personal@example.test")] },
+      });
+    });
+
+    expect(
+      screen.getByText((content) =>
+        content.includes(
+          `Work is now signed in as ${redactEmail("personal@example.test")} ` +
+            `(was ${redactEmail("work@example.test")})`,
+        ),
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Keep new account" }),
+    ).toBeDefined();
+    // And emphatically NOT the same-account auto-close: rebinding a profile to
+    // a different account must never be the silent path.
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+    expect(toast.success).not.toHaveBeenCalled();
+    // The header names the journey the user started, not the state the commit
+    // above produced - a profile that was signed out is still "Signing in",
+    // never relabelled mid-flow as an account SWITCH it never was.
+    expect(screen.getByText("Signing in")).toBeDefined();
+    expect(screen.queryByText("Switching account")).toBeNull();
+  });
+
+  it("closes a sign-in-intent dialog once the user acknowledges a changed account", async () => {
+    providerMocks.listResult.data = {
+      providers: [codexWithManaged(workProfileSignedInAs("work@example.test"))],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: { profiles: [workProfileSignedInAs("personal@example.test")] },
+      });
+    });
+
+    // The notice still gets its stop - that is the whole carve-out.
+    fireEvent.click(screen.getByRole("button", { name: "Keep new account" }));
+
+    // But acknowledging it ends the dialog rather than handing back an edit
+    // form with nothing staged in it: the user came here to sign in, and the
+    // sign-in is over however the account came back.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Sign in to Work" }),
+      ).toBeNull();
+    });
+    expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
+    // No toast on this path: the notice they just confirmed WAS the
+    // confirmation, so nothing was taken away for a toast to replace.
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("keeps the acknowledgment and the open dialog when a same-account reconnect came from Switch account", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    // Manage-profile intent: the name/color fields are live and uncommitted
+    // until "Save changes", so this entry must land back on the form.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        state: {
+          profiles: [
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByText("Signed in as")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Done" })).toBeDefined();
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(toast.success).not.toHaveBeenCalled();
+
+    // And Done still returns to the form rather than closing over the top of
+    // whatever the user was editing.
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Switch account" }),
+    ).toBeDefined();
   });
 
   it("does not show a stale identity step after cancelling a re-auth during waiting and reopening", async () => {

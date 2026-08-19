@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import {
   AlertTriangle,
   ChevronRight,
@@ -548,6 +549,16 @@ function profileEditDialogCopy(
   };
 }
 
+/** Carries the confirmation the suppressed identity card used to. Redacted to
+ *  match every other Providers surface that prints a profile's email - the
+ *  card behind it offered a reveal toggle, a toast cannot, so the redacted
+ *  form is the only honest one here. */
+function signedInMessage(profile: ProviderProfile): string {
+  const email = profile.identity?.email ?? null;
+  if (email !== null) return `Signed in as ${redactEmail(email)}`;
+  return `Signed in to ${profileDisplayLabel(profile)}`;
+}
+
 function ProfileEditDialog({
   state,
   profile,
@@ -643,6 +654,27 @@ function ProfileEditDialog({
     setSwitchingAccount(true);
   };
 
+  /** Sign-in intent opened this dialog *for* the sign-in, so once the sign-in
+   *  settles there is nothing here left to save - close the whole thing
+   *  instead of handing back an edit form whose only exit is Cancel. Both
+   *  settlements below take this route; they differ only in what confirms it.
+   *
+   *  `switchingAccount` deliberately stays true: clearing it here would swap
+   *  the edit form (and its footer) back in for the length of the dialog's
+   *  exit animation. Nothing leaks, because the section keys this dialog by
+   *  edit session - reopening remounts it with a fresh `switchingAccount`. */
+  const closeAfterSignIn = (): void => {
+    onOpenChange(false);
+  };
+
+  /** The SAME account reconnecting, settled without an acknowledgment step.
+   *  The toast stands in for the card that no longer renders - it is the only
+   *  confirmation left, so this path is the one that needs it. */
+  const finishSignIn = (signedIn: ProviderProfile): void => {
+    closeAfterSignIn();
+    toast.success(signedInMessage(signedIn));
+  };
+
   const requestRemove = (): void => {
     onOpenChange(false);
     setConfirmRemoveOpen(true);
@@ -686,8 +718,20 @@ function ProfileEditDialog({
               <ProviderProfileReauthPanel
                 state={state}
                 profile={profile}
+                onSameAccountReconnected={startInReauth ? finishSignIn : null}
                 onCancel={() => setSwitchingAccount(false)}
-                onDone={() => setSwitchingAccount(false)}
+                // A CHANGED account still stops for its amber notice, but
+                // acknowledging it ends a sign-in-intent dialog too - landing
+                // that user on the edit form would rebuild the same Cancel-only
+                // dead end one step later. No toast: they just read and
+                // confirmed the notice, so nothing was taken away to replace.
+                // The "Switch account" entry keeps returning to its form, which
+                // still holds their uncommitted name and color.
+                onDone={
+                  startInReauth
+                    ? closeAfterSignIn
+                    : () => setSwitchingAccount(false)
+                }
               />
             ) : (
               <TooltipWrapper
@@ -707,7 +751,7 @@ function ProfileEditDialog({
                   <button
                     type="button"
                     aria-label="Switch account"
-                    className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={!canOauth || savePending || invalid}
                     onClick={switchAccount}
                   >
@@ -739,7 +783,7 @@ function ProfileEditDialog({
             className={
               switchingAccount
                 ? "hidden"
-                : "mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3"
+                : "mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3"
             }
           >
             <div className="flex w-full flex-wrap items-center justify-between gap-2">

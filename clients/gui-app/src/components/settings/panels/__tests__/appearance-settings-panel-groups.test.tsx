@@ -78,12 +78,10 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(documentPosition(terminal, artifactIcons)).toBe("before");
   });
 
-  it("offers a hide option for the message minimap", () => {
+  it("offers a shared hide option for chat and artifact minimaps", () => {
     renderPanel(queryClient);
 
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Message minimap side" }),
-    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Minimap side" }));
     fireEvent.click(screen.getByRole("option", { name: "Hide" }));
 
     expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");

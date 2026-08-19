@@ -7,6 +7,7 @@ import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { cn } from "@/lib/utils";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   payloadTruncationNotice,
   usePublishedChatSource,
@@ -85,6 +86,7 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
   if (variant === "row") {
     return (
       <SegmentRow
+        headerAction={null}
         open={open}
         onOpenChange={setOpen}
         header={header}
@@ -160,6 +162,11 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
 
 function LiveFileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
   const query = useSnapshotDiffQuery({
+    // The transcript only ever renders inside a chat TILE (`chat-tile.tsx` is
+    // the sole mount of `<ChatMessages>`), and the snapshot blobs this row
+    // expands were written by that tab's host - which is also the client the
+    // PUBLISHED arm beside this one reads off `PublishedChatSource` (D15).
+    client: useTabHostClient(),
     beforeHash: props.segment.beforeHash,
     afterHash: props.segment.afterHash,
     enabled: true,

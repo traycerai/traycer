@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { basenameOfPath } from "@/lib/path";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 
 const PROMPT_POOL: ReadonlyArray<string> = [
   "What should we work on?",
@@ -42,7 +46,13 @@ interface HomeHeroProps {
 }
 
 export function HomeHero({ workspaceFolders }: HomeHeroProps) {
-  const globalFolders = useWorkspaceFoldersStore((state) => state.folders);
+  // The hero is a landing surface: its folder fallback follows the landing
+  // composer's own placement (pin ?? effective) - the bucket must describe
+  // the machine the composer beside it will actually create on.
+  const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const globalFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
+  );
   const folders = workspaceFolders === null ? globalFolders : workspaceFolders;
   const profile = useAuthStore((state) => state.profile);
   const [greeting] = useState(() => timeGreeting(new Date().getHours()));

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import {
+  adoptHostTerminalProjection,
   closeAllTabs,
   closeOtherTabs,
   closePane,
@@ -52,6 +54,7 @@ import {
   rootGroup,
   rootPane,
 } from "./canvas-test-fixtures";
+import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 
 /** Permanent (pinned) open - `openTile` with `preview: false`. */
 function openPinned(
@@ -1073,6 +1076,34 @@ describe("instanceId / content-id decoupling", () => {
     expect(pane.activeTabId).toBe("inst-1");
   });
 
+  it("keeps one tab per host for the same host-minted content id", () => {
+    // Host-minted ids (a chat, a shell) are unique per host, not globally: a
+    // cross-host clone carries the source's ids verbatim. Dedup on the id
+    // alone handed the second host back a tab bound to the FIRST - a window
+    // onto a machine that does not own that content and cannot stream it.
+    const onHostA = makeManagedCommandOutputTileRef({
+      commandId: "cmd-1",
+      hostId: TEST_HOST_ID,
+    });
+    const onHostB = makeManagedCommandOutputTileRef({
+      commandId: "cmd-1",
+      hostId: "other-host",
+    });
+
+    let state = openPinned(createEmptyCanvas(), onHostA);
+    state = openPinned(state, onHostB);
+
+    expect(rootPane(state).tabInstanceIds).toEqual([
+      onHostA.instanceId,
+      onHostB.instanceId,
+    ]);
+
+    // ...while re-opening a host's own window still focuses the tab it has.
+    const reopened = openPinned(state, onHostA);
+    expect(rootPane(reopened).tabInstanceIds).toHaveLength(2);
+    expect(rootPane(reopened).activeTabId).toBe(onHostA.instanceId);
+  });
+
   it("setActiveTab resolves by instanceId; content id is a no-op", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     state = openPinned(state, SPEC_B);
@@ -1363,5 +1394,91 @@ describe("openTile no-op short-circuits (same reference)", () => {
     expect(next).not.toBe(state);
     expect(next.root).toBe(state.root);
     expect(next.activePaneId).toBe(holdingPaneId);
+  });
+});
+
+describe("adoptHostTerminalProjection", () => {
+  const TERMINAL_ID = "terminal-adopt";
+
+  function projection(overrides: {
+    readonly manualTitle?: string | null;
+    readonly cwd?: string;
+    readonly shellArgs?: string[];
+  }): PlainTerminalProjection {
+    return {
+      record: {
+        terminalId: TERMINAL_ID,
+        hostId: TEST_HOST_ID,
+        scope: { kind: "epic", epicId: "epic-1" },
+        launch: {
+          cwd: overrides.cwd ?? "/work",
+          shellCommand: "/bin/zsh",
+          shellArgs: overrides.shellArgs ?? ["-l"],
+        },
+        manualTitle: overrides.manualTitle ?? null,
+        revision: 1,
+        createdAt: "2026-08-16T10:00:00.000Z",
+        updatedAt: "2026-08-16T10:00:00.000Z",
+      },
+      runtime: {
+        status: "running",
+        sessionId: TERMINAL_ID,
+        currentCwd: "/work",
+        activeProcessName: "bun",
+        cols: 100,
+        rows: 30,
+      },
+    };
+  }
+
+  const LEGACY_REF: EpicCanvasTileRef = {
+    id: TERMINAL_ID,
+    instanceId: "instance-adopt",
+    type: "terminal",
+    name: "Shell",
+    hostId: TEST_HOST_ID,
+    titleSource: "default",
+    cwd: "/work",
+  };
+
+  it("adopts a legacy ref once and then leaves the canvas identity alone", () => {
+    const state = openPinned(createEmptyCanvas(), LEGACY_REF);
+    const adopted = adoptHostTerminalProjection(
+      state,
+      TEST_HOST_ID,
+      projection({}),
+    );
+    expect(adopted).not.toBe(state);
+    const adoptedRef = adopted.tilesByInstanceId[LEGACY_REF.instanceId];
+    expect(adoptedRef?.type === "terminal" && adoptedRef.authority).toBe(
+      "host",
+    );
+
+    // A repeated stream projection carrying the same values must not mint a
+    // new canvas identity, or every tick re-renders every canvas subscriber.
+    const again = adoptHostTerminalProjection(
+      adopted,
+      TEST_HOST_ID,
+      projection({}),
+    );
+    expect(again).toBe(adopted);
+    expect(again.tilesByInstanceId[LEGACY_REF.instanceId]).toBe(adoptedRef);
+  });
+
+  it("still re-projects when a projected field actually changes", () => {
+    const state = adoptHostTerminalProjection(
+      openPinned(createEmptyCanvas(), LEGACY_REF),
+      TEST_HOST_ID,
+      projection({}),
+    );
+    for (const changed of [
+      projection({ manualTitle: "Renamed" }),
+      projection({ cwd: "/elsewhere" }),
+      projection({ shellArgs: ["-l", "-i"] }),
+    ]) {
+      expect(
+        adoptHostTerminalProjection(state, TEST_HOST_ID, changed),
+      ).not.toBe(state);
+    }
   });
 });

@@ -560,12 +560,14 @@ describe("HostRequestCoordinator", () => {
       handlers: { "join.await": () => ({ value: "ok" }) },
       requestId: () => "request-1",
     });
-    const client = new HostClient({
+    const spine = new HostClient({
       registry,
       messenger,
       invalidator,
       schedulingPolicy,
       requestCoordinator: null,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     });
     const fixture = createAuthenticatedUserFixture(undefined);
     const context = createRequestContext({
@@ -576,8 +578,8 @@ describe("HostRequestCoordinator", () => {
       operationId: undefined,
       externalAbortSignal: undefined,
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(context);
+    spine.setRequestContext(context);
+    const client = spine.createRequester(mockLocalHostEntry);
 
     await expect(
       client.requestWithResponseTimeout(
@@ -594,7 +596,7 @@ describe("HostRequestCoordinator", () => {
       ),
     ).resolves.toEqual({ value: "ok" });
     expect(messenger.calls).toHaveLength(1);
-    client.dispose();
+    spine.dispose();
   });
 
   it("uses the parsed stable wire value for structural keys and rejects non-wire values", () => {

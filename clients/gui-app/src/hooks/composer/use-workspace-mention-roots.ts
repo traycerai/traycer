@@ -5,18 +5,31 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
+/**
+ * `hostId` scopes the "globally registered folders" fallback: folder paths
+ * are host-local, so the fallback must be the composer's target host's
+ * bucket (a tab's bound host, the modal's pinned host, the landing page's
+ * active host) - never another machine's paths.
+ */
 export function useWorkspaceMentionRoots(
   preferredRoots: ReadonlyArray<string> | null,
   fallbackToGlobalWhenEmpty: boolean,
+  hostId: string | null,
 ): ReadonlyArray<string> {
-  const workspaceFolders = useWorkspaceFoldersStore((state) => state.folders);
+  const workspaceFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, hostId).folders,
+  );
   return useMemo(() => {
     const preferred =
       preferredRoots === null ? [] : dedupeMentionRoots(preferredRoots);
@@ -43,9 +56,16 @@ export function useLandingComposerMentionRoots(
       null
     );
   });
-  const globalFolders = useWorkspaceFoldersStore((state) => state.folders);
+  // The landing composer's placement is its surface pin (pin ?? effective),
+  // so the global folder fallback reads the bucket of the host it will
+  // actually create on.
+  const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const globalFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
+  );
   const stagingKeyId = worktreeStagingKeyString({
     surface: "landing",
+    hostId: activeHostId,
     draftId,
   });
   const stagedIntent = useWorktreeIntentStagingStore(
@@ -61,7 +81,7 @@ export function useLandingComposerMentionRoots(
   // would re-resolve the same source intent-stripped. Disable it - the only way
   // `preferredRoots` is empty here is when there are no folders at all, where
   // the fallback would yield `[]` anyway.
-  return useWorkspaceMentionRoots(preferredRoots, false);
+  return useWorkspaceMentionRoots(preferredRoots, false, activeHostId);
 }
 
 /**

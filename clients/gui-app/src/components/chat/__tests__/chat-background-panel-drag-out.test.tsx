@@ -44,6 +44,8 @@ vi.mock(
     useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStopAllIsPending: () => false,
+    useManagedCommandDeliverHeld: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeldIsPending: () => false,
   }),
 );
 
@@ -88,6 +90,9 @@ const MONITOR: ManagedCommand = {
   id: "cmd-1",
   monitoring: true,
   description: "deploy watcher",
+  command: "tail -f deploy.log",
+  cwd: "/work/repo",
+  cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: CHAT_ID,
   createdAtMs: 10,
@@ -139,11 +144,14 @@ function Harness(props: { readonly paneId: string }): ReactNode {
               readOnly={false}
               pendingStopTaskIds={new Set()}
               stopAllPending={false}
+              sessionStopPending={false}
+              turnActive={false}
               scrollRegionMaxHeightClass="max-h-96"
               separated={false}
               onItemClick={() => undefined}
               onStopItem={() => null}
               onStopAll={() => null}
+              onStopSession={() => null}
             />
             <PaneDropZone
               paneId={props.paneId}

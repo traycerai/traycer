@@ -17,6 +17,15 @@ import type {
   WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  useWsStreamClient,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
+import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
@@ -26,6 +35,9 @@ import {
 } from "@/stores/epics/git-panel-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitDiffPanelBodyLive } from "../git-diff-panel-body-live";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { gitDiffPanelSurfaceKey } from "@/stores/host/surface-host-selection-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { expectModuleHeaderPreview } from "./git-module-header-test-utils";
 
 const testState = vi.hoisted(() => ({
@@ -48,12 +60,106 @@ const testState = vi.hoisted(() => ({
   refresh: vi.fn<() => Promise<void>>(),
 }));
 
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every OTHER
+// assertion here is about. One arm below flips this to a pinned binding to
+// prove the provider sits above the subscription.
+const pinnedStreamBindingRef = vi.hoisted(() => ({
+  value: null as StreamRuntimeBinding | null,
+}));
+
+// The hook returns the value to PROVIDE: the pin's own binding when this suite
+// supplies one, else the ambient binding (following). `null` would now mean
+// PENDING - no client at all - which is not what these arms drive.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return {
+    useSurfaceHostStreamBinding: () =>
+      pinnedStreamBindingRef.value ?? use(StreamRuntimeContext),
+  };
+});
+
+/**
+ * The transport `useGitListChangedFilesSubscription` was handed, recorded from
+ * inside the mock.
+ *
+ * The real hook takes its client from `useWsStreamClient()` rather than from
+ * its arguments, which is exactly why the wrong-host defect was invisible: the
+ * pinned `hostId` it DOES take is a subscribe param, not a route, so a
+ * subscribe carrying host B's name over host A's socket looks identical to a
+ * correct one at every call site. Recording the context read here is what
+ * makes the routing observable in a suite that otherwise mocks the hook out.
+ */
+const observedSubscriptionClients: Array<IHostStreamClient<HostStreamRpcRegistry> | null> =
+  [];
+
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => ({
     data: { rows: testState.rows },
     error: null,
     isPending: false,
   }),
+  useWorktreeListBindingsForEpicForClient: () => ({
+    data: { rows: testState.rows },
+    error: null,
+    isPending: false,
+  }),
+}));
+
+interface PinTestReachability {
+  status: "reachable" | "unreachable" | "checking" | "host-starting";
+  hostLabel: string;
+  unavailability: "offline" | "plan-restricted" | null;
+}
+
+interface PinTestState {
+  activeHostId: string | null;
+  lastClientHostId: string | null;
+  reachability: PinTestReachability;
+  directory: Array<{ readonly hostId: string }>;
+}
+
+const pinTestState = vi.hoisted((): PinTestState => ({
+  activeHostId: "host-1",
+  lastClientHostId: null,
+  reachability: {
+    status: "reachable",
+    hostLabel: "Host One",
+    unavailability: null,
+  },
+  directory: [{ hostId: "host-1" }],
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => pinTestState.activeHostId,
+}));
+
+// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign
+// P1.2) resolves and latches against the effective host, not the directory's
+// active-host hook - drive it off the same fixture state.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => pinTestState.activeHostId,
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => pinTestState.reachability,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: pinTestState.directory,
+    fetchStatus: "idle",
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    pinTestState.lastClientHostId = hostId;
+    return null;
+  },
 }));
 
 vi.mock("@/hooks/git/use-git-prefetch-worktree-status", () => ({
@@ -76,6 +182,7 @@ vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
   useGitListChangedFilesSubscription: (args: {
     readonly runningDir: string | null;
   }) => {
+    observedSubscriptionClients.push(useWsStreamClient());
     const data =
       args.runningDir === null
         ? null
@@ -270,6 +377,29 @@ const rootSelected: GitPanelSelectedRepo = {
   repoRoot: "/repo",
 };
 
+/** A real, never-dialed transport - identity is all these arms compare. */
+function streamClientFixture(): WsStreamClient<HostStreamRpcRegistry> {
+  return new WsStreamClient<HostStreamRpcRegistry>({
+    registry: hostStreamRpcRegistry,
+    endpoint: () => null,
+    bearer: () => null,
+    auth: null,
+    hostCredentialMint: null,
+    evidence: NO_TRANSPORT_EVIDENCE,
+    webSocketFactory: {
+      create: () => {
+        throw new Error("stream client fixture should not open a websocket");
+      },
+    },
+    dialTimeoutMs: 1_000,
+    openAckTimeoutMs: 1_000,
+    pingIntervalMs: 25_000,
+    pongTimeoutMs: 50_000,
+    initialBackoffMs: 10,
+    maxBackoffMs: 1_000,
+  });
+}
+
 function renderPanel(selected: GitPanelSelectedRepo): QueryClient {
   useGitPanelStore.setState({
     stateByEpicId: {
@@ -337,10 +467,42 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     testState.capabilities = new Map();
     window.localStorage.clear();
     useGitPanelStore.setState({ stateByEpicId: {} });
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
+    pinTestState.activeHostId = "host-1";
+    pinTestState.lastClientHostId = null;
+    pinTestState.reachability = {
+      status: "reachable",
+      hostLabel: "Host One",
+      unavailability: null,
+    };
+    pinTestState.directory = [{ hostId: "host-1" }];
   });
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.getState().reset();
+    pinnedStreamBindingRef.value = null;
+    observedSubscriptionClients.length = 0;
+  });
+
+  it("subscribes on the PINNED host's transport, not the app-wide one", () => {
+    // Proves the re-provider sits ABOVE the subscription rather than beside
+    // it. That adjacency is the whole fix and nothing else can see it: the
+    // hook resolving the transport is correct either way, and the subscription
+    // registry is correct either way - only their arrangement decides which
+    // machine gets watched. `renderPanel` supplies no ambient binding, so a
+    // panel that failed to re-provide would subscribe on `null`.
+    const pinned = streamClientFixture();
+    pinnedStreamBindingRef.value = {
+      wsStreamClient: pinned,
+      hostId: "host-1",
+    };
+
+    renderPanel(rootSelected);
+
+    expect(observedSubscriptionClients.length).toBeGreaterThan(0);
+    expect([...new Set(observedSubscriptionClients)]).toEqual([pinned]);
   });
 
   it("renders the compact selector and removes the persistent repo tree", () => {
@@ -898,5 +1060,74 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       "git-diff-repo-switcher-root-notes",
     );
     expect(within(resolvedOption).getByText("not git")).toBeDefined();
+  });
+
+  it("latches the resolved host when the default root is already selected", () => {
+    renderPanel(rootSelected);
+
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        gitDiffPanelSurfaceKey(TAB_ID)
+      ],
+    ).toBe("host-1");
+    expect(pinTestState.lastClientHostId).toBe("host-1");
+  });
+
+  it("writes the pin when a repo is picked in the switcher", () => {
+    renderPanel(rootSelected);
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(gitDiffPanelSurfaceKey(TAB_ID), null);
+
+    openSwitcher();
+    fireEvent.click(
+      screen.getByTestId("git-diff-repo-switcher-root-other-repo"),
+    );
+
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        gitDiffPanelSurfaceKey(TAB_ID)
+      ],
+    ).toBe("host-1");
+  });
+
+  it("auto-follows to the effective host and renders normal content when the pinned host is dead (D6 sticky return, no dead-state screen)", async () => {
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(gitDiffPanelSurfaceKey(TAB_ID), "host-1");
+    // host-1 (the pin) is dead; host-2 is the effective host and can serve.
+    pinTestState.activeHostId = "host-2";
+    testState.rows = [row({ hostId: "host-2" })];
+    testState.snapshots = new Map([["/repo", response({})]]);
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: "host-2",
+      leases: [
+        { hostId: "host-1", status: "dead", dead: { reason: "offline" } },
+        { hostId: "host-2", status: "ready", dead: null },
+      ],
+    });
+
+    renderPanel(rootSelected);
+
+    // The pin is deposed, so the surface resolves to the effective host and the
+    // requester it asks for is host-2, never the dead host-1 - there is no
+    // separate dead-state screen to fall back to (D6 deleted it).
+    await waitFor(() => {
+      expect(pinTestState.lastClientHostId).toBe("host-2");
+    });
+    expect(screen.queryByTestId("git-diff-panel-pinned-host-dead")).toBeNull();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("git-diff-repo-switcher-trigger"),
+      ).toBeDefined();
+    });
+    // The pin ITSELF survives the death - only the resolution moved. This is
+    // what makes the return sticky once host-1 is usable again.
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        gitDiffPanelSurfaceKey(TAB_ID)
+      ],
+    ).toBe("host-1");
   });
 });

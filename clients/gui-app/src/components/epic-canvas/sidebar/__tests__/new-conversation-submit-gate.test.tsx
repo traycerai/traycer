@@ -95,8 +95,56 @@ const stubHostClient = {
   getRequestContextUserId: () => null,
 };
 
-vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => stubHostClient,
+  // The modal's per-host memory key for the unpinned path subscribes through
+  // the binding; null = no active host, so memory reads fall to the legacy tier
+  // and writes no-op - inert here.
+  //
+  // This comment used to name `useReactiveActiveHostId` as the subscriber. That
+  // hook no longer exists anywhere in the tree; the sentence is left describing
+  // the binding it actually mocks rather than being re-pointed at a successor
+  // nobody has verified. What is asserted here is the `null`, not the reader.
+  useHostBinding: () => null,
+}));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
+
+// P1.2: the body resolves its placement through this hook and refuses to
+// create when it is unusable. This suite is about the SUBMIT GATE, not
+// placement, so it presents a usable one addressing the stub client's host.
+vi.mock("@/hooks/host/use-composer-placement", () => {
+  // Built inside the factory: `vi.mock` is hoisted above the module-level
+  // `stubHostClient`, so closing over it would read a TDZ binding.
+  const target = {
+    resolvedHostId: "host-1",
+    client: { getActiveHostId: () => "host-1" },
+    hostLabel: "Local",
+    isPinned: false,
+    namedHostDead: false,
+  };
+  return {
+    // The modal resolves the per-EPIC placement (not the landing composer's
+    // `useComposerPlacement`); same shape, plus `followsEffective`.
+    useEpicConversationPlacement: () => ({
+      pin: {
+        selection: null,
+        honoredSelection: null,
+        setSelection: () => undefined,
+        resolvedHostId: "host-1",
+        isPinned: false,
+        latchOnFirstUse: () => undefined,
+      },
+      target,
+      submitTarget: target,
+      hostLabelFor: () => "Local",
+      followsEffective: true,
+    }),
+  };
+});
+
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "host-1",
+}));
 
 // The body resolves its host through `useHostClientForHostId`, which reads the
 // directory to pin an explicit id. This suite only exercises the unpinned

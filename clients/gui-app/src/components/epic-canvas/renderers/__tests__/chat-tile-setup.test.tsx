@@ -19,8 +19,8 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-test",
 }));
 
 const focusSession = vi.hoisted(() => vi.fn());
@@ -177,6 +177,7 @@ function emitSnapshot(
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
       managedCommands: [],
+      heldUpdates: [],
       worktreeBinding: null,
       missingWorktreePaths: [],
     },

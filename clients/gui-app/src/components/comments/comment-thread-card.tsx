@@ -5,6 +5,7 @@ import {
   type JsonContent,
 } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -16,12 +17,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
-  useDeleteComment,
-  useDeleteCommentThread,
-  useEditComment,
-  useReplyToCommentThread,
-  useSetCommentThreadResolved,
+  useDeleteCommentForClient,
+  useDeleteCommentThreadForClient,
+  useEditCommentForClient,
+  useReplyToCommentThreadForClient,
+  useSetCommentThreadResolvedForClient,
 } from "@/hooks/comments/use-comment-thread-mutations";
 import {
   CommentComposer,
@@ -32,6 +34,10 @@ import { deriveInitials } from "./mention-utils";
 
 export interface CommentThreadCardProps {
   readonly epicId: string;
+  /** The host serving the surface this card was mounted from - the Epic
+   *  session's client under the sidebar. Passed rather than read here so the
+   *  card stays mountable from a tile too (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   readonly thread: CommentThreadWire;
@@ -65,6 +71,7 @@ export interface CommentThreadCardProps {
 export function CommentThreadCard(props: CommentThreadCardProps) {
   const {
     epicId,
+    hostClient,
     artifactType,
     artifactId,
     thread,
@@ -76,11 +83,11 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
     onActivateAnchor,
   } = props;
 
-  const replyMutation = useReplyToCommentThread();
-  const editMutation = useEditComment();
-  const deleteCommentMutation = useDeleteComment();
-  const deleteThreadMutation = useDeleteCommentThread();
-  const setResolvedMutation = useSetCommentThreadResolved();
+  const replyMutation = useReplyToCommentThreadForClient(hostClient);
+  const editMutation = useEditCommentForClient(hostClient);
+  const deleteCommentMutation = useDeleteCommentForClient(hostClient);
+  const deleteThreadMutation = useDeleteCommentThreadForClient(hostClient);
+  const setResolvedMutation = useSetCommentThreadResolvedForClient(hostClient);
 
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const replyHandleRef = useRef<CommentComposerHandle | null>(null);
@@ -155,7 +162,7 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
       className={cn(
         "flex flex-col gap-2 rounded-md border border-border bg-card p-3 transition-colors",
         "data-[resolved=true]:opacity-70",
-        isExpanded ? "ring-1 ring-ring/40" : "hover:bg-muted/40",
+        isExpanded ? "ring-1 ring-ring/40" : "hover:bg-foreground/5",
       )}
     >
       <button
@@ -201,6 +208,7 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
                 key={comment.commentId}
                 comment={comment}
                 epicId={epicId}
+                hostClient={hostClient}
                 currentUserId={currentUserId}
                 isEditing={editingCommentId === comment.commentId}
                 onStartEdit={() => setEditingCommentId(comment.commentId)}
@@ -234,6 +242,7 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
           <CommentComposer
             ref={replyHandleRef}
             epicId={epicId}
+            hostClient={hostClient}
             initialContent={null}
             placeholder="Reply…"
             focusOnMount={false}
@@ -287,6 +296,7 @@ type CommentEntryData = CommentThreadWire["comments"][number];
 interface CommentEntryProps {
   readonly comment: CommentEntryData;
   readonly epicId: string;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly currentUserId: string | null;
   readonly isEditing: boolean;
   readonly onStartEdit: () => void;
@@ -299,6 +309,7 @@ function CommentEntry(props: CommentEntryProps) {
   const {
     comment,
     epicId,
+    hostClient,
     currentUserId,
     isEditing,
     onStartEdit,
@@ -352,6 +363,7 @@ function CommentEntry(props: CommentEntryProps) {
       {isEditing ? (
         <CommentComposer
           epicId={epicId}
+          hostClient={hostClient}
           initialContent={comment.content}
           placeholder="Edit comment…"
           focusOnMount

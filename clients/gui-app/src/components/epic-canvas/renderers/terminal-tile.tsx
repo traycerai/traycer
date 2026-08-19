@@ -6,19 +6,35 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type { Terminal } from "@xterm/xterm";
-import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicTerminalRef,
+  SupportedEpicTerminalRef,
+} from "@/stores/epics/canvas/types";
+import {
+  isImportExemptEpicTerminalOrigin,
+  isLegacyEpicTerminalRef,
+  isUnsupportedEpicTerminalRef,
+  legacyEpicTerminalEvidence,
+} from "@/stores/epics/canvas/types";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import {
+  MEASURE_GRID_TIMEOUT_MS,
   TerminalXtermHost,
   useTerminalTileBootstrap,
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  useHostReachability,
+  resolvedHostLabel,
+} from "@/hooks/agent/use-host-reachability";
+import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { TileHostLoadState } from "./tile-host-load-state";
 import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
@@ -51,6 +67,21 @@ import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-
 import { TerminalQuoteOverlay } from "./terminal-quote/terminal-quote-overlay";
 import { useTerminalFindSessionRow } from "@/hooks/terminal/use-terminal-display-title";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
+import type { EpicTerminalAuthorityController } from "@/hooks/terminal/use-epic-terminal-authority";
+import { useLandingTerminalDurableLifecycle } from "@/components/home/terminal-panel/landing-terminal-durable-bootstrap";
+import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
+import {
+  adoptWarmSessionInstance,
+  peekXtermHostGrid,
+  peekXtermHostGridForSession,
+} from "@/components/epic-canvas/renderers/xterm-host-registry";
+import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import { requestEpicTerminalLifetimeClose } from "@/lib/terminals/epic-terminal-close-coordinator";
+
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
 
 export interface TerminalTileProps {
   readonly node: EpicTerminalRef;
@@ -69,6 +100,17 @@ export function TerminalTile(props: TerminalTileProps) {
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
   const reachability = useHostReachability(hostId);
+  // Invariant 6: the pre-bootstrap wait is bounded and it says which host it
+  // is waiting on. This tile used to render a wordless skeleton for both
+  // `checking` and `host-starting` (audit S5) - indistinguishable from a
+  // terminal that was about to appear, and it never ended.
+  const hostLoad = useBoundedHostLoad({
+    hostId,
+    hostLabel: resolvedHostLabel(reachability),
+    pending:
+      reachability.status === "checking" ||
+      reachability.status === "host-starting",
+  });
   const crashReportedRef = useRef(false);
   const reportCrashExit = useCallback(() => {
     if (epicId === null) return;
@@ -159,6 +201,14 @@ export function TerminalTile(props: TerminalTileProps) {
     // persisted "closed" entry in the feed for a terminal an upgrade would hand
     // straight back.
     if (reachability.unavailability === "plan-restricted") return;
+    // So does the BASIS, for the same reason one level up. Since F4 this
+    // verdict also arrives from a starting host that overran its budget, and
+    // that is the UI's patience expiring, not proof the PTY died - the tile
+    // stops waiting (it must), but writing "permanently closed" into the feed
+    // off a timer would persist a claim about a machine that is very likely
+    // still running. Presentation falls; the death event needs directory
+    // evidence.
+    if (reachability.basis !== "directory") return;
     if (epicId === null) return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
@@ -177,6 +227,7 @@ export function TerminalTile(props: TerminalTileProps) {
     reachability.status,
     reachability.hostLabel,
     reachability.unavailability,
+    reachability.basis,
     epicId,
     hostId,
     props.node.id,
@@ -197,24 +248,25 @@ export function TerminalTile(props: TerminalTileProps) {
   }
   // "host-starting" = the directory is empty because the local host hasn't
   // published yet (boot/ensure/wake). Rendering the dead banner there showed
-  // "permanently closed" for terminals that were seconds from reconnecting.
-  if (
-    reachability.status === "checking" ||
-    reachability.status === "host-starting"
-  ) {
+  // "permanently closed" for terminals that were seconds from reconnecting -
+  // so this stays a non-destructive wait, but a wait WITH WORDS and an end.
+  // Past its budget the reachability hook itself falls to `unreachable` (F4),
+  // which the arm above answers; `timed-out` here covers the directory that
+  // never resolved at all.
+  if (hostLoad.kind !== "ready") {
     return (
-      <div
-        className="flex h-full w-full items-center justify-center bg-canvas"
-        data-testid={`terminal-tile-${props.tileId}`}
-      >
-        <TerminalLoadingSkeleton />
-      </div>
+      <TileHostLoadState
+        load={hostLoad}
+        subject="terminal"
+        onRetry={null}
+        testId={`terminal-tile-${props.tileId}`}
+      />
     );
   }
   // Keyed on `recoverNonce`: a recovery remounts the bootstrap subtree, re-running
   // `terminal.list -> create` against the (now invalidated) host list.
   return (
-    <TerminalTileLive
+    <ReachableTerminalTile
       {...props}
       key={recovery.recoverNonce}
       recovery={recovery}
@@ -223,8 +275,55 @@ export function TerminalTile(props: TerminalTileProps) {
   );
 }
 
-function TerminalTileLive(
+function ReachableTerminalTile(
   props: TerminalTileProps & {
+    readonly recovery: TerminalSessionRecovery;
+    readonly onCrashExit: () => void;
+  },
+) {
+  const epicId = useOpenEpicId();
+  const controller = useEpicTerminalAuthority({ epicId, node: props.node });
+  if (isUnsupportedEpicTerminalRef(props.node)) {
+    return <TerminalStartingTile tileId={props.tileId} />;
+  }
+  const supportedNode: SupportedEpicTerminalRef = props.node;
+  if (isImportExemptEpicTerminalOrigin(supportedNode.origin)) {
+    return <LegacyTerminalTileLive {...props} node={supportedNode} />;
+  }
+  if (controller.capability === "unknown") {
+    return <TerminalStartingTile tileId={props.tileId} />;
+  }
+  if (controller.capability === "legacy") {
+    return <LegacyTerminalTileLive {...props} node={supportedNode} />;
+  }
+  if (controller.migrationError !== null) {
+    return (
+      <TerminalStartError
+        tileId={props.tileId}
+        message={controller.migrationError.message}
+        onRetry={controller.retryMigration}
+      />
+    );
+  }
+  if (
+    isLegacyEpicTerminalRef(supportedNode) &&
+    (controller.migrationPending || controller.projection === undefined)
+  ) {
+    return <TerminalStartingTile tileId={props.tileId} />;
+  }
+  return (
+    <HostTerminalTileLive
+      {...props}
+      node={supportedNode}
+      controller={controller}
+      projection={controller.projection}
+    />
+  );
+}
+
+function LegacyTerminalTileLive(
+  props: Omit<TerminalTileProps, "node"> & {
+    readonly node: SupportedEpicTerminalRef;
     readonly recovery: TerminalSessionRecovery;
     readonly onCrashExit: () => void;
   },
@@ -233,7 +332,8 @@ function TerminalTileLive(
   const epicId = useOpenEpicId();
   const sessionId = props.node.id;
   const instanceId = props.node.instanceId;
-  const cwd = props.node.cwd;
+  const legacyEvidence = legacyEpicTerminalEvidence(props.node);
+  const cwd = legacyEvidence.cwd;
   const preparePayload = useMemo(
     () => () =>
       Promise.resolve<TerminalCreatePayload>({
@@ -385,13 +485,16 @@ function TerminalTileLive(
     <TerminalLive
       handle={bootstrap.handle}
       epicId={epicId}
-      fallbackTitle={props.node.name}
+      fallbackTitle={legacyEvidence.name}
       instanceId={instanceId}
       viewTabId={props.viewTabId}
       tileId={props.tileId}
       isActive={props.isActive}
       recovery={props.recovery}
       onCrashExit={props.onCrashExit}
+      authoritativeTerminal={null}
+      closeOnExit
+      onClose={closeExitedTile}
       signInTile={
         isSignInTerminal
           ? {
@@ -406,6 +509,198 @@ function TerminalTileLive(
   );
 }
 
+function HostTerminalTileLive(
+  props: Omit<TerminalTileProps, "node"> & {
+    readonly node: SupportedEpicTerminalRef;
+    readonly recovery: TerminalSessionRecovery;
+    readonly onCrashExit: () => void;
+    readonly controller: EpicTerminalAuthorityController;
+    readonly projection: PlainTerminalProjection | undefined;
+  },
+) {
+  const hostId = useTabHostId();
+  const epicId = useOpenEpicId();
+  const pendingCreate = useEpicCanvasStore((state) =>
+    state.pendingCreateArtifactIds.has(props.node.id),
+  );
+  const adoptProjection = useEpicCanvasStore(
+    (state) => state.adoptHostTerminalProjection,
+  );
+  const unmarkPendingCreate = useEpicCanvasStore(
+    (state) => state.unmarkArtifactPendingCreate,
+  );
+  const evidence = legacyEpicTerminalEvidence(props.node);
+  const [measuredGrid, setMeasuredGrid] = useState<{
+    readonly cols: number;
+    readonly rows: number;
+  } | null>(null);
+  const [measureTimedOut, setMeasureTimedOut] = useState(false);
+  const reportMeasuredGrid = (cols: number, rows: number): void => {
+    if (cols <= 0 || rows <= 0) return;
+    setMeasuredGrid({ cols, rows });
+  };
+
+  useEffect(() => {
+    if (measuredGrid !== null || measureTimedOut) return;
+    const timer = window.setTimeout(
+      () => setMeasureTimedOut(true),
+      MEASURE_GRID_TIMEOUT_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [measureTimedOut, measuredGrid]);
+  const gridReady = measuredGrid !== null || measureTimedOut;
+  const openingGrid = measuredGrid ??
+    peekXtermHostGrid(props.node.instanceId) ??
+    peekXtermHostGridForSession(props.node.id) ?? {
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
+    };
+  const projection = props.projection;
+  const create = props.controller.create;
+  const ensureRunning = props.controller.ensureRunning;
+  const dispatch = async (action: "create" | "ensure-running") => {
+    const response =
+      action === "create"
+        ? await create.mutateAsync({
+            terminalId: props.node.id,
+            scope: { kind: "epic", epicId },
+            cwd: evidence.cwd,
+            cols: openingGrid.cols,
+            rows: openingGrid.rows,
+          })
+        : await ensureRunning.mutateAsync({
+            terminalId: props.node.id,
+            cols: openingGrid.cols,
+            rows: openingGrid.rows,
+          });
+    return response.terminal;
+  };
+  const adopt = (terminal: PlainTerminalProjection): void => {
+    adoptProjection(hostId, terminal);
+    unmarkPendingCreate(props.node.id);
+  };
+  const lifecycle = useLandingTerminalDurableLifecycle({
+    projectionStatus:
+      projection === undefined ? "missing" : projection.runtime.status,
+    pendingCreate,
+    active: props.isActive,
+    canMutate: props.controller.canMutate,
+    gridReady,
+    dispatch,
+    adopt,
+  });
+
+  useEffect(() => {
+    adoptWarmSessionInstance(props.node.id, props.node.instanceId);
+  }, [props.node.id, props.node.instanceId]);
+
+  const runtimeRunning = projection?.runtime.status === "running";
+  const handle = useTerminalSessionHandle({
+    hostId,
+    scope: { kind: "epic", epicId },
+    sessionId: props.node.id,
+    instanceId: props.node.instanceId,
+    cols: openingGrid.cols,
+    rows: openingGrid.rows,
+    reattachMode: runtimeRunning ? "live" : "fresh",
+    kind: "terminal",
+    enabled: gridReady && (runtimeRunning || lifecycle.requestSettled),
+  });
+  const close = props.controller.close;
+  const requestClose = () => {
+    const pending = requestEpicTerminalLifetimeClose({
+      hostId,
+      terminalId: props.node.id,
+      capability: props.controller.capability,
+      canMutate: props.controller.canMutate,
+      close: async () => {
+        await close.mutateAsync({ terminalId: props.node.id });
+      },
+    });
+    if (pending !== null) void pending.catch(() => undefined);
+  };
+
+  if (lifecycle.requestError !== null) {
+    return (
+      <TerminalStartError
+        tileId={props.tileId}
+        message={lifecycle.requestError.message}
+        onRetry={lifecycle.retry}
+      />
+    );
+  }
+  if (handle === null) {
+    return (
+      <TerminalStartingTile
+        tileId={props.tileId}
+        probe={
+          <TerminalGridMeasureProbe
+            sessionId={props.node.id}
+            instanceId={props.node.instanceId}
+            tileKind="terminal"
+            chrome="padded"
+            onMeasured={reportMeasuredGrid}
+          />
+        }
+      />
+    );
+  }
+  return (
+    <TerminalLive
+      handle={handle}
+      epicId={epicId}
+      fallbackTitle={props.node.name}
+      instanceId={props.node.instanceId}
+      viewTabId={props.viewTabId}
+      tileId={props.tileId}
+      isActive={props.isActive}
+      recovery={props.recovery}
+      onCrashExit={props.onCrashExit}
+      authoritativeTerminal={props.controller.viewModel}
+      closeOnExit={false}
+      onClose={requestClose}
+      signInTile={null}
+    />
+  );
+}
+
+function TerminalStartingTile(props: {
+  readonly tileId: string;
+  readonly probe?: ReactNode;
+}) {
+  return (
+    <div
+      className="flex h-full w-full min-h-0 flex-col bg-canvas"
+      data-testid={`terminal-tile-${props.tileId}`}
+    >
+      <div className="relative min-h-0 flex-1">
+        {props.probe ?? null}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-ui-sm text-muted-foreground">
+          Starting terminal session…
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TerminalStartError(props: {
+  readonly tileId: string;
+  readonly message: string;
+  readonly onRetry: () => void;
+}) {
+  return (
+    <div
+      className="flex h-full w-full flex-col items-center justify-center gap-2 bg-canvas p-4 text-center text-ui-sm text-destructive"
+      data-testid={`terminal-tile-${props.tileId}`}
+    >
+      <span>Failed to start terminal: {props.message}</span>
+      <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 interface TerminalLiveProps {
   readonly handle: TerminalSessionStoreHandle;
   readonly epicId: string;
@@ -417,6 +712,9 @@ interface TerminalLiveProps {
   readonly isActive: boolean;
   readonly recovery: TerminalSessionRecovery;
   readonly onCrashExit: () => void;
+  readonly authoritativeTerminal: PlainTerminalViewModel | null;
+  readonly closeOnExit: boolean;
+  readonly onClose: () => void;
   /**
    * Non-null only for a `provider-login` tile. Carries the ended-panel props
    * rather than a bare boolean, because this component owns the ONLY prompt
@@ -448,29 +746,26 @@ function TerminalLive(props: TerminalLiveProps) {
   const hostId = useTabHostId();
   const hostClient = useTabHostClient();
   const sessionRow = useTerminalFindSessionRow({
-    client: hostClient,
+    client: props.authoritativeTerminal === null ? hostClient : null,
     epicId: props.epicId,
     sessionId: handle.sessionId,
   });
-  const liveTitle =
-    sessionRow === null
-      ? null
-      : terminalSessionTitle({
-          title: sessionRow.title,
-          activeProcessName: sessionRow.activeProcessName,
-          currentCwd: sessionRow.currentCwd,
-        });
+  let liveTitle: string | null = null;
+  if (props.authoritativeTerminal !== null) {
+    liveTitle = props.authoritativeTerminal.displayTitle;
+  } else if (sessionRow !== null) {
+    liveTitle = terminalSessionTitle({
+      title: sessionRow.title,
+      activeProcessName: sessionRow.activeProcessName,
+      currentCwd: sessionRow.currentCwd,
+    });
+  }
   const status = useStore(handle.store, (s) => s.status);
   const exitCode = useStore(handle.store, (s) => s.exitCode);
   const exitReason = useStore(handle.store, (s) => s.exitReason);
   const connectionStatus = useStore(handle.store, (s) => s.connectionStatus);
   const effectiveCols = useStore(handle.store, (s) => s.effectiveCols);
   const effectiveRows = useStore(handle.store, (s) => s.effectiveRows);
-  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
-    props.viewTabId,
-    props.tileId,
-    props.instanceId,
-  );
   useTerminalCrashNotification({
     handle,
     isExitSuppressed: terminalExitIsNeverSuppressed,
@@ -501,8 +796,10 @@ function TerminalLive(props: TerminalLiveProps) {
   // with no explanation. The tile shows the ended panel instead; the user
   // closes the tab themselves.
   const isSignInTerminal = props.signInTile !== null;
+  const { closeOnExit, onClose } = props;
   useEffect(() => {
     if (status !== "exited") return;
+    if (!closeOnExit) return;
     if (isSignInTerminal) return;
     if (
       isTerminalCrashExit({
@@ -517,8 +814,8 @@ function TerminalLive(props: TerminalLiveProps) {
     // `closeCanvasTab` resolves the tile by its pane tab *instance* id
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` silently no-ops, leaving the tab open after exit.
-    closeCanvasTile();
-  }, [status, exitCode, exitReason, closeCanvasTile, isSignInTerminal]);
+    onClose();
+  }, [status, exitCode, exitReason, isSignInTerminal, closeOnExit, onClose]);
 
   const overlayState = resolveTerminalOverlayState({
     status,
@@ -610,7 +907,12 @@ function TerminalLive(props: TerminalLiveProps) {
           terminalId={handle.sessionId}
           terminalHostId={hostId}
           terminalTitle={liveTitle ?? props.fallbackTitle}
-          terminalCwd={sessionRow?.cwd ?? null}
+          terminalCwd={
+            props.authoritativeTerminal?.liveCwd ??
+            props.authoritativeTerminal?.launchCwd ??
+            sessionRow?.cwd ??
+            null
+          }
           term={term}
           paneRef={paneRef}
         />
@@ -618,7 +920,7 @@ function TerminalLive(props: TerminalLiveProps) {
           <TerminalConnectionOverlay
             state={overlayState}
             onReconnect={props.recovery.onManualReconnect}
-            onClose={closeCanvasTile}
+            onClose={props.onClose}
             testId={`terminal-connection-overlay-${props.tileId}`}
           />
         ) : null}

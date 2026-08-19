@@ -22,8 +22,8 @@ import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host1",
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => "host1",
 }));
 
 // `PrRow` pulls in the per-Epic Y.doc-backed owner-label chain

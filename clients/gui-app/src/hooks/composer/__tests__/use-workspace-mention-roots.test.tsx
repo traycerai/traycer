@@ -1,5 +1,5 @@
 import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -15,21 +15,73 @@ import {
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+const HOST_A = "host-a";
+
+// `useLandingComposerMentionRoots` resolves the landing composer's surface
+// pin (pin ?? effective) to scope its global-folders fallback. No pin store
+// or authority is mounted in this suite, so left unmocked it always resolves
+// `null` (empty global folders). Mock the narrow leaf hook module so the
+// landing composer suite below can seed and read the SAME host's bucket the
+// hook resolves against.
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({
+    selection: null,
+    honoredSelection: null,
+    setSelection: () => undefined,
+    resolvedHostId: "host-a",
+    isPinned: false,
+    latchOnFirstUse: () => undefined,
+  }),
+}));
+
+// `useLandingDraftStore.createDraft` separately snapshots the workspace of the
+// app-wide host, resolved imperatively rather than through a hook (see
+// `landing-draft-store.ts`). That read is `activeHostIdOrNull` -> the
+// authority projection, which `resetStores` seeds; the spine override below
+// survives only for the other imperative callers this suite's tree reaches.
+// Both are pinned to the SAME host id as the reactive hook above, or a draft
+// created here would seed an empty workspace. Every other export is preserved
+// via the `importOriginal` spread.
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    getHostBindingSnapshot: () => ({
+      hostClient: { getActiveHostId: () => "host-a" },
+    }),
+  };
+});
 
 function setGlobalFolders(folders: ReadonlyArray<string>): void {
-  useWorkspaceFoldersStore.setState({ folders });
+  useWorkspaceFoldersStore.setState({
+    byHost: {
+      [HOST_A]: {
+        folders,
+        folderInfoByPath: {},
+        primaryPath: folders[0] ?? null,
+      },
+    },
+  });
 }
 
 function resetStores(): void {
-  useWorkspaceFoldersStore.setState({
-    folders: [],
-    folderInfoByPath: {},
-  });
+  useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
   });
   useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+  // The draft's workspace bucket resolves through the authority projection now
+  // (P4.2/D17 retired the spine's active slot). SEEDED rather than stubbed -
+  // this mock spreads `importOriginal`, so the production read runs for real
+  // and an unseeded store would silently select the unresolved-host bucket.
+  // Same host the spine override above pins.
+  useSelectionAuthorityStore.setState({
+    attached: true,
+    effectiveHostId: "host-a",
+  });
 }
 
 function bindingEntry(
@@ -106,37 +158,45 @@ describe("useWorkspaceMentionRoots", () => {
   it("uses the preferred roots when they are non-empty", () => {
     setGlobalFolders(["/global/a"]);
     const { result } = renderHook(() =>
-      useWorkspaceMentionRoots(["/epic/x", "/epic/y"], true),
+      useWorkspaceMentionRoots(["/epic/x", "/epic/y"], true, HOST_A),
     );
     expect(result.current).toEqual(["/epic/x", "/epic/y"]);
   });
 
   it("falls back to the global folders when preferred roots are null (landing composer)", () => {
     setGlobalFolders(["/global/a", "/global/b"]);
-    const { result } = renderHook(() => useWorkspaceMentionRoots(null, true));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots(null, true, HOST_A),
+    );
     expect(result.current).toEqual(["/global/a", "/global/b"]);
   });
 
   it("falls back to the global folders when preferred roots are empty (binding not loaded yet)", () => {
     setGlobalFolders(["/global/a"]);
-    const { result } = renderHook(() => useWorkspaceMentionRoots([], true));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], true, HOST_A),
+    );
     expect(result.current).toEqual(["/global/a"]);
   });
 
   it("does not fall back to global folders when an empty source is explicit", () => {
     setGlobalFolders(["/global/a"]);
-    const { result } = renderHook(() => useWorkspaceMentionRoots([], false));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], false, HOST_A),
+    );
     expect(result.current).toEqual([]);
   });
 
   it("returns an empty list when neither preferred nor global folders exist", () => {
-    const { result } = renderHook(() => useWorkspaceMentionRoots([], true));
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], true, HOST_A),
+    );
     expect(result.current).toEqual([]);
   });
 
   it("dedupes and trims the resolved roots", () => {
     const { result } = renderHook(() =>
-      useWorkspaceMentionRoots([" /epic/x ", "/epic/x", ""], true),
+      useWorkspaceMentionRoots([" /epic/x ", "/epic/x", ""], true, HOST_A),
     );
     expect(result.current).toEqual(["/epic/x"]);
   });
@@ -156,7 +216,7 @@ describe("useLandingComposerMentionRoots", () => {
     useWorktreeIntentStagingStore
       .getState()
       .stageIntent(
-        { surface: "landing", draftId: null },
+        { surface: "landing", hostId: "host-a", draftId: null },
         worktreeIntent("/repo", "import", "/worktrees/repo-feature"),
       );
 
@@ -171,7 +231,7 @@ describe("useLandingComposerMentionRoots", () => {
     useWorktreeIntentStagingStore
       .getState()
       .stageIntent(
-        { surface: "landing", draftId },
+        { surface: "landing", hostId: "host-a", draftId },
         worktreeIntent("/repo", "import", "/worktrees/repo-feature"),
       );
 

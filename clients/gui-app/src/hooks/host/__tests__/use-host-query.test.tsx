@@ -10,6 +10,10 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
@@ -26,17 +30,19 @@ import {
 describe("useHostQuery auth readiness", () => {
   afterEach(() => {
     cleanup();
+    resetHostConnectionRegistryForTest();
   });
 
   it("waits for an active request context before dispatching host RPC", async () => {
     const fixture = createHostQueryFixture();
-    fixture.client.bind(mockLocalHostEntry);
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    let directoryChangedListener: (() => void) | null = null;
 
     const rendered = renderHook(
       () =>
         useHostQuery({
           cacheKeyIdentity: undefined,
-          client: fixture.client,
+          client,
           method: "host.status",
           params: {},
           options: null,
@@ -47,6 +53,21 @@ describe("useHostQuery auth readiness", () => {
     expect(fixture.requestCount.value).toBe(0);
     expect(rendered.result.current.fetchStatus).toBe("idle");
 
+    // A directory refresh is what wakes `useReactiveHostReadiness`'s
+    // registry subscription in production (`HostRuntime`'s
+    // `requestContextProvider.onChange` pairs every `setRequestContext` with
+    // `directory.refreshForEra`) - this bare-`HostClient` fixture has no
+    // `HostRuntime`/directory installed, so it fires the same wake by hand.
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: () => mockLocalHostEntry,
+        onDirectoryChanged: (listener) => {
+          directoryChangedListener = listener;
+          return { dispose: () => undefined };
+        },
+      },
+      leases: null,
+    });
     act(() => {
       fixture.client.setRequestContext(
         createRequestContextFixture({
@@ -54,6 +75,7 @@ describe("useHostQuery auth readiness", () => {
           bearerToken: "tok-1",
         }),
       );
+      directoryChangedListener?.();
     });
 
     await waitFor(() => {
@@ -64,19 +86,19 @@ describe("useHostQuery auth readiness", () => {
 
   it("does not refetch active host queries when auth context is removed", async () => {
     const fixture = createHostQueryFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     renderHook(
       () =>
         useHostQuery({
           cacheKeyIdentity: undefined,
-          client: fixture.client,
+          client,
           method: "host.status",
           params: {},
           options: null,
@@ -98,19 +120,19 @@ describe("useHostQuery auth readiness", () => {
 
   it("respects a function-form `enabled` rather than collapsing it to true", async () => {
     const fixture = createHostQueryFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     renderHook(
       () =>
         useHostQuery({
           cacheKeyIdentity: undefined,
-          client: fixture.client,
+          client,
           method: "host.status",
           params: {},
           options: { enabled: () => false },
@@ -125,7 +147,7 @@ describe("useHostQuery auth readiness", () => {
       () =>
         useHostQuery({
           cacheKeyIdentity: undefined,
-          client: fixture.client,
+          client,
           method: "host.status",
           params: {},
           options: { enabled: () => true },
@@ -183,19 +205,19 @@ describe("host query/mutation HostRpcError boundary", () => {
 
   it("normalizes a bare throw from mapResponse into a HostRpcError", async () => {
     const fixture = createHostQueryFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     const rendered = renderHook(
       () =>
         useHostQueryWithResponseMap({
           cacheKeyIdentity: undefined,
-          client: fixture.client,
+          client,
           method: "host.status",
           params: {},
           options: null,
@@ -220,18 +242,18 @@ describe("host query/mutation HostRpcError boundary", () => {
 
   it("normalizes a bare throw from mapVariables into a HostRpcError", async () => {
     const fixture = createHostQueryFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     const rendered = renderHook(
       () =>
         useHostMutation({
-          client: fixture.client,
+          client,
           method: "host.status",
           options: null,
           mapVariables: () => {
@@ -261,19 +283,19 @@ describe("host query/mutation HostRpcError boundary", () => {
 
   it("normalizes a bare throw from a caller-supplied select into a HostRpcError", async () => {
     const fixture = createHostQueryFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     const rendered = renderHook(
       () =>
         useHostQuery({
           cacheKeyIdentity: undefined,
-          client: fixture.client,
+          client,
           method: "host.status",
           params: {},
           options: {
@@ -298,19 +320,19 @@ describe("host query/mutation HostRpcError boundary", () => {
 
   it("normalizes a bare throw from onMutate into a HostRpcError", async () => {
     const fixture = createHostQueryFixture();
-    fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
 
     let onErrorReceived: unknown;
     const rendered = renderHook(
       () =>
         useHostMutation({
-          client: fixture.client,
+          client,
           method: "host.status",
           options: {
             onMutate: () => {
@@ -614,6 +636,8 @@ function createHostQueryFixture(): {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -648,9 +672,11 @@ function createConditionHostQueryFixture(): {
 } {
   const queryClient = createAppQueryClient();
   const requestCount = { value: 0 };
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-speech-1",
@@ -670,13 +696,13 @@ function createConditionHostQueryFixture(): {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "tok-1",
     }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
@@ -695,9 +721,11 @@ function createFixedHostQueryFixture(
 } {
   const queryClient = createAppQueryClient();
   const requestCount = { value: 0 };
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-fixed-1",
@@ -724,13 +752,13 @@ function createFixedHostQueryFixture(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "tok-1",
     }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}

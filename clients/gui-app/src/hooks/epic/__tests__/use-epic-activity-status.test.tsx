@@ -104,6 +104,9 @@ function runningShell(chatId: string): ManagedCommand {
     id: `cmd-${chatId}`,
     monitoring: false,
     description: "dev server",
+    command: "tail -f deploy.log",
+    cwd: "/work/repo",
+    cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4242, startedAtMs: 1 },
     chatId,
     createdAtMs: 1,
@@ -178,7 +181,7 @@ describe("useEpicActivityStatus", () => {
     expect(result.current).toBe("idle");
 
     act(() => {
-      __getOpenEpicRegistryForTests().release(EPIC_ID);
+      __getOpenEpicRegistryForTests().release(EPIC_ID, "discard", null);
     });
 
     expect(result.current).toBe("turn");

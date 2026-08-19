@@ -3,6 +3,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   GET_TASK_CONTEXTS_MAX_IDS,
+  isFoundTaskContext,
   type GetTaskContextsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
@@ -56,8 +57,9 @@ export function combineTaskPinnedStateResults(
   const pinnedStates = new Map<string, boolean>();
   for (const result of results) {
     if (result.data === undefined) continue;
-    for (const task of Object.values(result.data.tasks)) {
-      if (task === null) continue;
+    for (const resolution of Object.values(result.data.tasks)) {
+      if (!isFoundTaskContext(resolution)) continue;
+      const task = resolution.task;
       const epicId = task.epic?.light?.id;
       if (epicId === undefined) continue;
       pinnedStates.set(epicId, task.pinned ?? false);

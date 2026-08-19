@@ -5,6 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   AppLifecycleBridge,
+  CrossWindowUnsyncableReport,
   FreshUnsyncedSnapshotRequest,
   FreshUnsyncedSnapshotResponse,
   QuitDecisionResponse,
@@ -55,6 +56,10 @@ export function buildLifecycleBridge(): LifecycleBridgeSurface {
           RunnerHostInvoke.freshUnsyncedSnapshotResponse,
           reply,
         ) as Promise<void>,
+      unsyncableWorkAcrossWindows: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.unsyncableWorkAcrossWindows,
+        ) as Promise<CrossWindowUnsyncableReport>,
     },
   };
 }

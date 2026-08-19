@@ -6,7 +6,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { UsageSummaryPanel } from "@/components/usage-analytics/usage-summary-panel";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
@@ -48,7 +48,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
  * on.
  */
 export function UsageSettingsPanel(): ReactNode {
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const client = useHostClient();
   const scope = useHostScope();
   // Names come from the scope's merged host model - the union of the runtime
@@ -205,7 +205,7 @@ function UsageNotice(props: {
       className="flex flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
       data-testid={props.testId}
     >
-      <span className="flex size-9 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+      <span className="flex size-9 items-center justify-center rounded-lg bg-foreground/6 text-muted-foreground">
         <LineChart className="size-4.5" />
       </span>
       <div className="max-w-[60ch] space-y-1">

@@ -5,6 +5,7 @@ import {
   findHostOption,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
+import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -21,6 +22,25 @@ interface HostSectionProps {
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
   /**
+   * `bind` for the composer (window rebind). `pin` for git-diff / file-tree /
+   * new-terminal (surface-local RPC scope). Both keep undialable rows inert
+   * and omit the Active chip.
+   */
+  readonly intent: Extract<HostPickIntent, "bind" | "pin">;
+  /**
+   * Per-host reasons THIS surface cannot use a host — the chat fork dialog's
+   * "needs update" for a target whose build predates the cross-host fork
+   * contract. `NO_HOST_OPTION_REFUSALS` everywhere else.
+   */
+  readonly refusalByHostId: ReadonlyMap<string, string>;
+  /**
+   * Every row but this one goes inert, WITHOUT a word — a blocker owned by the
+   * surface, not by any host. `null` imposes nothing. Kept separate from
+   * `refusalByHostId` so a surface-level reason is never written onto a row as
+   * if it were that host's fault.
+   */
+  readonly inertExceptHostId: string | null;
+  /**
    * A pending submission (or a surface pinned to one host) owns the selection.
    * The control goes inert rather than accepting a click and discarding it.
    */
@@ -33,9 +53,8 @@ interface HostSectionProps {
 
 /**
  * Host block for the workspace/worktree picker surfaces (composer, git-diff
- * panel, terminal creation, file tree, the fork dialogs). Choosing a host swaps
- * the app-wide active host via the directory binding; the host-scoped folder
- * queries underneath refetch automatically.
+ * panel, terminal creation, file tree, the fork dialogs). What a click
+ * writes is `intent`: `bind` rebinds the window; `pin` writes a surface pin.
  *
  * It is the same `HostSwitcher` the Settings rail and the usage popover mount —
  * one row of chrome that names the current host and opens the list — rather
@@ -70,9 +89,11 @@ export function HostSection(props: HostSectionProps): ReactNode {
         selected={findHostOption(props.hosts, props.activeHostId)}
         activeHostId={props.activeHostId}
         onSelect={props.onSelect}
-        // Binding the window to a host it cannot dial is not a legal answer, so
-        // those rows list with their reason and stay inert.
-        intent="bind"
+        refusalByHostId={props.refusalByHostId}
+        inertExceptHostId={props.inertExceptHostId}
+        // Undialable rows list with their reason and stay inert (`bind` and
+        // `pin` share that gate). The composer still binds the window.
+        intent={props.intent}
         action={{
           kind: "manage-hosts",
           onSelect: () => {

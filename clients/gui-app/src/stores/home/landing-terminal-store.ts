@@ -1,12 +1,16 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { basePersistOptions, landingTerminalsKey } from "@/lib/persist";
+import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 
 export const DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.36;
 export const MIN_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.22;
 export const MAX_LANDING_TERMINAL_PANEL_WIDTH_FRACTION = 0.72;
 
 export type LandingTerminalTitleSource = "default" | "manual";
+
+export const LANDING_TERMINAL_SOURCE_STORE_VERSION = 1;
 
 export interface LandingTerminalTabRef {
   readonly instanceId: string;
@@ -15,6 +19,16 @@ export interface LandingTerminalTabRef {
   readonly cwd: string;
   readonly name: string;
   readonly titleSource: LandingTerminalTitleSource;
+  /**
+   * True only after a capable host acknowledged this logical terminal. The
+   * legacy cwd/name/title fields remain downgrade evidence, never semantic
+   * authority while this bit is set and a capable host projection is fresh.
+   */
+  readonly hostAuthorityAcknowledged?: boolean;
+  /** A genuinely-new terminal awaiting `terminal.plain.create`. */
+  readonly pendingCreate?: boolean;
+  /** Schema version attached to legacy import evidence. */
+  readonly sourceStoreVersion?: number;
 }
 
 export interface LandingTerminalPendingKill {
@@ -84,6 +98,11 @@ export interface LandingTerminalStoreState {
   ) => void;
   readonly clearPendingKill: (hostId: string, sessionId: string) => void;
   readonly rekeyTab: (instanceId: string, sessionId: string) => void;
+  readonly adoptHostTerminal: (
+    instanceId: string,
+    terminal: PlainTerminalProjection,
+  ) => void;
+  readonly removeHostTerminal: (hostId: string, terminalId: string) => void;
   readonly resetForTests: () => void;
 }
 
@@ -152,6 +171,13 @@ export function parseLandingTerminalTabRef(
     cwd: value.cwd,
     name: value.name,
     titleSource,
+    ...(value.hostAuthorityAcknowledged === true
+      ? { hostAuthorityAcknowledged: true }
+      : {}),
+    ...(value.pendingCreate === true ? { pendingCreate: true } : {}),
+    ...(isNonNegativeInteger(value.sourceStoreVersion)
+      ? { sourceStoreVersion: value.sourceStoreVersion }
+      : {}),
   };
 }
 
@@ -350,6 +376,39 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
             tab.instanceId === instanceId ? { ...tab, sessionId } : tab,
           ),
         })),
+      // Matched on instance + host only. The canonical terminal a capable host
+      // returns for `importLegacy` ("existing"/"imported") may carry a
+      // DIFFERENT terminalId than the legacy evidence we sent - the response
+      // contract permits it - and rekeying that pointer is exactly what
+      // `hostAcknowledgedTab` is for. Also demanding the ids already match
+      // dropped the acknowledgement, left the tab unacknowledged beside a
+      // freshly adopted canonical duplicate, and re-imported on the next pass.
+      adoptHostTerminal: (instanceId, terminal) =>
+        set((state) => ({
+          tabs: state.tabs.map((tab) =>
+            tab.instanceId === instanceId &&
+            tab.hostId === terminal.record.hostId
+              ? hostAcknowledgedTab(tab, terminal)
+              : tab,
+          ),
+        })),
+      removeHostTerminal: (hostId, terminalId) =>
+        set((state) => {
+          const tabs = state.tabs.filter(
+            (tab) => tab.hostId !== hostId || tab.sessionId !== terminalId,
+          );
+          if (tabs.length === state.tabs.length) return state;
+          return {
+            tabs,
+            activeInstanceId: nextActiveInstanceId(
+              tabs,
+              state.activeInstanceId,
+            ),
+            ...(tabs.length === 0
+              ? collapseLayoutsForEmptyTerminalSet(state)
+              : {}),
+          };
+        }),
       resetForTests: () => set(initialLandingTerminalState()),
     }),
     {
@@ -534,8 +593,31 @@ export function terminalSessionKey(hostId: string, sessionId: string): string {
   return `${hostId}\u0000${sessionId}`;
 }
 
+export function hostAcknowledgedTab(
+  tab: LandingTerminalTabRef,
+  terminal: PlainTerminalProjection,
+): LandingTerminalTabRef {
+  const view = selectPlainTerminalViewModel(terminal);
+  return {
+    ...tab,
+    sessionId: terminal.record.terminalId,
+    hostId: terminal.record.hostId,
+    cwd: terminal.record.launch.cwd,
+    name: view.displayTitle,
+    titleSource: terminal.record.manualTitle === null ? "default" : "manual",
+    hostAuthorityAcknowledged: true,
+    pendingCreate: false,
+    sourceStoreVersion:
+      tab.sourceStoreVersion ?? LANDING_TERMINAL_SOURCE_STORE_VERSION,
+  };
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

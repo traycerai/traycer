@@ -1,8 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { useEpicSweepWorktreeCandidates } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type {
+  WorktreeHostEntryV15,
+  WorktreeListAllForHostRequestV15,
+  WorktreeListAllForHostResponseV15,
+} from "@traycer/protocol/host/worktree-schemas";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { useEpicSweepWorktreeCandidatesForClient } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
 
 interface StubOwner {
   readonly epicId: string;
@@ -11,33 +22,7 @@ interface StubOwner {
   readonly updatedAt: number;
 }
 
-interface StubEntry {
-  readonly worktreePath: string;
-  readonly repoLabel: string;
-  readonly branch: string | null;
-  readonly uncommittedCount: number;
-  readonly inUse: boolean;
-  readonly gitRemovable: boolean;
-  readonly owners: ReadonlyArray<StubOwner>;
-  readonly branchStatus: {
-    readonly ahead: number | null;
-    readonly behind: number | null;
-    readonly mergedIntoDefault: boolean;
-  } | null;
-  readonly prState: "merged" | "open" | "closed" | "none" | null;
-  readonly mergedHeadShaMatches: boolean;
-  readonly submodules: ReadonlyArray<never>;
-  readonly atBaseCommit: boolean;
-  readonly resolvedAt: number | null;
-}
-
-const mockHostClient = vi.hoisted(() => ({
-  request: vi.fn(),
-}));
-
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => mockHostClient,
-}));
+type StubEntry = WorktreeHostEntryV15;
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
@@ -54,17 +39,24 @@ function owner(epicId: string): StubOwner {
 function entry(over: Partial<StubEntry> & { worktreePath: string }): StubEntry {
   return {
     repoLabel: "acme/app",
+    repoIdentifier: null,
     branch: "feat/x",
     uncommittedCount: 0,
     inUse: false,
     gitRemovable: true,
+    scripts: null,
     owners: [owner("epic-1")],
+    lastActivityAt: null,
     branchStatus: null,
+    createdAt: null,
     prState: null,
+    prNumber: null,
+    prUrl: null,
     mergedHeadShaMatches: false,
     submodules: [],
     atBaseCommit: false,
     resolvedAt: 1,
+    presence: "present",
     ...over,
   };
 }
@@ -87,6 +79,17 @@ function forcedProbeParams(activityPaths: readonly string[]) {
   };
 }
 
+// Reassigned per test/act - the messenger's single registered handler
+// delegates here so each case can swap behavior (including across a
+// `refresh()` call) without re-constructing the client.
+let worktreeHandler: (
+  params: WorktreeListAllForHostRequestV15,
+) =>
+  | Promise<WorktreeListAllForHostResponseV15>
+  | WorktreeListAllForHostResponseV15 = () => {
+  throw new Error("no worktree handler configured for this test");
+};
+
 /**
  * Wires the two-request act-time flow: the un-probed base walk returns
  * `baseEntries` (owner discovery only), the forced selection-mode probe
@@ -96,17 +99,16 @@ function mockActTimeProbe(
   baseEntries: ReadonlyArray<StubEntry>,
   probedEntries: ReadonlyArray<StubEntry>,
 ): void {
-  mockHostClient.request.mockImplementation(
-    (method: string, params: { readonly forceRefresh: boolean }) => {
-      if (method !== "worktree.listAllForHost") {
-        throw new Error(`unexpected method ${method}`);
-      }
-      return Promise.resolve({
-        worktrees: params.forceRefresh ? probedEntries : baseEntries,
-        nextCursor: null,
-      });
-    },
-  );
+  worktreeHandler = (params) => ({
+    worktrees: params.forceRefresh ? [...probedEntries] : [...baseEntries],
+    nextCursor: null,
+  });
+}
+
+let messenger: MockHostMessenger<HostRpcRegistry>;
+
+function requestParams(index: number): unknown {
+  return messenger.calls[index].params;
 }
 
 function wrapperFor(queryClient: QueryClient) {
@@ -119,14 +121,36 @@ function wrapperFor(queryClient: QueryClient) {
 
 function renderCandidates(epicIds: ReadonlyArray<string> | null) {
   const queryClient = new QueryClient();
-  return renderHook(() => useEpicSweepWorktreeCandidates(epicIds), {
-    wrapper: wrapperFor(queryClient),
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger,
   });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  return renderHook(
+    () => useEpicSweepWorktreeCandidatesForClient(client, epicIds),
+    { wrapper: wrapperFor(queryClient) },
+  );
 }
 
-describe("useEpicSweepWorktreeCandidates", () => {
+describe("useEpicSweepWorktreeCandidatesForClient", () => {
   beforeEach(() => {
-    mockHostClient.request.mockReset();
+    worktreeHandler = () => {
+      throw new Error("no worktree handler configured for this test");
+    };
+    let requestSeq = 0;
+    messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `sweep-${String(++requestSeq)}`,
+      handlers: {
+        "worktree.listAllForHost": (params) => worktreeHandler(params),
+      },
+    });
   });
 
   it("lists EVERY task-owned worktree from the forced probe, pre-checking only greens", async () => {
@@ -179,17 +203,11 @@ describe("useEpicSweepWorktreeCandidates", () => {
     // The wire shape of the act-time proof: one cheap owner-discovery walk,
     // then ONE forced probe scoped to exactly the Task-owned paths (the
     // foreign worktree is never probed nor listed).
-    expect(mockHostClient.request).toHaveBeenNthCalledWith(
-      1,
-      "worktree.listAllForHost",
-      BASE_WALK_PARAMS,
-    );
-    expect(mockHostClient.request).toHaveBeenNthCalledWith(
-      2,
-      "worktree.listAllForHost",
+    expect(requestParams(0)).toEqual(BASE_WALK_PARAMS);
+    expect(requestParams(1)).toEqual(
       forcedProbeParams(["/wt/landed", "/wt/base", "/wt/review"]),
     );
-    expect(mockHostClient.request).toHaveBeenCalledTimes(2);
+    expect(messenger.calls).toHaveLength(2);
   });
 
   it("catches freshly-dirtied worktrees the cached listing still calls clean", async () => {
@@ -223,6 +241,49 @@ describe("useEpicSweepWorktreeCandidates", () => {
       disabled: false,
       note: "not-landed",
     });
+  });
+
+  it("re-runs the bounded proof on refresh and exposes the fresh host timestamp", async () => {
+    const base = entry({ worktreePath: "/wt/recheck" });
+    const before = entry({
+      worktreePath: "/wt/recheck",
+      resolvedAt: 100,
+    });
+    const after = entry({
+      worktreePath: "/wt/recheck",
+      prState: "merged",
+      mergedHeadShaMatches: true,
+      resolvedAt: 200,
+    });
+    let forcedProbeCount = 0;
+    worktreeHandler = (params) => {
+      if (!params.forceRefresh) {
+        return { worktrees: [base], nextCursor: null };
+      }
+      forcedProbeCount += 1;
+      return {
+        worktrees: [forcedProbeCount === 1 ? before : after],
+        nextCursor: null,
+      };
+    };
+
+    const { result } = renderCandidates(["epic-1"]);
+    await waitFor(() => {
+      expect(result.current.rows[0]?.tier).toBe("review");
+    });
+    expect(result.current.checkedAt).toBe(100);
+    expect(result.current.canRefresh).toBe(true);
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await waitFor(() => {
+      expect(result.current.rows[0]?.tier).toBe("merged");
+    });
+    expect(result.current.checkedAt).toBe(200);
+    expect(messenger.calls).toHaveLength(4);
+    expect(requestParams(3)).toEqual(forcedProbeParams(["/wt/recheck"]));
   });
 
   it("marks shared rows checkable-unchecked and busy/unresolved rows disabled", async () => {
@@ -342,9 +403,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
       "/wt/one",
       "/wt/two",
     ]);
-    expect(mockHostClient.request).toHaveBeenNthCalledWith(
-      2,
-      "worktree.listAllForHost",
+    expect(requestParams(1)).toEqual(
       forcedProbeParams(["/wt/shared", "/wt/one", "/wt/two"]),
     );
   });
@@ -360,15 +419,14 @@ describe("useEpicSweepWorktreeCandidates", () => {
     });
     expect(result.current.rows).toEqual([]);
     // Only the base walk ran - no forced probe for an empty path set.
-    expect(mockHostClient.request).toHaveBeenCalledTimes(1);
-    expect(mockHostClient.request).toHaveBeenCalledWith(
-      "worktree.listAllForHost",
-      BASE_WALK_PARAMS,
-    );
+    expect(messenger.calls).toHaveLength(1);
+    expect(requestParams(0)).toEqual(BASE_WALK_PARAMS);
   });
 
   it("yields zero rows on a failed probe (failure -> no candidates)", async () => {
-    mockHostClient.request.mockRejectedValue(new Error("probe failed"));
+    worktreeHandler = () => {
+      throw new Error("probe failed");
+    };
     const { result } = renderCandidates(["epic-1"]);
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
@@ -386,6 +444,6 @@ describe("useEpicSweepWorktreeCandidates", () => {
     expect(result.current.hostId).toBeNull();
     expect(result.current.rows).toEqual([]);
     expect(result.current.isPending).toBe(false);
-    expect(mockHostClient.request).not.toHaveBeenCalled();
+    expect(messenger.calls).toHaveLength(0);
   });
 });

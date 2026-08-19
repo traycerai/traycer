@@ -5,6 +5,7 @@ import type {
   OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import { RemoteSession, type IRemoteSession } from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
@@ -55,6 +56,17 @@ export interface CreateRemoteTransportOptions<
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly requestId: () => string;
+  /**
+   * Where the session's dial outcomes and liveness go (redesign P1.3).
+   *
+   * Part of the CONSUMER wiring, not of the cache identity: on a cache hit the
+   * factory below never runs, so a session keeps whatever reporter its first
+   * acquirer passed. That is safe only because production passes a RELAY whose
+   * scope matches the pool's - see `TransportEvidenceRelay`. Passing a kernel
+   * (or a per-mount reporter) here instead would pin warm sessions to a
+   * reporter that outlives its consumer.
+   */
+  readonly evidence: TransportEvidenceReporter;
 }
 
 export interface RemoteHostTransport<
@@ -141,6 +153,7 @@ export function createRemoteHostTransport<
         streamRegistry: options.streamRegistry,
         webSocketFactory: options.webSocketFactory,
         requestId: options.requestId,
+        evidence: options.evidence,
       });
     },
   );

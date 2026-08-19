@@ -6,10 +6,10 @@
  *
  *   - **Default host** - machine-local host for app-wide features
  *     (Epic list, opening artifacts, host-status footer). Read with
- *     `useReactiveActiveHostId()` / `useHostClient()`.
+ *     `useAddressableHostId()` / `useHostClient()`.
  *   - **Tab-scoped host** - per-tile binding from the artifact schema
  *     (`EpicNodeRef.hostId`). Read with `useTabHostId()` (from
- *     `./use-tab-host-id`); never with `useReactiveActiveHostId()`.
+ *     `./use-tab-host-id`); never with `useAddressableHostId()`.
  *
  * The renderer registry wraps every tile in
  * `<TabHostProvider hostId={node.hostId}>` so consumers inside a

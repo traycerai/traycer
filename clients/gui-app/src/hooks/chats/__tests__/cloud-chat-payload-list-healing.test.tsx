@@ -85,9 +85,11 @@ type Fixture = {
 function createFixture(): Fixture {
   const requests = { value: 0 };
   const queryClient = createAppQueryClient();
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `req-payload-list-${String(requests.value)}`,
@@ -109,10 +111,10 @@ function createFixture(): Fixture {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
     createElement(QueryClientProvider, { client: queryClient }, props.children);
   return { client, queryClient, Wrapper, requests };

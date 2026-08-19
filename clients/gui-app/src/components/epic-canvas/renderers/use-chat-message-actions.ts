@@ -6,16 +6,16 @@ import type {
   ChatForkMode,
   ChatMessageActions,
 } from "@/components/chat/chat-message";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   buildAbForkWorkspaceSeed,
   buildForkWorkspaceSeed,
 } from "@/lib/worktree/fork-workspace-seed";
 import {
-  pendingForkChatStagingKey,
   readStagedWorktreeIntent,
-  useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
+import { clearChatForkWorkspacesForEpic } from "@/lib/worktree/chat-fork-workspace-staging";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
@@ -75,6 +75,12 @@ export interface ChatMessageActionsInput {
   // picker so a fork starts from the same folders / worktree modes.
   readonly worktreeBinding: WorktreeBinding | null;
   readonly revertOnEditOpen: boolean;
+  /**
+   * Items currently parked in the message queue. They survive a history edit
+   * untouched and send after the replacement turn; the revert-on-edit dialog
+   * surfaces the count so that isn't a surprise.
+   */
+  readonly queuedCount: number;
 }
 
 export interface ChatMessageActionsResult {
@@ -101,6 +107,7 @@ export interface ChatMessageActionsResult {
     readonly onRevert: (revertArtifacts: boolean) => void;
     readonly onDontRevert: () => void;
     readonly artifactCount: number;
+    readonly queuedCount: number;
   };
 }
 
@@ -114,6 +121,9 @@ export interface ChatMessageActionsResult {
 export function useChatMessageActions(
   input: ChatMessageActionsInput,
 ): ChatMessageActionsResult {
+  // The chat is bound to this tab's host for life, so both its own staged
+  // slot and the fork scratch slot it seeds belong to that host.
+  const tabHostId = useTabHostId();
   const {
     dispatchUi,
     activeInlineEdit,
@@ -270,6 +280,7 @@ export function useChatMessageActions(
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
+        hostId: tabHostId,
         epicId: currentEpicId,
         ownerKind: "chat",
         ownerId: node.id,
@@ -281,16 +292,21 @@ export function useChatMessageActions(
       const workspaceSeed =
         mode === "ab-worktree"
           ? buildAbForkWorkspaceSeed(seedInput)
-          : buildForkWorkspaceSeed(seedInput);
+          : buildForkWorkspaceSeed({
+              ...seedInput,
+              hostId: tabHostId,
+            });
       // Seed the fork dialog's picker from the source chat's currently visible
       // workspace (its binding overlaid with any unsent staged choices) so it
       // opens exactly where the source chat's composer is. The dialog applies
       // this through the shared seedIntent -> seedEntryForFolder path the
       // terminal-agent launcher also uses; only the source owner differs (here,
       // the chat being forked).
-      useWorktreeIntentStagingStore
-        .getState()
-        .clear(pendingForkChatStagingKey(currentEpicId));
+      // Every host's slot, not just this tab's: the dialog can retarget while
+      // it is open, so a previous fork that moved to another machine before
+      // closing would otherwise leave that machine's folders staged for the
+      // next open.
+      clearChatForkWorkspacesForEpic(currentEpicId);
       setForkTarget({
         sourceChatId: node.id,
         sourceChatTitle: chatTitle ?? node.name,
@@ -311,6 +327,7 @@ export function useChatMessageActions(
     [
       chatParentId,
       chatTitle,
+      tabHostId,
       currentComposerSettings,
       currentEpicId,
       node.id,
@@ -451,6 +468,7 @@ export function useChatMessageActions(
         performEditSubmit(true, revertArtifacts),
       onDontRevert: () => performEditSubmit(false, true),
       artifactCount: revertOnEditArtifactCount,
+      queuedCount: input.queuedCount,
     },
   };
 }

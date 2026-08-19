@@ -44,7 +44,9 @@ import {
   type HostWorkspaceControlsHostScope,
 } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { preserveWhenNestedOverlay } from "@/components/home/host-workspace-selector/preserve-when-nested-overlay";
-import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { TerminalAgentWorktreeCreateInput } from "@/components/epic-canvas/hooks/use-terminal-agent-worktree-gate";
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
@@ -286,13 +288,39 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     tuiAgentPending,
     workspaceSeed,
   } = props;
-  // No seed here - nothing to validate.
-  const toolbarStore = useComposerToolbarStore(
-    null,
-    { kind: "none" },
-    null,
-    true,
+  // The host the agent launches on - `hostScope`'s fixed host when a row pins
+  // one, else this window's composer surface pin (`pin ?? effective`), which
+  // is what the active-scope host list below now writes instead of rebinding
+  // the app (redesign P1.2, selection model §2). Resolved through the SAME
+  // primitive the picker below applies to its `runTargetHostId`, so the
+  // toolbar store's catalog, the picker and the saved-args `providers.list`
+  // read below can never disagree on the host, and none of them can drift onto
+  // another host than the workspace controls create on.
+  const composerPin = useComposerSurfaceHostPin();
+  const launchHostId =
+    hostScope.kind === "fixed" ? hostScope.hostId : composerPin.resolvedHostId;
+  // `honoredSelection`, never `selection`: a following launcher keeps the
+  // app-wide bound client (already on the effective host); only a pin that
+  // can still SERVE needs its own requester. Same rule as the composer. This
+  // read `selection` once - the raw pin - so a pin whose host had died still
+  // aimed the catalog, the profile list and the picker at the dead machine
+  // while `launchHostId` above had already re-resolved to the live one: the
+  // catalog never populated and the terminal-agent launch stayed disabled
+  // under a chip naming a host that was fine.
+  const launchHostClient = useHostClientForHostId(
+    hostScope.kind === "fixed"
+      ? hostScope.hostId
+      : composerPin.honoredSelection,
   );
+  // Per-host memory keys on the same resolved launch host - under the
+  // surface-pin model there is no separate "reactive active" to follow.
+  const memoryHostId = launchHostId;
+  // No seed here - nothing to validate.
+  const toolbarStore = useComposerToolbarStore(null, { kind: "none" }, null, {
+    hostClient: launchHostClient,
+    hostId: memoryHostId,
+    tuiOnly: true,
+  });
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;
   const reasoning = useStore(toolbarStore, (state) => state.reasoning);
@@ -303,7 +331,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         ?.find((harness) => harness.id === state.selection.harnessId)
         ?.modes.includes("tui") ?? false,
   );
-  const providersQuery = useProvidersList({
+  const providersQuery = useProvidersListForClient(launchHostClient, {
     enabled: true,
     subscribed: true,
   });
@@ -322,8 +350,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   // `undefined`, falling back to the shared epic-scoped launcher slot.
   const overrideStagingKey = props.terminalAgentStagingKey;
   const stagingKey = useMemo(
-    () => overrideStagingKey ?? pendingTerminalAgentStagingKey(epicId),
-    [overrideStagingKey, epicId],
+    () =>
+      overrideStagingKey ??
+      pendingTerminalAgentStagingKey(memoryHostId, epicId),
+    [overrideStagingKey, memoryHostId, epicId],
   );
   const launchDisabled = terminalAgentLaunchDisabled({
     modelSlug: selection.modelSlug,
@@ -338,6 +368,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       stagingKey,
       seedIntent: workspaceSeed?.intent ?? null,
       fallbackWorkspace: workspaceSeed?.workspace ?? null,
+      hostId: memoryHostId,
     });
     onAddTerminalAgent({
       harnessId: selectedHarnessId,
@@ -355,6 +386,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     argsDraft,
     argsTouched,
     launchDisabled,
+    memoryHostId,
     onAddTerminalAgent,
     reasoning,
     selection.modelSlug,
@@ -399,11 +431,12 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             lockedHarnessId={null}
             disabled={tuiAgentPending}
             registerActivation={false}
-            // Adding a brand-new node has no existing tab to bind to yet -
-            // the app-wide default host is the correct scope, same as this
-            // dropdown's own `useProvidersList()` read below.
-            createProfileHostId={null}
-            runTargetHostId={null}
+            // The launch host (see `launchHostId` above): a row-pinned fixed
+            // host, or `null` = the app-wide default for a brand-new node
+            // with no tab to bind to yet - the same scope as this submenu's
+            // own `providers.list` read.
+            createProfileHostId={launchHostId}
+            runTargetHostId={launchHostId}
             profileAdmission={null}
           />
         </div>

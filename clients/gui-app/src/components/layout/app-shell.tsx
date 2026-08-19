@@ -6,8 +6,8 @@ import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-br
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
-import { HostStatusStrip } from "@/components/layout/host-status-strip";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
@@ -17,7 +17,7 @@ import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-te
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 
@@ -32,7 +32,7 @@ interface AppShellProps {
  */
 export function AppShell(props: AppShellProps) {
   const { children } = props;
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   // Phones get the hamburger navigation drawer; it is only mounted below md so
   // desktop mounts nothing extra and stays unchanged.
   const isMobile = useIsMobileViewport();
@@ -56,7 +56,7 @@ export function AppShell(props: AppShellProps) {
           <RootDndProvider>
             <div className="relative flex h-safe-dvh w-full flex-col">
               <AppHeader variant="app" />
-              <HostStatusStrip />
+              <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal. */}

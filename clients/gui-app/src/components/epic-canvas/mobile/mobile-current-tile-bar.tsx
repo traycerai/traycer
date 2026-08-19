@@ -44,7 +44,12 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
   );
   const terminalHostClient = isTerminal ? resolvedHostClient : null;
   const displayTitle = useEpicTabDisplayTitle(
-    { id: tile.id, name: tile.name, type: tile.type },
+    {
+      id: tile.id,
+      name: tile.name,
+      type: tile.type,
+      hostId: "hostId" in tile ? tile.hostId : null,
+    },
     epicId,
     terminalHostClient,
   );

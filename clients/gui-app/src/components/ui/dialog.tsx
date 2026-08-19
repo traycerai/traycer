@@ -132,7 +132,12 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        // `bg-foreground/5`, not `bg-muted/50`: the footer band renders on
+        // `DialogContent`'s own `bg-popover`, and every preset dark theme
+        // defines `--muted` equal to `--popover`, so the band used to
+        // disappear in all of them and leave only `border-t`. See
+        // `ui/skeleton.tsx` for the token collapse in full.
+        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-foreground/5 p-4 sm:flex-row sm:justify-end",
         className,
       )}
       {...props}

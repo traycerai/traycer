@@ -42,6 +42,27 @@
   }
 }
 
+/* Indeterminate host-progress bar: a segment sweeping across the track, for a
+   stage that is RUNNING but reports no percentage (verify, extract, swap,
+   service-start). Plain CSS for the same reason as the shimmer above - no motion
+   runtime, so it animates regardless of the LazyMotion provider.
+
+   It must MOVE. A static full-width fill was the previous behaviour here and it
+   was a lie: the progress carry-forward used to leak a completed download's 100%
+   into the next stage, so the card sat at a full bar for minutes of real work. A
+   motionless indeterminate bar would be that same claim in a new costume.
+
+   `transform` only, so it composites without laying out - this runs for the whole
+   multi-minute extract. */
+@keyframes host-progress-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
 @keyframes prompt-stash-count-flash {
   0%,
   72% {
@@ -50,8 +71,18 @@
     box-shadow: 0 0 0 3px
       color-mix(in srgb, var(--color-primary) 18%, transparent);
   }
+  /* The animation is `both`, so this frame is not a hand-off back to the
+     class - it is the element's permanent background from 700ms on. It must
+     therefore restate the pill's own `bg-foreground/8`, not `--muted`: every
+     preset dark defines `--muted` as its `--popover`/`--card` value, so a
+     muted terminal frame silently re-collapsed the count pill into the
+     composer surface the moment the first stash landed. */
   100% {
-    background-color: var(--color-muted);
+    background-color: color-mix(
+      in oklab,
+      var(--color-foreground) 8%,
+      transparent
+    );
     color: inherit;
     box-shadow: none;
   }

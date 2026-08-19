@@ -5,6 +5,7 @@ import {
   DiffContentPrimitive,
 } from "@/components/diff/diff-content-primitive";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { FILE_EDIT_REASON_COPY } from "@/lib/chat/file-edit-reason-copy";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 
@@ -29,6 +30,9 @@ export function SnapshotHashInlineDiff(props: {
   readonly cacheScope: string;
 }) {
   const query = useSnapshotDiffQuery({
+    // Mounted only from artifact rows/cards inside a chat TILE, and the blobs
+    // these hashes address are that tab host's (D15).
+    client: useTabHostClient(),
     beforeHash: props.beforeHash,
     afterHash: props.afterHash,
     enabled: true,

@@ -10,7 +10,9 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
@@ -20,7 +22,6 @@ import {
   type ChatDeadTileBannerReason,
 } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
-import { useHostClient } from "@/lib/host";
 import {
   cloudChatListAuthorizesRecordSweep,
   useCloudChatList,
@@ -51,7 +52,7 @@ import {
 import { EpicNodeTile } from "@/components/epic-canvas/renderers/epic-node-tile";
 import { PaneDropZone } from "@/components/epic-canvas/dnd/pane-drop-zone";
 import {
-  isPersistentTerminalSurface,
+  concealsWithoutCollapsing,
   useMountedPaneTabs,
 } from "@/components/epic-canvas/canvas/use-mounted-pane-tabs";
 import {
@@ -359,11 +360,13 @@ export const TabGroupView = memo(function TabGroupView(
   }, [pane.activeTabId, pane.tabInstanceIds, tabs]);
   // Keep-alive mounting policy: pinned terminals ∪ LRU(cap 3) of recently
   // active tabs, with the active tab as the LRU head (so at most 3
-  // non-terminal bodies are mounted, INCLUDING the active one); a hidden
-  // pane collapses to active-only(+terminals). See use-mounted-pane-tabs.ts.
+  // non-terminal bodies are mounted, INCLUDING the active one), ∪ the pane's
+  // retained chats; a hidden pane collapses the LRU to active-only
+  // (+terminals, +chats). See use-mounted-pane-tabs.ts.
   const paneVisible = usePaneVisible();
   const mountedTabIds = useMountedPaneTabs({
     activeTabId: activeTab?.instanceId ?? null,
+    pane,
     tabs,
     paneVisible,
   });
@@ -438,11 +441,13 @@ export const TabGroupView = memo(function TabGroupView(
               {activeTab !== null
                 ? mountedTabs.map((tab) => {
                     const selected = activeTab.instanceId === tab.instanceId;
-                    // Hidden terminals conceal via `visibility` so xterm keeps
-                    // its box dimensions; hidden LRU keep-alives use
+                    // Hidden terminals and retained chats conceal via
+                    // `visibility` so the concealed body keeps its box - xterm
+                    // needs its dimensions, and a chat reflowed at zero width
+                    // republishes bogus item sizes. Hidden LRU keep-alives use
                     // `display:none` so concealed heavy bodies cost no layout
                     // or paint.
-                    const terminal = isPersistentTerminalSurface(tab);
+                    const keepsBox = concealsWithoutCollapsing(tab);
                     return (
                       <div
                         key={tab.instanceId}
@@ -454,9 +459,9 @@ export const TabGroupView = memo(function TabGroupView(
                           "absolute inset-0 min-h-0",
                           selected && "visible pointer-events-auto",
                           !selected &&
-                            terminal &&
+                            keepsBox &&
                             "invisible pointer-events-none",
-                          !selected && !terminal && "hidden",
+                          !selected && !keepsBox && "hidden",
                         )}
                         aria-hidden={selected ? undefined : true}
                       >
@@ -615,6 +620,7 @@ function resolveChatFallbackDecision(args: {
   readonly isChat: boolean;
   readonly isSameHost: boolean;
   readonly hostUnreachable: boolean;
+  readonly unavailability: HostUnavailability | null;
   readonly confirmedAbsent: boolean;
   readonly cloudChatOwnerUserId: string | null;
   readonly liveArtifactOwnerUserId: string | null;
@@ -639,6 +645,7 @@ function resolveChatFallbackDecision(args: {
   const substitute = args.isChat && (crossHostFallback || sameHostFallback);
   const reason = deadTileBannerReason({
     hostUnreachable: args.hostUnreachable,
+    unavailability: args.unavailability,
     isSameHost: args.isSameHost,
   });
   const ownerUserId = args.liveArtifactOwnerUserId ?? args.cloudChatOwnerUserId;
@@ -661,9 +668,19 @@ function resolveChatFallbackDecision(args: {
  */
 function deadTileBannerReason(input: {
   readonly hostUnreachable: boolean;
+  readonly unavailability: HostUnavailability | null;
   readonly isSameHost: boolean;
 }): ChatDeadTileBannerReason {
-  if (input.hostUnreachable) return "host-offline";
+  if (input.hostUnreachable) {
+    // The hook's reason, not a constant - collapsing every unreachable
+    // result to `host-offline` is how a `plan-restricted` host (running
+    // fine, just with no remote route on this account's plan) got reported
+    // to its owner as being off. Same fix as `chat-tile.tsx`'s live-render
+    // path.
+    return input.unavailability === "plan-restricted"
+      ? "host-plan-restricted"
+      : "host-offline";
+  }
   return input.isSameHost ? "chat-not-on-this-host" : "chat-not-visible";
 }
 
@@ -699,9 +716,12 @@ function usePublishedChatFallbackRef(args: {
     fatalClose !== null &&
     fatalClose.code === CHAT_SESSION_NOT_VISIBLE_CODE;
   const wantsCloudChatFallback = isChat && isSameHost && liveArtifact === null;
-  const appHostClient = useHostClient();
+  // The Epic SESSION's client - the same one the sidebar's tree fetches this
+  // list on, so the TanStack cache is shared rather than split by host, and
+  // the one host known to be serving this canvas.
+  const sessionHostClient = useEpicSessionHostClient();
   const cloudChats = useCloudChatList({
-    client: appHostClient,
+    client: sessionHostClient,
     taskId: epicId,
     enabled: wantsCloudChatFallback,
   });
@@ -725,6 +745,7 @@ function usePublishedChatFallbackRef(args: {
     isChat,
     isSameHost,
     hostUnreachable: reachability.status === "unreachable",
+    unavailability: reachability.unavailability,
     confirmedAbsent,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
@@ -823,11 +844,19 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   const snapshotLoaded = useEpicSnapshotLoaded();
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
   const liveArtifact = useEpicArtifact(activeTab.id);
-  // The projection feeding `liveArtifact` is served by the app-wide active
-  // host; cross-host CHAT refs are exempt from its record gate (see
-  // `computeIsRemoteDeleted`). This is canvas machinery at epic-view
-  // altitude, not a chat tab - the tab-scoped host rule doesn't apply here.
-  const activeHostIdForRecordGate = useReactiveActiveHostId();
+  // The projection feeding `liveArtifact` is served by the EPIC SESSION's
+  // host - NOT the app-wide active one, which is what this comment used to
+  // say and what the read below used to be. `EpicSessionProvider` keeps the
+  // previous handle registered and rendered while a re-point establishes and
+  // after one fails, so during an A→B re-point the records are still A's
+  // while the app-wide pointer already says B. Judging refs against B then
+  // inverted the record gate: A-bound tabs read as cross-host (exempt) and
+  // B-bound tabs were policed against a projection that could not contain
+  // them - reported remote-deleted. Cross-host CHAT refs stay exempt (see
+  // `computeIsRemoteDeleted`); "same host" means the SESSION's. This is canvas
+  // machinery at epic-view altitude, not a chat tab - hence the canvas host,
+  // not `useTabHostId()`.
+  const activeHostIdForRecordGate = useCanvasHostId();
   const chatRetraction = useChatTabRetraction(activeTab);
   const isRetractedAsRevoked = chatRetraction === "revoked";
   const {

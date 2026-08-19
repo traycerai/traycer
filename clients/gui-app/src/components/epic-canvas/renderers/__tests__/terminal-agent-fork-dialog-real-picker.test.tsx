@@ -161,8 +161,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => hostId ?? "default",
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-test",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-test",
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -244,9 +244,8 @@ vi.mock("react-virtuoso", async () => {
 });
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useDefaultHostClient: () => null,
   harnessCatalogEntryNeedsRefresh: () => true,
-  useGuiHarnessesQuery: () => ({
+  useGuiHarnessesQueryForClient: () => ({
     data: {
       harnesses: [
         {
@@ -265,7 +264,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     isPending: false,
     error: null,
   }),
-  useGuiHarnessModelsQuery: () => ({
+  useGuiHarnessModelsQueryForClient: () => ({
     data: {
       harnessId: "claude",
       models: [
@@ -295,7 +294,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     error: null,
     refetch: () => Promise.resolve({ data: undefined }),
   }),
-  useGuiHarnessCatalog: () => ({
+  useGuiHarnessCatalogForClient: () => ({
     harnesses: [
       {
         id: "claude",
@@ -331,7 +330,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     harnessesError: null,
     modelsLoading: false,
   }),
-  useRefreshHarnessCatalog: () => async () => {},
+  useRefreshHarnessCatalogForClient: () => async () => {},
 }));
 
 vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({

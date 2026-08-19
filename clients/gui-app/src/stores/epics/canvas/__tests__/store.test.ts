@@ -1418,6 +1418,40 @@ describe("closedTilePayloadsByTabId", () => {
     ).toBe(false);
   });
 
+  it("clears pending-create when host-driven ref removal bypasses closeCanvasTab", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pending-host-remove", "Pending Host");
+    const terminal: EpicCanvasTileRef = {
+      id: "term-pending",
+      instanceId: "inst-pending",
+      type: "terminal",
+      name: "Pending create",
+      hostId: TEST_HOST_ID,
+      authority: "host",
+      legacyFallback: {
+        name: "Pending create",
+        titleSource: "default",
+        cwd: "/repo",
+      },
+    };
+    store.markArtifactPendingCreate(terminal.id);
+    store.openTileInTab(tabId, terminal);
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(terminal.id),
+    ).toBe(true);
+
+    store.removeHostTerminalRefs(TEST_HOST_ID, terminal.id);
+
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(terminal.id),
+    ).toBe(false);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        terminal.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
   it("discardClosedTilePayload drops a single cached entry", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-discard-payload", "Discard Payload");

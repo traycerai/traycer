@@ -1,7 +1,10 @@
 import { useCallback } from "react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
-import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
+import {
+  useIsRateLimitQueueTargetForced,
+  useRateLimitQueueTargetPhase,
+} from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
 import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
@@ -26,13 +29,10 @@ import {
  * - **Spinner state (`isRefreshing`)**: `query.isFetching` covers a fetch on
  *   THIS provider's own query key (whoever triggered it - the queue's
  *   `fetchQuery`, a direct refetch, an invalidation). For `ephemeralProcess`
- *   providers it is OR-ed with the queue's `draining` flag: this provider's own
- *   `isFetching` can settle while another profile in the same "Refresh all"
- *   batch is still running, or while another queue item is pending. Gating on
- *   `draining` (the whole round) rather than only this provider's own fetch keeps
- *   the button disabled for as long as any refresh in the shared lane is in
- *   flight - matching the user's "Refresh all is in progress" mental model, not
- *   "my own fetch is in flight".
+ *   providers it is OR-ed with THIS target's own queue phase, so the control
+ *   reflects a click from the moment it is enqueued rather than only once its
+ *   `fetchQuery` starts behind an earlier item - without borrowing any other
+ *   target's state.
  *   `httpFetch` providers refresh concurrently (no shared queue), so their own
  *   `isFetching` is already the complete signal.
  *
@@ -44,6 +44,7 @@ export interface ProviderRateLimitRefreshInput {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly hasCachedValue: boolean;
   readonly fetchEligible: boolean;
   readonly isFetching: boolean;
   readonly refetch: () => Promise<unknown>;
@@ -53,6 +54,7 @@ export function useProviderRateLimitRefresh({
   providerId,
   profileId,
   usageUpdatedAt,
+  hasCachedValue,
   fetchEligible,
   isFetching,
   refetch,
@@ -60,19 +62,19 @@ export function useProviderRateLimitRefresh({
   readonly refresh: () => Promise<void>;
   readonly isRefreshing: boolean;
 } {
-  const draining = useIsRateLimitQueueDraining();
+  const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
   const queueScope = useRateLimitQueueScope();
   const lane = rateLimitFetchLane(providerId);
-  // Fresh-data-on-open for the ephemeralProcess lane, routed through the shared
-  // serial queue rather than TanStack's own (deliberately disabled)
-  // refetch-on-mount - see providerRateLimitQueryOptions' doc comment. No-ops
-  // for the httpFetch lane, which keeps TanStack's refetch-on-mount instead.
-  useRefreshProviderRateLimitsOnMount(
+  // Cold-start/recovery refresh for both lanes. Successful cached values leave
+  // freshness to the interval timer and manual refresh action.
+  useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
     usageUpdatedAt,
+    hasCachedValue,
     fetchEligible,
-  );
+    refetch,
+  });
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!fetchEligible) return;
@@ -91,8 +93,38 @@ export function useProviderRateLimitRefresh({
     await refetch();
   }, [fetchEligible, lane, profileId, providerId, queueScope, refetch]);
 
+  // Scoped to THIS provider/profile's own queue entry, never the lane-wide
+  // draining flag, and only while that entry is actually FETCHING.
+  //
+  // `RefreshIconButton` DISABLES on this value and its trigger no-ops while
+  // set. Two consequences drive both halves of this rule. Gating on the whole
+  // lane turned every ephemeral control off whenever anything was queued
+  // anywhere (a background sweep of an unrelated provider, one wedged probe
+  // holding the lane for its full response budget). And counting `"queued"`
+  // here would disable the control in precisely the state where a click still
+  // does real work: an enqueue for an already-queued target promotes it
+  // (`pending.force = true`), which is the only thing that stops that pull
+  // being skipped by its second freshness/cool-down check or reaching the host
+  // as `force: false` and being served from the gauge cache.
+  //
+  // So the two QUEUED states split, rather than the phase alone deciding:
+  //
+  //   queued + not yet forced -> stays clickable; the click promotes it.
+  //   queued + already forced -> nothing left to promote, so read as pending.
+  //
+  // Without that second arm a user who clicks while another target holds the
+  // lane gets a control that falls idle and clickable again the moment
+  // `RefreshIconButton`'s 10s internal cap lapses, with their request still
+  // pending for up to the full response budget. The popover row renders
+  // #1268's "Queued…" label, but the Settings consumers do not - so for them
+  // the spinner is the ONLY feedback that exists.
+  const targetForced = useIsRateLimitQueueTargetForced(providerId, profileId);
   const isRefreshing =
-    fetchEligible && (isFetching || (lane === "ephemeralProcess" && draining));
+    fetchEligible &&
+    (isFetching ||
+      (lane === "ephemeralProcess" &&
+        (targetPhase === "fetching" ||
+          (targetPhase === "queued" && targetForced))));
 
   return { refresh, isRefreshing };
 }

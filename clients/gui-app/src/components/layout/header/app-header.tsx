@@ -9,6 +9,7 @@ import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
+import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -90,7 +91,10 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       data-testid="app-header"
       data-variant={variant}
       className={cn(
-        "relative z-20 flex h-10 shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
+        // The height is a shared token: the boot surfaces reserve this exact
+        // slot so their card does not move when the header appears under it.
+        APP_HEADER_HEIGHT_CLASS,
+        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
         framelessDesktop
           ? cn(
               "pl-3 pr-3",

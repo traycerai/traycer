@@ -11,8 +11,10 @@ export function PrimaryActionShortcutHint() {
   return (
     <ShortcutHint>
       <KbdGroup aria-hidden>
-        <Kbd>{modLabel()}</Kbd>
-        <Kbd>↵</Kbd>
+        <Kbd className="border-current bg-transparent text-current">
+          {modLabel()}
+        </Kbd>
+        <Kbd className="border-current bg-transparent text-current">↵</Kbd>
       </KbdGroup>
     </ShortcutHint>
   );

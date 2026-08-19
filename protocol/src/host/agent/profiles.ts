@@ -26,13 +26,13 @@ import {
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
   providerRateLimitsSchema,
   providerRateLimitsSchemaV40,
   providerRateLimitsSchemaV50,
   providerRateLimitsSchemaV60,
-  providerRateLimitsSchemaV70,
 } from "@traycer/protocol/host/rate-limit/schemas";
 import {
   agentFacingHarnessIdSchema,
@@ -499,8 +499,11 @@ export const agentGetProviderProfileRateLimitsV30 = defineRpcContract({
   responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV3,
 });
 
+// The LIVE line: ranges over `providerRateLimitsSchema` rather than a frozen
+// snapshot, because `4` is the newest major and no released peer has ever
+// negotiated it (the newest released baseline tops out at `3`).
 export const agentGetProviderProfileRateLimitsResponseSchemaV4 = z.object({
-  rateLimits: providerRateLimitsSchemaV70,
+  rateLimits: providerRateLimitsSchema,
   usageUpdatedAt: z.number().nullable(),
 });
 
@@ -509,13 +512,6 @@ export const agentGetProviderProfileRateLimitsV40 = defineRpcContract({
   schemaVersion: { major: 4, minor: 0 } as const,
   requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
   responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV4,
-});
-
-export const agentGetProviderProfileRateLimitsV50 = defineRpcContract({
-  method: "agent.getProviderProfileRateLimits",
-  schemaVersion: { major: 5, minor: 0 } as const,
-  requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
-  responseSchema: agentGetProviderProfileRateLimitsResponseSchema,
 });
 
 export const agentGetProviderProfileRateLimitsUpgradeV10ToV20 =
@@ -673,8 +669,18 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV30 =
       // unrepresentable, and this response carries exactly one provider - so
       // fail closed rather than mis-decode. The message names no provider so
       // it stays honest as the enum grows.
+      //
+      // Cursor DOES degrade rather than fail closed: `"cursor"` is in the
+      // frozen v6.0 provider enum, so the unavailable row is representable
+      // here, and an older client is better served by an honest "usage isn't
+      // available" than by an error it cannot act on.
       const parsed =
-        agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse(response);
+        agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse({
+          ...response,
+          rateLimits: mapCursorAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          ),
+        });
       if (!parsed.success) {
         return {
           ok: false,
@@ -700,9 +706,15 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV20 =
     downgradeResponse: (response) => {
       // Same rule as the v4->v3 bridge against the narrower v2.0 enum: the
       // frozen v2.0 union keeps grok, so only post-v5.0 providers (omp,
-      // huggingface) fail closed here.
+      // huggingface) fail closed here. Cursor degrades for the same reason it
+      // does there - `"cursor"` is in the frozen v5.0 provider enum too.
       const parsed =
-        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse(response);
+        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse({
+          ...response,
+          rateLimits: mapCursorAvailableToUnavailable(
+            mapOpenCodeAvailableToUnavailable(response.rateLimits),
+          ),
+        });
       if (!parsed.success) {
         return {
           ok: false,
@@ -730,8 +742,13 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV10 =
       // frozen v1.0 union predates the grok available arm, so a grok-available
       // snapshot becomes the `unsupported_provider` row a v1.0 host returns for
       // grok today (shared map). Post-v4.0 providers (Hermes, omp, huggingface)
-      // stay unrepresentable and still fail closed.
-      const rateLimits = mapGrokAvailableToUnavailable(response.rateLimits);
+      // stay unrepresentable and still fail closed. Cursor degrades here too:
+      // `"cursor"` is in the frozen v4.0 provider enum.
+      const rateLimits = mapGrokAvailableToUnavailable(
+        mapCursorAvailableToUnavailable(
+          mapOpenCodeAvailableToUnavailable(response.rateLimits),
+        ),
+      );
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
           ...response,
@@ -751,119 +768,6 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV10 =
     },
   });
 
-export const agentGetProviderProfileRateLimitsUpgradeV40ToV50 =
-  defineUpgradePath<
-    typeof agentGetProviderProfileRateLimitsV40,
-    typeof agentGetProviderProfileRateLimitsV50
-  >({
-    from: { major: 4, minor: 0 },
-    to: { major: 5, minor: 0 },
-    upgradeRequest: (request) => request,
-    upgradeResponse: (response) => response,
-  });
-
-export const agentGetProviderProfileRateLimitsDowngradeV50ToV40 =
-  defineDowngradePath<
-    typeof agentGetProviderProfileRateLimitsV50,
-    typeof agentGetProviderProfileRateLimitsV40
-  >({
-    from: { major: 5, minor: 0 },
-    to: { major: 4, minor: 0 },
-    downgradeRequest: (request) => ({ ok: true, value: request }),
-    downgradeResponse: (response) => ({
-      ok: true,
-      value: agentGetProviderProfileRateLimitsResponseSchemaV4.parse({
-        ...response,
-        rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
-      }),
-    }),
-  });
-
-export const agentGetProviderProfileRateLimitsDowngradeV50ToV30 =
-  defineDowngradePath<
-    typeof agentGetProviderProfileRateLimitsV50,
-    typeof agentGetProviderProfileRateLimitsV30
-  >({
-    from: { major: 5, minor: 0 },
-    to: { major: 3, minor: 0 },
-    downgradeRequest: (request) => ({ ok: true, value: request }),
-    downgradeResponse: (response) => {
-      const parsed =
-        agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse({
-          ...response,
-          rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
-        });
-      if (!parsed.success) {
-        return {
-          ok: false,
-          error: {
-            code: "DOWNGRADE_UNSUPPORTED",
-            message:
-              "Reading rate limits for this provider requires a newer Traycer client.",
-          },
-        };
-      }
-      return { ok: true, value: parsed.data };
-    },
-  });
-
-export const agentGetProviderProfileRateLimitsDowngradeV50ToV20 =
-  defineDowngradePath<
-    typeof agentGetProviderProfileRateLimitsV50,
-    typeof agentGetProviderProfileRateLimitsV20
-  >({
-    from: { major: 5, minor: 0 },
-    to: { major: 2, minor: 0 },
-    downgradeRequest: (request) => ({ ok: true, value: request }),
-    downgradeResponse: (response) => {
-      const parsed =
-        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse({
-          ...response,
-          rateLimits: mapOpenCodeAvailableToUnavailable(response.rateLimits),
-        });
-      if (!parsed.success) {
-        return {
-          ok: false,
-          error: {
-            code: "DOWNGRADE_UNSUPPORTED",
-            message:
-              "Reading rate limits for this provider requires a newer Traycer client.",
-          },
-        };
-      }
-      return { ok: true, value: parsed.data };
-    },
-  });
-
-export const agentGetProviderProfileRateLimitsDowngradeV50ToV10 =
-  defineDowngradePath<
-    typeof agentGetProviderProfileRateLimitsV50,
-    typeof agentGetProviderProfileRateLimitsV10
-  >({
-    from: { major: 5, minor: 0 },
-    to: { major: 1, minor: 0 },
-    downgradeRequest: (request) => ({ ok: true, value: request }),
-    downgradeResponse: (response) => {
-      const parsed =
-        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
-          ...response,
-          rateLimits: mapGrokAvailableToUnavailable(
-            mapOpenCodeAvailableToUnavailable(response.rateLimits),
-          ),
-        });
-      if (!parsed.success) {
-        return {
-          ok: false,
-          error: {
-            code: "DOWNGRADE_UNSUPPORTED",
-            message:
-              "Reading rate limits for this provider requires a newer Traycer client.",
-          },
-        };
-      }
-      return { ok: true, value: parsed.data };
-    },
-  });
 
 // ─── `agent.configure@1.0` / `2.0` ─────────────────────────────────────────
 //

@@ -9,11 +9,13 @@
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
+import { toast } from "sonner";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { buildTerminalTileRef } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
@@ -37,7 +39,9 @@ import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-f
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
+import { existingSessionOriginFields } from "@/stores/epics/canvas/types";
 import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
+import { isSetupTerminal } from "@/stores/worktree/setup-terminals";
 import {
   deriveTitleSourceFromSessionTitle,
   terminalSessionTitle,
@@ -74,13 +78,19 @@ function terminalWorkspaceLeaf(
       // explain to anyone, and it must give the same answer the tile's own
       // dial will give a moment later.
       if (liveEntry === null || dialableHostEndpoint(liveEntry) === null) {
+        // Silent refusal used to look like a broken row - the palette entry
+        // that offered this launch a moment ago went stale between listing
+        // and selection (host dropped its lease, session died).
+        toast(
+          `Can't create a terminal on ${liveEntry?.label ?? target.hostId} right now - it's not reachable.`,
+        );
         return;
       }
       hasLaunched = true;
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
-        ref: buildTerminalTileRef(target),
+        ref: mintNewEpicTerminalTile(target),
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       });
     },
@@ -305,7 +315,7 @@ function makeHostWorkspaceSubpage(
 function useNewTerminalWorkspaceItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const hostClient = useHostClient();
   const bindings = useWorktreeListBindingsForEpic({
     epicId: ctx.activeEpicId ?? "",
@@ -386,8 +396,13 @@ const NEW_TERMINAL_WORKSPACE_SUBPAGE: CommandSubpage = {
 export function useTerminalsOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const defaultHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
-  const hostClient = useHostClient();
+  // The epic's terminals are listed on, and their tiles bind to, the host
+  // serving the epic's projection - see `useActiveEpicHostId`. (Creating a
+  // NEW terminal below is a placement flow with its own host picker and
+  // deliberately keeps the app-wide default.)
+  const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  const hostClient = useHostClientForHostId(activeEpicHostId);
   const scope = { kind: "epic" as const, epicId: ctx.activeEpicId ?? "" };
   const terminals = useTerminalList(scope, hostClient);
   const sessionsData = terminals.data;
@@ -415,6 +430,7 @@ export function useTerminalsOpenerItems(
         defaultHostId,
         session.sessionId,
       );
+      const setupSession = isSetupTerminal(defaultHostId, session.sessionId);
       return openerExistingLeaf(
         "terminals",
         ctx,
@@ -432,15 +448,10 @@ export function useTerminalsOpenerItems(
           // Recorded so an eviction-recreate lands back in the session's
           // directory - same as the sidebar's open-existing path.
           cwd: session.cwd,
-          ...(signInProviderId === null
-            ? {}
-            : {
-                origin: "provider-login" as const,
-                originProviderId: signInProviderId,
-              }),
+          ...existingSessionOriginFields(signInProviderId, setupSession),
         },
-        // `terminal.list` is always issued against the active host's client
-        // (`useHostClient()` above) - there is no cross-host terminal listing
+        // `terminal.list` is issued against the epic's host client
+        // (`hostClient` above) - there is no cross-host terminal listing
         // today, so every session here IS already on `defaultHostId`. A badge
         // can never legitimately apply until that plumbing exists (flagged
         // back per T22's scope - inventing it is a separate, larger change).

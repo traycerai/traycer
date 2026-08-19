@@ -32,7 +32,7 @@ export function TerminalCursorStylePicker(
   return (
     <div
       aria-label="Terminal cursor style"
-      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5"
+      className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5"
     >
       {STYLES.map((style) => {
         const active = style.id === value;

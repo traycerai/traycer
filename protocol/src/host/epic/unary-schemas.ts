@@ -584,14 +584,15 @@ export type RecordEpicViewedResponse = z.infer<
   typeof recordEpicViewedResponseSchema
 >;
 
-// ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
+// ─── Batch task context (epic.getTaskContexts@1.0+) ──────────────────────────
 // Optional (non-floor) capability: resolve a small set of task ids to list-row
 // shapes for title/context (e.g. worktree owner titles). Old hosts fail only
 // this call with E_HOST_UNSUPPORTED; callers degrade to cache-only resolution.
 //
-// `null` in the response map means deleted OR not permitted to the requester —
-// indistinguishable by design. Clients render both the same way (e.g. muted
-// "Owner unresolved").
+// v1.0's `null` response row was ambiguous: a deleted task, an inaccessible
+// task, and a failed cloud lookup all looked identical. v1.1 makes that
+// distinction explicit. Its `unknown` arm deliberately preserves uncertainty
+// rather than licensing destructive client reconciliation.
 
 export const GET_TASK_CONTEXTS_MAX_IDS = 50;
 
@@ -602,10 +603,62 @@ export type GetTaskContextsRequest = z.infer<
   typeof getTaskContextsRequestSchema
 >;
 
-export const getTaskContextsResponseSchema = z.object({
-  // Per-id: ListTaskLight when readable, null when deleted or not permitted
-  // (indistinguishable by design).
+export const getTaskContextsResponseSchemaV10 = z.object({
   tasks: z.record(z.string(), listTaskLightSchema.nullable()),
+});
+export type GetTaskContextsResponseV10 = z.infer<
+  typeof getTaskContextsResponseSchemaV10
+>;
+
+export const taskContextUnknownReasonSchema = z.enum([
+  "legacy",
+  "not-found-or-not-permitted",
+  "transport",
+  "server",
+  "auth",
+  "denied",
+  "unexpected-response",
+]);
+export type TaskContextUnknownReason = z.infer<
+  typeof taskContextUnknownReasonSchema
+>;
+
+export const taskContextResolutionSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("found"),
+    task: listTaskLightSchema,
+  }),
+  z.object({
+    status: z.literal("confirmed-absent"),
+  }),
+  z.object({
+    status: z.literal("unknown"),
+    reason: taskContextUnknownReasonSchema,
+  }),
+]);
+export type TaskContextResolution = z.infer<typeof taskContextResolutionSchema>;
+
+// Older-host values are parsed by their v1.0 schema and upgraded at the
+// transport boundary. Canonical v1.1 data therefore stays exhaustive here:
+// accepting the all-optional legacy list shape would let malformed v1.1 arms
+// parse as an empty task.
+export const taskContextResultSchema = taskContextResolutionSchema;
+export type TaskContextResult = TaskContextResolution;
+
+export function isFoundTaskContext(
+  result: TaskContextResult | undefined,
+): result is Extract<TaskContextResolution, { status: "found" }> {
+  return result?.status === "found";
+}
+
+export function isConfirmedAbsentTaskContext(
+  result: TaskContextResult | undefined,
+): result is Extract<TaskContextResolution, { status: "confirmed-absent" }> {
+  return result?.status === "confirmed-absent";
+}
+
+export const getTaskContextsResponseSchema = z.object({
+  tasks: z.record(z.string(), taskContextResultSchema),
 });
 export type GetTaskContextsResponse = z.infer<
   typeof getTaskContextsResponseSchema
@@ -947,6 +1000,28 @@ export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
  * forever, since `epic.createChat@1.0` is already in released hosts (see
  * `epicCreateChatV11`'s own doc in `contracts.ts` for why this is a new
  * minor rather than an in-place edit).
+ *
+ * Carries the same `sourceOwnerUserId` hint the latest-checkpoint variant
+ * below has had since ticket 37, for the CROSS-HOST fork: the target host of
+ * a cross-host fork holds no local registry facts about the source chat, so
+ * the cloud tier's anti-squatting guard (ticket 34 B2) has nothing to check
+ * the resolved publication's owner against and refuses to seed.
+ *
+ * A HINT, never an authority, with UNLOCK-ONLY semantics: the host prefers
+ * its own registry facts and REFUSES the cloud tier outright when the two
+ * disagree - the registry outranks the client, and a disagreement is
+ * suspicious rather than a tiebreak to resolve. The hint only unlocks the
+ * case where the host holds no facts of its own. See
+ * `resolveExpectedForkOwner` / `chat-fork-cloud-source.ts`.
+ *
+ * NULLABLE WITH A `null` DEFAULT, unlike the latest-checkpoint variant: that
+ * one was a brand-new arm with no producers to be compatible with, so it can
+ * demand the field explicitly. This shape's other producers - every
+ * message-level fork the dialog already sends - predate the field, so the
+ * default makes an omitting payload parse to the honest `null` instead of
+ * failing validation outright. `null` stays the honest value for "the client
+ * genuinely does not know who owns this", which must never be fabricated
+ * into a guess the host would then trust.
  */
 export const createChatForkSourceAssistantBoundarySchema = z.object({
   boundary: z.literal("assistantMessage"),
@@ -954,6 +1029,7 @@ export const createChatForkSourceAssistantBoundarySchema = z.object({
   assistantMessageId: z.string(),
   interviewBlockId: z.string().nullish(),
   carriedInterviews: z.enum(["pending", "settled"]).nullish(),
+  sourceOwnerUserId: z.string().min(1).nullable().default(null),
 });
 export type CreateChatForkSourceAssistantBoundary = z.infer<
   typeof createChatForkSourceAssistantBoundarySchema
@@ -1169,6 +1245,118 @@ export const setChatArchivedResponseSchema = z.object({
 });
 export type SetChatArchivedResponse = z.infer<
   typeof setChatArchivedResponseSchema
+>;
+
+/**
+ * Publication coverage for a chat this host OWNS, asked on demand.
+ *
+ * The fork dialog needs to know, BEFORE it lets a user fork a chat onto another
+ * machine, whether the target will be able to read the transcript at all: a
+ * cross-host fork is served from the chat's cloud publication, so a chat that
+ * has never been published cannot be pulled, and a boundary the published head
+ * does not yet cover would slice against a transcript that stops short of it.
+ *
+ * Answered from the publisher's own acknowledged receipt rather than from
+ * maintained state: no registry-row write path, no outbox interaction, no cloud
+ * schema, and no per-chat churn on the record plane.
+ *
+ * `boundaryMessageId` is the fork boundary the caller intends to use. It is
+ * OPTIONAL because the same question is worth asking without one ("is this chat
+ * backed up at all?"); when it is absent the host answers `boundaryCovered:
+ * null`, which means NOT ASKED and must never be read as "not covered".
+ */
+export const chatPublicationStateRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  boundaryMessageId: z.string().nullish(),
+});
+export type ChatPublicationStateRequest = z.infer<
+  typeof chatPublicationStateRequestSchema
+>;
+
+/**
+ * `boundaryCovered` is decided by MESSAGE IDENTITY, never by clock comparison:
+ * it is true iff the UPSERT that carries the named message is at or below the
+ * acknowledged receipt's `through_seq` in this host's own op log. That is
+ * exact, and it is why no timestamp reasoning exists anywhere in this feature -
+ * forked and cloned chats carry foreign-minted timestamps and per-chat
+ * timestamps are not monotonic, so a "boundary newer than the watermark" test
+ * would be wrong in both directions.
+ *
+ * UPSERT-ONLY, deliberately. A local removal of the boundary message does NOT
+ * make this `false`, and that is the correct answer rather than a gap: coverage
+ * asks what a TARGET host could pull from the published head, and an
+ * unpublished deletion has not changed that. Answering `false` would tell the
+ * user to retry, and retrying is precisely what makes an unpublished removal
+ * fail permanently. Do not build "the boundary is gone if it was deleted" on
+ * this field - it does not answer that question and is not intended to.
+ *
+ * `publishedThroughTs` is DISPLAY METADATA ONLY ("backed up as of …"). It must
+ * never be gated on. It is nullable because a chat with no acknowledged receipt
+ * has no such moment to report.
+ *
+ * The tri-state on `boundaryCovered` is load-bearing:
+ * - `true`  - the boundary is inside the published head.
+ * - `false` - it is not, YET. This clears on its own within a publish sweep, so
+ *   callers should treat it as retryable rather than terminal.
+ * - `null`  - NO ANSWER WAS COMPUTED. Two causes, and `published` is what
+ *   distinguishes them: no boundary was named (`published: true`), or the chat
+ *   has never been published at all (`published: false`), in which case `null`
+ *   comes back even though a boundary WAS named - there is no head to measure
+ *   against. So never branch on `boundaryCovered` alone: read `published`
+ *   first, which is decisive by itself. A caller that collapses `null` to
+ *   `false` blocks a fork on a question that was never answered, and one that
+ *   reads `null` as "not asked" mislabels a never-published chat.
+ *
+ * One deliberate indistinguishability, so a future reader does not treat it as
+ * a leak to be fixed: a boundary withheld by fork arbitration reports
+ * `{ published: true, boundaryCovered: false }`, exactly like a boundary the
+ * sweep has not reached yet. Both are retryable and the client's action is the
+ * same, so distinguishing them would leak host-side arbitration state for no
+ * behavioural gain. This holds only while the condition really is transient -
+ * a lineage that has been SUPERSEDED is not, and reports through `definitive`
+ * below rather than hiding here.
+ */
+export const chatPublicationStateResponseSchema = z.object({
+  published: z.boolean(),
+  boundaryCovered: z.boolean().nullable(),
+  publishedThroughTs: z.number().nullable(),
+  /**
+   * Set when waiting CANNOT change this answer. `null` means the ordinary
+   * reading applies and the state may still move on its own.
+   *
+   * ## Why a separate field rather than more values on the other three
+   *
+   * Every other answer here is a snapshot of a moving process, and the client
+   * polls precisely because it expects movement. Nothing in `published` /
+   * `boundaryCovered` can express "stop asking": `published: false` is what a
+   * chat mid-first-sweep reports, and it is also what a chat whose publication
+   * halted on an unresolvable conflict reports. The client cannot tell them
+   * apart, so it re-asks every 30s forever and tells the user "it backs up
+   * automatically - try again shortly", which is false and never resolves.
+   *
+   * A caller MUST stop polling when this is non-null and MUST NOT present the
+   * state as transient. Treating an unrecognised reason as terminal-but-
+   * unexplained is correct and forward-compatible; treating it as `null` is
+   * not, and reintroduces the infinite wait.
+   *
+   * - `chat-deleted` - the source chat is a tombstone on its own host. It will
+   *   not come back, and the fork would be refused anyway.
+   * - `lineage-superseded` - this chat lost an arbitrated fork, so its
+   *   publications now land under a different cloud identity. The receipt this
+   *   host holds describes a row a fork of THIS id will never fetch.
+   * - `backup-halted` - publication stopped for a reason the sweep does not
+   *   retry within the process lifetime (an unresolvable conflict, an
+   *   escalation, an unprovable head). A host restart may clear it; waiting on
+   *   this connection will not.
+   */
+  definitive: z
+    .enum(["chat-deleted", "lineage-superseded", "backup-halted"])
+    .nullable()
+    .default(null),
+});
+export type ChatPublicationStateResponse = z.infer<
+  typeof chatPublicationStateResponseSchema
 >;
 
 // Optional two-phase artifact-image ingest. Prepare validates and retains

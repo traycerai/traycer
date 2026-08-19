@@ -61,6 +61,8 @@ const FILE_BASE = {
   headOid: "a".repeat(40),
   path: "src/a.ts",
   previousPath: null as string | null,
+  pathBytes: null as string | null,
+  previousPathBytes: null as string | null,
   ignoreWhitespace: false,
   byteBudget: 262144 as number | null,
 };
@@ -121,6 +123,8 @@ describe("prQueryKeys.localFileDiff", () => {
       { headOid: "e".repeat(40) },
       { path: "src/b.ts" },
       { previousPath: "src/old.ts" },
+      { pathBytes: "cGF0aA==" },
+      { previousPathBytes: "b2xkcGF0aA==" },
       { ignoreWhitespace: true },
       { byteBudget: null },
     ]) {

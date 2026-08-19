@@ -38,6 +38,7 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
     dispose: () => {
       h.disposeCount += 1;
     },
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],

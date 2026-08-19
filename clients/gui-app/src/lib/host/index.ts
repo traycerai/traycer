@@ -16,6 +16,7 @@ export {
   useHostBinding,
   useHostClient,
   useHostDirectory,
+  useHostRuntimeClient,
 } from "@/lib/host/runtime";
 export { HostDirectoryService } from "@/lib/host/host-directory-service";
 export type { HostDirectoryServiceOptions } from "@/lib/host/host-directory-service";

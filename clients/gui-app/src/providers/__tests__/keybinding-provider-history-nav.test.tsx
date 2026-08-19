@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import {
   createMemoryHistory,
   createRouter,
@@ -13,6 +13,7 @@ import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { isMac } from "@/lib/keybindings/platform";
 
 const WINDOW_ID = "history-nav-input-window";
 
@@ -27,7 +28,6 @@ function makeRouter(history: RouterHistory): AppRouter {
     context: {
       queryClient: new QueryClient(),
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () => null,
       getHostClient: () => null,
     },
   });
@@ -47,7 +47,7 @@ function renderProviderWith(history: RouterHistory): AppRouter {
   const router = makeRouter(history);
   render(
     <KeybindingProvider router={router}>
-      <span />
+      <input aria-label="Editor" />
     </KeybindingProvider>,
   );
   return router;
@@ -64,10 +64,75 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-// In-app back/forward has NO keyboard chord (mod/alt+Arrow collide with native
-// caret movement in the chat composer). Mouse buttons 3/4 remain a non-
-// conflicting explicit affordance, alongside the header arrows + palette rows.
-describe("KeybindingProvider in-app back/forward — mouse buttons 3/4", () => {
+describe("KeybindingProvider in-app back/forward", () => {
+  it("preserves native caret movement for mod+Arrow inside editable fields", () => {
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "nav.back": "mod+arrowleft",
+      },
+    });
+    const router = renderProviderWith(brandedHistory());
+    const goSpy = vi.spyOn(router.history, "go").mockImplementation(() => {});
+    const input = screen.getByRole("textbox", { name: "Editor" });
+    const modifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+    const event = new KeyboardEvent("keydown", {
+      code: "ArrowLeft",
+      key: "ArrowLeft",
+      ...modifier,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    input.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(goSpy).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the default mod+shift+, history navigation", () => {
+    const router = renderProviderWith(brandedHistory());
+    const goSpy = vi.spyOn(router.history, "go").mockImplementation(() => {});
+    const modifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+    const event = new KeyboardEvent("keydown", {
+      code: "Comma",
+      key: ",",
+      shiftKey: true,
+      ...modifier,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(goSpy).toHaveBeenCalledWith(-1);
+  });
+
+  it("dispatches mod+Arrow history navigation outside editable fields", () => {
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "nav.back": "mod+arrowleft",
+      },
+    });
+    const router = renderProviderWith(brandedHistory());
+    const goSpy = vi.spyOn(router.history, "go").mockImplementation(() => {});
+    const modifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+    const event = new KeyboardEvent("keydown", {
+      code: "ArrowLeft",
+      key: "ArrowLeft",
+      ...modifier,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(goSpy).toHaveBeenCalledWith(-1);
+  });
+
   it("navigates via go(±1) on a desktop (branded) history", () => {
     const router = renderProviderWith(brandedHistory());
     const goSpy = vi.spyOn(router.history, "go").mockImplementation(() => {});

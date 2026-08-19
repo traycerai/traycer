@@ -6,18 +6,29 @@ import {
 } from "@/lib/host/stream-wake-reconnect";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import {
+  processReconnectEngine,
+  WAKE_RETRY_EPISODE_MS,
+} from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
- * One physical wake fans out as several pulses: the desktop shell fires the
- * resume AND unlock-screen bridges, and the `online` event lands after its own
- * ~250ms debounce. A live session absorbs that (`forceReconnect` is cheap and
- * idempotent), but a retry is a full stream-client rebuild, and a permanently
- * fatal session (e.g. INCOMPATIBLE) re-closes fast enough to be re-attempted
- * by every pulse. Handles attempted within this window are skipped, folding
- * the burst into one dial per wake.
+ * THE wake-episode window now lives in the reconnect engine
+ * (redesign P4.1 / connection-registry §6), alongside R9's rebuild pacing and
+ * R10's reopen backoff, so all three retry policies are declared in one place
+ * instead of one per owner. Re-exported here because this module's own
+ * consumers and tests already name it.
+ *
+ * RULING D1, worth stating plainly at the code: R9 and R10 fold into the
+ * PER-LEASE engine because their subject is a host. This one does not - a
+ * `ChatSessionStoreHandle` carries no `hostId`, and the wake subscriber walks
+ * the module-global chat-session registry deduping per HANDLE, process-wide.
+ * Scoping the episode per host would change which retries coalesce on a wake,
+ * which the acceptance forbids. So the MECHANISM folds and the instance is
+ * process-scoped: "collapsed into the per-lease reconnect engine" is true of
+ * R9 and R10, and deliberately not of this limb.
  */
-export const WAKE_RETRY_EPISODE_MS = 5_000;
+export { WAKE_RETRY_EPISODE_MS };
 
 /**
  * Re-dials warm chat sessions whose stream went TERMINALLY closed, on the OS
@@ -90,7 +101,13 @@ export function subscribeChatSessionWakeRetry(
   runnerHost: IRunnerHost | null,
 ): () => void {
   const registry = getChatSessionRegistry();
-  const lastAttemptAt = new WeakMap<ChatSessionStoreHandle, number>();
+  // The attempt dedupe is the ENGINE's episode primitive, not a private map
+  // (D1): one window, one claim/query API, declared once. The `wakeEpisodes`
+  // map below stays local because it carries a wake REASON alongside its
+  // timestamp - state about THIS subject that the engine has no business
+  // modelling - and folding it would have meant widening a shared primitive
+  // to carry a caller's private vocabulary.
+  const reconnect = processReconnectEngine();
   const wakeEpisodes = new Map<
     ChatSessionStoreHandle,
     { readonly reason: WakeSignalReason; readonly startedAt: number }
@@ -108,7 +125,7 @@ export function subscribeChatSessionWakeRetry(
     for (const handle of handles) {
       pendingLateCloseReason.delete(handle);
       wakeEpisodes.delete(handle);
-      lastAttemptAt.set(handle, attemptedAt);
+      reconnect.claimWakeEpisode(handle, attemptedAt);
     }
   };
 
@@ -162,8 +179,7 @@ export function subscribeChatSessionWakeRetry(
   const onWake = (reason: WakeSignalReason): void => {
     const now = Date.now();
     const due = registry.listHandles().filter((handle) => {
-      const last = lastAttemptAt.get(handle);
-      if (last !== undefined && now - last < WAKE_RETRY_EPISODE_MS) {
+      if (reconnect.isWithinWakeEpisode(handle, now)) {
         return false;
       }
       const episode = wakeEpisodes.get(handle);

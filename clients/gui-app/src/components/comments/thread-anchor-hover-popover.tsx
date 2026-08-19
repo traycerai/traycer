@@ -18,10 +18,12 @@ import {
 import type { Editor } from "@tiptap/core";
 import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
-import { useEpicCommentThreads } from "@/hooks/comments/use-epic-comment-threads";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { CommentContent } from "./comment-content-renderer";
 import { deriveInitials } from "./mention-utils";
@@ -30,6 +32,11 @@ const HOVER_DELAY_MS = 300;
 
 export interface ThreadAnchorHoverPopoverProps {
   readonly epicId: string;
+  /** The TILE's client, handed down by `collab-tile-body.tsx`. It must be the
+   *  same one the tile's own threads query used or this cache-only read
+   *  (`enabled: false`) lands on a different host's key and never resolves a
+   *  thread (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: EpicArtifactKind;
   readonly artifactId: string;
   /** Tiptap editor for the active tile. We attach pointer listeners to
@@ -67,6 +74,7 @@ interface HoverState {
 export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const {
     epicId,
+    hostClient,
     artifactType,
     artifactId,
     editor,
@@ -85,8 +93,12 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
 
   // Read the cached thread snapshot without firing a fresh request - the
   // hover popover should never trigger network traffic.
-  const threadsQuery = useEpicCommentThreads(epicId, artifactType, artifactId, {
-    enabled: false,
+  const threadsQuery = useEpicCommentThreadsForClient({
+    client: hostClient,
+    epicId,
+    artifactType: artifactType,
+    artifactId: artifactId,
+    options: { enabled: false },
   });
   const threadsById = useMemo(() => {
     const map = new Map<string, CommentThreadWire>();

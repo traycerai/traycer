@@ -35,7 +35,9 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import { __setManagedCommandOutputStreamClientFactoryForTests } from "@/providers/managed-command-output-stream-factory-override";
+import type { StreamMethodSupportSource } from "@/lib/host/stream-runtime-context";
 import type { ManagedCommandOutputStreamCallbacks } from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   managedCommandSubscribeOutputClientFrameSchema,
   managedCommandSubscribeOutputServerFrameSchema,
@@ -46,6 +48,7 @@ import type {
   ManagedCommandSubscribeOutputClientFrame,
   ManagedCommandSubscribeOutputServerFrame,
 } from "@traycer/protocol/host/managed-command/subscribe";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 
@@ -63,6 +66,10 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     status: mocks.reachability.value,
     hostLabel: `host ${hostId}`,
   }),
+  resolvedHostLabel: (r: {
+    readonly status: string;
+    readonly hostLabel: string;
+  }) => (r.status === "checking" ? null : r.hostLabel),
 }));
 
 vi.mock(
@@ -86,10 +93,16 @@ vi.mock(
 
 // Dialing the real durable transport from a test would be a silent fall-through
 // past the factory override; make it unmissable instead.
+//
+// Hoisted to ONE instance so the opener is referentially stable across renders,
+// matching the real hook — see the note at
+// `lib/registries/__tests__/chat-session-registry.test.ts` for what a
+// fresh-closure-per-render mock does to the effects that depend on it.
+const refuseDurableTransport = vi.hoisted(() => () => {
+  throw new Error("acceptance: the real stream transport must not be dialed");
+});
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => () => {
-    throw new Error("acceptance: the real stream transport must not be dialed");
-  },
+  useDurableStreamTransportFactory: () => refuseDurableTransport,
 }));
 
 const EPIC_ID = "epic-s4";
@@ -114,10 +127,25 @@ interface OutputWire {
 
 let wire: OutputWire | null = null;
 let epicHandle: OpenEpicStoreHandle | null = null;
+// Counts every stream open, mount and Retry alike - a Retry test's proof that
+// it opened a NEW stream rather than resuming the failed one.
+let outputWireFactoryCalls = 0;
 
-function installOutputWire(): void {
+function methodSupportStub(
+  support: StreamMethodSupport,
+): StreamMethodSupportSource {
+  return {
+    getMethodSupport: () => support,
+    subscribeMethodSupport: () => () => undefined,
+  };
+}
+
+function installOutputWire(over: {
+  readonly streamMethodSupport: StreamMethodSupportSource | null;
+}): void {
   __setManagedCommandOutputStreamClientFactoryForTests(
     (_epicId, _commandId, callbacks) => {
+      outputWireFactoryCalls += 1;
       const current: OutputWire = { callbacks, sentLoadOlder: [] };
       wire = current;
       return {
@@ -128,6 +156,7 @@ function installOutputWire(): void {
           );
         },
         close: () => undefined,
+        streamMethodSupport: over.streamMethodSupport,
       };
     },
   );
@@ -140,11 +169,19 @@ function connectedWire(): OutputWire {
   return wire;
 }
 
+/** A close that is about the stream, not the shell - the host's own reader threw. */
+function fatalErrorDetails(code: string, reason: string): FatalErrorDetails {
+  return { code, reason, incompatibleMethods: null, upgradeGuidance: null };
+}
+
 function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   return managedCommandSchema.parse({
     id: COMMAND_ID,
     monitoring: true,
     description: "deploy watcher",
+    command: "tail -f deploy.log",
+    cwd: "/work/repo",
+    cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: "chat-owner",
     createdAtMs: T0,
@@ -301,7 +338,8 @@ beforeEach(() => {
     activeTabId: TAB_ID,
   });
   mocks.reachability.value = "reachable";
-  installOutputWire();
+  outputWireFactoryCalls = 0;
+  installOutputWire({ streamMethodSupport: null });
 });
 
 afterEach(() => {
@@ -334,11 +372,10 @@ describe("S4 · output window", () => {
       reachedStart: true,
     });
 
-    // Entity naming: the noun follows the monitor flag, and this fixture is
-    // watching.
-    expect(screen.getByTestId("managed-command-output-title").textContent).toBe(
-      "Monitor · deploy watcher",
-    );
+    // The window carries no title of its own: identity lives in the tab, and a
+    // bar here would restate the tab's own "Monitor · deploy watcher" over the
+    // one thing a reader came for. What floats over the log is live state.
+    expect(screen.queryByTestId("managed-command-output-title")).toBeNull();
     expect(
       screen.getByTestId("managed-command-output-status").textContent,
     ).toMatch(/running/i);
@@ -516,7 +553,7 @@ describe("S4 · output window", () => {
     expect(connectedWire().sentLoadOlder).toHaveLength(1);
   });
 
-  it("S4d: a deleted command shows the dead-state banner over the retained scrollback, loses its lifecycle actions, and stays closeable", () => {
+  it("S4d: a deleted command replaces the whole window with a terminal notice - no scrollback, no lifecycle actions, still closeable", () => {
     renderTile();
     emitSnapshot({
       command: makeCommand({}),
@@ -533,11 +570,14 @@ describe("S4 · output window", () => {
 
     emitDeleted();
 
-    const banner = screen.getByTestId("managed-command-output-deleted");
-    expect(banner).toBeTruthy();
-    // Scrollback survives under the banner — the last trace of a destroyed
-    // history stays readable.
-    expect(screen.getByText("last words")).toBeTruthy();
+    const panel = screen.getByTestId("managed-command-output-availability");
+    expect(screen.getByText("This shell was deleted.")).toBeTruthy();
+    expect(panel.getAttribute("data-availability")).toBe("gone");
+    expect(panel.getAttribute("data-cause")).toBe("deleted");
+    // The history went with the shell - no ghost of the retained log stays on
+    // screen under the terminal notice.
+    expect(screen.queryByText("last words")).toBeNull();
+    expect(screen.queryByTestId("managed-command-output-timeline")).toBeNull();
     // The command is gone, not merely stopped: no lifecycle action remains.
     expect(
       screen.queryByTestId(`managed-command-stop-${COMMAND_ID}`),
@@ -549,18 +589,207 @@ describe("S4 · output window", () => {
       screen.queryByTestId(`managed-command-delete-${COMMAND_ID}`),
     ).toBeNull();
 
-    // The window remains closeable from the banner itself.
-    fireEvent.click(within(banner).getByRole("button"));
+    fireEvent.click(screen.getByRole("button", { name: "Close tab" }));
     expect(findOpenArtifactInTab(TAB_ID, COMMAND_ID)).toBeNull();
   });
 
   it("S4e: an unreachable host shows the connection overlay instead of a viewer — the stream is never dialed", () => {
     mocks.reachability.value = "unreachable";
     renderTile();
+
+    const panel = screen.getByTestId("managed-command-output-availability");
     expect(
-      screen.getByTestId("managed-command-output-unreachable"),
+      screen.getByText(
+        'Host "host host-1" is unreachable, so this output cannot be read. The shell and its log are kept on that host.',
+      ),
     ).toBeTruthy();
+    expect(panel.getAttribute("data-availability")).toBe("unreachable-host");
     expect(screen.queryByTestId("managed-command-output-timeline")).toBeNull();
     expect(wire).toBeNull();
+  });
+
+  it("S4f: a NOT_FOUND close before any snapshot reads as a shell the host no longer has", () => {
+    renderTile();
+
+    act(() => {
+      connectedWire().callbacks.onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: fatalErrorDetails(
+          "MANAGED_COMMAND_NOT_FOUND",
+          "MANAGED_COMMAND_NOT_FOUND: no such managed command in this epic",
+        ),
+      });
+    });
+
+    const panel = screen.getByTestId("managed-command-output-availability");
+    expect(
+      screen.getByText("This shell is no longer on this host."),
+    ).toBeTruthy();
+    expect(panel.getAttribute("data-cause")).toBe("not-found");
+    expect(screen.getByRole("button", { name: "Close tab" })).toBeTruthy();
+    expect(screen.queryByTestId("managed-command-output-timeline")).toBeNull();
+  });
+
+  it("S4f: an UNAUTHORIZED close after a snapshot drops the cached lines and the viewer's access", () => {
+    renderTile();
+    emitSnapshot({
+      command: makeCommand({}),
+      lines: [{ channel: "stdout", text: "last words", atMs: T0 }],
+      start: START,
+      reachedStart: true,
+    });
+
+    act(() => {
+      connectedWire().callbacks.onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: fatalErrorDetails(
+          "UNAUTHORIZED",
+          "UNAUTHORIZED: role revoked",
+        ),
+      });
+    });
+
+    expect(
+      screen.getByText("You no longer have access to this epic's shells."),
+    ).toBeTruthy();
+    expect(screen.queryByText("last words")).toBeNull();
+    expect(
+      screen.queryByTestId(`managed-command-stop-${COMMAND_ID}`),
+    ).toBeNull();
+  });
+
+  it("S4f: a stream failure after a snapshot keeps the scrollback and lifecycle actions, and Retry opens a fresh stream", () => {
+    renderTile();
+    emitSnapshot({
+      command: makeCommand({}),
+      lines: [{ channel: "stdout", text: "before the failure", atMs: T0 }],
+      start: START,
+      reachedStart: true,
+    });
+    const firstWire = connectedWire();
+    const callsBeforeRetry = outputWireFactoryCalls;
+
+    act(() => {
+      firstWire.callbacks.onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: fatalErrorDetails(
+          "MANAGED_COMMAND_OUTPUT_FAILED",
+          "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
+        ),
+      });
+    });
+
+    const banner = screen.getByTestId("managed-command-output-availability");
+    expect(banner.getAttribute("data-availability")).toBe("stream-error");
+    expect(banner.textContent).toContain("The output stream failed.");
+    // The stream failed, not the shell - its own history and controls stay.
+    expect(screen.getByText("before the failure")).toBeTruthy();
+    expect(
+      screen.getByTestId(`managed-command-stop-${COMMAND_ID}`),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // Retry tears the failed store down and dials a brand new stream.
+    expect(outputWireFactoryCalls).toBe(callsBeforeRetry + 1);
+    expect(connectedWire()).not.toBe(firstWire);
+    expect(screen.queryByText("before the failure")).toBeNull();
+    expect(screen.getByText("Connecting…")).toBeTruthy();
+
+    emitSnapshot({
+      command: makeCommand({}),
+      lines: [{ channel: "stdout", text: "after the retry", atMs: T0 + 1 }],
+      start: START,
+      reachedStart: true,
+    });
+
+    expect(screen.getByText("after the retry")).toBeTruthy();
+  });
+
+  it("S4g: reads 'Connecting…' as a centred panel until a snapshot lands whatever the transport says, then an empty tail as 'No output yet.'", () => {
+    renderTile();
+
+    // Before the opening snapshot there is nothing to keep in view, so the
+    // window is a centred connecting panel - the timeline is not mounted yet,
+    // and no strip sits along the top where a header bar used to.
+    expect(screen.queryByTestId("managed-command-output-timeline")).toBeNull();
+    expect(screen.getByText("Connecting…")).toBeTruthy();
+
+    // The socket declaring itself open is not the snapshot landing.
+    act(() => {
+      connectedWire().callbacks.onConnectionStatus("open", null);
+    });
+    expect(screen.getByText("Connecting…")).toBeTruthy();
+
+    emitSnapshot({
+      command: makeCommand({}),
+      lines: [],
+      start: START,
+      reachedStart: true,
+    });
+
+    expect(screen.queryByText("Connecting…")).toBeNull();
+    const timelineEl = screen.getByTestId("managed-command-output-timeline");
+    expect(within(timelineEl).getByText("No output yet.")).toBeTruthy();
+    expect(screen.getByTestId("managed-command-output-status")).toBeTruthy();
+  });
+
+  it("S4h: a fatal close during an in-flight older-page request clears the spinner and stops paging", () => {
+    renderTile();
+    emitSnapshot({
+      command: makeCommand({}),
+      lines: [{ channel: "stdout", text: "recent tail line", atMs: T0 }],
+      start: START,
+      reachedStart: false,
+    });
+    const view = screen.getByTestId("managed-command-output-timeline");
+    setScrollGeometry(view, {
+      scrollTop: 10,
+      scrollHeight: 1_000,
+      clientHeight: 200,
+    });
+    fireEvent.scroll(view);
+
+    expect(connectedWire().sentLoadOlder).toHaveLength(1);
+    expect(
+      screen.getByTestId("managed-command-output-loading-older"),
+    ).toBeTruthy();
+
+    act(() => {
+      connectedWire().callbacks.onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: fatalErrorDetails(
+          "MANAGED_COMMAND_OUTPUT_FAILED",
+          "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
+        ),
+      });
+    });
+
+    expect(
+      screen.queryByTestId("managed-command-output-loading-older"),
+    ).toBeNull();
+
+    setScrollGeometry(view, {
+      scrollTop: 0,
+      scrollHeight: 1_000,
+      clientHeight: 200,
+    });
+    fireEvent.scroll(view);
+    expect(connectedWire().sentLoadOlder).toHaveLength(1);
+  });
+
+  it("S4i: a bound host that cannot serve the stream reads as too old, with no timeline - read through the wire's own capability, not the app default", () => {
+    installOutputWire({
+      streamMethodSupport: methodSupportStub("unsupported"),
+    });
+    renderTile();
+
+    const panel = screen.getByTestId("managed-command-output-availability");
+    expect(
+      screen.getByText("This host is too old to show shells."),
+    ).toBeTruthy();
+    expect(panel.getAttribute("data-availability")).toBe("unsupported-host");
+    expect(screen.queryByTestId("managed-command-output-timeline")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close tab" })).toBeNull();
   });
 });

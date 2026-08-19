@@ -219,6 +219,44 @@ describe("dispatchAction", () => {
     expect(router.getPathname()).toBe("/epics");
   });
 
+  it("walks available app history and no-ops at its boundaries", () => {
+    const { router: baseRouter, calls } = buildRouter("/");
+    let canGoBack = true;
+    let canGoForward = true;
+    const router: KeybindingRouter = {
+      ...baseRouter,
+      isHistoryNavAvailable: () => true,
+      canGoBack: () => canGoBack,
+      canGoForward: () => canGoForward,
+    };
+
+    expect(dispatchAction("nav.back", router)).toBe(true);
+    expect(dispatchAction("nav.forward", router)).toBe(true);
+    expect(calls.map((call) => call.kind)).toEqual(["back", "forward"]);
+
+    canGoBack = false;
+    canGoForward = false;
+    expect(dispatchAction("nav.back", router)).toBe(false);
+    expect(dispatchAction("nav.forward", router)).toBe(false);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("registers defaults for Resource Monitor and usage limits", () => {
+    const defaults = getDefaultBindings();
+
+    expect(defaults["app.resources.open"]).toBe("shift+escape");
+    expect(defaults["app.rate-limits.open"]).toBe("mod+shift+u");
+    expect(findActionForChord("shift+escape")).toBe("app.resources.open");
+    expect(findActionForChord("mod+shift+u")).toBe("app.rate-limits.open");
+  });
+
+  it("registers a default binding for the notification center", () => {
+    const defaults = getDefaultBindings();
+
+    expect(defaults["app.notifications.open"]).toBe("mod+shift+n");
+    expect(findActionForChord("mod+shift+n")).toBe("app.notifications.open");
+  });
+
   it("app.sidebar.toggle no-ops when no bridge is registered", () => {
     const { router } = buildRouter("/epics/e1");
     const fired = dispatchAction("app.sidebar.toggle", router);

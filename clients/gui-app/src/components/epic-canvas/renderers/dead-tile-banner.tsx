@@ -122,54 +122,10 @@ export function TerminalDeadTileBanner(
   );
 }
 
-export interface ManagedCommandDeletedBannerProps {
-  /**
-   * Whether the deletion itself was observed. `false` only when the window
-   * never received a snapshot (restored for a shell the host had already
-   * dropped), which is the one case where "deleted" cannot be confirmed -
-   * only that the shell is no longer there.
-   */
-  readonly deletionConfirmed: boolean;
-  readonly onClose: () => void;
-  readonly testId: string;
-}
-
-/**
- * A shell deleted while its output window was open. Sits ABOVE the timeline
- * rather than replacing it: the scrollback the viewer already has is the last
- * trace of a history the host just destroyed, so it stays readable until the
- * tab is closed. Nothing can be paged in behind it and no lifecycle action
- * remains - the shell is gone, not merely stopped.
- */
-export function ManagedCommandDeletedBanner(
-  props: ManagedCommandDeletedBannerProps,
-): ReactNode {
-  return (
-    <div
-      className="flex min-w-0 items-center gap-3 border-b border-border/60 bg-muted/30 px-3 py-2 text-ui-xs text-muted-foreground"
-      data-testid={props.testId}
-      role="status"
-    >
-      <span className="min-w-0 flex-1">
-        {props.deletionConfirmed
-          ? "This shell was deleted. Its output history is gone; what is shown below is only what this window had already read."
-          : "This shell is no longer on this host. Its output history is gone; what is shown below is only what this window had already read."}
-      </span>
-      <Button type="button" variant="outline" size="sm" onClick={props.onClose}>
-        Close tab
-      </Button>
-    </div>
-  );
-}
-
 export interface WorkspaceFileDeadTileBannerProps {
   readonly hostLabel: string;
-  /**
-   * `offline` - the bound host is not in the directory / not available.
-   * `inactive` - the bound host is reachable but is not the renderer's
-   * active host, so its RPC client is not addressable from here.
-   */
-  readonly reason: "offline" | "inactive";
+  /** The bound host is not in the directory / not available. */
+  readonly reason: "offline";
   readonly testId: string;
 }
 
@@ -180,11 +136,11 @@ export function WorkspaceFileDeadTileBanner(
     <div
       className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
       data-testid={props.testId}
+      data-reason={props.reason}
     >
       <p className="max-w-md">
-        {props.reason === "offline"
-          ? `This file is on host "${props.hostLabel}", which is currently unreachable. The preview will load once that host is back.`
-          : `This file is on host "${props.hostLabel}". Switch your active host to "${props.hostLabel}" to view it.`}
+        This file is on host &quot;{props.hostLabel}&quot;, which is currently
+        unreachable. The preview will load once that host is back.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
@@ -202,7 +158,7 @@ export function WorkspaceFileDeadTileBanner(
 
 export interface GitDiffDeadTileBannerProps {
   readonly hostLabel: string;
-  readonly reason: "offline" | "inactive";
+  readonly reason: "offline";
   readonly testId: string;
 }
 
@@ -213,11 +169,11 @@ export function GitDiffDeadTileBanner(
     <div
       className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
       data-testid={props.testId}
+      data-reason={props.reason}
     >
       <p className="max-w-md">
-        {props.reason === "offline"
-          ? `This diff is on host "${props.hostLabel}", which is currently unreachable. The diff will load once that host is back.`
-          : `This diff is on host "${props.hostLabel}". Switch your active host to "${props.hostLabel}" to view it.`}
+        This diff is on host &quot;{props.hostLabel}&quot;, which is currently
+        unreachable. The diff will load once that host is back.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
@@ -235,10 +191,9 @@ export function GitDiffDeadTileBanner(
 
 /**
  * PR detail tiles subscribe through their OWN bound host's client
- * (`useHostStreamClientFor`), never the app's active host - so unlike
- * `GitDiffDeadTileBanner` there is no "inactive" reason, only "the bound
- * host itself is unreachable." The heavy PR cache lives on that host, so
- * nothing can render until it returns.
+ * (`useHostStreamClientFor`), never the app's active host — same as
+ * `GitDiffDeadTileBanner`, which only has an "offline" reason. The heavy
+ * PR cache lives on that host, so nothing can render until it returns.
  */
 export interface PrDetailDeadTileBannerProps {
   readonly hostLabel: string;
@@ -331,6 +286,8 @@ export function ChatHostStartingBanner(
       role="status"
       data-testid={props.testId}
       className={cn(
+        // muted-fill-ok: banner carries its own border-b border-border, so a
+        // collapse loses the wash and not the band
         "flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-ui-sm text-muted-foreground",
         props.className,
       )}

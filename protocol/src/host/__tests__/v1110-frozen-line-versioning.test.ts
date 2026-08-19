@@ -23,10 +23,10 @@ import {
   createTuiAgentRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
-  providersListRequestSchemaV70,
+  providersListResponseSchema,
   providersListResponseSchemaV60,
-  providersListResponseSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
 import type { NativeListQuery } from "@traycer/protocol/host/provider-native-schemas";
 
@@ -106,17 +106,17 @@ const releasedProvidersRequest = { forceAuthRefresh: true };
 // carries a major-7 contract), which is why nothing downgrades INTO it and the
 // strip loop stops at 6.
 //
-// Its request is read here through `providersListRequestSchemaV70` - the
-// inactive pin, held identical to the live schema by the equality guard in
-// `provider-model-providers-compat.test.ts`. Reading the pin rather than the
-// live schema is the point: the day this line is released, the pin becomes the
-// contract, so it is the shape worth asserting against now.
+// Its request is read here through the LIVE `providersListRequestSchema`,
+// which is what the v7.0 contract binds: v7.0 is the head line, and the head
+// tracks live. It briefly read an inactive `providersListRequestSchemaV70`
+// pin instead, back when a v8.0 sat above it; collapsing that unreleased major
+// into v7.0 made the live schema the contract again.
 const RELEASED_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6] as const;
 const ALL_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6, 7] as const;
 
 function requestSchemaFor(major: number) {
   return major >= 7
-    ? providersListRequestSchemaV70
+    ? providersListRequestSchema
     : providersListRequestSchemaBeforeV70;
 }
 
@@ -137,18 +137,17 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
         forceAuthRefresh: true,
         native: null,
       });
-      // Asserted against the frozen v7.0 schema specifically, not merely the
-      // canonical one - the registered `providers.list` v7.0 contract is
-      // pinned to `providersListRequestSchemaV70`, so this is the schema a
-      // real peer negotiating v7.0 actually decodes against.
+      // Asserted against the schema the registered `providers.list` v7.0
+      // contract actually binds, so this is what a real peer negotiating v7.0
+      // decodes against.
       expect(() =>
-        providersListRequestSchemaV70.parse(canonical),
+        providersListRequestSchema.parse(canonical),
       ).not.toThrow();
     }
   });
 
   it("a new 7.0 client downgrades its request to every released major without leaking native", () => {
-    const canonical = providersListRequestSchemaV70.parse({
+    const canonical = providersListRequestSchema.parse({
       forceAuthRefresh: true,
       native: {
         kind: "mcp",
@@ -184,7 +183,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   // `serverName`/`forceRefresh` and `pluginIcon` adds `pluginId`/`theme` - a
   // downgrade that reshaped the union could drop those and still look correct
   // against an `mcp`-only assertion.
-  const V70_QUERY_CASES: {
+  const HEAD_QUERY_CASES: {
     // Mapped over the discriminant with `Extract`, not `Record<kind, union>`:
     // the latter accepts ANY arm under ANY key, so a payload filed under the
     // wrong `kind` would type-check and quietly test one arm twice while
@@ -229,18 +228,17 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
     },
   };
 
-  it.each(Object.entries(V70_QUERY_CASES))(
-    "the inactive v7.0 request pin round-trips a %s native query losslessly",
+  it.each(Object.entries(HEAD_QUERY_CASES))(
+    "the v7.0 request schema round-trips a %s native query losslessly",
     (_kind, native) => {
-      // NOT a bridge test. The registered v7.0 contract decodes requests
-      // through this pin, and its `native` deliberately stays the live query
-      // schema (see the pin's comment) - so what has to hold is that the pin
-      // carries every arm losslessly; an arm it mangles mangles real traffic.
-      const canonical = providersListRequestSchemaV70.parse({
+      // NOT a bridge test. This is the schema the registered v7.0 contract
+      // decodes requests through, so what has to hold is that it carries every
+      // `native` arm losslessly; an arm it mangles mangles real traffic.
+      const canonical = providersListRequestSchema.parse({
         forceAuthRefresh: true,
         native,
       });
-      const pinned = providersListRequestSchemaV70.safeParse(canonical);
+      const pinned = providersListRequestSchema.safeParse(canonical);
       expect(pinned.success).toBe(true);
       if (!pinned.success) return;
       // Deep-equal against the ORIGINAL payload, not merely "it parsed": a
@@ -252,7 +250,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
   );
 
   it("response round-trip 7.0 -> 6.0 -> 7.0 still parses at both ends", () => {
-    const canonicalResponse = providersListResponseSchemaV70.parse({
+    const canonicalResponse = providersListResponseSchema.parse({
       providers: [],
       native: null,
     });
@@ -275,6 +273,6 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       providersListResponseSchemaV60.parse(down.value),
     );
     expect(back.native).toBeNull();
-    expect(providersListResponseSchemaV70.safeParse(back).success).toBe(true);
+    expect(providersListResponseSchema.safeParse(back).success).toBe(true);
   });
 });

@@ -34,11 +34,23 @@ export function managedCommandNoun(monitoring: boolean): string {
   return monitoring ? "Monitor" : MANAGED_COMMAND_NOUN;
 }
 
-/** The list row / tab title: "Monitor · deploy watcher", "Shell · db migration". */
+/**
+ * The list row / tab title: "Monitor · deploy watcher", "Shell · db migration".
+ *
+ * A shell with no description is the noun alone rather than a dangling
+ * "Shell · ": the separator promises a name after it. Whitespace counts as no
+ * description - an agent that passed " " meant nothing by it, and a title
+ * ending in a separator and a space is the same broken promise. The guard
+ * lives here so every surface inherits it - it used to be a
+ * resource-monitor-only rule, which is exactly how a second spelling of the
+ * same title gets written.
+ */
 export function managedCommandTitle(
   command: Pick<ManagedCommand, "description" | "monitoring">,
 ): string {
-  return `${managedCommandNoun(command.monitoring)} · ${command.description}`;
+  const noun = managedCommandNoun(command.monitoring);
+  const description = command.description.trim();
+  return description.length === 0 ? noun : `${noun} · ${description}`;
 }
 
 /**
@@ -51,6 +63,55 @@ export const MANAGED_COMMAND_QUEUED_CHIP_TOOLTIP =
 
 /** The output window's own name. */
 export const MANAGED_COMMAND_OUTPUT_WINDOW_TITLE = "Shell output";
+
+/**
+ * The restart card's header verb, in the shell's own noun: "Restarted Monitor ·
+ * deploy watcher". Same guard as `managedCommandTitle` for a shell with no
+ * description, and for the same reason.
+ */
+export function managedCommandRestartTitle(
+  command: Pick<ManagedCommand, "description" | "monitoring">,
+): string {
+  return `Restarted ${managedCommandTitle(command)}`;
+}
+
+/**
+ * What a restart changed, as the compact phrase beside its title. Judged
+ * against the spec the shell ran under before the call, never against which
+ * inputs the caller passed - a restart naming the command already stored is
+ * "same command and cwd", because it is.
+ */
+export function managedCommandRestartDeltaPhrase(delta: {
+  readonly commandChanged: boolean;
+  readonly cwdChanged: boolean;
+}): string {
+  if (delta.commandChanged && delta.cwdChanged) {
+    return "command and cwd changed";
+  }
+  if (delta.commandChanged) return "command changed";
+  if (delta.cwdChanged) return "cwd changed";
+  return "same command and cwd";
+}
+
+/**
+ * The frozen outcome a restart card shows when the relaunch did NOT come up.
+ * A spawn failure is `exited` with neither code nor signal - "Exited" would
+ * read as though something ran; it did not. Anything else keeps the shared
+ * status vocabulary. (A `running` outcome is not shown at all: it is the
+ * normal case, and frozen it reads as a live claim.)
+ */
+export function managedCommandRestartOutcomeLabel(
+  outcome: ManagedCommandStatus,
+): string {
+  if (
+    outcome.state === "exited" &&
+    outcome.exitCode === null &&
+    outcome.signal === null
+  ) {
+    return "Failed to start";
+  }
+  return managedCommandStatusLabel(outcome);
+}
 
 export function managedCommandStatusLabel(
   status: ManagedCommandStatus,
@@ -68,26 +129,6 @@ export function managedCommandStatusLabel(
     case "interrupted":
       return "Interrupted";
   }
-}
-
-/**
- * Whether this shell's ending is news - the one thing that turns the chat's
- * badge from quiet to attention.
- *
- * A failure and nothing else, whether or not the shell was monitoring. A stop is
- * something a human or an agent asked for, so it is never news no matter how it
- * reads afterwards; a clean exit is a shell doing what it was made to do, and a
- * watcher that means to keep running says so through its own output rather than
- * through a badge on the chat. `interrupted` is the host dying underneath the
- * shell rather than the shell doing anything, so it stays quiet too.
- */
-export function managedCommandNeedsAttention(
-  command: Pick<ManagedCommand, "status">,
-): boolean {
-  const status = command.status;
-  if (status.state !== "exited") return false;
-  if (status.signal !== null) return true;
-  return status.exitCode !== 0;
 }
 
 export type ManagedCommandStatusTone = "running" | "failed" | "idle";

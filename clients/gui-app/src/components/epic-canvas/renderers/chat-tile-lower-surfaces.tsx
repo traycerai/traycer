@@ -38,7 +38,10 @@ import {
 } from "@/lib/chat/chat-lower-scroll-budget";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
-import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-commands-for-chat";
+import {
+  useHeldManagedCommandsForChat,
+  useRunningManagedCommandsForChat,
+} from "@/stores/managed-commands/managed-commands-for-chat";
 import { cn } from "@/lib/utils";
 import type {
   PendingInterviewView,
@@ -74,6 +77,7 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
   readonly backgroundStopAllPending: boolean;
+  readonly backgroundSessionStopPending: boolean;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
 }
 
@@ -170,6 +174,7 @@ export interface ChatLowerQueueState {
   readonly onCancelEdit: () => void;
   readonly onStopBackgroundItem: (taskId: string) => string | null;
   readonly onStopAllBackgroundItems: () => string | null;
+  readonly onStopBackgroundSession: () => string | null;
   readonly onReorder: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
@@ -288,7 +293,7 @@ export function ChatLowerInteractionSurfaces(
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
-  // Read here rather than inside the dock: the same count decides the dock's
+  // Read here rather than inside the dock: the same counts decide the dock's
   // Background section and the spacing of everything below it. Scoped to the
   // tile's bound host - that is the host the tile opened the session under,
   // and a same-id chat on another machine is a different agent.
@@ -297,9 +302,20 @@ export function ChatLowerInteractionSurfaces(
     chatId: props.chatId,
     hostId: props.hostId,
   }).length;
+  // A second read rather than a bigger first one: the sets overlap, so this is
+  // not a partition, and only the union decides whether the section exists. A
+  // hold that only a human can clear belongs to a shell that has FINISHED, so a
+  // chat holding output while running nothing - the case Deliver exists for -
+  // has a running count of zero and must open the section on this alone.
+  const heldManagedCommandCount = useHeldManagedCommandsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId: props.hostId,
+  }).length;
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount,
+    heldManagedCommandCount,
   });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
@@ -396,8 +412,10 @@ export function ChatLowerInteractionSurfaces(
         queue={props.queue.value}
         backgroundItems={props.backgroundItems}
         runningManagedCommandCount={runningManagedCommandCount}
+        heldManagedCommandCount={heldManagedCommandCount}
         backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
         backgroundStopAllPending={props.backgroundStopAllPending}
+        backgroundSessionStopPending={props.backgroundSessionStopPending}
         activeTurnStatus={props.turn.activeTurnStatus}
         canAct={props.access.canAct}
         queueResumeRequested={props.queue.resumeRequested}
@@ -416,6 +434,7 @@ export function ChatLowerInteractionSurfaces(
         onBackgroundItemClick={props.onBackgroundItemClick}
         onBackgroundItemStop={props.queue.onStopBackgroundItem}
         onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
+        onBackgroundSessionStop={props.queue.onStopBackgroundSession}
       />
       <ChatComposerRegion model={composerModel} layout={composerLayout} />
       <StopChildrenDialog

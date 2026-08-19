@@ -331,7 +331,7 @@ function CliBinaryProbePendingNotice({
   readonly providerLabel: string;
 }): ReactNode {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
+    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-foreground/2 p-3 text-ui-sm text-muted-foreground">
       <MutedAgentSpinner />
       Looking for the {providerLabel} CLI…
     </div>
@@ -348,7 +348,7 @@ function CliBinaryMissingNotice({
   const openExternalLink = useRunnerOpenExternalLink();
   const runnerHost = use(RunnerHostContext);
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
+    <div className="rounded-lg border border-border/60 bg-foreground/2 p-3 text-ui-sm text-muted-foreground">
       <p>
         No {providerLabel} CLI was found on this machine, and Traycer ships no
         bundled copy of it. Install it, or add its path below.
@@ -603,7 +603,7 @@ function CandidateTable({
       <div
         className={cn(
           TABLE_ROW,
-          "border-b border-border/40 bg-muted/30 py-2 text-ui-xs font-medium text-muted-foreground",
+          "border-b border-border/40 bg-foreground/3 py-2 text-ui-xs font-medium text-muted-foreground",
         )}
       >
         <span />
@@ -678,7 +678,7 @@ function CustomPathForm({
     // `col-span-4`: the table container is the shared grid the header and rows
     // subgrid onto, so this form is a grid item too - without it, it lands in
     // the 2.25rem radio column and collapses to a sliver.
-    <div className="col-span-4 flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
+    <div className="col-span-4 flex flex-col gap-2 border-t border-border/40 bg-foreground/2 p-3">
       <div className="flex items-center gap-2">
         <Input
           ref={focusDraftInput}
@@ -784,7 +784,7 @@ function CandidateRow({
     <div
       className={cn(
         TABLE_ROW,
-        "border-b border-border/40 py-2.5 last:border-b-0 hover:bg-muted/20",
+        "border-b border-border/40 py-2.5 last:border-b-0 hover:bg-foreground/3",
         presentation.unavailable ? "opacity-60" : "",
       )}
     >
@@ -1077,8 +1077,10 @@ function VersionMenuTrigger({
         // published version plus every retained install. Past the dialog's
         // collision boundary the older rows and their Use / Delete controls
         // were simply unreachable, because `overflow-hidden` clips rather than
-        // scrolls. The panel scrolls its own list, so the header and the
-        // auto-download toggle stay put.
+        // scrolls. The panel scrolls its own list, so its banners and its
+        // auto-download footer stay put. This cap is now the outer of two -
+        // the list carries its own, tighter one - and remains the binding
+        // constraint only when the banners and a long notice are all present.
         className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden p-0"
       >
         {data.kind === "unavailable" ? (
@@ -1361,7 +1363,24 @@ function RowStatusLine({
         ? null
         : Math.min(100, Math.max(0, Math.round(status.percent)));
     return (
-      <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 items-center gap-2 px-2.5">
+      // STACKED, not side by side. The bar and the label used to share one
+      // flex line with the bar `w-full shrink-0` - it claimed the whole line
+      // and then refused to give any of it back, so the label was squeezed
+      // into whatever remained and wrapped to four lines against the right
+      // edge, under the narrow `0.2fr` Version column it does not even belong
+      // to. Nothing about the pair wants to be horizontal: the label is a
+      // sentence with a variable-length fallback clause appended, and a
+      // sentence next to a progress track is two things fighting for the same
+      // inline axis. Column layout also drops `shrink-0`, which only existed
+      // to stop the bar collapsing in that fight.
+      <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 flex-col gap-1.5 px-2.5">
+        <span className="min-w-0 text-ui-xs text-muted-foreground">
+          {/* Own element so the visible progress label stays byte-identical to
+              the progressbar's accessible name, whether or not a fallback
+              clause follows it. */}
+          <span>{status.label}</span>
+          {status.note === null ? null : <span> · {status.note}</span>}
+        </span>
         <span
           role="progressbar"
           aria-label={status.label}
@@ -1372,7 +1391,7 @@ function RowStatusLine({
           // width, which this repo's UI rule excludes for layout surfaces - the
           // track has to shrink with a narrow settings dialog rather than hold
           // a rem figure chosen against one window size.
-          className="h-1 w-full max-w-[min(100%,30vw)] shrink-0 overflow-hidden rounded-full bg-muted"
+          className="h-1 w-full max-w-[min(100%,30vw)] overflow-hidden rounded-full bg-foreground/8"
         >
           <span
             className={cn(
@@ -1383,13 +1402,6 @@ function RowStatusLine({
               percent === null ? undefined : { width: `${String(percent)}%` }
             }
           />
-        </span>
-        <span className="min-w-0 text-ui-xs text-muted-foreground">
-          {/* Own element so the visible progress label stays byte-identical to
-              the progressbar's accessible name, whether or not a fallback
-              clause follows it. */}
-          <span>{status.label}</span>
-          {status.note === null ? null : <span> · {status.note}</span>}
         </span>
       </span>
     );

@@ -111,9 +111,16 @@ export function AgentSelectionGuideSection() {
   // `following` is usable but needs no re-provision either: the ambient client
   // already IS the scoped host's, and building a second one would duplicate
   // its socket for nothing.
+  //
+  // A GOVERNED SECOND COPY of `useScopedHostBinding`, narrowed to `ready` — see
+  // that hook's exception list, which names this one and why. `hostId` is what
+  // makes the re-provide reach `useHostClient()` at all, and the spread cannot
+  // be type-checked into supplying it: `...realBinding` satisfies the field
+  // with the app-wide `null`, so dropping it compiles clean and silently
+  // returns this section to the ambient host.
   const scopedBinding =
     scope.status === "ready" && realBinding !== null && scope.client !== null
-      ? { ...realBinding, hostClient: scope.client }
+      ? { ...realBinding, hostClient: scope.client, hostId: scope.hostId }
       : null;
 
   // ONE gate, wrapping everything that talks to the scoped host — including
@@ -438,8 +445,8 @@ function SaveStatus(props: {
 function EditorSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="min-h-[min(22vh,11rem)] flex-1 animate-pulse rounded-md bg-muted/40" />
-      <div className="h-4 w-2/3 animate-pulse rounded bg-muted/30" />
+      <div className="min-h-[min(22vh,11rem)] flex-1 animate-pulse rounded-md bg-foreground/10" />
+      <div className="h-4 w-2/3 animate-pulse rounded bg-foreground/10" />
     </div>
   );
 }

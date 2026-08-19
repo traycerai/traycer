@@ -92,6 +92,8 @@ export function EnvOverrideEditor(props: {
       <div
         className={cn(
           GRID,
+          // muted-fill-ok: header band inside a border-border/60 container and
+          // carrying its own border-b; a collapse loses the tint, not the row
           "hidden border-b border-border/40 bg-muted/30 px-3 py-2 text-ui-xs font-medium text-muted-foreground sm:grid",
         )}
       >
@@ -249,6 +251,8 @@ function EnvOverrideRow(props: {
           disabled={disabled}
           onClick={() => onDelete(entry.key)}
           aria-label={`Remove ${entry.key}`}
+          // muted-fill-ok: hover also swings the icon to text-destructive, so
+          // the state keeps a channel that no theme can collapse
           className={cn(
             ROW_ACTIONS_PLACEMENT,
             "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50",

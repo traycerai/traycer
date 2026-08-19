@@ -295,12 +295,22 @@ export function ProviderReauthBanner({
   // button is only offered when the tab's host is local; remote hosts fall
   // through to the "reconnect from the CLI" stub.
   const isLocalHost = tabEntry?.kind === "local";
+  // TAB-bound, not scope-bound — which is why this cannot go through
+  // `useScopedHostBinding` (it takes a `HostScope`; there is none here). Listed
+  // as a governed exception on that hook.
+  //
+  // `hostId` is `tabHostId` because that is the host `tabClient` addresses, and
+  // the pair has to move as one value: the mutations below re-authenticate a
+  // provider ON the machine that ran the turn. The spread cannot be
+  // type-checked into supplying it — `...realBinding` satisfies the field with
+  // the app-wide `null` — so without it every `providers.*` login here would go
+  // to the ambient host while the banner named the tab's.
   const scopedBinding = useMemo(
     () =>
       tabClient !== null && realBinding !== null
-        ? { ...realBinding, hostClient: tabClient }
+        ? { ...realBinding, hostClient: tabClient, hostId: tabHostId }
         : null,
-    [tabClient, realBinding],
+    [tabClient, tabHostId, realBinding],
   );
 
   const message = providerSignedOutMessage(providerId);

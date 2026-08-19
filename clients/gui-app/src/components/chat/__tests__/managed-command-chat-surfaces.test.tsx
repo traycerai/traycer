@@ -17,17 +17,20 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { DndContext } from "@dnd-kit/core";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
-import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  HeldManagedCommandUpdate,
+  ManagedCommand,
+} from "@traycer/protocol/host/managed-command/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
  * The chat's own managed-command surfaces: the chip and the resume divider are
- * doors into the output window, both naming the Shell entity; the Background panel lists
- * what this chat has running right now; and the Shells menu is the home for
- * the chat's commands in every state.
+ * doors into the output window, both naming the Shell entity, and the
+ * Background panel lists what this chat has running right now. (The Shells
+ * menu that used to sit beside the composer is gone - the transcript's start
+ * cards and the output window carry what it did.)
  */
 
 const streamSupport = vi.hoisted<{ value: string }>(() => ({
@@ -46,7 +49,28 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 // over a real host client.
 const stopMutate = vi.fn();
 const stopAllMutate = vi.fn();
-const stopAllFlight = { isPending: false };
+const deliverHeldMutate = vi.fn();
+/**
+ * The two pending reads are separate flags on purpose, and driving them from
+ * one was a hole rather than a shortcut.
+ *
+ * A mutation result's `isPending` is PER-OBSERVER, so the same chat open in two
+ * tiles leaves the second tile's button live while the first tile's call is in
+ * flight - which for a null-ids Deliver is not a narrower duplicate but the
+ * identical whole-chat action re-sent. The shared `useIsMutating` read is what
+ * closes that, and it is the only one a panel may consult. While one flag drove
+ * both, a component that switched to the local `isPending` - the exact
+ * regression the shared hook exists to prevent - kept every test green.
+ *
+ * The `*OwnFlight` flags therefore stay false in the gate tests below: a panel
+ * that reads them fails, which is the point. (In production the shared read is
+ * a superset - `useIsMutating` counts this observer's own mutation too - so
+ * own-true/shared-false is a state only a test can produce.)
+ */
+const stopAllOwnFlight = { isPending: false };
+const stopAllSharedFlight = { isPending: false };
+const deliverHeldOwnFlight = { isPending: false };
+const deliverHeldSharedFlight = { isPending: false };
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
   () => ({
@@ -54,10 +78,16 @@ vi.mock(
     useManagedCommandStop: () => ({ mutate: stopMutate, isPending: false }),
     useManagedCommandStopAll: () => ({
       mutate: stopAllMutate,
-      isPending: stopAllFlight.isPending,
+      isPending: stopAllOwnFlight.isPending,
     }),
-    useManagedCommandStopAllIsPending: () => stopAllFlight.isPending,
+    useManagedCommandStopAllIsPending: () => stopAllSharedFlight.isPending,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDeliverHeld: () => ({
+      mutate: deliverHeldMutate,
+      isPending: deliverHeldOwnFlight.isPending,
+    }),
+    useManagedCommandDeliverHeldIsPending: () =>
+      deliverHeldSharedFlight.isPending,
   }),
 );
 
@@ -78,8 +108,6 @@ import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { ManagedCommandBadge } from "@/components/chat/queued-message-surface";
 import { AutonomousResumeSegment } from "@/components/chat/segments/autonomous-resume-segment";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
-import { ManagedCommandChatMenu } from "@/components/managed-commands/managed-command-chat-menu";
-import { useManagedCommandAttentionStore } from "@/stores/managed-commands/managed-command-attention-store";
 
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
@@ -93,6 +121,7 @@ const HARNESS_ITEM: BackgroundItem = {
   blockId: "harness-task-tool",
   parentTaskId: null,
   scheduledFor: null,
+  individualStopUnavailable: null,
 };
 
 function command(over: Partial<ManagedCommand>): ManagedCommand {
@@ -100,10 +129,24 @@ function command(over: Partial<ManagedCommand>): ManagedCommand {
     id: "cmd-1",
     monitoring: true,
     description: "deploy watcher",
+    command: "tail -f deploy.log",
+    cwd: "/work/repo",
+    cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4410, startedAtMs: 10 },
     chatId: CHAT_ID,
     createdAtMs: 10,
     updatedAtMs: 10,
+    ...over,
+  };
+}
+
+function held(
+  over: Partial<HeldManagedCommandUpdate>,
+): HeldManagedCommandUpdate {
+  return {
+    commandId: "cmd-1",
+    description: "deploy watcher",
+    heldAtMs: 10,
     ...over,
   };
 }
@@ -155,6 +198,14 @@ function setCommands(
   chatSession(chatId).setCommands(commands);
 }
 
+/** This chat's whole set of held updates, the way the host sends it. */
+function setHeldUpdates(
+  heldUpdates: readonly HeldManagedCommandUpdate[],
+  chatId: string,
+): void {
+  chatSession(chatId).setHeldUpdates(heldUpdates);
+}
+
 function chatTileTree(node: ReactNode): ReactNode {
   return (
     <EpicSessionContext.Provider value={epicHandle}>
@@ -183,12 +234,12 @@ let epicHandle: OpenEpicStoreHandle;
 beforeEach(() => {
   stopMutate.mockClear();
   stopAllMutate.mockClear();
-  stopAllFlight.isPending = false;
+  stopAllOwnFlight.isPending = false;
+  stopAllSharedFlight.isPending = false;
+  deliverHeldMutate.mockClear();
+  deliverHeldOwnFlight.isPending = false;
+  deliverHeldSharedFlight.isPending = false;
   streamSupport.value = "supported";
-  useManagedCommandAttentionStore.setState(
-    useManagedCommandAttentionStore.getInitialState(),
-    true,
-  );
   epicHandle = createOpenEpicStore({
     epicId: EPIC_ID,
     streamClientFactory: noopStreamClientFactory,
@@ -377,11 +428,14 @@ describe("running commands in the Background panel", () => {
         readOnly={false}
         pendingStopTaskIds={new Set()}
         stopAllPending={false}
+        sessionStopPending={false}
+        turnActive={false}
         scrollRegionMaxHeightClass="max-h-96"
         separated={false}
         onItemClick={() => undefined}
         onStopItem={() => null}
         onStopAll={onStopAll}
+        onStopSession={() => null}
       />,
     );
     return { onStopAll };
@@ -632,7 +686,7 @@ describe("running commands in the Background panel", () => {
   });
 
   it("stays dead while anything it started is still in flight", () => {
-    stopAllFlight.isPending = true;
+    stopAllSharedFlight.isPending = true;
     const panel = renderPanel([HARNESS_ITEM]);
     act(() => {
       setCommands([command({ id: "m1" })], CHAT_ID);
@@ -652,7 +706,7 @@ describe("running commands in the Background panel", () => {
   });
 
   it("disables Stop all only when neither half can act", () => {
-    stopAllFlight.isPending = true;
+    stopAllSharedFlight.isPending = true;
     const panel = renderPanelWith([HARNESS_ITEM], false);
     act(() => {
       setCommands([command({ id: "m1" })], CHAT_ID);
@@ -715,412 +769,222 @@ describe("running commands in the Background panel", () => {
   });
 });
 
-describe("the chat's Shells menu", () => {
-  function renderMenu(): void {
+describe("held shells in the Background panel", () => {
+  function renderPanel(): void {
+    renderPanelAs(false);
+  }
+
+  /** `readOnly` is the viewer's own permission - the one gate a host RPC from
+   *  this panel still answers to, since the chat stream's state does not. */
+  function renderPanelAs(readOnly: boolean): void {
     renderInChatTile(
-      <DndContext>
-        <ManagedCommandChatMenu
-          epicId={EPIC_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          viewTabId={TAB_ID}
-        />
-      </DndContext>,
+      <BackgroundItemsPanel
+        items={[]}
+        epicId={EPIC_ID}
+        chatId={CHAT_ID}
+        viewTabId={TAB_ID}
+        canAct
+        readOnly={readOnly}
+        pendingStopTaskIds={new Set()}
+        stopAllPending={false}
+        sessionStopPending={false}
+        turnActive={false}
+        scrollRegionMaxHeightClass="max-h-96"
+        separated={false}
+        onItemClick={() => undefined}
+        onStopItem={() => null}
+        onStopAll={() => null}
+        onStopSession={() => null}
+      />,
     );
   }
 
-  function trigger$(): HTMLElement | null {
-    return screen.queryByTestId("managed-command-chat-menu-trigger");
+  function expandPanel(): void {
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
   }
 
-  function openMenu(): void {
-    fireEvent.click(screen.getByTestId("managed-command-chat-menu-trigger"));
-  }
+  it("shows no Deliver button when this chat holds nothing", () => {
+    renderPanel();
 
-  function exited(over: Partial<ManagedCommand>): ManagedCommand {
-    return command({
-      status: { state: "exited", exitCode: 1, signal: null, exitedAtMs: 20 },
-      updatedAtMs: 20,
-      ...over,
-    });
-  }
-
-  it("is absent until this chat owns a command, and present for any state", () => {
-    renderMenu();
-    act(() => {
-      // Only the other chat has anything, and its set never reaches this menu.
-      setCommands([command({ id: "other", chatId: "chat-2" })], "chat-2");
-    });
-    expect(trigger$()).toBeNull();
-
-    act(() => {
-      setCommands(
-        [
-          command({
-            id: "mine-done",
-            status: { state: "stopped", stoppedAtMs: 30 },
-          }),
-        ],
-        CHAT_ID,
-      );
-    });
-    // A finished command still belongs to the chat, so the door to it stays.
-    expect(trigger$()).not.toBeNull();
+    expect(screen.queryByTestId("background-deliver-held")).toBeNull();
   });
 
-  it("counts what is running, and says nothing when nothing is", () => {
-    renderMenu();
+  it("appears the moment this chat has a held shell, named by count", () => {
+    renderPanel();
     act(() => {
-      setCommands(
-        [
-          command({ id: "r1" }),
-          command({ id: "r2", monitoring: false }),
-          command({
-            id: "done",
-            status: { state: "stopped", stoppedAtMs: 30 },
-          }),
-        ],
-        CHAT_ID,
-      );
+      setHeldUpdates([held({ commandId: "cmd-1" })], CHAT_ID);
     });
 
-    expect(
-      screen.getByTestId("managed-command-chat-menu-running").textContent,
-    ).toBe("2");
-
-    act(() => {
-      setCommands(
-        [
-          command({ id: "r1", status: { state: "stopped", stoppedAtMs: 31 } }),
-          command({
-            id: "r2",
-            monitoring: false,
-            status: { state: "stopped", stoppedAtMs: 31 },
-          }),
-          command({
-            id: "done",
-            status: { state: "stopped", stoppedAtMs: 30 },
-          }),
-        ],
-        CHAT_ID,
-      );
-    });
-
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-running"),
-    ).toBeNull();
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
-    ).toBeNull();
-  });
-
-  it("lights attention for a failure only - never a clean exit, monitoring or not", () => {
-    renderMenu();
-    act(() => {
-      setCommands(
-        [
-          // Failed: its ending is not the one it promised.
-          exited({ id: "shell-failed", monitoring: false }),
-          // A monitoring shell that exited cleanly stopped watching, which its
-          // own final digest already says. The badge is for failures.
-          exited({
-            id: "watcher-clean-exit",
-            status: {
-              state: "exited",
-              exitCode: 0,
-              signal: null,
-              exitedAtMs: 20,
-            },
-          }),
-          // Asked for by a human or an agent: never news.
-          command({
-            id: "stopped-by-someone",
-            status: { state: "stopped", stoppedAtMs: 20 },
-          }),
-          // A clean run ended the way it said it would.
-          exited({
-            id: "shell-clean",
-            monitoring: false,
-            status: {
-              state: "exited",
-              exitCode: 0,
-              signal: null,
-              exitedAtMs: 20,
-            },
-          }),
-        ],
-        CHAT_ID,
-      );
-    });
-
-    expect(
-      screen.getByTestId("managed-command-chat-menu-attention").textContent,
-    ).toBe("1");
-  });
-
-  it("lets attention beat running, then clears it once the menu has been opened", () => {
-    renderMenu();
-    act(() => {
-      setCommands(
-        [command({ id: "live" }), exited({ id: "failed", monitoring: false })],
-        CHAT_ID,
-      );
-    });
-
-    // Both apply; the failure is the thing to say.
-    expect(
-      screen.getByTestId("managed-command-chat-menu-attention").textContent,
-    ).toBe("1");
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-running"),
-    ).toBeNull();
-
-    openMenu();
-    // The row spells the outcome out, so the badge has nothing left to report.
-    expect(
-      screen.getByTestId("managed-command-menu-row-failed").textContent,
-    ).toContain("Exited · code 1");
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
-    ).toBeNull();
-    expect(
-      screen.getByTestId("managed-command-chat-menu-running").textContent,
-    ).toBe("1");
-  });
-
-  it("does not re-arm another chat's acknowledged failures", () => {
-    renderInChatTile(
-      <DndContext>
-        <ManagedCommandChatMenu
-          epicId={EPIC_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          viewTabId={TAB_ID}
-        />
-        <ManagedCommandChatMenu
-          epicId={EPIC_ID}
-          chatId="chat-2"
-          hostId="host-1"
-          viewTabId={TAB_ID}
-        />
-      </DndContext>,
+    expect(screen.getByTestId("background-deliver-held").textContent).toBe(
+      "Deliver",
     );
+
     act(() => {
-      setCommands([exited({ id: "a-failed", monitoring: false })], CHAT_ID);
-      setCommands(
-        [exited({ id: "b-failed", monitoring: false, chatId: "chat-2" })],
-        "chat-2",
-      );
-    });
-
-    const [menuA, menuB] = screen.getAllByTestId(
-      "managed-command-chat-menu-trigger",
-    );
-    fireEvent.click(menuA);
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(menuB);
-
-    // Acknowledgement is one map across every chat, and each menu only ever
-    // knows its own commands - so opening chat B must MERGE rather than
-    // rebuild, or chat A's already-seen failure lights up again.
-    const attention = screen.queryAllByTestId(
-      "managed-command-chat-menu-attention",
-    );
-    expect(attention).toHaveLength(0);
-  });
-
-  it("treats an ending that arrives while the menu is open as seen", () => {
-    renderMenu();
-    act(() => {
-      setCommands([command({ id: "flaky", monitoring: false })], CHAT_ID);
-    });
-    openMenu();
-
-    // The rows are on screen when the exit lands, so the user watched it
-    // happen - the badge has nothing left to report, open or closed.
-    act(() => {
-      setCommands(
-        [
-          exited({
-            id: "flaky",
-            monitoring: false,
-            status: {
-              state: "exited",
-              exitCode: 2,
-              signal: null,
-              exitedAtMs: 99,
-            },
-            updatedAtMs: 99,
-          }),
-        ],
-        CHAT_ID,
-      );
-    });
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
-    ).toBeNull();
-
-    openMenu(); // toggles closed
-    expect(
-      screen
-        .getByTestId("managed-command-chat-menu-trigger")
-        .getAttribute("data-attention"),
-    ).toBe("false");
-  });
-
-  it("re-arms when an acknowledged command fails again after the menu closes", () => {
-    renderMenu();
-    act(() => {
-      setCommands([exited({ id: "flaky", monitoring: false })], CHAT_ID);
-    });
-    openMenu();
-    expect(
-      screen.queryByTestId("managed-command-chat-menu-attention"),
-    ).toBeNull();
-    openMenu(); // toggles closed
-
-    // A failure nobody had on screen is new news.
-    act(() => {
-      setCommands(
-        [
-          exited({
-            id: "flaky",
-            monitoring: false,
-            status: {
-              state: "exited",
-              exitCode: 2,
-              signal: null,
-              exitedAtMs: 99,
-            },
-            updatedAtMs: 99,
-          }),
-        ],
+      setHeldUpdates(
+        [held({ commandId: "cmd-1" }), held({ commandId: "cmd-2" })],
         CHAT_ID,
       );
     });
 
-    expect(
-      screen.getByTestId("managed-command-chat-menu-attention").textContent,
-    ).toBe("1");
+    expect(screen.getByTestId("background-deliver-held").textContent).toBe(
+      "Deliver 2",
+    );
   });
 
-  it("stays put with an empty state when its last command is deleted while open", () => {
-    renderMenu();
+  it("sends commandIds: null, not the rendered ids", () => {
+    renderPanel();
     act(() => {
-      setCommands([command({ id: "only" })], CHAT_ID);
+      setHeldUpdates(
+        [held({ commandId: "cmd-1" }), held({ commandId: "cmd-2" })],
+        CHAT_ID,
+      );
     });
-    openMenu();
 
+    fireEvent.click(screen.getByTestId("background-deliver-held"));
+
+    // A hold installed between render and click must not be silently
+    // skipped - Deliver means "everything you are holding for me", not "the
+    // ids this panel happened to show".
+    expect(deliverHeldMutate).toHaveBeenCalledTimes(1);
+    expect(deliverHeldMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      commandIds: null,
+    });
+  });
+
+  it("disables the Deliver button while a Deliver is already in flight", () => {
+    deliverHeldSharedFlight.isPending = true;
+    renderPanel();
     act(() => {
+      setHeldUpdates([held({ commandId: "cmd-1" })], CHAT_ID);
+    });
+
+    const deliverButton = screen.getByTestId<HTMLButtonElement>(
+      "background-deliver-held",
+    );
+    expect(deliverButton.disabled).toBe(true);
+    fireEvent.click(deliverButton);
+    expect(deliverHeldMutate).not.toHaveBeenCalled();
+  });
+
+  it("renders held rows above running rows", () => {
+    renderPanel();
+    act(() => {
+      setCommands([command({ id: "running-1" })], CHAT_ID);
+      setHeldUpdates([held({ commandId: "held-1" })], CHAT_ID);
+    });
+    expandPanel();
+
+    const heldRow = screen.getByTestId("held-managed-command-row-held-1");
+    const runningRow = screen.getByTestId(
+      "managed-command-background-row-running-1",
+    );
+    expect(
+      heldRow.compareDocumentPosition(runningRow) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  // The host filters holds by no status, and a running shell keeps its hold
+  // until it next prints - so a watcher that went quiet before the Stop is in
+  // BOTH lists. Rendered whole, it appeared twice: a "Held" row and a live row
+  // with a running timer, under a header that called it one running shell.
+  it("renders a held-and-running shell once, as held", () => {
+    renderPanel();
+    act(() => {
+      setCommands(
+        [command({ id: "quiet-watcher" }), command({ id: "busy-shell" })],
+        CHAT_ID,
+      );
+      setHeldUpdates([held({ commandId: "quiet-watcher" })], CHAT_ID);
+    });
+    expandPanel();
+
+    expect(
+      screen.getByTestId("held-managed-command-row-quiet-watcher"),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("managed-command-background-row-quiet-watcher"),
+    ).toBeNull();
+    // The shell that is only running keeps its ordinary row.
+    expect(
+      screen.getByTestId("managed-command-background-row-busy-shell"),
+    ).not.toBeNull();
+  });
+
+  it("keeps the header count agreeing with the rows on screen", () => {
+    renderPanel();
+    act(() => {
+      setCommands(
+        [command({ id: "quiet-watcher" }), command({ id: "busy-shell" })],
+        CHAT_ID,
+      );
+      setHeldUpdates([held({ commandId: "quiet-watcher" })], CHAT_ID);
+    });
+
+    // Two running commands, but one of them renders as held - so "2 running"
+    // would name a row that is not there. Every number counts rows you can see.
+    expect(screen.getByTestId("background-header-summary").textContent).toBe(
+      "1 running · 1 held",
+    );
+  });
+
+  it("still offers Stop on a held row whose shell has not finished", () => {
+    renderPanel();
+    act(() => {
+      setCommands([command({ id: "quiet-watcher" })], CHAT_ID);
+      setHeldUpdates([held({ commandId: "quiet-watcher" })], CHAT_ID);
+    });
+    expandPanel();
+
+    // Held does not imply finished, and this row is the only place the shell
+    // appears - dropping the stop here would be the panel's one lost
+    // capability for a process that is still burning cycles.
+    fireEvent.click(screen.getByTestId("managed-command-stop-quiet-watcher"));
+    expect(stopMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: EPIC_ID,
+      commandId: "quiet-watcher",
+    });
+  });
+
+  it("offers no Stop on a held row whose shell has finished", () => {
+    renderPanel();
+    act(() => {
+      // The ordinary hold: the Stop caught this shell's FINAL batch, so it is
+      // absent from the running set and there is nothing left to stop.
       setCommands([], CHAT_ID);
+      setHeldUpdates([held({ commandId: "finished-shell" })], CHAT_ID);
     });
+    expandPanel();
 
-    // Removing the button under the pointer that just pressed Delete would
-    // take the popover with it.
-    expect(trigger$()).not.toBeNull();
     expect(
-      screen.getByTestId("managed-command-chat-menu-empty").textContent,
-    ).toBe("No shells left");
-  });
-
-  it("swaps a live row's glyph and noun when its monitor flag is turned off", () => {
-    renderMenu();
-    act(() => {
-      setCommands([command({ id: "watcher", monitoring: true })], CHAT_ID);
-    });
-    openMenu();
-
-    const row = () => screen.getByTestId("managed-command-menu-row-watcher");
-    expect(row().querySelector("[data-monitor-icon='on']")).not.toBeNull();
-    expect(row().textContent).toContain("Monitor · deploy watcher");
-
-    // Muting is applied live by the host - no restart, same record - so the
-    // row stays where it is and the change reads off its glyph and its name.
-    act(() => {
-      setCommands(
-        [command({ id: "watcher", monitoring: false, updatedAtMs: 40 })],
-        CHAT_ID,
-      );
-    });
-
-    expect(row().querySelector("[data-monitor-icon='on']")).toBeNull();
-    expect(row().querySelector("[data-monitor-icon='off']")).not.toBeNull();
-    // The noun moves with the flag: this stopped being a watcher, and the
-    // title is where the product says so.
-    expect(row().textContent).toContain("Shell · deploy watcher");
-  });
-
-  it("opens the shell's output window from a row", () => {
-    renderMenu();
-    act(() => {
-      setCommands([command({ id: "door" })], CHAT_ID);
-    });
-    openMenu();
-
-    fireEvent.click(screen.getByTestId("managed-command-menu-row-door"));
-
-    expect(findOpenArtifactInTab(TAB_ID, "door")).not.toBeNull();
-  });
-
-  it("contributes nothing but its trigger, so the composer row can lay it out", () => {
-    const { container } = renderInChatTile(
-      <DndContext>
-        <ManagedCommandChatMenu
-          epicId={EPIC_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          viewTabId={TAB_ID}
-        />
-      </DndContext>,
-    );
-    act(() => {
-      setCommands([command({ id: "only" })], CHAT_ID);
-    });
-
-    // The badge used to hang in an absolutely positioned frame over the
-    // transcript. Now that it lives in the workspace-controls row beside the
-    // context-usage chip, a frame of its own would either hold a slot open
-    // while the chat owns nothing or lift the button out of the row's flow.
-    expect(container.firstElementChild).toBe(
-      screen.getByTestId("managed-command-chat-menu-trigger"),
+      screen.getByTestId("held-managed-command-row-finished-shell"),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("managed-command-stop-finished-shell"),
+    ).toBeNull();
+    expect(screen.getByTestId("background-header-summary").textContent).toBe(
+      "1 held",
     );
   });
 
-  it("flags a lost host while keeping the last known rows", () => {
-    renderMenu();
+  it("does not offer Deliver to a viewer", () => {
+    renderPanelAs(true);
     act(() => {
-      setCommands([command({ id: "frozen" })], CHAT_ID);
-      chatSession(CHAT_ID).setConnectionStatus("open");
-    });
-    openMenu();
-
-    act(() => {
-      chatSession(CHAT_ID).setConnectionStatus("reconnecting");
+      setHeldUpdates([held({ commandId: "cmd-1" })], CHAT_ID);
     });
 
-    // A dropped stream freezes the menu on its last snapshot. Without a word
-    // for it, a stale list is indistinguishable from a quiet one.
-    expect(
-      screen.getByTestId("managed-command-chat-menu-disconnected"),
-    ).not.toBeNull();
-    expect(
-      screen.getByTestId("managed-command-menu-row-frozen"),
-    ).not.toBeNull();
-  });
-
-  it("offers restart and delete on a finished command, stop on a live one", () => {
-    renderMenu();
-    act(() => {
-      setCommands(
-        [command({ id: "live" }), exited({ id: "over", monitoring: false })],
-        CHAT_ID,
-      );
-    });
-    openMenu();
-
-    expect(screen.getByTestId("managed-command-stop-live")).not.toBeNull();
-    expect(screen.queryByTestId("managed-command-start-live")).toBeNull();
-    expect(screen.getByTestId("managed-command-start-over")).not.toBeNull();
-    expect(screen.getByTestId("managed-command-delete-over")).not.toBeNull();
+    // The host refuses a viewer's Deliver, so a live button here could only
+    // ever produce an error toast - the same rule the managed rows' Stop
+    // already follows.
+    const deliverButton = screen.getByTestId<HTMLButtonElement>(
+      "background-deliver-held",
+    );
+    expect(deliverButton.disabled).toBe(true);
+    fireEvent.click(deliverButton);
+    expect(deliverHeldMutate).not.toHaveBeenCalled();
   });
 });

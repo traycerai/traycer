@@ -6,10 +6,12 @@
  * trades the header row for the input rather than stacking a second row under
  * it. Typing into the focused tree enters the mode too; Escape leaves it.
  *
- * The affordance is UNCONDITIONAL. It used to be gated on the Epic holding at
- * least ten artifacts, on the theory that scanning a short tree beats filtering
- * it - but a control that silently disappears below a threshold reads as a
- * removed feature, not as a considered default, so the gate is gone.
+ * The affordance is gated on the Epic having ANY artifacts, and on nothing
+ * else. It was once gated on holding at least ten, which hid it from most
+ * Epics and read as a removed feature; whether nine artifacts are worth
+ * filtering is the user's call, not this module's. Zero is not a judgement
+ * call - there is nothing to match - so search is withheld only there. See
+ * `useArtifactSearchAvailable`.
  *
  * While the mode is on, the input's DOM is portaled into the header's slot but
  * the component tree is unchanged - so the host query, same-scope retention,
@@ -37,8 +39,8 @@ import type {
   SearchArtifactHit,
   SearchArtifactsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
@@ -72,6 +74,7 @@ import {
   isTypeToFilterKey,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import {
   usePanelHeaderSearchOpen,
   usePanelHeaderSearchQuery,
@@ -118,6 +121,8 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
     ARTIFACTS_PANEL_ID,
   );
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
+  const searchAvailable = useArtifactSearchAvailable();
+  const closeSearch = usePanelHeaderSearchStore((s) => s.closeSearch);
 
   const debouncedRaw = useDebouncedValue(searchQuery, 200);
   // Treat an empty/whitespace box as immediate: clearing or leaving search must
@@ -140,6 +145,20 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
     }
   }, [searchActive]);
 
+  // Leaving the availability window while search is already OPEN - the last
+  // artifact deleted here, by a collaborator, or in another retained view -
+  // has to close the mode, not merely stop new entries into it.
+  //
+  // Closing the store flag rather than deriving an effective-open locally,
+  // because the header reads that same flag independently
+  // (`PanelGroupSectionHeader`). A local derive would unmount this box while
+  // the header kept the search row, leaving an empty input with nothing
+  // portaled into it - a worse version of the state being fixed.
+  useEffect(() => {
+    if (searchAvailable || !searchOpen) return;
+    closeSearch(props.tabId, ARTIFACTS_PANEL_ID);
+  }, [searchAvailable, searchOpen, closeSearch, props.tabId]);
+
   // Type-to-filter: a bare printable key anywhere in the focused tree enters
   // search mode seeded with that character, so the keystroke that started the
   // search is not swallowed by the focus handoff to the header input.
@@ -150,7 +169,9 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
   useEffect(() => {
     const region = treeScrollRef.current;
     if (region === null) return;
-    if (searchOpen) return;
+    // Both entry points read the same gate, so an Epic with no artifacts cannot
+    // reach search by typing into a tree whose header offers no search item.
+    if (!searchAvailable || searchOpen) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (isTypeToFilterEditableTarget(event.target)) return;
       if (!isTypeToFilterKey(event)) return;
@@ -159,7 +180,7 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
     };
     region.addEventListener("keydown", onKeyDown);
     return () => region.removeEventListener("keydown", onKeyDown);
-  }, [props.tabId, searchOpen, openSearch]);
+  }, [props.tabId, searchAvailable, searchOpen, openSearch]);
 
   return (
     // `overflow-hidden` overrides SidebarContent's default `overflow-auto` so the
@@ -211,8 +232,15 @@ interface ArtifactSearchBoxProps {
 // eslint-disable-next-line complexity
 export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   const { epicId, tabId, searchQuery, debouncedQuery } = props;
-  const client = useHostClient();
-  const activeHostId = useReactiveActiveHostId();
+  // BOTH from the Epic session, and that is the point - these two were read
+  // from two different sources (the ambient client, and the app-wide
+  // addressable id beside it) and then used together: the id keys the scope
+  // signature AND binds every opened hit's tile for life. So during a re-point
+  // - when the sidebar stays interactive while only the canvas goes inert -
+  // this searched one machine and opened the results as tiles bound to
+  // another. One source makes them incapable of disagreeing.
+  const client = useEpicSessionHostClient();
+  const activeHostId = useEpicSessionHostId();
   const filter = useArtifactFilter(epicId);
   const inputRef = useRef<HTMLInputElement>(null);
   const headerSlot = usePanelHeaderSearchSlot(tabId, ARTIFACTS_PANEL_ID);

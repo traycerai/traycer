@@ -42,7 +42,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import {
   deriveEpicSyncPillState,
   type EpicHostDirtyState,
@@ -54,7 +54,6 @@ import {
 } from "@/lib/agent-activity";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useEpicStore } from "@/hooks/use-epic-store";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
 import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
@@ -62,7 +61,10 @@ import {
   useMaybeOpenEpicHandle,
   useOpenEpicHandle,
 } from "@/providers/use-open-epic-handle";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getEpicSessionHandleHostId,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
 import {
   pendingTitleVisibleAutoPurge,
   useEpicCanvasStore,
@@ -464,12 +466,16 @@ export function epicNodeRefForNodeId(
 
 export function useEpicArtifactRecords(): ReadonlyArray<EpicTreeRecord> {
   const handle = useOpenEpicHandle();
-  // Chat / artifact projections do not yet carry a hostId (only
-  // tui-agents do). The renderer's currently-active host is the
-  // host hosting the open-epic projection, so it is the correct
-  // binding source for those rows. Tui-agent rows override with their
+  // Chat / artifact projections do not yet carry a hostId (only tui-agents
+  // do). The host that SERVES this projection is the Epic session's host - the
+  // one `handle` was acquired against - not the app-wide addressable host:
+  // during an A→B re-point the A-backed Epic stays rendered while the
+  // addressable host already answers B, and every record stamped here is
+  // copied by its consumers (`AgentReferenceChip`, the route-focus opener) into
+  // a tile ref that is bound for life. Tui-agent rows override with their
   // projected hostId.
-  const fallbackHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const fallbackHostId =
+    getEpicSessionHandleHostId(handle) ?? UNKNOWN_HOST_PLACEHOLDER;
   return useStore(
     handle.store,
     useShallow((s): ReadonlyArray<EpicTreeRecord> => {
@@ -862,6 +868,8 @@ type EpicTabDisplayTitleNode = {
   readonly id: string;
   readonly name: string;
   readonly type: string | undefined;
+  /** The tab's bound host, for the node kinds that have one. */
+  readonly hostId: string | null;
 };
 
 export function useEpicTabDisplayTitle(
@@ -879,10 +887,15 @@ export function useEpicTabDisplayTitle(
   // An output window's tile carries no label at all (its persisted shape is
   // just the command pointer), so the kind-explicit title comes from the owning
   // chat's live set - and follows a rename the agent makes.
-  const managedCommand = useManagedCommandInEpic(
+  const isManagedCommandOutput = node.type === "managed-command-output";
+  const managedCommand = useManagedCommandOnHost({
     epicId,
-    node.type === "managed-command-output" ? node.id : "",
-  );
+    // The tab's own host, never the epic at large: a clone carries the source
+    // transcript's command ids, and a title read across hosts would name a
+    // shell this tab cannot open.
+    hostId: isManagedCommandOutput ? (node.hostId ?? "") : "",
+    commandId: isManagedCommandOutput ? node.id : "",
+  });
   const liveManagedCommandTitle =
     managedCommand === null ? null : managedCommandTitle(managedCommand);
   return (

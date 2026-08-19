@@ -25,14 +25,23 @@ vi.mock("@/lib/host", () => {
     version: null,
     transportDialability: "dialable",
   };
+  const client = {
+    request: () => new Promise(() => {}),
+    getActiveHostId: () => "host-test",
+    // `useTabHostClient` resolves through `useHostClientForHostId`, which
+    // asks the SPINE for the tab's entry (live directory first, then the
+    // active entry) before handing it to `useHostClientFor` - mocked below to
+    // return the same stub client for any entry. Spine and app-wide client
+    // are separate exports since redesign P2.1; one stub serves both here.
+    resolveHostById: () => entry,
+    getActiveHost: () => entry,
+    getRequestContextUserId: () => "user-test",
+    onChange: () => () => undefined,
+  };
   return {
     useHostBinding: () => null,
-    useHostClient: () => ({
-      request: () => new Promise(() => {}),
-      getActiveHostId: () => "host-test",
-      getRequestContextUserId: () => "user-test",
-      onChange: () => () => undefined,
-    }),
+    useHostClient: () => client,
+    useHostRuntimeClient: () => client,
     useHostDirectory: () => ({
       findById: () => entry,
       onChange: () => ({ dispose: () => undefined }),
@@ -362,11 +371,15 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
     };
     const sourceStagingKey = {
       surface: "owner" as const,
+      hostId: "test-host",
       epicId: "epic-test",
       ownerKind: "terminal-agent" as const,
       ownerId: "agent-1",
     };
-    const pendingForkKey = pendingForkTerminalAgentStagingKey("epic-test");
+    const pendingForkKey = pendingForkTerminalAgentStagingKey(
+      "test-host",
+      "epic-test",
+    );
     useWorktreeIntentStagingStore.getState().setIntent(sourceStagingKey, {
       entries: [
         {

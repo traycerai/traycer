@@ -10,7 +10,6 @@ import {
 } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
-  Activity,
   FileDiff,
   FilePlus,
   GitPullRequest,
@@ -54,6 +53,7 @@ import {
 import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
+  EpicTerminalRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
 import {
@@ -68,6 +68,8 @@ import {
   isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -103,6 +105,9 @@ import {
 } from "@/hooks/use-shift-key-held";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
+import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -431,6 +436,11 @@ interface TabItemProps {
 // Ticket 12's chat cost line: the tab's own overflow (this context menu),
 // never the header. `null` for every non-chat tab kind and for a chat whose
 // host hasn't negotiated `host.usage.summary` - "unsupported chats show
+/** The tab's bound host, for the tile kinds that have one. */
+function tabHostId(tab: EpicCanvasTileRef): string | null {
+  return "hostId" in tab ? tab.hostId : null;
+}
+
 // nothing" applied to the menu item itself rather than opening a dialog that
 // would then show a capability notice. Extracted out of `TabItem` to keep
 // that component's branching under the complexity budget.
@@ -438,8 +448,7 @@ function useChatUsageMenuHandler(
   tab: EpicCanvasTileRef,
   chatTitle: string,
 ): (() => void) | null {
-  const usageChatHostId =
-    tab.type === "chat" && "hostId" in tab ? tab.hostId : null;
+  const usageChatHostId = tab.type === "chat" ? tabHostId(tab) : null;
   const usageSupported = useUsageSummarySupported(usageChatHostId);
   const openChatUsageDialog = useChatUsageDialogStore((s) => s.open);
   return useMemo(() => {
@@ -454,7 +463,138 @@ function useChatUsageMenuHandler(
   }, [chatTitle, openChatUsageDialog, tab.id, usageChatHostId, usageSupported]);
 }
 
+interface TerminalTabControl {
+  readonly mode: "unknown" | "legacy" | "capable";
+  readonly displayTitle: string;
+  readonly canMutate: boolean;
+  readonly rename: (title: string) => void;
+}
+
 function TabItem(props: TabItemProps) {
+  if (props.tab.type !== "terminal") {
+    return <TabItemBody {...props} terminalControl={null} />;
+  }
+  return (
+    <TabHostProvider hostId={props.tab.hostId}>
+      <TerminalTabItem {...props} tab={props.tab} />
+    </TabHostProvider>
+  );
+}
+
+function TerminalTabItem(
+  props: Omit<TabItemProps, "tab"> & { readonly tab: EpicTerminalRef },
+) {
+  const controller = useEpicTerminalAuthority({
+    epicId: props.epicId,
+    node: props.tab,
+  });
+  const rename = controller.rename;
+  const close = controller.close;
+  const terminalId = props.tab.id;
+  const canClose =
+    controller.canMutate &&
+    !controller.migrationPending &&
+    controller.projection !== undefined;
+  useEffect(
+    () =>
+      registerEpicTerminalCloseAuthority({
+        instanceId: props.tab.instanceId,
+        hostId: props.tab.hostId,
+        terminalId,
+        capability: controller.capability,
+        canMutate: canClose,
+        close: async () => {
+          await close.mutateAsync({ terminalId });
+        },
+      }),
+    [
+      canClose,
+      close,
+      controller.capability,
+      props.tab.hostId,
+      props.tab.instanceId,
+      terminalId,
+    ],
+  );
+  const control: TerminalTabControl = {
+    mode: controller.capability,
+    displayTitle: controller.viewModel?.displayTitle ?? props.tab.name,
+    canMutate: canClose,
+    rename: (title) => {
+      if (!controller.canMutate) return;
+      rename.mutate({ terminalId, manualTitle: title });
+    },
+  };
+  return <TabItemBody {...props} terminalControl={control} />;
+}
+
+function useTabRenameControl(args: {
+  readonly tab: EpicCanvasTileRef;
+  readonly epicId: string;
+  readonly groupId: string;
+  readonly canRenameTabs: boolean;
+  readonly terminalControl: TerminalTabControl | null;
+  readonly onRename: TabItemProps["menuProps"]["onRename"];
+}) {
+  const { tab, epicId, groupId, canRenameTabs, terminalControl, onRename } =
+    args;
+  const isTerminalTab = tab.type === "terminal";
+  const resolvedHostClient = useHostClientForHostId(
+    isTerminalTab ? tabHostId(tab) : null,
+  );
+  const terminalHostClient =
+    isTerminalTab && terminalControl?.mode !== "capable"
+      ? resolvedHostClient
+      : null;
+  const fallbackDisplayTitle = useEpicTabDisplayTitle(
+    {
+      id: tab.id,
+      name: tab.name,
+      type: tab.type,
+      hostId: tabHostId(tab),
+    },
+    epicId,
+    terminalHostClient,
+  );
+  const displayTitle =
+    terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
+      ? terminalControl.displayTitle
+      : fallbackDisplayTitle;
+  const canRename =
+    canRenameTabs &&
+    (isOpenableEpicNodeKind(tab.type) || tab.type === "terminal") &&
+    (terminalControl === null ||
+      terminalControl.mode === "legacy" ||
+      (terminalControl.mode === "capable" && terminalControl.canMutate));
+  const renameTerminal = useTerminalRenameFor(terminalHostClient);
+  const { mutate: renameTerminalMutate } = renameTerminal;
+  const handleRename = (next: string) => {
+    if (isTerminalTab) {
+      const trimmed = next.trim();
+      if (trimmed.length === 0) return;
+      if (terminalControl?.mode === "capable") {
+        terminalControl.rename(trimmed);
+        return;
+      }
+      if (terminalControl?.mode === "unknown") return;
+      renameTerminalMutate({ sessionId: tab.id, title: trimmed });
+      return;
+    }
+    onRename(groupId, tab.instanceId, next);
+  };
+  const rename = useInlineRename({
+    value: displayTitle,
+    canEdit: canRename,
+    onCommit: handleRename,
+  });
+  return { displayTitle, canRename, rename };
+}
+
+function TabItemBody(
+  props: TabItemProps & {
+    readonly terminalControl: TerminalTabControl | null;
+  },
+) {
   const {
     tab,
     epicId,
@@ -515,24 +655,15 @@ function TabItem(props: TabItemProps) {
     id: getArtifactTabDropId(groupId, tab.instanceId),
     data: dropData,
   });
-  // ONE bound-host client per tab, shared by title resolution and the
-  // terminal rename mutation (terminal tabs are host-bound for life; the
-  // default host may differ). Gated to terminals - non-terminal tabs pass
-  // null everywhere, keeping their terminal.list observer disabled.
-  const isTerminalTab = tab.type === "terminal";
-  const resolvedHostClient = useHostClientForHostId(
-    isTerminalTab && "hostId" in tab ? tab.hostId : null,
-  );
-  const terminalHostClient = isTerminalTab ? resolvedHostClient : null;
-  const displayTitle = useEpicTabDisplayTitle(
-    {
-      id: tab.id,
-      name: tab.name,
-      type: tab.type,
-    },
+  const { onRename } = menuProps;
+  const { displayTitle, canRename, rename } = useTabRenameControl({
+    tab,
     epicId,
-    terminalHostClient,
-  );
+    groupId,
+    canRenameTabs,
+    terminalControl: props.terminalControl,
+    onRename,
+  });
   const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
@@ -542,42 +673,6 @@ function TabItem(props: TabItemProps) {
     [domRef, dragRef, dropRef],
   );
 
-  // Only chat / artifact / terminal tabs carry an editable title; diff,
-  // blank, and workspace-file tabs are not renameable.
-  const canRename = canRenameTabs && isOpenableEpicNodeKind(tab.type);
-  // Terminal renames go straight to the tab's bound host via the shared
-  // client above; the mutation's optimistic `terminal.list` patch is what
-  // every title surface renders from, so no per-view canvas rename is
-  // involved.
-  const renameTerminal = useTerminalRenameFor(terminalHostClient);
-  // Pull `onRename` out so the commit callback depends on the (stable) handler
-  // rather than the per-render `menuProps` object literal.
-  const { onRename } = menuProps;
-  const { mutate: renameTerminalMutate } = renameTerminal;
-  const handleRename = useCallback(
-    (next: string) => {
-      if (isTerminalTab) {
-        const trimmed = next.trim();
-        if (trimmed.length === 0) return;
-        renameTerminalMutate({ sessionId: tab.id, title: trimmed });
-        return;
-      }
-      onRename(groupId, tab.instanceId, next);
-    },
-    [
-      groupId,
-      isTerminalTab,
-      onRename,
-      renameTerminalMutate,
-      tab.id,
-      tab.instanceId,
-    ],
-  );
-  const rename = useInlineRename({
-    value: displayTitle,
-    canEdit: canRename,
-    onCommit: handleRename,
-  });
   const { copy } = useClipboardCopy({
     resetMs: 1500,
     onSuccess: null,
@@ -603,24 +698,18 @@ function TabItem(props: TabItemProps) {
     if (isPreview) onPromotePreview(groupId);
   }, [groupId, isPreview, onPromotePreview, rename.isEditing]);
 
-  const handleClose = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation();
-      onClose(groupId, tab.instanceId);
-    },
-    [groupId, onClose, tab.instanceId],
-  );
+  const handleClose = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onClose(groupId, tab.instanceId);
+  };
 
-  const handleAuxClick = useCallback(
-    (event: MouseEvent<HTMLDivElement>) => {
-      // Middle-click closes.
-      if (event.button === 1) {
-        event.preventDefault();
-        onClose(groupId, tab.instanceId);
-      }
-    },
-    [groupId, onClose, tab.instanceId],
-  );
+  const handleAuxClick = (event: MouseEvent<HTMLDivElement>) => {
+    // Middle-click closes.
+    if (event.button === 1) {
+      event.preventDefault();
+      onClose(groupId, tab.instanceId);
+    }
+  };
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -812,7 +901,7 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           data-testid={`tab-close-${tabInstanceId}`}
           className={cn(
             "pointer-events-none absolute right-2 inline-flex size-4 items-center justify-center rounded-sm opacity-0 transition-[background-color,color,opacity] focus-visible:opacity-100",
-            "hover:bg-muted",
+            "hover:bg-foreground/5",
             "group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
           )}
         >
@@ -1011,6 +1100,16 @@ export function TabIcon(props: {
   const boundHostReachability = useHostReachability(
     props.tab.type === "chat" ? props.tab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
+  // Same live lookup the title already runs (`useEpicTabDisplayTitle`), so the
+  // glyph and the name in one tab can never disagree about whether the shell is
+  // watching. Unconditional for hook order; an empty id resolves to null.
+  const managedCommand = useManagedCommandOnHost({
+    epicId: props.epicId,
+    // Scoped to the tab's own bound host: a clone's tab must never wear the
+    // source host's shell (same rule the card's presence follows).
+    hostId: isManagedCommandOutputTileRef(props.tab) ? props.tab.hostId : "",
+    commandId: isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
+  });
   if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
   }
@@ -1023,7 +1122,16 @@ export function TabIcon(props: {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   if (isManagedCommandOutputTileRef(props.tab)) {
-    return <Activity className="size-3.5 shrink-0 text-muted-foreground" />;
+    // A tab opened for a shell whose chat has no live session yet resolves to
+    // nothing; the quiet glyph is the honest guess, since a watcher announces
+    // itself the moment its record lands.
+    return (
+      <ManagedCommandMonitorIcon
+        monitoring={managedCommand !== null && managedCommand.monitoring}
+        decorative
+        className="size-3.5"
+      />
+    );
   }
   if (isCommGraphTileRef(props.tab)) {
     return <CommGraphTileIcon className="size-3.5" />;

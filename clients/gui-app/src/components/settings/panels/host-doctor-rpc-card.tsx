@@ -31,10 +31,12 @@ import {
   splitDoctorIssuesByVantage,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import { busyRestartVerdictSentence } from "@/components/host/host-restart-copy";
 import { useHostDoctorRun } from "@/components/settings/panels/host-overview-rpc";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastHostRestartRequested } from "@/lib/host-restart-toast";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { cn } from "@/lib/utils";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -169,7 +171,7 @@ export function HostDoctorRpcCard(props: {
   }
   if (report === null) {
     return (
-      <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground">
+      <div className="flex items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
           className="size-3"
           testId={undefined}
@@ -236,11 +238,11 @@ export function HostDoctorRpcCard(props: {
                   armedFixRestartIdRef.current = null;
                   if (response.outcome === "busy") {
                     toast.message(
-                      `Not restarted — ${response.verdict.busySessionCount} session${response.verdict.busySessionCount === 1 ? " is" : "s are"} still working.`,
+                      `Not restarted. ${busyRestartVerdictSentence(response.verdict)}`,
                     );
                     return;
                   }
-                  toast.success(`Restarting ${hostName}`);
+                  toastHostRestartRequested();
                 },
                 onError: (error) =>
                   toastFromHostError(error, "Couldn't restart this host."),
@@ -285,7 +287,7 @@ export function HostDoctorRpcCard(props: {
             {split.disprovenByTransport.map((issue) => (
               <div
                 key={issue.code}
-                className="rounded-md border border-border/60 bg-muted/20 px-3 py-2"
+                className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2"
                 data-testid={`host-doctor-disproven-${issue.code}`}
               >
                 <div className="font-medium text-ui-sm">{issue.title}</div>
@@ -398,19 +400,19 @@ function DoctorRpcIssueCard(props: {
           {expanded && issue.terminalCommand !== null ? (
             <pre
               data-testid="host-doctor-issue-terminal-command"
-              className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-code-xs text-muted-foreground"
+              className="mt-2 max-h-40 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground"
             >
               {issue.terminalCommand}
             </pre>
           ) : null}
           {expanded && issue.details !== null ? (
-            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-code-xs text-muted-foreground">
+            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground">
               {JSON.stringify(issue.details, null, 2)}
             </pre>
           ) : null}
           {issue.fixAction === "host-logs" && props.logTail !== null ? (
             <pre
-              className="mt-2 max-h-52 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-code-xs text-muted-foreground"
+              className="mt-2 max-h-52 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground"
               data-testid="host-doctor-log-tail"
             >
               {props.logTail.length === 0
@@ -499,7 +501,7 @@ function DoctorRerunRow(props: {
 function DoctorMessage(props: { readonly children: ReactNode }): ReactNode {
   return (
     <div
-      className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground"
+      className="rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground"
       data-testid="host-doctor-message"
     >
       {props.children}

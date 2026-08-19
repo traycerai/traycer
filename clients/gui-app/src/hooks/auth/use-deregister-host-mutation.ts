@@ -9,6 +9,8 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { authMutationKeys, authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 interface DeregisterHostMutationContext {
   readonly auth: AuthService | null;
@@ -65,6 +67,9 @@ export function useDeregisterHostFromAccount(
 ): UseMutationResult<void, Error, void, DeregisterHostMutationContext> {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
+  // A SHELL capability, deliberately not the authority client - see
+  // `lib/host/fleet-refresh.ts`.
+  const runnerHost = useRunnerHost();
 
   return useMutation({
     mutationKey: authMutationKeys.deregisterHostFromAccount(hostId),
@@ -85,6 +90,12 @@ export function useDeregisterHostFromAccount(
       // Arm-time captures, not the live binding: a scope change during the
       // request must not re-point either refresh at another host's caches.
       void context.directory?.refresh();
+      // Renderer state alone is not enough (F6): the selection authority
+      // derives `effectiveHostId` from ITS OWN fleet, in the desktop main
+      // process, and would keep deriving onto the host just removed. Only the
+      // SUCCESS path announces it - a failed deregistration removed nothing,
+      // so main's copy is not stale and a refresh there would be noise.
+      requestFleetRefresh(runnerHost);
       if (context.auth === null) {
         return;
       }

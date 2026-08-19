@@ -7,6 +7,7 @@
  * consumes the fully typed shared interface.
  */
 import type { LiveHostAvailability } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
 
 export interface DesktopLocalHostSnapshot {
   readonly hostId: string;
@@ -55,6 +56,30 @@ export type DesktopTrayIndicatorState = "idle" | "active" | "attention";
  * preload boundary rule) rather than reaching into the shared package.
  */
 export type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+
+/**
+ * One registry read, fanned out to every window (redesign P4.1/F22, §1b).
+ *
+ * Main owns the poll cadence, so N windows produce ONE `GET /api/v3/hosts`
+ * instead of one per window. These are the same rows the renderer used to
+ * fetch for itself - the transport moved, the trust level did not: the
+ * selection authority still derives leases from transport evidence and never
+ * from these bytes (invariant 5), and the authority's own fleet port still
+ * projects ids only.
+ *
+ * `identityKey` is the signed-in user id captured when the FETCH STARTED, and
+ * it is the whole fence. A renderer compares it against its own auth context
+ * and drops a push belonging to another account. The main-process identity
+ * GENERATION cannot serve here - it is a per-process counter with no meaning
+ * in a renderer - so the account is named by the one key both sides can
+ * compare, which is exactly the key `HostDirectoryService`'s injected
+ * `authContextId()` already answers with. `null` means the fetch ran
+ * signed-out.
+ */
+export interface RegisteredHostsPush {
+  readonly identityKey: string | null;
+  readonly response: HostListResponse;
+}
 export type {
   ListUserSessionsFetchResult,
   MintHostCredentialFetchResult,

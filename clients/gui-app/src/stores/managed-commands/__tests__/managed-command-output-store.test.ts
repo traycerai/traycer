@@ -5,6 +5,7 @@ import {
   type ManagedCommandLogPosition,
   type ManagedCommandSubscribeOutputClientFrame,
 } from "@traycer/protocol/host/managed-command/subscribe";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { ManagedCommandOutputStreamCallbacks } from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
 import {
@@ -24,6 +25,9 @@ const COMMAND: ManagedCommand = {
   id: "cmd-1",
   monitoring: true,
   description: "deploy watcher",
+  command: "tail -f deploy.log",
+  cwd: "/work/repo",
+  cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
   createdAtMs: 10,
@@ -33,6 +37,14 @@ const COMMAND: ManagedCommand = {
 function line(text: string): ManagedCommandLogLine {
   return { channel: "stdout", text, atMs: 1_000 };
 }
+
+/** A close that is about the stream, not the shell - the host's own reader threw. */
+const OUTPUT_FAILED: FatalErrorDetails = {
+  code: "MANAGED_COMMAND_OUTPUT_FAILED",
+  reason: "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
 
 function position(
   segmentId: string,
@@ -70,6 +82,7 @@ function harness(): Harness {
           sent.push(frame);
         },
         close: () => undefined,
+        streamMethodSupport: null,
       };
     },
   });
@@ -173,16 +186,57 @@ describe("managed-command output store", () => {
     expect(h.sent).toHaveLength(1);
   });
 
-  it("keeps the scrollback when the command is deleted", () => {
+  it("leaves the retained lines in state after a deletion - the window decides whether to show them", () => {
     const h = harness();
     openAtTail(h);
 
     h.emit().onDeleted();
 
-    // The window goes dead but stays readable - the lines the viewer already
-    // has are the last trace of a history the host just destroyed.
+    // The STORE keeps every line it already held; deletion only flips the
+    // flag. What a viewer does with them is the window's own call now (it
+    // shows none, for the terminal `gone` state) - this store makes no claim
+    // about the screen, only about what it retains.
     expect(h.handle.store.getState().deleted).toBe(true);
     expect(texts(h.handle)).toEqual(["tail-1", "tail-2"]);
+  });
+
+  it("a fatal close clears an in-flight page and stops paging", () => {
+    const h = harness();
+    openAtTail(h);
+    h.handle.store.getState().loadOlder();
+
+    expect(h.sent).toHaveLength(1);
+    expect(h.handle.store.getState().loadingOlder).toBe(true);
+
+    h.emit().onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: OUTPUT_FAILED,
+    });
+
+    expect(h.handle.store.getState().loadingOlder).toBe(false);
+    expect(h.handle.store.getState().fatalClose).toEqual(OUTPUT_FAILED);
+
+    // Nothing can land on a stream the host closed for good - asking again
+    // would leave a second spinner waiting on a reply that never comes.
+    h.handle.store.getState().loadOlder();
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it("a deletion stops paging without claiming the tail was ever the start", () => {
+    const h = harness();
+    openAtTail(h);
+    expect(h.handle.store.getState().reachedStart).toBe(false);
+
+    h.emit().onDeleted();
+
+    // `reachedStart` is the host's own word about the retained log; a
+    // deletion is a different fact and must not borrow that word.
+    expect(h.handle.store.getState().deleted).toBe(true);
+    expect(h.handle.store.getState().reachedStart).toBe(false);
+    expect(h.handle.store.getState().loadingOlder).toBe(false);
+
+    h.handle.store.getState().loadOlder();
+    expect(h.sent).toHaveLength(0);
   });
 
   it("follows the command's own state changes", () => {

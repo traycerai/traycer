@@ -155,7 +155,7 @@ describe("createOpenEpicStore", () => {
     const opened = createOpenEpicStore({
       epicId: "epic-a",
       streamClientFactory: factory,
-      userId: "alice@example.com",
+      userId: "user-alice",
       onAuthError: null,
     });
 
@@ -169,7 +169,7 @@ describe("createOpenEpicStore", () => {
 
     expect(window.localStorage.length).toBe(1);
     expect(window.localStorage.key(0)).toBe(
-      "traycer-gui-app:open-epic:alice@example.com:epic-a",
+      "traycer-gui-app:open-epic:user-alice:epic-a",
     );
 
     opened.dispose();

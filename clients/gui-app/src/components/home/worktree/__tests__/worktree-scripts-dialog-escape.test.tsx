@@ -136,7 +136,11 @@ import {
 } from "@/components/home/worktree/worktree-scripts-dialog";
 
 const WORKSPACE = "/tmp/a";
-const STAGING_KEY: WorktreeStagingKey = { surface: "landing", draftId: null };
+const STAGING_KEY: WorktreeStagingKey = {
+  surface: "landing",
+  hostId: "host-a",
+  draftId: null,
+};
 
 function summaryWith(
   scripts: WorktreeWorkspaceSummaryV14["scripts"],

@@ -90,13 +90,13 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
           {expanded && issue.terminalCommand !== null ? (
             <pre
               data-testid="host-doctor-issue-terminal-command"
-              className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-code-xs text-muted-foreground"
+              className="mt-2 max-h-40 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground"
             >
               {issue.terminalCommand}
             </pre>
           ) : null}
           {expanded && issue.details !== null ? (
-            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-code-xs text-muted-foreground">
+            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground">
               {JSON.stringify(issue.details, null, 2)}
             </pre>
           ) : null}

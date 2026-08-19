@@ -1,4 +1,18 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
+import {
+  Check,
+  Download,
+  RotateCw,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import type {
   ProviderManagedVersions,
   ProviderPackVersion,
@@ -7,11 +21,6 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProviderPackVersionManagerSupport } from "./provider-pack-version-manager-capability";
 import {
@@ -25,7 +34,6 @@ import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-
 import { cn } from "@/lib/utils";
 import {
   comparePackVersionsDescending,
-  formatPackSizeBytes,
   formatSharedWithProvidersLine,
   installPackVersionRefusalMessage,
   isBlockingCertification,
@@ -33,11 +41,12 @@ import {
   updateBannerDownloadEligibility,
   packVersionUseRefusalMessage,
   versionDeleteEligibility,
-  versionDetailLines,
   versionDownloadEligibility,
   versionInstallFetchLabel,
   versionRowChip,
+  versionShowsDeleteAction,
   versionShowsInstallFetchAction,
+  versionTroubleLine,
   versionUseEligibility,
   type VersionDeleteEligibility,
   type VersionDownloadEligibility,
@@ -51,7 +60,7 @@ const CLEAR_PIN_PENDING_KEY = "__auto__";
 /**
  * Public props for the per-pack version manager. The CLI candidates table
  * ticket mounts this panel and supplies the wire fields from `providers.list`
- * v8.0 (`packId` + `managedVersions`) plus the **settings-scoped** `hostId`
+ * v7.0 (`packId` + `managedVersions`) plus the **settings-scoped** `hostId`
  * already threaded through this tree (`scope.hostId`). Do not ambiently
  * re-read the globally active host — the settings surface can display one
  * host while another is active.
@@ -96,11 +105,54 @@ type BannerNotice = {
 };
 
 /**
+ * The row whose Delete is armed — identified by WHERE it is, not just which
+ * version, so the arming cannot outlive the host and pack it was made on.
+ */
+type ArmedDelete = {
+  readonly hostId: string | null;
+  readonly packId: string;
+  readonly version: string;
+};
+
+/** The armed version, but only while the panel still shows the host and pack it was armed on. */
+function armedVersionWithin(
+  armed: ArmedDelete | null,
+  hostId: string | null,
+  packId: string,
+): string | null {
+  if (armed === null) return null;
+  if (armed.hostId !== hostId || armed.packId !== packId) return null;
+  return armed.version;
+}
+
+/**
  * Per-pack version manager panel (B5-T2).
  *
- * Renders the wireframe surface: header (name, sharing, footprint, auto-
- * download toggle), update-available banner, and one action row per version.
- * Mutations go through the four v8.0 pack RPCs.
+ * Three regions, in the order a reader needs them: what is true of the pack
+ * right now (sharing, a pin, an available update), the versions themselves,
+ * and one persistent setting pinned to the bottom.
+ *
+ * The panel used to open with a titled header bar — `<pack> CLI · versions`,
+ * a footprint line, and the auto-download switch. All three were dropped:
+ *
+ * - The TITLE restated the row the popover is anchored to. It is opened from
+ *   one specific CLI's version cell, so naming that CLI again is the widest,
+ *   loudest element on the surface saying the one thing the user cannot have
+ *   forgotten. `aria-label` on the section keeps it for screen readers, which
+ *   do NOT get the anchoring for free.
+ * - The FOOTPRINT was `managedVersions.totalSizeBytes` — the whole pack cell
+ *   across every retained version — sitting directly above rows whose own
+ *   sizes are per-version. Two numbers on different axes, one labelled "on
+ *   disk" and neither summing to the other, read as an error in the smaller
+ *   one. The per-version sizes stayed (they answer "what will this cost me");
+ *   the total left, because a pack-wide figure belongs wherever pack-wide
+ *   storage is managed, not in a version picker.
+ * - The SWITCH moved to the footer. It is a durable preference, not an action
+ *   on any version, so it wants the calmest position on the surface rather
+ *   than the most prominent — and out of the header it stops competing with
+ *   the pin banner for the same corner.
+ *
+ * Mutations go through the four v7.0 pack RPCs.
  *
  * Capability-gated (non-floor optional RPCs): see
  * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS}.
@@ -139,6 +191,30 @@ export function ProviderPackVersionManagerPanel(
   // exactly the condition that makes a clear-pin refusal possible.
   const [pinNotice, setPinNotice] = useState<BannerNotice | null>(null);
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
+  // The version whose Delete is ARMED — its icon has been clicked once and is
+  // now showing a labelled "Delete?" awaiting the second click.
+  //
+  // Delete used to be a word-labelled button that fired on its only click. It
+  // is now a 28px unlabelled trash icon sitting one gap away from the other
+  // row actions, which makes a mis-click both likelier and less obviously a
+  // mistake while it is happening. Re-downloading is usually the whole cost of
+  // one, but not always: an `uncertified` version is still installed, still
+  // usable, and NOT re-downloadable, so for that row a slip is irreversible.
+  //
+  // Deliberately not a timeout — a self-disarming control is untestable
+  // without fake timers and, worse, can disarm between a user deciding and
+  // clicking. It disarms on any other action in the panel (via `clearNotice`)
+  // and on unmount, which closing the popover does.
+  //
+  // Keyed by host and pack as well as version, because this panel is mounted
+  // unkeyed under a settings scope whose host can AUTO-FOLLOW to another
+  // machine while the popover is open. A bare version string would survive
+  // that move, and if the new host also carries `1.5.0` its row would mount
+  // already armed — one press from deleting something on a machine the user
+  // never armed anything on. Matching the full key makes the move disarm for
+  // free, with no effect and no remount.
+  const [armedDelete, setArmedDelete] = useState<ArmedDelete | null>(null);
+  const armedVersion = armedVersionWithin(armedDelete, hostId, packId);
 
   // Tell the mutation hooks this panel is on screen to render outcomes. While
   // it is, refusals draw inline below, anchored to what they are about; once
@@ -157,7 +233,6 @@ export function ProviderPackVersionManagerPanel(
   const sharedLine = formatSharedWithProvidersLine(
     managedVersions.sharedWithProviders,
   );
-  const totalSizeLabel = formatPackSizeBytes(managedVersions.totalSizeBytes);
   const updateAvailable = managedVersions.updateAvailable;
   const bannerDownload =
     updateAvailable === null
@@ -167,10 +242,13 @@ export function ProviderPackVersionManagerPanel(
           updateAvailable.version,
         );
 
+  // Runs at the top of every action. Disarming the delete here is what keeps
+  // an armed row from surviving the user's attention moving elsewhere.
   const clearNotice = useCallback(() => {
     setRowNotice(null);
     setBannerNotice(null);
     setPinNotice(null);
+    setArmedDelete(null);
   }, []);
 
   const onToggleAutoDownload = useCallback(
@@ -260,6 +338,16 @@ export function ProviderPackVersionManagerPanel(
     );
   }, [clearNotice, packId, useVersion]);
 
+  // First click on the trash: arm this row and clear whatever else was showing.
+  // `clearNotice` disarms, so the set has to follow it rather than precede it.
+  const onArmDelete = useCallback(
+    (version: string) => {
+      clearNotice();
+      setArmedDelete({ hostId, packId, version });
+    },
+    [clearNotice, hostId, packId],
+  );
+
   const onDelete = useCallback(
     (version: string) => {
       clearNotice();
@@ -291,7 +379,7 @@ export function ProviderPackVersionManagerPanel(
       <div
         data-testid="provider-pack-version-manager-pending"
         data-pack-id={packId}
-        className="flex w-full max-w-2xl items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-ui-sm text-muted-foreground"
+        className="flex w-full items-center gap-2 px-4 py-3 text-ui-sm text-muted-foreground"
         aria-busy="true"
         aria-label={`${packDisplayName} versions loading`}
       >
@@ -306,7 +394,7 @@ export function ProviderPackVersionManagerPanel(
       <div
         data-testid="provider-pack-version-manager-unsupported"
         data-pack-id={packId}
-        className="w-full max-w-2xl rounded-xl border border-border bg-card px-4 py-3 text-ui-sm text-muted-foreground sm:px-5"
+        className="w-full px-4 py-3 text-ui-sm text-muted-foreground"
         role="status"
       >
         Managing managed CLI versions requires a newer Traycer host. The
@@ -333,22 +421,27 @@ export function ProviderPackVersionManagerPanel(
       data-host-id={hostId}
       // `min-h-0` so the list below can actually scroll inside a height-capped
       // container instead of forcing this section past it.
-      className="flex w-full min-h-0 max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card"
+      //
+      // NO frame of its own. This panel only ever mounts inside
+      // `VersionMenuTrigger`'s `PopoverContent`, which already draws the
+      // surface: `rounded-lg bg-popover ring-1 shadow-md`, with `p-0` and
+      // `overflow-hidden` so a full-bleed child clips to its corners. The
+      // `rounded-xl border border-border bg-card` this used to add put a
+      // SECOND 1px line inside the ring at a LARGER radius than the container
+      // it sat in, so the popover's own corners showed through as four slivers
+      // behind the card's — the frayed edge in the report. `bg-card` over
+      // `bg-popover` was a second, quieter mismatch of the same kind.
+      className="flex w-full min-h-0 flex-col overflow-hidden"
       aria-label={`${packDisplayName} versions`}
     >
-      <VersionManagerHeader
-        packDisplayName={packDisplayName}
+      <VersionManagerBanners
         sharedLine={sharedLine}
-        totalSizeLabel={totalSizeLabel}
-        autoDownload={managedVersions.autoDownload}
         pinnedVersion={managedVersions.pinnedVersion}
         pinNotice={pinNotice}
         clearPinPending={
           pendingVersion === CLEAR_PIN_PENDING_KEY && useVersion.isPending
         }
-        policyPending={setPolicy.isPending}
         actionsDisabled={anyPending}
-        onToggleAutoDownload={onToggleAutoDownload}
         onClearPin={onClearPin}
       />
 
@@ -366,7 +459,20 @@ export function ProviderPackVersionManagerPanel(
         />
       ) : null}
 
-      <ul className="flex w-full min-h-0 flex-col overflow-y-auto">
+      {/*
+        Capped so the list SHOWS about four rows and scrolls the rest, instead
+        of growing to whatever the popover's own `max-h` allows. Two reasons
+        the outer cap was not enough: `managedVersions.available` is every
+        published version plus every retained install, so on a mature pack the
+        popover simply became a full-height wall of near-identical rows; and
+        the footer only reads as a footer when the list visibly ends above it.
+        Viewport-derived, per the repo's fluid-sizing rule. A row is ~41px
+        (`py-1.5` around a 28px icon button, plus its 1px rule), so 10.5rem
+        lands PART-WAY THROUGH the fifth: four rows read whole and the clipped
+        one is the scroll affordance. A cap on a row boundary would look like
+        the list simply ends.
+      */}
+      <ul className="flex max-h-[min(45vh,10.5rem)] w-full min-h-0 flex-col overflow-y-auto">
         {rows.map((row) => (
           <VersionRow
             key={row.version}
@@ -376,6 +482,7 @@ export function ProviderPackVersionManagerPanel(
                 ? rowNotice
                 : null
             }
+            deleteArmed={armedVersion === row.version}
             downloadPending={
               pendingVersion === row.version && install.isPending
             }
@@ -384,72 +491,62 @@ export function ProviderPackVersionManagerPanel(
             actionsDisabled={anyPending}
             onDownload={onDownload}
             onUse={onUse}
+            onArmDelete={onArmDelete}
             onDelete={onDelete}
           />
         ))}
         {rows.length === 0 ? (
-          <li className="px-4 py-6 text-center text-ui-sm text-muted-foreground sm:px-5">
+          <li className="px-4 py-6 text-center text-ui-sm text-muted-foreground">
             No versions listed for this pack yet.
           </li>
         ) : null}
       </ul>
+
+      <VersionManagerFooter
+        autoDownload={managedVersions.autoDownload}
+        policyPending={setPolicy.isPending}
+        onToggleAutoDownload={onToggleAutoDownload}
+      />
     </section>
   );
 }
 
-function formatFootprintLine(
-  sharedLine: string | null,
-  totalSizeLabel: string | null,
-): string | null {
-  if (sharedLine !== null && totalSizeLabel !== null) {
-    return `${sharedLine} · ${totalSizeLabel} on disk`;
-  }
-  if (sharedLine !== null) return sharedLine;
-  if (totalSizeLabel !== null) return `${totalSizeLabel} on disk`;
-  return null;
-}
-
-function VersionManagerHeader(props: {
-  readonly packDisplayName: string;
+/**
+ * What is true of the PACK, above the list of versions.
+ *
+ * Everything here is conditional, and on the common pack — unshared, unpinned,
+ * up to date — the whole region renders nothing and the popover opens directly
+ * onto the versions. That is the point of it having replaced a header: a header
+ * is chrome and is always there, whereas each of these is a fact that is only
+ * sometimes worth a line.
+ *
+ * The sharing line is the one that had to survive the header's removal. It is
+ * the only warning that a pack backs several providers, which is what makes a
+ * delete here reach further than the CLI the user opened this from.
+ */
+function VersionManagerBanners(props: {
   readonly sharedLine: string | null;
-  readonly totalSizeLabel: string | null;
-  readonly autoDownload: boolean;
   readonly pinnedVersion: string | null;
   readonly pinNotice: BannerNotice | null;
   readonly clearPinPending: boolean;
-  readonly policyPending: boolean;
   readonly actionsDisabled: boolean;
-  readonly onToggleAutoDownload: (next: boolean) => void;
   readonly onClearPin: () => void;
-}): JSX.Element {
-  const footprint = formatFootprintLine(props.sharedLine, props.totalSizeLabel);
+}): JSX.Element | null {
+  const hasPin = props.pinnedVersion !== null;
+  if (props.sharedLine === null && !hasPin && props.pinNotice === null) {
+    return null;
+  }
 
   return (
-    <header className="flex w-full flex-col gap-3 border-b border-border bg-muted/40 px-4 py-3 sm:px-5">
-      <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-ui-sm font-semibold text-foreground">
-            {props.packDisplayName}
-            <span className="font-normal text-muted-foreground">
-              {" "}
-              · versions
-            </span>
-          </h3>
-          {footprint !== null ? (
-            <p className="mt-1 text-ui-xs text-muted-foreground">{footprint}</p>
-          ) : null}
-        </div>
-        <label className="flex shrink-0 items-center gap-2 text-ui-xs text-muted-foreground">
-          <span>Auto-download updates</span>
-          <Switch
-            checked={props.autoDownload}
-            onCheckedChange={props.onToggleAutoDownload}
-            disabled={props.policyPending}
-            aria-label="Auto-download updates"
-          />
-          {props.policyPending ? <MutedAgentSpinner /> : null}
-        </label>
-      </div>
+    <div className="flex w-full shrink-0 flex-col gap-2 border-b border-border bg-foreground/5 px-4 py-2.5">
+      {props.sharedLine !== null ? (
+        <p
+          data-testid="provider-pack-shared-line"
+          className="text-ui-xs text-muted-foreground"
+        >
+          {props.sharedLine}
+        </p>
+      ) : null}
       {props.pinnedVersion !== null ? (
         <div
           data-testid="provider-pack-pinned-banner"
@@ -465,7 +562,7 @@ function VersionManagerHeader(props: {
           </p>
           <Button
             type="button"
-            size="sm"
+            size="xs"
             variant="outline"
             data-testid="provider-pack-clear-pin"
             disabled={props.actionsDisabled}
@@ -484,7 +581,35 @@ function VersionManagerHeader(props: {
           {props.pinNotice.message}
         </p>
       ) : null}
-    </header>
+    </div>
+  );
+}
+
+/**
+ * The one durable preference on this surface, pinned below the list.
+ *
+ * Outside the scrolling `<ul>` rather than `position: sticky` inside it: the
+ * list is a sibling that scrolls its own overflow, so this row is always
+ * visible by construction and never overlaps a row it is scrolling past.
+ */
+function VersionManagerFooter(props: {
+  readonly autoDownload: boolean;
+  readonly policyPending: boolean;
+  readonly onToggleAutoDownload: (next: boolean) => void;
+}): JSX.Element {
+  return (
+    <label className="flex w-full shrink-0 cursor-pointer items-center justify-between gap-3 border-t border-border bg-foreground/5 px-4 py-2.5 text-ui-xs text-muted-foreground">
+      <span>Auto-download updates</span>
+      <span className="flex shrink-0 items-center gap-2">
+        {props.policyPending ? <MutedAgentSpinner /> : null}
+        <Switch
+          checked={props.autoDownload}
+          onCheckedChange={props.onToggleAutoDownload}
+          disabled={props.policyPending}
+          aria-label="Auto-download updates"
+        />
+      </span>
+    </label>
   );
 }
 
@@ -498,9 +623,18 @@ function UpdateAvailableBanner(props: {
   readonly onDownload: (version: string) => void;
 }): JSX.Element {
   return (
+    // A full-width strip, not the inset rounded card this was. Floating a
+    // second bordered box inside a bordered popover, inset from both edges,
+    // gave the surface three nested frames before the first version; every
+    // other region here is a bordered band, so this one is too.
+    //
+    // Its Download keeps a WORD while the rows' went to icons. The rows have a
+    // repeating action column where labels are redundant by the second row —
+    // this is a one-off call to action attached to a sentence, and it is the
+    // only control on the surface that acts on a version with no row.
     <div
       data-testid="provider-pack-update-available-banner"
-      className="mx-4 mt-3 flex flex-col gap-2 rounded-lg border border-border bg-muted/30 px-3.5 py-2.5 sm:mx-5"
+      className="flex w-full shrink-0 flex-col gap-2 border-b border-border bg-foreground/3 px-4 py-2.5"
     >
       <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-ui-sm text-foreground">
@@ -509,7 +643,7 @@ function UpdateAvailableBanner(props: {
         </p>
         <Button
           type="button"
-          size="sm"
+          size="xs"
           data-testid="provider-pack-update-download"
           disabled={!props.canDownload || props.actionsDisabled}
           onClick={() => props.onDownload(props.version)}
@@ -541,12 +675,14 @@ function UpdateAvailableBanner(props: {
 type VersionRowProps = {
   readonly row: ProviderPackVersion;
   readonly notice: RowNotice | null;
+  readonly deleteArmed: boolean;
   readonly downloadPending: boolean;
   readonly usePending: boolean;
   readonly deletePending: boolean;
   readonly actionsDisabled: boolean;
   readonly onDownload: (version: string) => void;
   readonly onUse: (version: string) => void;
+  readonly onArmDelete: (version: string) => void;
   readonly onDelete: (version: string) => void;
 };
 
@@ -558,24 +694,40 @@ type VersionRowProps = {
  * a `Use disabled: …` line, and up to three buttons. A list whose job is
  * "pick a version" was the hardest thing on the screen to read.
  *
- * What stayed inline is what a list cannot delegate: the number you scan, the
- * one state worth scanning FOR, and the control. What moved to the hover card
- * is everything you only want once you have already picked a row.
+ * That first pass moved the surplus into a hover card on the version number.
+ * The card is now gone too, because hiding redundancy is not removing it —
+ * three of its five lines restated the row. `Installed` was already told by
+ * WHICH action the row offers (`Use` means installed, `Download` means not);
+ * `pairs with this Traycer release` is the `Recommended` chip in prose; and
+ * `Can't switch to it — …` became a second copy of the disabled `Use` button's
+ * own tooltip the moment those buttons went icon-only. Size went with it: it
+ * decides one question, "what do I delete to reclaim space", and a figure you
+ * must hover each row in turn to collect is a poor way to answer it.
  *
- * Two things deliberately did NOT move to the card, because a card you have
- * to go find is the wrong home for them: live download progress, and the
+ * Only the certification survived, as a chip, because it is the one thing here
+ * that changes whether an ACTION IS REVERSIBLE — see `versionRowChip`.
+ *
+ * The card also cost more than its content. It made the version number a
+ * focusable button with a ring, so a number read as an editable field, and its
+ * content opened directly over the rows below it — a list you cannot see while
+ * inspecting a member of it.
+ *
+ * Two things were never in the card and still are not, because a surface you
+ * have to go find is the wrong home for them: live download progress, and the
  * notice returned by an action you just took.
  */
 function VersionRow(props: VersionRowProps): JSX.Element {
   const {
     row,
     notice,
+    deleteArmed,
     downloadPending,
     usePending,
     deletePending,
     actionsDisabled,
     onDownload,
     onUse,
+    onArmDelete,
     onDelete,
   } = props;
 
@@ -583,7 +735,7 @@ function VersionRow(props: VersionRowProps): JSX.Element {
   const useElig = versionUseEligibility(row);
   const del = versionDeleteEligibility(row);
   const chip = versionRowChip(row);
-  const detailLines = versionDetailLines(row);
+  const trouble = versionTroubleLine(row);
   const greyed = isBlockingCertification(row.certification);
 
   const showFetch = versionShowsInstallFetchAction(row);
@@ -594,24 +746,18 @@ function VersionRow(props: VersionRowProps): JSX.Element {
       data-testid={`provider-pack-version-row-${row.version}`}
       data-version={row.version}
       className={cn(
-        "w-full border-t border-border px-4 py-2.5 sm:px-5",
+        // `first:border-t-0` because the list no longer has a header above it
+        // to divide from — a top border on row one drew a line directly under
+        // the popover's own edge, or under a banner's, doubling it.
+        "w-full border-t border-border px-4 py-1.5 first:border-t-0",
         greyed && "opacity-70",
       )}
     >
       <div className="flex w-full items-center gap-2">
-        <VersionDetailsHoverCard version={row.version} lines={detailLines}>
-          <span className="font-mono text-ui-sm text-foreground">
-            {row.version}
-          </span>
-        </VersionDetailsHoverCard>
-        {chip === null ? null : (
-          <Badge
-            variant={chipVariant(chip.tone)}
-            data-testid={`version-row-chip-${chip.tone}`}
-          >
-            {chip.label}
-          </Badge>
-        )}
+        <span className="font-mono text-ui-sm text-foreground">
+          {row.version}
+        </span>
+        {chip === null ? null : <VersionChip chip={chip} />}
         <span className="flex-1" />
         <VersionRowActions
           row={row}
@@ -620,12 +766,14 @@ function VersionRow(props: VersionRowProps): JSX.Element {
           del={del}
           showFetch={showFetch}
           fetchLabel={fetchLabel}
+          deleteArmed={deleteArmed}
           downloadPending={downloadPending}
           usePending={usePending}
           deletePending={deletePending}
           actionsDisabled={actionsDisabled}
           onDownload={onDownload}
           onUse={onUse}
+          onArmDelete={onArmDelete}
           onDelete={onDelete}
         />
       </div>
@@ -634,77 +782,90 @@ function VersionRow(props: VersionRowProps): JSX.Element {
         <DownloadProgress percent={row.installState.percent} />
       ) : null}
 
-      {notice !== null ? (
-        <p
-          data-testid="version-row-notice"
-          className={cn(
-            "mt-1.5 text-ui-xs",
-            notice.kind === "error"
-              ? "text-destructive"
-              : "text-muted-foreground",
-          )}
-        >
-          {notice.message}
-        </p>
-      ) : null}
+      <VersionRowFootnote notice={notice} trouble={trouble} />
     </li>
   );
 }
 
-function chipVariant(
-  tone: VersionRowChip["tone"],
-): "default" | "destructive" | "secondary" {
-  if (tone === "current") return "default";
-  if (tone === "blocked") return "destructive";
-  return "secondary";
+/**
+ * At most ONE line under a row, and the action notice wins.
+ *
+ * Both answer "what is wrong here", but the notice is the fresher answer — it
+ * is the outcome of something the user just did, whereas the trouble line is
+ * the standing state they did it FROM. Stacking them shows a refusal directly
+ * above the condition that caused it, which reads as two separate problems.
+ */
+function VersionRowFootnote(props: {
+  readonly notice: RowNotice | null;
+  readonly trouble: string | null;
+}): JSX.Element | null {
+  if (props.notice !== null) {
+    return (
+      <p
+        data-testid="version-row-notice"
+        className={cn(
+          "mt-1.5 text-ui-xs",
+          props.notice.kind === "error"
+            ? "text-destructive"
+            : "text-muted-foreground",
+        )}
+      >
+        {props.notice.message}
+      </p>
+    );
+  }
+  if (props.trouble === null) return null;
+  return (
+    <p
+      data-testid="version-row-trouble"
+      className="mt-1.5 text-ui-xs text-muted-foreground"
+    >
+      {props.trouble}
+    </p>
+  );
 }
 
-/**
- * The version's details, on hover or focus of its number.
- *
- * READ-ONLY BY CONTRACT. `hover-card.tsx` documents that Radix keeps card
- * content out of the sequential tab order, so anything actionable placed here
- * would be unreachable by keyboard - which is why every control stayed in the
- * row and only sentences came here.
- *
- * The same sentences are also the trigger's accessible name: a HoverCard
- * mounts no visually-hidden a11y clone the way a Tooltip does, so without this
- * a screen reader would get the bare version number and none of its state.
- */
-function VersionDetailsHoverCard(props: {
-  readonly version: string;
-  readonly lines: readonly string[];
-  readonly children: JSX.Element;
-}): JSX.Element {
-  if (props.lines.length === 0) return props.children;
+function VersionChip(props: { readonly chip: VersionRowChip }): JSX.Element {
+  const style = chipStyle(props.chip.tone);
   return (
-    <HoverCard>
-      <HoverCardTrigger asChild>
-        <button
-          type="button"
-          data-testid={`version-details-trigger-${props.version}`}
-          aria-label={`${props.version} — ${props.lines.join(". ")}`}
-          className="cursor-default rounded-sm decoration-dotted underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-        >
-          {props.children}
-        </button>
-      </HoverCardTrigger>
-      <HoverCardContent
-        // `max-w-*` rather than a fixed `w-*`: a row whose only detail is
-        // "Not installed" gets a card that size, and the repo forbids fixed
-        // widths for layout surfaces anyway.
-        className="max-w-xs p-3"
-        data-testid={`version-details-${props.version}`}
-      >
-        <p className="font-mono text-ui-sm text-foreground">{props.version}</p>
-        {props.lines.map((line) => (
-          <p key={line} className="mt-1 text-ui-xs text-muted-foreground">
-            {line}
-          </p>
-        ))}
-      </HoverCardContent>
-    </HoverCard>
+    <Badge
+      variant={style.variant}
+      className={style.className}
+      data-testid={`version-row-chip-${props.chip.tone}`}
+    >
+      {props.chip.label}
+    </Badge>
   );
+}
+
+type ChipStyle = {
+  readonly variant: "default" | "destructive" | "outline";
+  readonly className: string | undefined;
+};
+
+/**
+ * Tone → Badge styling, loudest first.
+ *
+ * `recommended` used to be `secondary`, which is a fill this surface cannot
+ * carry: `--secondary` is identical to `--popover` in the amoled and
+ * traycer-green dark presets, so the chip was invisible on exactly the themes
+ * that collapse it — the same class of defect as the repo's `bg-muted` rule,
+ * one token over, and one the `bg-muted` lint cannot see. `outline` is safe by
+ * construction because `--border` never collapses.
+ *
+ * `unpublished` is the same outline with the text dimmed. That is deliberate:
+ * a chip warning you that deleting is permanent should be READABLE, not
+ * ALARMING — alarm belongs to `blocked`, which is a refusal.
+ */
+function chipStyle(tone: VersionRowChip["tone"]): ChipStyle {
+  if (tone === "current") return { variant: "default", className: undefined };
+  if (tone === "blocked") {
+    return { variant: "destructive", className: undefined };
+  }
+  if (tone === "unpublished") {
+    return { variant: "outline", className: "text-muted-foreground" };
+  }
+  return { variant: "outline", className: undefined };
 }
 
 function VersionRowActions(props: {
@@ -714,12 +875,14 @@ function VersionRowActions(props: {
   readonly del: VersionDeleteEligibility;
   readonly showFetch: boolean;
   readonly fetchLabel: "Download" | "Retry";
+  readonly deleteArmed: boolean;
   readonly downloadPending: boolean;
   readonly usePending: boolean;
   readonly deletePending: boolean;
   readonly actionsDisabled: boolean;
   readonly onDownload: (version: string) => void;
   readonly onUse: (version: string) => void;
+  readonly onArmDelete: (version: string) => void;
   readonly onDelete: (version: string) => void;
 }): JSX.Element {
   const {
@@ -729,27 +892,37 @@ function VersionRowActions(props: {
     del,
     showFetch,
     fetchLabel,
+    deleteArmed,
     downloadPending,
     usePending,
     deletePending,
     actionsDisabled,
     onDownload,
     onUse,
+    onArmDelete,
     onDelete,
   } = props;
 
   const downloading = row.installState.status === "downloading";
   const showUse = row.installState.status === "installed" && !row.current;
+  const showDelete = versionShowsDeleteAction(row);
   const fetchDisabled = actionsDisabled || !download.allowed;
   const useDisabled = actionsDisabled || !useElig.allowed;
   const fetchTooltip = download.allowed ? null : download.reason;
   const useTooltip = useElig.allowed ? null : useElig.reason;
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
+    <div className="flex shrink-0 items-center gap-1">
       {downloading ? (
-        <Button type="button" size="sm" variant="outline" disabled>
-          Downloading…
+        // The button carries only "something is happening"; the progress bar
+        // below the row carries how far along. A word here duplicated the bar.
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          disabled
+          aria-label={`Downloading ${row.version}`}
+        >
           <MutedAgentSpinner />
         </Button>
       ) : null}
@@ -757,10 +930,11 @@ function VersionRowActions(props: {
       {showFetch ? (
         <ActionButton
           label={fetchLabel}
+          version={row.version}
+          icon={fetchLabel === "Retry" ? RotateCw : Download}
           disabled={fetchDisabled}
           tooltip={fetchTooltip}
           pending={downloadPending}
-          variant={fetchLabel === "Retry" ? "outline" : "default"}
           onClick={() => onDownload(row.version)}
         />
       ) : null}
@@ -768,79 +942,176 @@ function VersionRowActions(props: {
       {showUse ? (
         <ActionButton
           label="Use"
+          version={row.version}
+          icon={Check}
           disabled={useDisabled}
           tooltip={useTooltip}
           pending={usePending}
-          variant="outline"
           onClick={() => onUse(row.version)}
         />
       ) : null}
 
-      {del.allowed ? (
-        <ActionButton
-          label="Delete"
-          disabled={actionsDisabled}
-          tooltip={null}
+      {showDelete ? (
+        <DeleteAction
+          version={row.version}
+          armed={deleteArmed}
+          eligibility={del}
           pending={deletePending}
-          variant="outline"
-          destructive
-          onClick={() => onDelete(row.version)}
-        />
-      ) : null}
-
-      {row.current ? (
-        <ActionButton
-          label="Delete"
-          disabled
-          tooltip="Switch to another version first"
-          pending={false}
-          variant="outline"
-          testId="delete-disabled-current"
-          onClick={() => undefined}
+          actionsDisabled={actionsDisabled}
+          onArm={onArmDelete}
+          onConfirm={onDelete}
         />
       ) : null}
     </div>
   );
 }
 
+/**
+ * Delete, in its two shapes.
+ *
+ * Disabled it stays an icon and explains itself through the tooltip, from
+ * `versionDeleteEligibility` — one reason string, whether the block is "this is
+ * the version you are running" or "quarantine is holding these bytes". The
+ * component no longer decides which blocks exist; asking the model is what
+ * keeps a new block from silently rendering no control at all.
+ *
+ * Armed it becomes a word, which is the whole mechanism: nothing about a second
+ * click on an unchanged icon tells the user their first click registered as a
+ * request rather than as the deletion.
+ */
+function DeleteAction(props: {
+  readonly version: string;
+  readonly armed: boolean;
+  readonly eligibility: VersionDeleteEligibility;
+  readonly pending: boolean;
+  readonly actionsDisabled: boolean;
+  readonly onArm: (version: string) => void;
+  readonly onConfirm: (version: string) => void;
+}): JSX.Element {
+  if (props.armed && props.eligibility.allowed) {
+    return (
+      <ArmedDeleteButton
+        version={props.version}
+        pending={props.pending}
+        disabled={props.actionsDisabled}
+        onConfirm={props.onConfirm}
+      />
+    );
+  }
+
+  return (
+    <ActionButton
+      label="Delete"
+      version={props.version}
+      icon={Trash2}
+      destructive
+      disabled={props.actionsDisabled || !props.eligibility.allowed}
+      tooltip={props.eligibility.allowed ? null : props.eligibility.reason}
+      pending={props.pending}
+      testId={props.eligibility.allowed ? undefined : "delete-disabled-blocked"}
+      onClick={() => props.onArm(props.version)}
+    />
+  );
+}
+
+/**
+ * The armed half of the two-step delete, split out for the focus effect.
+ *
+ * Arming REPLACES a DOM node rather than restyling one: the trash
+ * `ActionButton` (tooltip → span → button) unmounts and this button mounts in
+ * its place. Whatever the pointer does, that drops a keyboard user's focus to
+ * `<body>`, so the second press of a two-press flow has nothing to land on and
+ * the state change is never announced — the confirmation step becomes a
+ * mouse-only affordance. Focusing on mount is what keeps the two presses on one
+ * control, and it is imperative because `jsx-a11y` forbids the `autoFocus` prop.
+ *
+ * The visible word can't carry the version the way the icon buttons' labels do
+ * ("Delete?" has to stay short), so the accessible name restates it: in a
+ * five-row list an unqualified "Delete?" names no version at all.
+ */
+function ArmedDeleteButton(props: {
+  readonly version: string;
+  readonly pending: boolean;
+  readonly disabled: boolean;
+  readonly onConfirm: (version: string) => void;
+}): JSX.Element {
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    confirmRef.current?.focus();
+  }, []);
+
+  return (
+    <Button
+      ref={confirmRef}
+      type="button"
+      size="xs"
+      variant="destructive"
+      data-testid={`version-delete-confirm-${props.version}`}
+      disabled={props.disabled}
+      aria-label={`Confirm delete ${props.version}`}
+      onClick={() => props.onConfirm(props.version)}
+    >
+      Delete?
+      {props.pending ? <MutedAgentSpinner /> : null}
+    </Button>
+  );
+}
+
+/**
+ * One icon-only row control.
+ *
+ * `label` does triple duty — the accessible name (with the version appended, so
+ * the buttons of a five-row list are distinguishable), the tooltip when the
+ * control is live, and the thing a refusal replaces when it is not. A tooltip
+ * is therefore ALWAYS rendered: an icon button with nothing to hover is a
+ * guessing game, which is the standing cost of dropping the words and the
+ * reason this component has no "no tooltip" path.
+ */
 function ActionButton(props: {
   readonly label: string;
+  readonly version: string;
+  readonly icon: LucideIcon;
   readonly disabled: boolean;
   readonly tooltip: string | null;
   readonly pending: boolean;
-  readonly variant: "default" | "outline";
   readonly destructive?: boolean;
   readonly testId?: string;
   readonly onClick: () => void;
 }): JSX.Element {
+  const Icon = props.icon;
+  const accessibleName = `${props.label} ${props.version}`;
+
   const button = (
     <Button
       type="button"
-      size="sm"
-      variant={props.variant}
-      className={
-        props.destructive === true
-          ? "text-destructive hover:text-destructive"
-          : undefined
-      }
+      size="icon-sm"
+      variant="ghost"
+      className={cn(
+        props.destructive === true &&
+          "text-destructive hover:bg-destructive/10 hover:text-destructive",
+      )}
       disabled={props.disabled}
       data-testid={props.testId}
+      aria-label={accessibleName}
       onClick={props.onClick}
     >
-      {props.label}
-      {props.pending ? <MutedAgentSpinner /> : null}
+      {props.pending ? <MutedAgentSpinner /> : <Icon aria-hidden="true" />}
     </Button>
   );
 
-  if (props.tooltip === null) return button;
-
   return (
     <TooltipWrapper
-      label={props.tooltip}
+      label={props.tooltip ?? accessibleName}
       side="top"
       sideOffset={4}
       align="center"
     >
+      {/*
+        The span is load-bearing on the disabled path: `disabled` buttons emit
+        no pointer events, so a tooltip bound to the button itself never opens
+        for exactly the states whose reason the user most needs.
+      */}
       <span className="inline-flex">{button}</span>
     </TooltipWrapper>
   );
@@ -854,7 +1125,7 @@ function DownloadProgress(props: {
     return (
       <div
         data-testid="download-progress-indeterminate"
-        className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+        className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-foreground/8"
         role="progressbar"
         aria-valuetext="Download in progress on another host"
         aria-busy="true"
@@ -867,7 +1138,7 @@ function DownloadProgress(props: {
   return (
     <div
       data-testid="download-progress-determinate"
-      className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+      className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-foreground/8"
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={100}

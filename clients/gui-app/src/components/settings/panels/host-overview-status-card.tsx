@@ -207,93 +207,19 @@ export function HostOverviewNameAction(props: {
   );
 }
 
-/**
- * The host refused to restart because it is busy.
+/*
+ * There is deliberately no busy-restart NOTICE here.
  *
- * Deliberately not a toast and not an error: the host closed session admission,
- * found work in flight, reopened it, and told us the count. Nothing failed and
- * nothing needs reporting — the honest affordance is to say what it is waiting
- * on and let the person decide whether to try again.
+ * A `host.restart` busy verdict used to render as an amber band on this card,
+ * with Try again / Force restart / Dismiss inline. Its Force button dispatched
+ * the bridge respawn on the FIRST press — so the same verdict was strictly more
+ * destructive answered from Settings than from the Help menu, which has always
+ * put an explicit force/defer confirm between the offer and the kill. The band
+ * is gone rather than fixed in place: one verdict, one affordance, and that
+ * affordance is `HostBusyForceDeferDialog` (see `host-overview-panel.tsx` and
+ * `local-host-restart-flow.tsx`). Re-adding an inline force control here would
+ * put the two surfaces back out of step.
  */
-export function HostRestartBusyNotice(props: {
-  readonly busySessionCount: number;
-  readonly onRetry: () => void;
-  readonly onDismiss: () => void;
-  readonly retryPending: boolean;
-  /**
-   * The Force-restart offer, or `null` where none can be made. Non-null only
-   * for the LOCAL machine's host with a CLI bridge present: force is a bridge
-   * respawn of this machine's host process, and a remote host has no
-   * transport that can kill its process. Forcing ends the sessions the count
-   * above describes — the copy says so before the button does it.
-   */
-  readonly onForceRestart: (() => void) | null;
-  readonly forcePending: boolean;
-  /**
-   * The page-wide lifecycle-write gate. Exclusion has to hold in BOTH
-   * directions: the page's other writes (update install, rename, policy,
-   * service register/deregister) already refuse to dispatch while a restart
-   * is in flight, and the notice's actions must equally refuse to recycle
-   * the host in the middle of one of theirs.
-   */
-  readonly pageGatePending: boolean;
-}): ReactNode {
-  const { busySessionCount } = props;
-  const anyPending =
-    props.retryPending || props.forcePending || props.pageGatePending;
-  return (
-    <div
-      className="flex flex-wrap items-center gap-3 border-b border-amber-700/30 bg-amber-900/10 px-5 py-3 text-ui-sm"
-      data-testid="host-overview-restart-busy"
-    >
-      <span className="flex min-w-0 flex-1 items-start gap-2 text-amber-200">
-        <AlertTriangle className="mt-px size-4 shrink-0" aria-hidden />
-        <span>
-          Not restarted —{" "}
-          {busySessionCount === 1
-            ? "1 session is"
-            : `${busySessionCount} sessions are`}{" "}
-          still working. Nothing was interrupted; try again when they finish.
-          {props.onForceRestart === null
-            ? null
-            : " Force restart ends them immediately."}
-        </span>
-      </span>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={anyPending}
-        onClick={props.onRetry}
-        data-testid="host-overview-restart-busy-retry"
-      >
-        Try again
-      </Button>
-      {props.onForceRestart === null ? null : (
-        <Button
-          type="button"
-          size="sm"
-          variant="destructive"
-          disabled={anyPending}
-          onClick={props.onForceRestart}
-          data-testid="host-overview-restart-busy-force"
-        >
-          {props.forcePending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          Force restart
-        </Button>
-      )}
-      <Button type="button" size="sm" variant="ghost" onClick={props.onDismiss}>
-        Dismiss
-      </Button>
-    </div>
-  );
-}
 
 /**
  * A host update in flight, as the HOST reports it on `host.status`.
@@ -311,7 +237,7 @@ export function HostOverviewUpdateProgress(props: {
       className={
         failed
           ? "flex items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-5 py-3 text-ui-sm text-destructive"
-          : "flex items-center gap-2 border-b border-border/40 bg-muted/20 px-5 py-3 text-ui-sm text-muted-foreground"
+          : "flex items-center gap-2 border-b border-border/40 bg-foreground/3 px-5 py-3 text-ui-sm text-muted-foreground"
       }
       data-testid="host-overview-update-progress"
       data-state={props.state}
@@ -479,6 +405,8 @@ export function HostOverviewHeaderActions(props: {
   readonly onRestart: () => void;
   readonly onOpenDoctor: () => void;
   readonly onMakeActive: () => void;
+  /** An Activate is already in flight - see `HostScope.isActivating`. */
+  readonly activateBusy: boolean;
   readonly onCopyHostId: () => void;
 }): ReactNode {
   const { hostName } = props;
@@ -506,7 +434,10 @@ export function HostOverviewHeaderActions(props: {
           // one the user is blocked on.
           label={
             props.connectable
-              ? "Switching changes where new work starts. Tabs you already have open stay on the host they started on."
+              ? // Not "tabs stay on the host they started on" - the active-host
+                // switch still reloads open tabs today (F2/F3/F7), so that
+                // promise would be false. This only says what IS true.
+                "Switching changes where new work starts."
               : `${hostName} has no dialable route from this window, so it can't become this window's host.`
           }
           side="top"
@@ -518,7 +449,7 @@ export function HostOverviewHeaderActions(props: {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!props.connectable}
+              disabled={!props.connectable || props.activateBusy}
               onClick={props.onMakeActive}
               data-testid="host-make-active"
             >

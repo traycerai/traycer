@@ -1,5 +1,8 @@
 import { createContext, use, useCallback, useSyncExternalStore } from "react";
-import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type {
+  IHostStreamClient,
+  StreamMethodSupportSource as SharedStreamMethodSupportSource,
+} from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -73,17 +76,25 @@ export function useStreamHostId(): string | null {
   return client === null ? null : (value?.hostId ?? null);
 }
 
+/**
+ * The host-registry specialisation of the shared method-support slice - all
+ * `useStreamMethodSupportFor` needs, and what a session handle exposes so its
+ * consumers can read the bound host's capabilities without the whole transport.
+ */
+export type StreamMethodSupportSource =
+  SharedStreamMethodSupportSource<HostStreamRpcRegistry>;
+
 // Both method-support readers ride the same `subscribeMethodSupport` store and
 // null-client handling; only the per-snapshot read differs. The readers are
 // module-level constants so `getSnapshot`'s identity stays keyed on
 // `[client, method]` alone.
-function useStreamMethodValueForClient<T>(
-  client: IHostStreamClient<HostStreamRpcRegistry> | null,
+function useStreamMethodValueForClient<
+  TClient extends StreamMethodSupportSource,
+  T,
+>(
+  client: TClient | null,
   method: keyof HostStreamRpcRegistry & string,
-  read: (
-    client: IHostStreamClient<HostStreamRpcRegistry>,
-    method: keyof HostStreamRpcRegistry & string,
-  ) => T,
+  read: (client: TClient, method: keyof HostStreamRpcRegistry & string) => T,
 ): T | null {
   const subscribe = useCallback(
     (callback: () => void) => {
@@ -115,7 +126,7 @@ function useStreamMethodValue<T>(
 }
 
 const readMethodSupport = (
-  client: IHostStreamClient<HostStreamRpcRegistry>,
+  client: StreamMethodSupportSource,
   method: keyof HostStreamRpcRegistry & string,
 ) => client.getMethodSupport(method);
 
@@ -138,14 +149,22 @@ export function useStreamMethodSchemaVersion(
 
 /**
  * Method-support reader for an EXPLICIT client instance, not the app-wide
- * default-host `StreamRuntimeContext`. A per-tab tile (`useHostStreamClientFor`)
- * dials a transient client for its bound host, which may not be the app's
- * default/active host - `useStreamMethodSupport` would read the wrong
- * client's negotiated capabilities in that case.
+ * default-host `StreamRuntimeContext`. A per-tab tile (`useHostStreamClientFor`,
+ * or a session store's own durable transport) dials a client for its bound
+ * host, which may not be the app's default/active host -
+ * `useStreamMethodSupport` would read the wrong client's negotiated
+ * capabilities in that case.
  */
 export function useStreamMethodSupportFor(
-  client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  client: StreamMethodSupportSource | null,
   method: keyof HostStreamRpcRegistry & string,
 ): StreamMethodSupport | null {
   return useStreamMethodValueForClient(client, method, readMethodSupport);
+}
+
+export function useStreamMethodSchemaVersionFor(
+  client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  method: keyof HostStreamRpcRegistry & string,
+): SchemaVersion | null {
+  return useStreamMethodValueForClient(client, method, readMethodSchemaVersion);
 }

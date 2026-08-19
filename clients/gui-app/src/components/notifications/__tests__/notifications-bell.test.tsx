@@ -5,13 +5,20 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  dispatchAction,
+  type KeybindingRouter,
+} from "@/lib/keybindings/dispatch";
+import { isMac } from "@/lib/keybindings/platform";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -49,6 +56,9 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+
+const reconnectEngine = createHostReconnectEngine();
 
 const activeHostIdRef = vi.hoisted(() => ({
   value: null as string | null,
@@ -60,8 +70,8 @@ const directoryRef = vi.hoisted(() => ({
   } | null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdRef.value,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdRef.value,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -112,7 +122,7 @@ interface FakeHandle {
 }
 
 function fakeFactory(): {
-  factory: Parameters<typeof openNotificationsStream>[0];
+  factory: Parameters<typeof openNotificationsStream>[1];
   handle: () => FakeHandle;
 } {
   let current: FakeHandle | null = null;
@@ -151,6 +161,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");
@@ -223,6 +234,36 @@ function createRunnerHost(): MockRunnerHost {
   });
 }
 
+const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
+
+/** The default `app.notifications.open` chord as a keyboard event, pressed the
+ * way a user on THIS platform presses it. `hasPlatformModKey` accepts
+ * `metaKey || ctrlKey` off macOS, so a Command press would match there too -
+ * and would leave the Ctrl half, the one every Windows/Linux user actually
+ * hits, untested. */
+function pressNotificationsChord(): void {
+  fireEvent.keyDown(window, {
+    key: "N",
+    code: "KeyN",
+    ...(isMac() ? { metaKey: true } : { ctrlKey: true }),
+    shiftKey: true,
+  });
+}
+
 function expectNoBellIndicators(): void {
   expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
   expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
@@ -272,6 +313,79 @@ describe("NotificationsBell", () => {
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
   });
 
+  it("opens through the notifications keybinding action and focuses the heading", async () => {
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, undefined);
+
+    expect(screen.queryByTestId("notifications-popover")).toBeNull();
+    act(() => {
+      expect(
+        dispatchAction("app.notifications.open", DYNAMIC_ACTION_ROUTER),
+      ).toBe(true);
+    });
+
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(useNotificationsPopoverStore.getState().open).toBe(true);
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "Notifications" }),
+    );
+  });
+
+  it("toggles the open center closed on a second chord press and returns focus to the bell", async () => {
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, undefined);
+
+    act(() => {
+      dispatchAction("app.notifications.open", DYNAMIC_ACTION_ROUTER);
+    });
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "Notifications" }),
+    );
+
+    // Dispatch can't deliver the second press: an open Radix popover is a
+    // `role="dialog"`, which the keybinding provider treats as a chord
+    // barrier. The bell's own window listener is what closes it.
+    act(() => {
+      pressNotificationsChord();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("notifications-popover")).toBeNull();
+    });
+    expect(useNotificationsPopoverStore.getState().open).toBe(false);
+    // Identity by testid, not ref: the tooltip may remount the trigger node.
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute("data-testid")).toBe(
+        "notifications-bell",
+      );
+    });
+  });
+
+  it("does not steal focus when the chord closes a center the pointer opened", async () => {
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, undefined);
+
+    const bell = screen.getByTestId("notifications-bell");
+    fireEvent.pointerDown(bell);
+    fireEvent.click(bell);
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+
+    const outside = document.createElement("input");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    act(() => {
+      pressNotificationsChord();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("notifications-popover")).toBeNull();
+    });
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
   it("suppresses title-bar dragging only while the popover is open", async () => {
     const runnerHost = createRunnerHost();
     mountBell(runnerHost, undefined);
@@ -297,7 +411,7 @@ describe("NotificationsBell", () => {
   it("does not focus the first header action on pointer open", async () => {
     const runnerHost = createRunnerHost();
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     mountBell(runnerHost, undefined);
 
     act(() => {
@@ -379,7 +493,7 @@ describe("NotificationsBell", () => {
   it("renders the quiet-dot for quietDot state and no indicator for unknown/clear", () => {
     const runnerHost = createRunnerHost();
     const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
+    openNotificationsStream(reconnectEngine, factory, null);
     mountBell(runnerHost, undefined);
 
     // Host summary null → unknown kind, but renders like clear (no dot).

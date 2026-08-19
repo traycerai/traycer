@@ -6,6 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -17,6 +18,8 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { ExternalLink, LogOut, Settings } from "lucide-react";
 import { useState } from "react";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
 export interface UserMenuProps {
   readonly userName: string;
@@ -35,6 +38,7 @@ export function UserMenu(props: UserMenuProps) {
   const runnerHost = useRunnerHost();
   const [open, setOpen] = useState<boolean>(false);
   const [signOutOpen, setSignOutOpen] = useState<boolean>(false);
+  const settingsChord = useBindingForAction("app.settings.open");
   useTitleBarDragSuppression("user-menu", open);
   const initials = computeInitials(props.userName, props.email);
   const manageSubscriptionUrl = resolveManageSubscriptionUrl(
@@ -113,6 +117,11 @@ export function UserMenu(props: UserMenuProps) {
             >
               <Settings className="size-3.5" />
               App settings
+              {settingsChord === null ? null : (
+                <DropdownMenuShortcut>
+                  {formatChordForDisplay(settingsChord)}
+                </DropdownMenuShortcut>
+              )}
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuItem

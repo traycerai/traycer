@@ -1,5 +1,7 @@
 import { Plus } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
 const NEW_TAB_PLACEHOLDER = "Start Page";
 
@@ -11,10 +13,13 @@ export function TabStripNewButton(
   props: TabStripNewButtonProps,
 ): React.ReactNode {
   const { onNewTab } = props;
+  const chord = useBindingForAction("epic.new");
+  const tooltip =
+    chord === null ? "New task" : `New task (${formatChordForDisplay(chord)})`;
 
   return (
     <TooltipWrapper
-      label="New task"
+      label={tooltip}
       side="top"
       sideOffset={undefined}
       align={undefined}

@@ -1,8 +1,10 @@
 import { useSyncExternalStore } from "react";
 import {
+  getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
   subscribeNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 
 /**
  * Whether `hostId` advertised `method` in its last handshake.
@@ -57,5 +59,16 @@ export function useHostMethodSupport(
     const methods = getNegotiatedHostMethods(hostId);
     if (methods === null) return null;
     return methods.has(method);
+  });
+}
+
+/** Canonical schema version advertised in the host's last handshake. */
+export function useHostMethodSchemaVersion(
+  hostId: string | null,
+  method: string,
+): SchemaVersion | null {
+  return useSyncExternalStore(subscribeNegotiatedManifests, () => {
+    if (hostId === null) return null;
+    return getNegotiatedHostMethodVersion(hostId, method);
   });
 }

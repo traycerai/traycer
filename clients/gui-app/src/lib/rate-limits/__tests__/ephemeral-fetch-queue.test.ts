@@ -11,16 +11,30 @@ import { queryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
-import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
+import {
+  EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS,
+  RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+} from "@/lib/rate-limits/rate-limit-timing";
+import {
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
   enqueueRateLimitFetch,
   enqueueRateLimitFetchBatch,
+  enqueueRateLimitFetchBatchForScope,
   enqueueRateLimitFetchForScope,
+  getRateLimitQueueTargetPhase,
   isRateLimitQueueDraining,
+  isRateLimitReadFollowUpExhausted,
   subscribeRateLimitQueueDraining,
+  subscribeRateLimitQueueTargets,
+  type RateLimitQueueBatchTarget,
   type RateLimitQueueRequestFn,
+  type RateLimitQueueTargetPhase,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 const HOST_ID = "host-1";
@@ -94,6 +108,290 @@ describe("ephemeral-fetch-queue", () => {
   afterEach(() => {
     __resetRateLimitQueueForTests();
     vi.useRealTimers();
+  });
+
+  it("REISSUES a forced pull behind an in-flight automatic one instead of joining it", async () => {
+    // Joining used to be safe because every request forced a probe. Now that
+    // `force` rides the wire, the in-flight automatic pull travels as
+    // `force: false` and a v4 host may answer it from its gauge cache - so a
+    // joined forced pull gets a reading up to the host's read floor old when it
+    // asked for a probe. The refresh controls disable while their own target is
+    // fetching, but consuming a Codex rate-limit reset credit forces a re-read
+    // from outside any button, and answering THAT from cache shows the
+    // pre-reset numbers the user just paid to clear.
+    const queryClient = newQueryClient();
+    const forced: boolean[] = [];
+    const settlers: Array<() => void> = [];
+    const request: RateLimitQueueRequestFn = (_hostId, _method, params) => {
+      forced.push(params.force ?? false);
+      return new Promise((resolve) => {
+        settlers.push(() => resolve(response()));
+      });
+    };
+    configureRateLimitQueue({
+      hostId: HOST_ID,
+      queryClient,
+      request: vi.fn(request),
+    });
+
+    // Background sweep puts codex on the wire as an automatic pull.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+      profileId: null,
+    });
+    await flush();
+    expect(forced).toEqual([false]);
+
+    // The forced pull lands while that one is still FETCHING - too late to
+    // promote in place, since the request is already on the wire.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    await flush();
+    // It waits rather than joining: still just the automatic request.
+    expect(forced).toEqual([false]);
+
+    settlers[0]();
+    await flush();
+
+    // ...and then runs as its OWN request, carrying force so the host probes.
+    expect(forced).toEqual([false, true]);
+  });
+
+  // A response timeout after the request reached the host is not a failed read:
+  // the probe keeps running (a same-profile custodian alone can hold the gate
+  // for minutes) and the host captures it in its gauge cache. These pin that
+  // the queue goes back for it rather than leaving the user with a refresh that
+  // visibly failed and silently succeeded later.
+  describe("read follow-up after we stop waiting", () => {
+    function transportFailure(): HostTransportFailureError {
+      return new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket frame timed out after 180000ms",
+        requestId: "req-1",
+        method: "host.getRateLimitUsage",
+        fatalDetails: null,
+      });
+    }
+
+    it("re-reads the target once, as an UNFORCED pull so the host answers from its gauge cache", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      const forced: boolean[] = [];
+      let attempt = 0;
+      const request: RateLimitQueueRequestFn = (_hostId, _method, params) => {
+        attempt += 1;
+        forced.push(params.force ?? false);
+        return attempt === 1
+          ? Promise.reject(transportFailure())
+          : Promise.resolve(response());
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(forced).toEqual([true]);
+
+      // Nothing yet - the follow-up waits for the host to finish the probe.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS - 1);
+      expect(forced).toEqual([true]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      // Unforced: it wants the reading the abandoned probe already produced,
+      // not a second subprocess.
+      expect(forced).toEqual([true, false]);
+    });
+
+    it("does NOT keep re-reading when the follow-up fails too", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      let calls = 0;
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        return Promise.reject(transportFailure());
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+
+      // The cap holds: a host that never answers must not become a poll loop.
+      // The 15-minute sweep already covers that case.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS * 5);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+    });
+
+    // That cap is exactly what `isRateLimitQueryFailure` leans on to keep a
+    // still-running read hidden: it stays quiet because a collection is coming.
+    // Once the cap declines one, nothing is, and the surface has to say so - at
+    // the RIGHT moments. The two false readings below are the point: a row that
+    // reported exhausted while its own collection was still waiting, or still
+    // on the wire, would flash a failure in the middle of the recovery this
+    // whole lane exists to perform.
+    it("reports the follow-up budget exhausted only once the collection has settled unheard", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      let calls = 0;
+      const settlers: Array<() => void> = [];
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        return new Promise((_resolve, reject) => {
+          settlers.push(() => {
+            reject(transportFailure());
+          });
+        });
+      };
+      function settleNextUnheard(): void {
+        const next = settlers.shift();
+        if (next === undefined) throw new Error("no request in flight");
+        next();
+      }
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+      const exhausted = (): boolean =>
+        isRateLimitReadFollowUpExhausted(HOST_ID, "codex", null);
+
+      expect(exhausted()).toBe(false);
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+      expect(exhausted()).toBe(false);
+
+      // Unheard. The budget is now spent, but the delayed collection is
+      // scheduled - something is still coming back for this read.
+      settleNextUnheard();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exhausted()).toBe(false);
+
+      // The collection is now ON THE WIRE. No timer is pending and the budget
+      // reads as spent, so only the in-flight clause keeps this honest.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+      expect(exhausted()).toBe(false);
+
+      // It came back unheard too, and `scheduleReadFollowUp` declines a third.
+      // Nothing is collecting now, so the read must stop being suppressed.
+      settleNextUnheard();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exhausted()).toBe(true);
+    });
+
+    it("does not let TanStack retry a queue-owned read into a second CLI probe", async () => {
+      // `newQueryClient()` sets `retry: false` as the DEFAULT, so every other
+      // test in this file is blind to what production actually does: the app
+      // QueryClient retries every non-`RetryableTransportError` once
+      // (`lib/query-client.ts`). This client mirrors THAT, so the assertion is
+      // about the queue's own `retry: false` on `fetchQuery` rather than about
+      // the fixture.
+      //
+      // Without it, the response budget elapsing on a read the host is still
+      // running makes TanStack re-send the SAME forced probe - a second codex
+      // subprocess while the first may still be completing - and holds the
+      // serial lane for up to another full budget before the catch schedules
+      // the one delayed gauge read that is supposed to own recovery.
+      vi.useFakeTimers();
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: (failureCount: number, error: unknown) =>
+              !(error instanceof RetryableTransportError) && failureCount < 1,
+          },
+        },
+      });
+      let calls = 0;
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        return Promise.reject(transportFailure());
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      // Give TanStack's own retry backoff room to fire if it were going to.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(calls).toBe(1);
+
+      // Recovery is the single delayed follow-up, and it is UNFORCED - a cache
+      // read, not another subprocess.
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+    });
+
+    it("does not follow up a read the host never dispatched", async () => {
+      vi.useFakeTimers();
+      const queryClient = newQueryClient();
+      let calls = 0;
+      const request: RateLimitQueueRequestFn = () => {
+        calls += 1;
+        // Never-dispatched: the retrying messenger owns this case, and there is
+        // no in-flight probe whose result we could collect.
+        return Promise.reject(
+          new RetryableTransportError({
+            code: "RPC_ERROR",
+            message: "WebSocket dial timed out after 10000ms",
+            requestId: "req-2",
+            method: "host.getRateLimitUsage",
+            fatalDetails: null,
+          }),
+        );
+      };
+      configureRateLimitQueue({
+        hostId: HOST_ID,
+        queryClient,
+        request: vi.fn(request),
+      });
+
+      void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+        force: true,
+        profileId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_READ_FOLLOW_UP_DELAY_MS * 3);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+    });
   });
 
   it("serializes concurrent enqueues across providers - only one request is ever in flight (guardrail 1)", async () => {
@@ -217,7 +515,12 @@ describe("ephemeral-fetch-queue", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "codex",
         profileId: "work-profile",
+        // Rides the wire request only - the cache key asserted just below is
+        // deliberately force-less, so a forced pull and an automatic one share
+        // one entry instead of splitting into two.
+        force: true,
       },
+      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     );
     expect(
       queryClient.getQueryData(keyForHost("host-b", "codex", "work-profile")),
@@ -270,7 +573,13 @@ describe("ephemeral-fetch-queue", () => {
     expect(isRateLimitQueueDraining()).toBe(false);
   });
 
-  it("serializes many rapid same-provider force refreshes one at a time", async () => {
+  it("dedupes rapid identical-target force enqueues into a single fetch (target registry join, not four serialized fetches)", async () => {
+    // Pre-registry behavior serialized four rapid same-target force enqueues
+    // into four back-to-back fetches. The target registry now joins a
+    // still-queued identical target instead of re-registering it, so four
+    // back-to-back force refreshes for the SAME provider/profile collapse
+    // into ONE fetch - see "rate-limit queue target registry" below for the
+    // dedup/promotion/join mechanics in isolation.
     const queryClient = newQueryClient();
     const { request, settlers } = makeControllableRequest();
     configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
@@ -287,16 +596,21 @@ describe("ephemeral-fetch-queue", () => {
 
     settlers[0].ok();
     await flush();
+    // Still just the one fetch - the other three rapid calls joined it rather
+    // than each spawning their own.
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Once that fetch has settled and the target is cleared from the
+    // registry, a later enqueue is a genuinely new request.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    await flush();
     expect(request).toHaveBeenCalledTimes(2);
 
     settlers[1].ok();
     await flush();
-    expect(request).toHaveBeenCalledTimes(3);
-
-    settlers[2].ok();
-    settlers[3]?.ok();
-    await flush();
-    expect(request).toHaveBeenCalledTimes(4);
   });
 
   it("writes into the same query key the per-provider hook reads", async () => {
@@ -719,5 +1033,392 @@ describe("post-usage_fetch_failed cool-down", () => {
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(3);
+  });
+});
+
+// The per-target `queued`/`fetching` registry (`getRateLimitQueueTargetPhase` /
+// `subscribeRateLimitQueueTargets`) backing `useRateLimitQueueTargetPhase` -
+// the popover row-level "Queued…"/spinner copy. Distinct from the lane-wide
+// `isRateLimitQueueDraining` signal: a target can be truthfully reported
+// "queued" while a DIFFERENT target occupies the serial lane.
+describe("rate-limit queue target registry", () => {
+  beforeEach(() => {
+    __resetRateLimitQueueForTests();
+  });
+  afterEach(() => {
+    __resetRateLimitQueueForTests();
+    vi.useRealTimers();
+  });
+
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  function target(
+    providerId: RateLimitQueueBatchTarget["providerId"],
+    profileId: string | null,
+  ): RateLimitQueueBatchTarget {
+    return {
+      providerId,
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      profileId,
+    };
+  }
+
+  function ambientTarget(
+    providerId: RateLimitQueueBatchTarget["providerId"],
+  ): RateLimitQueueBatchTarget {
+    return target(providerId, null);
+  }
+
+  it("reports queued while a target waits behind an earlier item, then fetching once its turn arrives", async () => {
+    const queryClient = newQueryClient();
+    const blocker = makeControllableRequest();
+    configureRateLimitQueue({
+      hostId: HOST_ID,
+      queryClient,
+      request: blocker.request,
+    });
+
+    // Occupy the lane with claude-code so codex's item must wait.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: blocker.request },
+      [ambientTarget("claude-code")],
+      { force: true },
+    );
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "claude-code", null)).toBe(
+      "fetching",
+    );
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: blocker.request },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    await flush();
+    // Still behind claude-code: queued, not fetching.
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBe("queued");
+
+    blocker.settlers[0].ok();
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBe(
+      "fetching",
+    );
+    // The claude-code target already settled and was cleaned out of the
+    // registry - `null`, not a stale phase.
+    expect(
+      getRateLimitQueueTargetPhase(HOST_ID, "claude-code", null),
+    ).toBeNull();
+
+    blocker.settlers[1].ok();
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBeNull();
+  });
+
+  it("cleans the registry after a successful fetch", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBe(
+      "fetching",
+    );
+
+    settlers[0].ok();
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBeNull();
+  });
+
+  it("cleans the registry after a failed fetch", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    await flush();
+    settlers[0].fail();
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBeNull();
+  });
+
+  it("notifies target listeners on every queued/fetching/cleanup transition", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    const seen: Array<RateLimitQueueTargetPhase | null> = [];
+    const unsubscribe = subscribeRateLimitQueueTargets(() => {
+      seen.push(getRateLimitQueueTargetPhase(HOST_ID, "codex", null));
+    });
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    // Registered as "queued" synchronously at enqueue time.
+    expect(seen.at(-1)).toBe("queued");
+
+    await flush();
+    expect(seen.at(-1)).toBe("fetching");
+
+    settlers[0].ok();
+    await flush();
+    expect(seen.at(-1)).toBeNull();
+
+    unsubscribe();
+  });
+
+  it("dedupes a repeated identical force enqueue for a target still queued behind an earlier item - no extra queue item, one shared join", async () => {
+    const queryClient = newQueryClient();
+    const blocker = makeControllableRequest();
+    const codexCalls: Array<string | null> = [];
+    const codexRequest = vi.fn<RateLimitQueueRequestFn>(
+      (_hostId, _method, params) => {
+        codexCalls.push(params.profileId);
+        return Promise.resolve(response());
+      },
+    );
+    configureRateLimitQueue({
+      hostId: HOST_ID,
+      queryClient,
+      request: blocker.request,
+    });
+
+    // Occupy the lane so codex's item must wait, queued.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: blocker.request },
+      [ambientTarget("claude-code")],
+      { force: true },
+    );
+    await flush();
+
+    const first = enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: codexRequest },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    const second = enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: codexRequest },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    await flush();
+    // Both calls resolved to the SAME queued entry - only one target sits in
+    // the registry, and it is still queued behind claude-code.
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBe("queued");
+
+    blocker.settlers[0].ok();
+    await flush();
+    // One dedup'd entry -> exactly one codex request, not two.
+    expect(codexRequest).toHaveBeenCalledTimes(1);
+    expect(codexCalls).toEqual([null]);
+
+    await Promise.all([first, second]);
+  });
+
+  it("joins an already-fetching FORCED target instead of spawning a follow-up fetch", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBe(
+      "fetching",
+    );
+
+    // A second caller (e.g. a popover row remounting) asks for the exact same
+    // target while the first fetch is still in flight. The in-flight pull is
+    // itself forced, so its result is the probe this caller wants - joining is
+    // correct, and reissuing would spawn a redundant CLI subprocess. Contrast
+    // the reissue case above, where the in-flight pull is AUTOMATIC and may be
+    // answered from the host gauge cache.
+    const joinResult = enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    await flush();
+    // No second request spawned - the join is satisfied by the one already
+    // running.
+    expect(request).toHaveBeenCalledTimes(1);
+
+    let joinResolved = false;
+    void joinResult.then(() => {
+      joinResolved = true;
+    });
+    await flush();
+    expect(joinResolved).toBe(false);
+
+    settlers[0].ok();
+    await flush();
+    expect(joinResolved).toBe(true);
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBeNull();
+  });
+
+  it("promotes queued automatic work to force when a manual refresh joins it before its turn arrives", async () => {
+    const queryClient = newQueryClient();
+    const blocker = makeControllableRequest();
+    const codexRequest = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    configureRateLimitQueue({
+      hostId: HOST_ID,
+      queryClient,
+      request: blocker.request,
+    });
+
+    // Occupy the lane so the automatic codex enqueue below queues instead of
+    // running immediately.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: blocker.request },
+      [ambientTarget("claude-code")],
+      { force: true },
+    );
+    await flush();
+
+    // Automatic (force: false) enqueue for codex - the cache is empty, so it
+    // passes its enqueue-time freshness check and gets queued.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: codexRequest },
+      [ambientTarget("codex")],
+      { force: false },
+    );
+    await flush();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBe("queued");
+
+    // While it waits, the codex cache key becomes fresh (a sibling lane wrote
+    // it) - without promotion, `shouldSkipAutomatic()` would now skip codex's
+    // still-force:false turn entirely.
+    queryClient.setQueryData(keyFor("codex"), response());
+
+    // A manual refresh for the exact same target joins the queued entry
+    // instead of adding a new one, upgrading it to force in place.
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: codexRequest },
+      [ambientTarget("codex")],
+      { force: true },
+    );
+    await flush();
+
+    blocker.settlers[0].ok();
+    await flush();
+
+    // The promotion made codex's turn run despite the now-fresh cache -
+    // proving `force` actually propagated onto the already-queued entry
+    // rather than being dropped as a redundant enqueue.
+    expect(codexRequest).toHaveBeenCalledTimes(1);
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBeNull();
+  });
+
+  it("without promotion, a queued automatic target that turns fresh before its turn is skipped (contrast case)", async () => {
+    const queryClient = newQueryClient();
+    const blocker = makeControllableRequest();
+    const codexRequest = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    configureRateLimitQueue({
+      hostId: HOST_ID,
+      queryClient,
+      request: blocker.request,
+    });
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: blocker.request },
+      [ambientTarget("claude-code")],
+      { force: true },
+    );
+    await flush();
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: HOST_ID, queryClient, request: codexRequest },
+      [ambientTarget("codex")],
+      { force: false },
+    );
+    await flush();
+
+    // Turns fresh before its turn, with no manual join this time.
+    queryClient.setQueryData(keyFor("codex"), response());
+
+    blocker.settlers[0].ok();
+    await flush();
+
+    expect(codexRequest).not.toHaveBeenCalled();
+    expect(getRateLimitQueueTargetPhase(HOST_ID, "codex", null)).toBeNull();
+  });
+
+  it("keeps host-scoped targets separate: the same provider/profile on two hosts tracks independent registry entries and is never joined as one target", async () => {
+    // The serial lane itself is shared process-wide across every host scope
+    // (by design - see the module doc comment), so these two items still run
+    // one after the other rather than concurrently. What this test proves is
+    // narrower: an identical (providerId, profileId) pair on two DIFFERENT
+    // hosts must occupy two DISTINCT registry entries - never joined/deduped
+    // into one target the way a same-host repeat enqueue is - and each host's
+    // fetch/cleanup is independent of the other's.
+    const queryClient = newQueryClient();
+    const hostA = makeControllableRequest();
+    const hostB = makeControllableRequest();
+
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: "host-a", queryClient, request: hostA.request },
+      [target("codex", "work-profile")],
+      { force: true },
+    );
+    void enqueueRateLimitFetchBatchForScope(
+      { hostId: "host-b", queryClient, request: hostB.request },
+      [target("codex", "work-profile")],
+      { force: true },
+    );
+    await flush();
+
+    // host-a's item reached the lane first and started fetching; host-b's
+    // identical (provider, profile) pair got its OWN registry entry - queued
+    // behind host-a's, not silently joined into it.
+    expect(hostA.request).toHaveBeenCalledTimes(1);
+    expect(hostB.request).not.toHaveBeenCalled();
+    expect(
+      getRateLimitQueueTargetPhase(HOST_ID, "codex", "work-profile"),
+    ).toBeNull();
+    expect(
+      getRateLimitQueueTargetPhase("host-a", "codex", "work-profile"),
+    ).toBe("fetching");
+    expect(
+      getRateLimitQueueTargetPhase("host-b", "codex", "work-profile"),
+    ).toBe("queued");
+
+    hostA.settlers[0].ok();
+    await flush();
+    // Host A cleaned up independently of host B, which now runs its own fetch.
+    expect(
+      getRateLimitQueueTargetPhase("host-a", "codex", "work-profile"),
+    ).toBeNull();
+    expect(hostB.request).toHaveBeenCalledTimes(1);
+    expect(
+      getRateLimitQueueTargetPhase("host-b", "codex", "work-profile"),
+    ).toBe("fetching");
+
+    hostB.settlers[0].ok();
+    await flush();
+    expect(
+      getRateLimitQueueTargetPhase("host-b", "codex", "work-profile"),
+    ).toBeNull();
   });
 });

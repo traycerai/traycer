@@ -251,9 +251,9 @@ function OptionRow(props: OptionRowProps) {
     >
       <div
         className={cn(
-          "relative flex w-full items-center gap-2 rounded-md border border-transparent bg-muted/25 px-2 py-1.5 transition-colors",
+          "relative flex w-full items-center gap-2 rounded-md border border-transparent bg-foreground/3 px-2 py-1.5 transition-colors",
           selected
-            ? "border-border bg-muted/70 text-foreground shadow-sm"
+            ? "border-border bg-foreground/6 text-foreground shadow-sm"
             : "text-muted-foreground",
           // `hover:*` matches an ancestor whenever ANY hit-tested descendant
           // is hovered - including through this row's own `pointer-events:
@@ -264,7 +264,7 @@ function OptionRow(props: OptionRowProps) {
           // can't suppress that.
           !disabled &&
             !selected &&
-            "hover:border-border/70 hover:bg-muted/40 hover:text-foreground",
+            "hover:border-border/70 hover:bg-foreground/5 hover:text-foreground",
           // The overlay button below is transparent (no visible pixels of
           // its own), so a `disabled:` class on it has nothing to dim. Apply
           // the disabled look to this visible container instead.
@@ -331,7 +331,7 @@ function InfoHint(props: InfoHintProps) {
         type="button"
         aria-label={props.ariaLabel}
         className={cn(
-          "inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+          "inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
           props.className,
         )}
       >

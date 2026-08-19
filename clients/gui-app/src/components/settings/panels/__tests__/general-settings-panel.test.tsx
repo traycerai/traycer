@@ -191,8 +191,8 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => hostQueryMocks.activeHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => hostQueryMocks.activeHostId,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({

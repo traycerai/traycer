@@ -78,6 +78,15 @@ export interface ComposerBodyProps {
    * has nothing to resume (chat / new-conversation).
    */
   readonly onEditorReady: (() => void) | null;
+  /**
+   * The host this composer creates on - threaded to the toolbar's and the
+   * terminal launcher's model pickers as their `createProfileHostId` /
+   * `runTargetHostId`, so the harnesses/models/providers they offer are that
+   * host's. `null` follows the app-wide default (the landing composer, whose
+   * own host picker rebinds that default); the new-conversation modal passes
+   * the host it was pinned to.
+   */
+  readonly hostId: string | null;
   readonly onSubmit: () => void;
   readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
   readonly onDocumentChange: (
@@ -112,6 +121,7 @@ export function ComposerBody({
   hasPastedImageBytes,
   ingestPastedComposerImages,
   onEditorReady,
+  hostId,
   onSubmit,
   onStartTerminal,
   onDocumentChange,
@@ -138,9 +148,8 @@ export function ComposerBody({
     dictation: dictationControl,
     dictationPreparing,
     settingsLocked: isSubmitting,
-    // The landing composer has no tab yet - the app-wide default host applies.
-    createProfileHostId: null,
-    runTargetHostId: null,
+    createProfileHostId: hostId,
+    runTargetHostId: hostId,
   } as const;
 
   return (
@@ -190,6 +199,7 @@ export function ComposerBody({
                   store={toolbarStore}
                   pending={isSubmitting}
                   disabledHint={workspaceDisabledHint}
+                  hostId={hostId}
                   onStart={onStartTerminal}
                 />
               </SurfaceActivityProvider>

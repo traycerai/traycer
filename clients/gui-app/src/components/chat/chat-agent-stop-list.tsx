@@ -121,7 +121,7 @@ function AgentStopRow(props: {
     <li
       className={cn(
         "group flex min-w-0 items-center gap-2 rounded-md",
-        self ? "bg-muted/50 px-2" : "pl-5 pr-2 hover:bg-muted/40",
+        self ? "bg-foreground/8 px-2" : "pl-5 pr-2 hover:bg-foreground/5",
         isDragging && "opacity-60",
       )}
     >
@@ -152,7 +152,7 @@ function AgentStopRow(props: {
           >
             {agent.title}
           </span>
-          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+          <span className="shrink-0 rounded bg-foreground/8 px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
             {agent.surface}
           </span>
         </button>

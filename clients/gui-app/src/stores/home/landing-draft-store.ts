@@ -13,7 +13,11 @@ import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { isMobileApp } from "@/lib/mobile-app";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -838,13 +842,19 @@ function normalizeChatRunSettings(
 }
 
 function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
-  const globalState = useWorkspaceFoldersStore.getState();
+  // A new draft is created on the landing surface, which follows the
+  // app-wide effective host - snapshot THAT host's folder bucket, not another
+  // machine's paths. Through the shared reader: the spine stopped carrying an
+  // identity at P4.2, so asking it here selected the unresolved-host bucket
+  // and silently dropped the real host's folders.
+  const bucket = selectWorkspaceFoldersBucket(
+    useWorkspaceFoldersStore.getState(),
+    activeHostIdOrNull(),
+  );
   return normalizeLandingDraftWorkspace({
-    folders: [...globalState.folders],
-    folderInfoByPath: copyWorkspaceFolderInfoByPath(
-      globalState.folderInfoByPath,
-    ),
-    primaryPath: globalState.primaryPath,
+    folders: [...bucket.folders],
+    folderInfoByPath: copyWorkspaceFolderInfoByPath(bucket.folderInfoByPath),
+    primaryPath: bucket.primaryPath,
   });
 }
 

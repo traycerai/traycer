@@ -10,6 +10,10 @@ import {
   NotificationsStreamClient,
   type NotificationsStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/notifications-stream-client";
+import {
+  acquireHostConnection,
+  type HostConnectionLease,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
@@ -99,11 +103,11 @@ interface FocusedNotificationScope {
  * does not see the previous user's entries.
  *
  * On a shell that has a local host, notifications always come from that
- * host - never from whichever host happens to be active in a composer/tab
- * elsewhere in the app. A shell with no local host at all falls back to the
- * bound host, because otherwise nothing would ever serve it; that choice
- * lives entirely in `useNotificationsServingHostEntry()`, which is also
- * where the reasoning for the fallback's gate lives.
+ * host (the G8 decision) - never from whichever host happens to be active in
+ * a composer/tab elsewhere in the app. A shell with no local host at all
+ * falls back to the bound host, because otherwise nothing would ever serve
+ * it; that choice lives entirely in `useNotificationsServingHostEntry()`,
+ * which is also where the reasoning for the fallback's gate lives.
  *
  * Every stream here binds to that ONE serving host through a transient,
  * non-rebinding client (`useHostStreamClientBindingFor`), never through the
@@ -397,8 +401,19 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
   }, []);
 
+  const hostConnectionRef = useRef<HostConnectionLease | null>(null);
+
   const tearDown = useCallback((): void => {
     openedStreamClientRef.current = null;
+    // Release this host's connection lease LAST-ish but unconditionally: the
+    // lease is ref-counted with a keep-warm linger, so dropping it here lets
+    // the registry retire the host's bookkeeping when nothing else holds it,
+    // while a prompt re-open (a mode flip, a re-mount) adopts it warm.
+    if (hostConnectionRef.current !== null) {
+      const lease = hostConnectionRef.current;
+      hostConnectionRef.current = null;
+      lease.release();
+    }
     if (disposerRef.current !== null) {
       const disposer = disposerRef.current;
       disposerRef.current = null;
@@ -577,6 +592,15 @@ export function NotificationsSessionProvider(
     };
     if (servingHostId === null) return;
     const streamHostId = servingHostId;
+    // ONE reconnect policy for this host, handed to every stream opened below
+    // (redesign P4.1 / connection-registry §6). This is the single wiring
+    // point for all four, which is exactly why the acquisition belongs here:
+    // four stores each constructing their own scheduler was the scattered
+    // ownership the consolidation removes. Each store still opens its OWN
+    // lane off it, so their backoffs stay independent.
+    const hostConnection = acquireHostConnection(streamHostId);
+    hostConnectionRef.current = hostConnection;
+    const reconnect = hostConnection.reconnect;
     openedStreamClientRef.current = servingStreamClient;
     const createNotificationsStream = (
       callbacks: NotificationsStreamCallbacks,
@@ -601,6 +625,7 @@ export function NotificationsSessionProvider(
     // a serving-host swap, not the host that carried it.
     if (servingStreamClient !== null) {
       activityDisposerRef.current = openAgentActivityStream(
+        reconnect,
         servingStreamClient,
         onAuthError,
       );
@@ -612,10 +637,12 @@ export function NotificationsSessionProvider(
       // keep that replica live alongside the relay or sharing notifications
       // disappear after the mode-transition reset below.
       disposerRef.current = openNotificationsStream(
+        reconnect,
         createNotificationsStream,
         onAuthError,
       );
       cloudDisposerRef.current = openCloudNotificationsStream(
+        reconnect,
         servingStreamClient,
         onAuthError,
         onEntitlementDenied,
@@ -645,6 +672,7 @@ export function NotificationsSessionProvider(
     // this independently ordered feed as causal evidence over a renderer-local
     // failure.
     disposerRef.current = openNotificationsStream(
+      reconnect,
       createNotificationsStream,
       onAuthError,
     );
@@ -654,6 +682,7 @@ export function NotificationsSessionProvider(
       servingStreamClient !== null
     ) {
       hostDisposerRef.current = openHostNotificationsStream(
+        reconnect,
         servingStreamClient,
         onAuthError,
         {
@@ -715,7 +744,7 @@ export function NotificationsSessionProvider(
   // all (a relay-only shell before a host is bound) or the serving host's
   // channel drops - we teardown so the next reconnect lands on a fresh
   // client. It becomes a NEW object when the serving host respawns at a fresh
-  // endpoint under the SAME `hostId` (`useHostStreamClientFor` rebuilds the
+  // endpoint under the SAME `hostId` (`useHostStreamClientBindingFor` rebuilds the
   // transport on an endpoint move) - that reference change, not a `hostId`
   // comparison, is what drives teardown/reopen here, so a respawn is followed
   // even though the host identity never changed. On a shell WITH a local
@@ -736,7 +765,7 @@ export function NotificationsSessionProvider(
       // signedOut path; no-op here.
       return;
     }
-    // Keyed on the HOST, not the client: `useHostStreamClientFor` returns a
+    // Keyed on the HOST, not the client: `useHostStreamClientBindingFor` returns a
     // client exactly when it is given an entry, so in production these two are
     // the same condition - but the test stream-factory override supplies a
     // stream with no client at all, and gating on the client would make that

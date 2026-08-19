@@ -283,9 +283,11 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     // for - the chunking assertions read this (per-path counts stay on
     // `onPathRequest`).
     const wireRequests: Array<readonly string[]> = [];
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-1",
@@ -314,10 +316,10 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         },
       }),
     });
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
-    client.bind(mockLocalHostEntry);
+    const client = spine.createRequester(mockLocalHostEntry);
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
         {props.children}

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
 /**
@@ -27,6 +28,8 @@ function renderEmpty(props: {
 }): void {
   render(
     <HostSwitcher
+      refusalByHostId={NO_HOST_OPTION_REFUSALS}
+      inertExceptHostId={null}
       hosts={[]}
       selected={null}
       activeHostId={null}
@@ -97,6 +100,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
     // A background refetch failure must not blank a working picker.
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -127,6 +132,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
     const onRetryLists = vi.fn();
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -156,8 +163,18 @@ describe("<HostSwitcher /> empty vs failed", () => {
     // Same `connectable: false`, different fact: one is fixed by an upgrade,
     // the other maybe by waiting. One word covering both sent people
     // debugging their network over a billing limit.
+    //
+    // The row's word comes from `health.state` now, not from `connectable` /
+    // `planRestricted` — those decide whether the row can be PICKED, which is
+    // a route question, while the word is a status question (P4.3's ruling D).
+    // So the fixture has to say what the host's health IS, and the route flags
+    // stay because pick legality is still theirs to decide. `unreachable` is
+    // no longer a row word at all, which makes the second assertion below
+    // stronger than it was rather than weaker.
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[
           hostScopeOptionFixture({
             hostId: "host-gated",
@@ -165,6 +182,14 @@ describe("<HostSwitcher /> empty vs failed", () => {
             isLocalMachine: false,
             connectable: false,
             planRestricted: true,
+            health: {
+              state: "local-only",
+              label: "Local only",
+              detail:
+                "Not reachable from here — remote access needs a paid plan.",
+              tone: "idle",
+              live: false,
+            },
           }),
         ]}
         selected={null}
@@ -200,6 +225,8 @@ describe("<HostSwitcher /> trailing action", () => {
     const onSelect = vi.fn();
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
         selected={null}
         activeHostId={null}
@@ -233,6 +260,8 @@ describe("<HostSwitcher /> trailing action", () => {
     // third ending.
     render(
       <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
         hosts={[]}
         selected={null}
         activeHostId={null}
@@ -252,5 +281,56 @@ describe("<HostSwitcher /> trailing action", () => {
     ).not.toBeNull();
     expect(screen.getByText("Manage hosts…")).not.toBeNull();
     expect(screen.queryByTestId("settings-host-switcher-empty-add")).toBeNull();
+  });
+});
+
+describe("<HostSwitcher /> setting-up status word (M5)", () => {
+  it("labels the LOCAL machine's row 'setting up' while a remote row keeps its own status", () => {
+    // `settingUp` is fed to each `HostScopeOption` individually (from the
+    // mutation lane), so the local row and a remote row can disagree even
+    // though they share the same picker.
+    render(
+      <HostSwitcher
+        hosts={[
+          hostScopeOptionFixture({
+            hostId: "host-local",
+            name: "This machine",
+            isLocalMachine: true,
+            settingUp: true,
+          }),
+          hostScopeOptionFixture({
+            hostId: "host-remote",
+            name: "Remote box",
+            isLocalMachine: false,
+            settingUp: false,
+          }),
+        ]}
+        selected={null}
+        activeHostId={null}
+        onSelect={() => undefined}
+        action={{ kind: "add-host", onSelect: () => undefined }}
+        surface="rail"
+        intent="view"
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Settings host: none selected" }),
+    );
+
+    const localRow = screen.getByTestId(
+      "settings-host-switcher-option-host-local",
+    );
+    const remoteRow = screen.getByTestId(
+      "settings-host-switcher-option-host-remote",
+    );
+    expect(localRow.textContent).toContain("setting up");
+    expect(remoteRow.textContent).not.toContain("setting up");
   });
 });

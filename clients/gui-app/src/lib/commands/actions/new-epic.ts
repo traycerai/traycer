@@ -10,11 +10,16 @@
  */
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { newDraftTabIntent } from "@/lib/tab-navigation/intents";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 
 export function openNewEpicIntent() {
+  // The new draft lands on the landing surface, which follows the app-wide
+  // active host - seed it from that host's last-run bucket.
   return newDraftTabIntent(
-    useComposerRunSettingsStore.getState().globalLastRunSettings,
+    useComposerRunSettingsStore
+      .getState()
+      .getGlobalRunSettings(activeHostIdOrNull()),
   );
 }
 

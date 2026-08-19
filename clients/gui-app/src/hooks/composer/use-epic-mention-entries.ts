@@ -2,8 +2,8 @@ import { useEffect, useRef } from "react";
 import { keepPreviousData } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EpicMentionSuggestion } from "@traycer/protocol/host/index";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostBinding } from "@/lib/host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -14,6 +14,12 @@ import type {
 
 export interface UseEpicMentionEntriesParams {
   readonly requests: ReadonlyArray<MentionEpicRequest>;
+  /**
+   * The composer's host - the SAME client its workspace/terminal/GitHub
+   * mention lanes use, so a tab bound to a non-default host lists that host's
+   * artifacts and never the app-wide default's. `null` disables the queries.
+   */
+  readonly client: HostClient<HostRpcRegistry> | null;
 }
 
 export interface UseEpicMentionEntriesResult {
@@ -38,14 +44,14 @@ export interface UseEpicMentionEntriesResult {
 export function useEpicMentionEntries(
   params: UseEpicMentionEntriesParams,
 ): UseEpicMentionEntriesResult {
-  const binding = useHostBinding();
-  const client = binding?.hostClient ?? null;
+  const { client } = params;
   const readiness = useReactiveHostReadiness(client);
 
   // The CURRENTLY bound host, readable when the refetch below settles. That
-  // continuation is a plain promise chain closed over one render; an app-wide
-  // composer can rebind while the round-trip is in flight, and the closure has
-  // no way to see it. The ref is the live end of the comparison.
+  // continuation is a plain promise chain closed over one render; a composer
+  // following the app-wide host can rebind while the round-trip is in flight,
+  // and the closure has no way to see it. The ref is the live end of the
+  // comparison.
   const boundHostIdRef = useRef(readiness.hostId);
   useEffect(() => {
     boundHostIdRef.current = readiness.hostId;

@@ -8,7 +8,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host/runtime";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { invalidateNotificationIndicators } from "@/lib/notifications/notification-indicator-cache";
 import { invalidateChatPublicationTargets } from "@/hooks/chats/use-chat-publication-targets";
 
@@ -63,7 +63,7 @@ export function useChatForkEventQuery(): UseQueryResult<
   HostRpcError
 > {
   const client = useHostClient();
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const supportsGet = useHostSupportsMethod(hostId, "host.chatFork.get");
   const params = useMemo(() => ({}), []);
   const query = useHostQuery<HostRpcRegistry, "host.chatFork.get">({

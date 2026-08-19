@@ -8,6 +8,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
 import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
@@ -32,66 +34,92 @@ import {
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { SystemTabModalApi } from "@/stores/tabs/use-system-tab-modal";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { StripItem, TabStripItem } from "@/stores/tabs/layout";
 
 type TerminalListFixture = {
   readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
   readonly homeCwd: string | null;
 };
 
-const mocks = vi.hoisted(() => ({
-  // React reactive host (useReactiveActiveHostId) vs client host (getActiveHostId).
-  // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
-  activeHostId: null as string | null,
-  clientActiveHostId: null as string | null,
-  probeData: undefined as TerminalListFixture | undefined,
-  freshProbeData: undefined as TerminalListFixture | undefined,
-  probeError: null,
-  dataUpdatedAt: 1,
-  primaryWorkspacePath: null as string | null,
-  isMobile: false,
-  workspacePaths: [] as ReadonlyArray<string>,
-  mutableWorkspacePaths: [] as string[],
-  kill: vi.fn(),
-  killAsync: vi.fn(() => Promise.resolve({ killed: true })),
-  reconcileXtermHostAfterLayoutTransition: vi.fn(),
-  queryClient: {
-    cancelQueries: vi.fn(() => Promise.resolve()),
-    fetchQuery: vi.fn(),
-  },
-  onChangeListeners: [] as Array<
-    (event: {
-      readonly previousHostId: string | null;
-      readonly currentHostId: string | null;
-      readonly reason: string;
-    }) => void
-  >,
-  defaultClient: {
-    getActiveHostId: () => mocks.clientActiveHostId,
-    onChange: (
-      listener: (event: {
+const mocks = vi.hoisted(() => {
+  const initialPlainAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
+    "legacy";
+  let plainCollection: PlainTerminalCollection | undefined;
+  return {
+    // React reactive host (useAddressableHostId) vs client host (getActiveHostId).
+    // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
+    activeHostId: null as string | null,
+    // The COMPOSER placement's resolved host (the window pin). Follows
+    // `activeHostId` unless a test sets it, so one arm can make the two differ.
+    placementHostId: null as string | null,
+    clientActiveHostId: null as string | null,
+    probeData: undefined as TerminalListFixture | undefined,
+    freshProbeData: undefined as TerminalListFixture | undefined,
+    probeError: null,
+    dataUpdatedAt: 1,
+    primaryWorkspacePath: null as string | null,
+    workspacePaths: [] as ReadonlyArray<string>,
+    mutableWorkspacePaths: [] as string[],
+    isMobile: false,
+    kill: vi.fn(),
+    killAsync: vi.fn(() => Promise.resolve({ killed: true })),
+    plainAuthorityStatus: initialPlainAuthorityStatus(),
+    plainCanMutate: false,
+    plainCollection,
+    plainCreateAsync: vi.fn(),
+    plainEnsureAsync: vi.fn(),
+    plainRename: vi.fn(),
+    plainCloseAsync: vi.fn(),
+    plainImportAsync: vi.fn(),
+    reconcileXtermHostAfterLayoutTransition: vi.fn(),
+    queryClient: {
+      cancelQueries: vi.fn(() => Promise.resolve()),
+      fetchQuery: vi.fn(),
+      getQueryData: vi.fn(() => mocks.plainCollection),
+    },
+    onChangeListeners: [] as Array<
+      (event: {
         readonly previousHostId: string | null;
         readonly currentHostId: string | null;
         readonly reason: string;
-      }) => void,
-    ) => {
-      mocks.onChangeListeners.push(listener);
-      return () => {
-        mocks.onChangeListeners = mocks.onChangeListeners.filter(
-          (entry) => entry !== listener,
-        );
-      };
+      }) => void
+    >,
+    // The connection registry's per-host row signal. The panel used to be told
+    // "this host's transport moved" by the active slot's `host-updated` event;
+    // P4.2 deleted the slot, and the registry reports the same move per host.
+    rowChangedListeners: [] as Array<{
+      readonly hostId: string;
+      readonly listener: () => void;
+    }>,
+    defaultClient: {
+      getActiveHostId: () => mocks.clientActiveHostId,
+      onChange: (
+        listener: (event: {
+          readonly previousHostId: string | null;
+          readonly currentHostId: string | null;
+          readonly reason: string;
+        }) => void,
+      ) => {
+        mocks.onChangeListeners.push(listener);
+        return () => {
+          mocks.onChangeListeners = mocks.onChangeListeners.filter(
+            (entry) => entry !== listener,
+          );
+        };
+      },
     },
-  },
-  buildTransientHostClient: vi.fn<
-    (
-      client: unknown,
-      entry: { readonly hostId: string },
-    ) => { getActiveHostId: () => string; onChange: () => () => void } | null
-  >((_client, entry) => ({
-    getActiveHostId: () => entry.hostId,
-    onChange: () => () => undefined,
-  })),
-}));
+    buildTransientHostClient: vi.fn<
+      (
+        client: unknown,
+        entry: { readonly hostId: string },
+      ) => { getActiveHostId: () => string; onChange: () => () => void } | null
+    >((_client, entry) => ({
+      getActiveHostId: () => entry.hostId,
+      onChange: () => () => undefined,
+    })),
+  };
+});
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
@@ -100,9 +128,63 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
     useQueryClient: () => mocks.queryClient,
   };
 });
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mocks.activeHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mocks.activeHostId,
 }));
+// The gesture provider resolves the COMPOSER'S placement (the window's surface
+// pin ?? effective), not the app-wide host, so the landing terminals and the
+// composer beside them describe one machine. Mocked at its seam with the same
+// `mocks.activeHostId` / `mocks.defaultClient` the rest of this suite drives.
+vi.mock("@/hooks/host/use-composer-placement", () => ({
+  useComposerPlacement: () => {
+    const resolvedHostId = mocks.placementHostId ?? mocks.activeHostId;
+    const target = {
+      resolvedHostId,
+      client: mocks.defaultClient,
+      hostLabel: null,
+      isPinned: false,
+      namedHostDead: false,
+    };
+    return {
+      pin: {
+        selection: null,
+        honoredSelection: null,
+        resolvedHostId,
+        isPinned: false,
+        setSelection: () => undefined,
+        latchOnFirstUse: () => undefined,
+      },
+      target,
+      submitTarget: target,
+      hostLabelFor: () => null,
+      followsEffective: true,
+    };
+  },
+}));
+// Partial, not whole-module: the registry also owns `acquireHostConnection`
+// and the equality helpers, and replacing the module wholesale would strand
+// whatever else in this graph reaches for them.
+vi.mock(
+  "@traycer-clients/shared/host-client/host-connection-registry",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-connection-registry")
+      >();
+    return {
+      ...actual,
+      subscribeHostRowChanged: (hostId: string, listener: () => void) => {
+        const entry = { hostId, listener };
+        mocks.rowChangedListeners.push(entry);
+        return () => {
+          mocks.rowChangedListeners = mocks.rowChangedListeners.filter(
+            (candidate) => candidate !== entry,
+          );
+        };
+      },
+    };
+  },
+);
 vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
   useTerminalListFor: () => ({
     data: mocks.probeData,
@@ -112,6 +194,8 @@ vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.defaultClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mocks.defaultClient,
   useHostDirectory: () => ({
     findById: (hostId: string) => ({ hostId, websocketUrl: "ws://test" }),
   }),
@@ -148,6 +232,54 @@ vi.mock(
       mutateAsync: mocks.killAsync,
     }),
   }),
+);
+vi.mock(
+  "@/components/home/terminal-panel/landing-terminal-authority-fleet",
+  async () => {
+    const { useEffect } = await import("react");
+    return {
+      LandingTerminalAuthorityFleet: (props: {
+        readonly hostIds: readonly string[];
+        readonly onEntry: (hostId: string, entry: unknown) => void;
+      }) => {
+        const { onEntry } = props;
+        const hostKey = props.hostIds.join("\u0000");
+        useEffect(() => {
+          const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
+          hostIds.forEach((hostId) => {
+            onEntry(hostId, {
+              authority: {
+                hostId,
+                scope: { kind: "independent" },
+                capability:
+                  mocks.plainAuthorityStatus === "capable"
+                    ? {
+                        status: "capable",
+                        schemaVersion: { major: 1, minor: 0 },
+                      }
+                    : { status: mocks.plainAuthorityStatus },
+                collection: mocks.plainCollection,
+                terminals: [],
+                canMutate: mocks.plainCanMutate,
+                query: {},
+              },
+              mutations: {
+                create: { mutateAsync: mocks.plainCreateAsync },
+                ensureRunning: { mutateAsync: mocks.plainEnsureAsync },
+                rename: { mutate: mocks.plainRename },
+                close: { mutateAsync: mocks.plainCloseAsync },
+                importLegacy: { mutateAsync: mocks.plainImportAsync },
+              },
+            });
+          });
+          return () => {
+            hostIds.forEach((hostId) => onEntry(hostId, null));
+          };
+        }, [hostKey, onEntry]);
+        return null;
+      },
+    };
+  },
 );
 vi.mock("@/components/home/terminal-panel/landing-terminal-tile", () => ({
   LandingTerminalTile: () => (
@@ -247,6 +379,56 @@ function listWith(
   return { sessions, homeCwd };
 }
 
+function plainTerminal(input: {
+  readonly terminalId: string;
+  readonly manualTitle: string | null;
+  readonly runtime: "running" | "dormant";
+}): PlainTerminalProjection {
+  return {
+    record: {
+      terminalId: input.terminalId,
+      hostId: "host-a",
+      scope: { kind: "independent" },
+      launch: {
+        cwd: "/host/launch",
+        shellCommand: "/bin/zsh",
+        shellArgs: ["-l"],
+      },
+      manualTitle: input.manualTitle,
+      revision: 3,
+      createdAt: "2026-08-16T10:00:00.000Z",
+      updatedAt: "2026-08-16T10:01:00.000Z",
+    },
+    runtime:
+      input.runtime === "dormant"
+        ? { status: "dormant" }
+        : {
+            status: "running",
+            sessionId: input.terminalId,
+            currentCwd: "/host/live",
+            activeProcessName: "vitest",
+            cols: 100,
+            rows: 30,
+          },
+  };
+}
+
+function freshPlainCollection(terminals: readonly PlainTerminalProjection[]) {
+  return {
+    terminalsById: Object.fromEntries(
+      terminals.map((terminal) => [terminal.record.terminalId, terminal]),
+    ),
+    deletedRevisionById: {},
+    pendingPresentationDeletionRevisionById: {},
+    projectionSequence: 1,
+    snapshotEpoch: 1,
+    lastStreamSequenceById: {},
+    streamStatus: "open" as const,
+    streamCompatibility: "compatible" as const,
+    streamSnapshotFresh: true,
+  };
+}
+
 function fakeKeybindingRouter(): KeybindingRouter {
   return {
     getPathname: () => "/",
@@ -329,6 +511,31 @@ function MobileHeaderSlotProbe() {
   return <>{rightActions}</>;
 }
 
+// The panel outlives its start page's activation, so several behaviors now
+// depend on which top-level surface owns the screen. Default layout = a start
+// page is active, which is what every other case in this file assumes.
+const PANEL_DRAFT_TAB: TabStripItem = {
+  kind: "tab",
+  id: "item-draft-a",
+  ref: { kind: "draft", id: TEST_LANDING_PAGE_ID },
+};
+const PANEL_EPIC_TAB: TabStripItem = {
+  kind: "tab",
+  id: "item-epic-a",
+  ref: { kind: "epic", id: "epic-a" },
+};
+const INITIAL_TABS_LAYOUT = {
+  items: useTabsStore.getState().items,
+  activeItemId: useTabsStore.getState().activeItemId,
+};
+
+function seedTabsLayout(
+  items: ReadonlyArray<StripItem>,
+  activeItemId: string,
+): void {
+  useTabsStore.setState({ items, activeItemId });
+}
+
 describe("<LandingTerminalPanel />", () => {
   const focusCleanups: Array<() => void> = [];
 
@@ -336,8 +543,10 @@ describe("<LandingTerminalPanel />", () => {
     resetPrimaryFocusCoordinatorForTests();
     resetTerminalFocusRegistryForTests();
     mocks.activeHostId = null;
+    mocks.placementHostId = null;
     mocks.clientActiveHostId = null;
     mocks.onChangeListeners = [];
+    mocks.rowChangedListeners = [];
     mocks.probeData = undefined;
     mocks.freshProbeData = undefined;
     mocks.probeError = null;
@@ -348,6 +557,20 @@ describe("<LandingTerminalPanel />", () => {
     mocks.mutableWorkspacePaths = [];
     mocks.kill.mockReset();
     mocks.killAsync.mockClear();
+    mocks.plainAuthorityStatus = "legacy";
+    mocks.plainCanMutate = false;
+    mocks.plainCollection = undefined;
+    mocks.plainCreateAsync.mockReset();
+    mocks.plainEnsureAsync.mockReset();
+    mocks.plainRename.mockReset();
+    mocks.plainCloseAsync.mockReset();
+    mocks.plainImportAsync.mockReset();
+    mocks.plainCreateAsync.mockImplementation(() => Promise.resolve());
+    mocks.plainEnsureAsync.mockImplementation(() => Promise.resolve());
+    mocks.plainCloseAsync.mockImplementation(() => Promise.resolve());
+    mocks.plainImportAsync.mockImplementation(() =>
+      Promise.reject(new Error("unexpected legacy import")),
+    );
     // Reset (not just clear): a test may override the return with a fail-closed
     // `null`, and mockClear would leak that override into later tests. Restore
     // the default host-pinned client here.
@@ -361,6 +584,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.reconcileXtermHostAfterLayoutTransition.mockClear();
     mocks.queryClient.cancelQueries.mockClear();
     mocks.queryClient.fetchQuery.mockReset();
+    mocks.queryClient.getQueryData.mockClear();
     mocks.queryClient.fetchQuery.mockImplementation(() =>
       Promise.resolve(mocks.freshProbeData ?? mocks.probeData),
     );
@@ -376,6 +600,7 @@ describe("<LandingTerminalPanel />", () => {
     resetPrimaryFocusCoordinatorForTests();
     useLandingTerminalStore.getState().resetForTests();
     setSystemTabModalApi(null);
+    useTabsStore.setState(INITIAL_TABS_LAYOUT);
   });
 
   describe("at phone width", () => {
@@ -667,6 +892,68 @@ describe("<LandingTerminalPanel />", () => {
     expect(screen.queryByTestId("landing-terminal-select-folder")).toBeNull();
   });
 
+  it("creates on the COMPOSER's placement host, not the app-wide one, when the two differ", async () => {
+    // The landing page's composer, hero and folder picker all resolve the
+    // window's surface pin; the terminal panel used to read the app-wide host
+    // (`useAddressableHostId` / `useHostClient`), so a page pinned to host-b
+    // listed, dialed and CREATED terminals on host-a - bound for life - under
+    // a chip that said host-b, and its folder picker staged under
+    // `{landing, host-a, draft}` beside the composer's `{landing, host-b, draft}`.
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-b";
+    mocks.clientActiveHostId = "host-b";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.hostId).toBe("host-b");
+  });
+
+  it("holds an auto-spawn that settles while the start page is backgrounded, then spawns on return", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    // Open the panel, then switch to the epic tab before `terminal.list`
+    // settles. The panel used to UNMOUNT here, which aborted the pass; now it
+    // survives, so the settlement has to gate itself - a terminal spawned into
+    // a `display:none` pane cannot be measured and lands at the 80x24 fallback,
+    // and the focus grab would pull the keyboard off the epic canvas.
+    seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    // The fresh list is the last step before settlement, so waiting on it makes
+    // "nothing spawned" an ordering claim rather than a race the test won.
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+
+    // Returning must still open the terminal the user asked for: the
+    // reconciliation key is unchanged on the way back, so a settlement that was
+    // DROPPED rather than held would never be recomputed and the panel would
+    // sit empty forever.
+    await act(async () => {
+      seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe("/Users/dev");
+  });
+
   it("shows host update guidance when homeCwd is null and nothing is pinned", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -799,6 +1086,223 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs[0]?.name).toBe("build");
     });
+  });
+
+  it("renders capable-host title, foreground process, cwd, and dormant state from projections", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const running = plainTerminal({
+      terminalId: "terminal-running",
+      manualTitle: "Host title",
+      runtime: "running",
+    });
+    const dormant = plainTerminal({
+      terminalId: "terminal-dormant",
+      manualTitle: null,
+      runtime: "dormant",
+    });
+    mocks.plainCollection = freshPlainCollection([running, dormant]);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "running-instance",
+      sessionId: "terminal-running",
+      hostId: "host-a",
+      cwd: "/stale",
+      name: "Stale name",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "dormant-instance",
+      sessionId: "terminal-dormant",
+      hostId: "host-a",
+      cwd: "/stale",
+      name: "Stale dormant",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    expect(await screen.findByText("Host title")).toBeTruthy();
+    expect(
+      screen.getByTestId("landing-terminal-process-running-instance")
+        .textContent,
+    ).toContain("vitest");
+    expect(
+      screen
+        .getByTestId("landing-terminal-tab-running-instance")
+        .getAttribute("aria-label"),
+    ).toBe("Host title, /host/live");
+    expect(
+      screen.getByTestId("landing-terminal-dormant-dormant-instance"),
+    ).toBeTruthy();
+  });
+
+  it("routes capable rename and close through shared mutations", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const projection = plainTerminal({
+      terminalId: "terminal-shared",
+      manualTitle: "Shared title",
+      runtime: "running",
+    });
+    mocks.plainCollection = freshPlainCollection([projection]);
+    const local = {
+      instanceId: "shared-instance",
+      sessionId: "terminal-shared",
+      hostId: "host-a",
+      cwd: "/legacy",
+      name: "Legacy title",
+      titleSource: "manual" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    useLandingTerminalStore.getState().addTab(local);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    fireEvent.contextMenu(
+      await screen.findByTestId("landing-terminal-tab-shared-instance"),
+    );
+    fireEvent.click(await screen.findByText("Rename"));
+    const input = await screen.findByTestId(
+      "landing-terminal-tab-input-shared-instance",
+    );
+    fireEvent.change(input, { target: { value: "Renamed everywhere" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mocks.plainRename).toHaveBeenCalledWith({
+      terminalId: "terminal-shared",
+      manualTitle: "Renamed everywhere",
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.name).not.toBe(
+      "Renamed everywhere",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Shared title" }));
+    await waitFor(() => {
+      expect(mocks.plainCloseAsync).toHaveBeenCalledWith({
+        terminalId: "terminal-shared",
+      });
+      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    });
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("blocks capable-host create, rename, and close while authority is stale", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = false;
+    const projection = plainTerminal({
+      terminalId: "terminal-stale",
+      manualTitle: "Cached title",
+      runtime: "running",
+    });
+    mocks.plainCollection = freshPlainCollection([projection]);
+    const local = {
+      instanceId: "stale-instance",
+      sessionId: "terminal-stale",
+      hostId: "host-a",
+      cwd: "/legacy",
+      name: "Legacy title",
+      titleSource: "manual" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    useLandingTerminalStore.getState().addTab(local);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const plus = await screen.findByRole("button", { name: "New terminal" });
+    expect(plus.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(plus);
+    const closeButton = screen.getByRole("button", {
+      name: "Close Cached title",
+    });
+    expect(
+      closeButton instanceof HTMLButtonElement && closeButton.disabled,
+    ).toBe(true);
+    fireEvent.click(closeButton);
+
+    expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("enables the close button once a capable host's authority is ready", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const projection = plainTerminal({
+      terminalId: "terminal-ready",
+      manualTitle: "Ready title",
+      runtime: "running",
+    });
+    mocks.plainCollection = freshPlainCollection([projection]);
+    const local = {
+      instanceId: "ready-instance",
+      sessionId: "terminal-ready",
+      hostId: "host-a",
+      cwd: "/legacy",
+      name: "Legacy title",
+      titleSource: "manual" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    useLandingTerminalStore.getState().addTab(local);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const closeButton = await screen.findByRole("button", {
+      name: "Close Ready title",
+    });
+    expect(
+      closeButton instanceof HTMLButtonElement && closeButton.disabled,
+    ).toBe(false);
+  });
+
+  it("blocks terminal creation while the host's capability probe is unresolved", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "unknown";
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    const plus = await screen.findByRole("button", { name: "New terminal" });
+    expect(plus.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(plus);
+    // Bypasses the disabled "+" affordance: before the fix, every creation
+    // path funneled into `addTerminalTab` without consulting the host's
+    // authority readiness, so a chord could still persist a tab that looked
+    // exactly like legacy import evidence for a terminal never created on any
+    // host.
+    act(() => {
+      dispatchAction("tab.new", router);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
   });
 
   it("closes every terminal from the context menu, tombstoning before killing", async () => {
@@ -2747,17 +3251,20 @@ describe("<LandingTerminalPanel />", () => {
     const hostATab = useLandingTerminalStore.getState().tabs[0];
     expect(hostATab.hostId).toBe("host-a");
     expect(hostATab.cwd).toBe("/Users/host-a");
-    expect(mocks.onChangeListeners.length).toBeGreaterThan(0);
+    // Subscribed BY HOST since P4.2: the panel is told "host-a's row moved",
+    // not "the bound host changed". Asserted rather than assumed, because a
+    // registry arm that never subscribed would make the drive below a no-op
+    // and this whole case would pass without ever starting a generation.
+    const hostARowListeners = mocks.rowChangedListeners.filter(
+      (entry) => entry.hostId === "host-a",
+    );
+    expect(hostARowListeners.length).toBeGreaterThan(0);
 
     // Start a fresh Host-A list generation that stays pending (no React host change).
     deferFetches = true;
     act(() => {
-      for (const listener of mocks.onChangeListeners) {
-        listener({
-          previousHostId: "host-a",
-          currentHostId: "host-a",
-          reason: "host-updated",
-        });
+      for (const entry of hostARowListeners) {
+        entry.listener();
       }
     });
     await waitFor(() => {

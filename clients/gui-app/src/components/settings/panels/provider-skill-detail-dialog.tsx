@@ -673,7 +673,7 @@ function UnsavedSkillChangesDialog(props: {
             </DialogDescription>
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+        <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="ghost"
@@ -916,7 +916,7 @@ function SkillBody(props: {
   return (
     <>
       {props.truncated ? (
-        <p className="mb-3 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-xs text-muted-foreground">
+        <p className="mb-3 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-xs text-muted-foreground">
           This skill is large - showing the beginning of the file.
         </p>
       ) : null}

@@ -36,6 +36,14 @@ vi.mock("@/components/diff/diff-content-primitive", () => ({
 
 // The inline diff lazy-fetches before/after by hash; stub the query so the
 // expanded diff renders synchronously without a HostRuntimeProvider.
+// The transcript renders inside a chat TILE, so its file-change rows resolve
+// the snapshot store on the TAB's host (D15). The query itself is mocked just
+// below, so `null` is enough here - what matters is that the seam exists and is
+// this one, not the app-wide read it replaced.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
 vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
   useSnapshotDiffQuery: () => ({
     data: {
@@ -415,9 +423,15 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
     if (fileHeader === null) throw new Error("Missing file-change row header");
     fireEvent.click(fileHeader);
 
-    expect(fileHeader.className).toContain("sticky");
-    expect(fileHeader.className).toContain("bg-background");
-    expect(fileHeader.className).not.toContain("backdrop-blur");
+    // The sticky treatment sits on the header WRAPPER, not the trigger: the
+    // trigger's containing block is only as tall as the header, so a sticky
+    // trigger would have nothing to travel within. The wrapper's containing
+    // block is the row, whose body is what scrolls past.
+    const stickyHeader = fileHeader.parentElement;
+    if (stickyHeader === null) throw new Error("Missing sticky header wrapper");
+    expect(stickyHeader.className).toContain("sticky");
+    expect(stickyHeader.className).toContain("bg-background");
+    expect(stickyHeader.className).not.toContain("backdrop-blur");
     const diff = screen.getByTestId("inline-diff");
     expect(diff.getAttribute("data-backgrounds")).toBe("true");
     expect(diff.getAttribute("data-line-numbers")).toBe("false");

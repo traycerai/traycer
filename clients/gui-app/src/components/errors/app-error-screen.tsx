@@ -56,7 +56,11 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
             </p>
           </div>
           {detail === null ? null : (
-            <p className="max-h-24 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs break-words whitespace-pre-wrap text-muted-foreground">
+            <p
+              // muted-fill-ok: weak tint delimited by its own border-border/60,
+              // so a collapse degrades the panel rather than erasing it
+              className="max-h-24 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs break-words whitespace-pre-wrap text-muted-foreground"
+            >
               {detail}
             </p>
           )}

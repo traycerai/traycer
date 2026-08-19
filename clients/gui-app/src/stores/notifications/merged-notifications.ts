@@ -3,6 +3,8 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
   Analytics,
   AnalyticsEvent,
@@ -10,7 +12,7 @@ import {
 } from "@/lib/analytics";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
@@ -78,6 +80,7 @@ import {
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
+  type HostNotificationsClearAllRequest,
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
@@ -223,7 +226,7 @@ export function mergedUnreadCount(input: {
  * from without recomputing their own source subscriptions. */
 function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const hostIds = useHostNotificationIds();
   const appLocalIds = useAppLocalNotificationIds();
   const globalIds = useNotificationEntryIds();
@@ -442,7 +445,7 @@ export function useMergedNotificationRow(
   feedId: string,
 ): MergedNotificationRow | null {
   const feedMode = useNotificationFeedMode();
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const parsed = parseFeedId(feedId);
   const hostEntry = useHostNotificationById(
     parsed?.source === "host" ? parsed.sourceId : "",
@@ -566,7 +569,7 @@ export interface NotificationCenterHostState {
 
 /** Active-host subtitle/partial-state selector for the center header. */
 export function useNotificationCenterHostState(): NotificationCenterHostState {
-  const activeHostId = useReactiveActiveHostId();
+  const activeHostId = useAddressableHostId();
   const hostEntry = useHostDirectoryEntry(activeHostId ?? "");
   const feedMode = useNotificationFeedMode();
   const localSummary = useHostNotificationsStore(selectHostNotificationSummary);
@@ -583,8 +586,18 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const feedMode = useNotificationFeedMode();
+  // APP-WIDE BY INTENT. These actions mark notifications read ON a host, and
+  // the host is the one whose feed the bell is showing - an app-wide fact. A
+  // scoped panel's host would mark the wrong feed read, so this must not follow
+  // a re-provided binding even if one is ever mounted above it. Resolved from
+  // the effective host rather than read off the spine, which stopped naming one
+  // when P4.2 deleted the active slot.
   const binding = useHostBinding();
-  const client = binding?.hostClient ?? null;
+  const effectiveHostId = useEffectiveHostId();
+  const client = useMemo(
+    () => resolveAppWideHostClient(binding, effectiveHostId),
+    [binding, effectiveHostId],
+  );
   const queryClient = useQueryClient();
   const globalMarkAsRead = useNotificationsStore((state) => state.markAsRead);
   const globalMarkAllAsRead = useNotificationsStore(
@@ -821,6 +834,34 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       onError: (error, _variables, context) => {
         if (!isCurrentHostNotificationMutation(client, context)) return;
         toastFromHostError(error, "Couldn't mark notifications as read.");
+      },
+    },
+  });
+
+  const clearHostAll = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.clearAll",
+    HostNotificationMutationContext,
+    HostNotificationsClearAllRequest
+  >({
+    client,
+    method: "host.notifications.clearAll",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.clearAll(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      onSuccess: (_data, variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        useHostNotificationsStore
+          .getState()
+          .clearAllLocally(variables.beforeUpdatedAt, context.snapshotEpoch);
+        if (context.hostId !== null) {
+          invalidateNotificationIndicators(queryClient, context.hostId, client);
+        }
+      },
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        toastFromHostError(error, "Couldn't clear notifications.");
       },
     },
   });
@@ -1066,7 +1107,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // firing the host mutation then only yields an unbound-rejection error toast
         // while the rendered rows cannot change. Gate BOTH on the same
         // authoritative active-host signal (read fresh at click time, the same
-        // value `useReactiveActiveHostId` projects), NOT `client !== null`. The
+        // value `useAddressableHostId` projects), NOT `client !== null`. The
         // local global/app-local mark-all above always run. Marking read never
         // resolves the underlying question or permission request.
         if (client !== null && client.getActiveHostId() !== null) {
@@ -1098,13 +1139,23 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         cloudClear.mutate({ entryId: row.sourceId });
       },
       clearAll: () => {
-        if (feedMode !== "cloud" || cloudVersion === null) return;
-        // Send the version of the snapshot the user is LOOKING AT, not
-        // whatever the cloud head has reached by the time this lands. The
-        // fan-out then covers exactly the rows on screen, and an entry that
-        // arrives in between survives however many times a lost-response
-        // retry replays this call.
-        cloudClearAll.mutate({ observedVersion: cloudVersion });
+        if (feedMode === "cloud") {
+          if (cloudVersion === null) return;
+          // Send the version of the snapshot the user is LOOKING AT, not
+          // whatever the cloud head has reached by the time this lands. The
+          // fan-out then covers exactly the rows on screen, and an entry that
+          // arrives in between survives however many times a lost-response
+          // retry replays this call.
+          cloudClearAll.mutate({ observedVersion: cloudVersion });
+          return;
+        }
+        if (
+          feedMode === "local" &&
+          client !== null &&
+          client.getActiveHostId() !== null
+        ) {
+          clearHostAll.mutate({ beforeUpdatedAt: Date.now() });
+        }
       },
       loadMoreHost: () => {
         if (feedMode !== "local") return;
@@ -1149,6 +1200,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       appLocalMarkAllAsRead,
       markHostRead,
       markHostAllRead,
+      clearHostAll,
       loadMoreHost,
       hostNextCursor,
       hasHostLoadError,

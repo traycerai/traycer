@@ -902,7 +902,7 @@ function SkillsEmptyState({
           instructions it follows.
         </p>
       </div>
-      <pre className="w-full max-w-prose overflow-x-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-ui-xs text-muted-foreground">
+      <pre className="w-full max-w-prose overflow-x-auto rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-left font-mono text-ui-xs text-muted-foreground">
         {EXAMPLE_SKILL_MD}
       </pre>
       {canAuthor ? (
@@ -969,7 +969,7 @@ function SkillRow({
         // (rows are keyed `source:path`), which would leave a screen reader
         // with several buttons all reading "Open deploy".
         aria-label={skillOpenLabel(skill)}
-        className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {/* No leading tile. A skill is a markdown directory; no provider's
             format carries artwork for one, so anything here would be a glyph

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
@@ -23,6 +23,9 @@ import {
   rateLimitWindowSeverityBarClassName,
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
 const EMPTY_BAR_KEYS = ["primary", "secondary"] as const;
 
@@ -36,7 +39,7 @@ const NO_BARS: ReadonlyArray<HeaderRateLimitBar> = [];
  * The scope is resolved HERE, above both the glyph and the popover, and
  * re-provided as this subtree's `HostRuntimeContext`. That one swap is what
  * re-targets the whole surface: every hook below reaches its host through
- * `useHostClient()` / `useReactiveActiveHostId()`, and both read the binding
+ * `useHostClient()` / `useAddressableHostId()`, and both read the binding
  * from context, so the query keys, the serial fetch queue's scope and the
  * invalidations all move together and cannot end up describing different
  * machines. Nothing outside this subtree moves — picking a host to WATCH is
@@ -89,6 +92,14 @@ function ScopedRateLimitIconButton({
   readonly hasExplicitPick: boolean;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const chord = useBindingForAction("app.rate-limits.open");
+  useEffect(
+    () =>
+      registerDynamicActionHandler("app.rate-limits.open", () => {
+        setOpen(true);
+      }),
+    [],
+  );
   useTitleBarDragSuppression("rate-limits", open);
   // One subscription bridge owns active-chat + per-harness profile state for
   // both the always-mounted glyph and the lazily-mounted popover. Passing the
@@ -109,6 +120,13 @@ function ScopedRateLimitIconButton({
   // retention is built to ride out. Blanking the bars there would be a
   // regression paid by every single-host user for a picker they never opened.
   const scopedToOwnHost = !hasExplicitPick || isHostScopeUsable(scope.status);
+  const tooltipLabel = scope.isViewingActive
+    ? "Usage limits"
+    : `Usage limits · ${scope.hostLabel}`;
+  const tooltip =
+    chord === null
+      ? tooltipLabel
+      : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -116,11 +134,7 @@ function ScopedRateLimitIconButton({
         // The host belongs in the label only when it is NOT the obvious one.
         // Naming the active host on every hover would train people to ignore
         // the one case the words exist for.
-        label={
-          scope.isViewingActive
-            ? "Usage limits"
-            : `Usage limits · ${scope.hostLabel}`
-        }
+        label={tooltip}
         side="top"
         sideOffset={6}
         align={undefined}

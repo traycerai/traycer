@@ -54,7 +54,19 @@ failures.
 
 - Bundle CLI only, not the host. Host lives under `~/.traycer/host/` via CLI.
 - Main entry: `dist/main/index.js`.
-- Preload stays CommonJS and imports only from `src/ipc-contracts/`.
+- Preload stays CommonJS and imports only from `src/ipc-contracts/` — with one
+  governed exception, `electron-preload/selection-authority-bridge.ts`, which
+  also imports the selection-authority **contract parsers** and the
+  **buffered/rotating client** from `clients/shared/host-selection/`. Two
+  reasons, and a new exception needs both: (1) the attach/rotate choreography is
+  identical for the Electron and browser/dev bindings, so a preload-local copy
+  is a second implementation of a protocol that must not drift; (2) parsing at
+  this hop is what makes same-major skew safety structural — renderer domain
+  code never sees an unparsed envelope. The preload is esbuild-bundled to one
+  CommonJS file, so a shared import is inlined and the CommonJS half of the rule
+  is unaffected. Everything else still crosses as plain wire types through
+  `src/ipc-contracts/`; do not read this as licence to move feature logic into
+  preload.
 - Never build `Tray` from `nativeImage.createEmpty()` (invisible tray).
 - No Electron-native SQLite / `better-sqlite3` rebuilds in this shell — host owns
   app-assets DB.

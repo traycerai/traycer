@@ -57,6 +57,20 @@ import {
   deregisterHostViaHttp,
   type DeregisterHostFetchResult,
 } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import {
+  InMemoryAuthorityIdentitySource,
+  InMemoryHostFleetSource,
+  InMemoryPreferredHostStore,
+  createInProcessSelectionAuthority,
+  inertLocalHostOutageSignal,
+  type InProcessSelectionAuthority,
+} from "@traycer-clients/shared/host-selection/in-process-selection-authority";
+import {
+  createIncrementingIncarnationIds,
+  silentAuthorityLog,
+  systemAuthorityClock,
+} from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type {
   CredentialsMigrationOutcome,
   DeviceFlowAuthorization,
@@ -64,7 +78,6 @@ import type {
   DeviceFlowSession,
   HostRestartRequestResult,
   IDeviceFlowHost,
-  IHostPicker,
   IDeviceDescriber,
   ILinkCodeScanner,
   INotificationHost,
@@ -75,6 +88,7 @@ import type {
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
   NotificationShowOutcome,
+  RegisteredHostsChange,
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
@@ -146,7 +160,22 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState = new MobileNoopTrayState();
-  readonly hostPicker: IHostPicker = new MobileHostPicker();
+  /**
+   * Browser/dev topology (D16): the selection authority engine mounted
+   * in-process behind the single window's adapter - the same composition
+   * `MockRunnerHost` uses, which the contract names for shells with no main
+   * process. The phone is exactly that shell: one window, no local host.
+   */
+  readonly selectionFleet = new InMemoryHostFleetSource({
+    revision: 0,
+    identityGeneration: 0,
+    localHostId: null,
+    hosts: [],
+  });
+  readonly selectionIdentity = new InMemoryAuthorityIdentitySource(null);
+  readonly selectionPreferredStore = new InMemoryPreferredHostStore();
+  private selectionAuthorityMount: InProcessSelectionAuthority;
+  readonly selectionAuthority: SelectionAuthorityClient;
   readonly workspaceFolders: IWorkspaceFoldersHost = {
     // No native folder dialog on the phone - remote-host folder adds go
     // through the RPC-backed remote folder picker in gui-app.
@@ -192,6 +221,64 @@ export class MobileRunnerHost implements IRunnerHost {
       options.authnBaseUrl,
       options.hostLabel,
       options.returnScheme,
+    );
+    this.selectionAuthorityMount = createInProcessSelectionAuthority({
+      fleet: this.selectionFleet,
+      identity: this.selectionIdentity,
+      // A relay-only shell owns no host process, so the D14 ensure genuinely
+      // cannot provision - the refusal is the honest answer, and the engine's
+      // derivation falls through to the usable remotes.
+      localHostEnsure: {
+        ensureReady: () =>
+          Promise.resolve({
+            ok: false as const,
+            reason: "local-provisioning-unavailable",
+            deferred: false,
+          }),
+      },
+      localOutage: inertLocalHostOutageSignal,
+      preferredStore: this.selectionPreferredStore,
+      clock: systemAuthorityClock,
+      newIncarnationId: createIncrementingIncarnationIds(),
+      log: silentAuthorityLog,
+    });
+    this.selectionAuthority = this.selectionAuthorityMount.client;
+  }
+
+  /**
+   * `null`: this shell owns no registry cadence - the window's directory
+   * service keeps its own poll timer, the browser/dev answer.
+   */
+  onRegisteredHostsChange(
+    handler: (push: RegisteredHostsChange) => void,
+  ): Disposable | null {
+    void handler;
+    return null;
+  }
+
+  /**
+   * Re-reads the registry and republishes the fleet tuple. The authority runs
+   * in this window, so "tell the shell its copy is stale" resolves to one
+   * atomic fetch-and-publish here; a failed or signed-out read republishes
+   * nothing (the fleet stays as stale as it already was, and the evidence
+   * kernel is what recovers).
+   */
+  async refreshHostFleet(): Promise<void> {
+    const credentials = await this.tokenStore.get();
+    if (credentials === null) return;
+    const result = await fetchRegisteredHostsViaHttp(
+      this.authnBaseUrl,
+      credentials.token,
+    );
+    if (result.kind !== "ok") return;
+    const current = this.selectionFleet.snapshot();
+    this.selectionFleet.publish(
+      current.identityGeneration,
+      null,
+      result.response.hosts.map((host) => ({
+        hostId: host.hostId,
+        kind: "remote" as const,
+      })),
     );
   }
 
@@ -978,39 +1065,5 @@ class MobileNoopTrayState implements ITrayState {
   onEpicSelected(handler: (epicId: string) => void): Disposable {
     void handler;
     return disposable();
-  }
-}
-
-class MobileHostPicker implements IHostPicker {
-  private open = false;
-  private readonly handlers = new Set<(isOpen: boolean) => void>();
-
-  get isOpen(): boolean {
-    return this.open;
-  }
-
-  requestOpen(): void {
-    this.setOpen(true);
-  }
-
-  requestClose(): void {
-    this.setOpen(false);
-  }
-
-  onChange(handler: (isOpen: boolean) => void): Disposable {
-    this.handlers.add(handler);
-    return {
-      dispose: () => {
-        this.handlers.delete(handler);
-      },
-    };
-  }
-
-  private setOpen(open: boolean): void {
-    if (this.open === open) return;
-    this.open = open;
-    for (const handler of this.handlers) {
-      handler(open);
-    }
   }
 }

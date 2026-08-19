@@ -1,24 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   BusyContinuation,
-  HostRestartRequestResult,
   IRunnerHost,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
 import { useAuthService } from "@/lib/host";
-import {
-  runnerMutationKeys,
-  runnerQueryKeys,
-} from "@/lib/query-keys/runner-mutation-keys";
-import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { resolveDesktopMenuBridge } from "@/lib/windows/desktop-capabilities";
 import type {
   DesktopMenuCommandId,
@@ -32,7 +26,7 @@ import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
@@ -101,35 +95,9 @@ export function MenuCommandListener() {
     (state) => state.openEpicInNewWindow,
   );
   const management = runnerHost.hostManagement;
-  const traycerCli = runnerHost.traycerCli;
   const status = useRunnerHostControllerStatusQuery().data;
   const [pendingHostRestart, setPendingHostRestart] = useState<boolean>(false);
   const [busy, setBusy] = useState<MenuBusyState | null>(null);
-
-  const restartHostMutation = useMutation<HostRestartRequestResult>({
-    mutationKey: runnerMutationKeys.requestHostRespawn(),
-    mutationFn: () => runnerHost.requestHostRespawn(),
-    onSuccess: (result) => {
-      setPendingHostRestart(false);
-      // `declined` resolves (rather than rejecting) because it is not an
-      // error - the host deliberately was not restarted and a later retry
-      // succeeds on its own; see `toastHostRestartDeclined`.
-      if (result.kind === "declined") {
-        toastHostRestartDeclined(result.message);
-        return;
-      }
-      toast.success("Host restart requested");
-      if (traycerCli !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.traycerHostStatus(traycerCli),
-        });
-      }
-    },
-    onError: (err) => {
-      setPendingHostRestart(false);
-      toastFromRunnerError(err, "Couldn't restart host");
-    },
-  });
 
   const applyStagedMutation = useRunnerApplyStaged();
   const activateInstalledMutation = useRunnerActivateInstalled();
@@ -310,13 +278,9 @@ export function MenuCommandListener() {
   return (
     <>
       {closeTabFlow.unsyncedDialog}
-      <RestartHostConfirmDialog
-        open={pendingHostRestart}
-        onOpenChange={(open) => {
-          if (!open) setPendingHostRestart(false);
-        }}
-        isPending={restartHostMutation.isPending}
-        onConfirm={() => restartHostMutation.mutate()}
+      <LocalHostRestartFlow
+        requested={pendingHostRestart}
+        onClose={() => setPendingHostRestart(false)}
       />
       <HostBusyForceDeferDialog
         open={busy !== null}
@@ -418,6 +382,10 @@ function handleMenuCommand(
   if (payload.command === "app.reportIssue") {
     Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
       source: "native_menu",
+      // No in-app surface: the menu IS the entry point, and the report it
+      // opens has no context to name one. `null` means "there was none", not
+      // "we did not look".
+      surface: null,
     });
     handlers.reportIssue();
     return;

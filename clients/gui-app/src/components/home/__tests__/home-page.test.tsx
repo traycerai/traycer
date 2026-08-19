@@ -19,8 +19,13 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import { useHostClient } from "@/lib/host";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  useWorkspaceFoldersStore,
+  type WorkspaceFolderInfo,
+} from "@/stores/workspace/workspace-folders-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 /**
@@ -97,6 +102,17 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
+/** The composer's resolved placement (P1.2), pointed at the mocked host. */
+function useTestPlacementTarget(): LandingPlacementTarget {
+  return {
+    resolvedHostId: homeMocks.getActiveHostId(),
+    client: useHostClient(),
+    hostLabel: "Local",
+    isPinned: false,
+    namedHostDead: false,
+  };
+}
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({
     request: homeMocks.request,
@@ -104,10 +120,28 @@ vi.mock("@/lib/host/runtime", () => ({
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
   }),
+  // `landing-draft-store.ts` (real, unmocked) and `use-landing-composer-actions.ts`
+  // (also real - invoked through the mocked `LandingComposer`'s `handleClick`)
+  // both resolve the per-host workspace-folder bucket through an imperative
+  // read, not through a hook. A whole-module mock missing one leaves the
+  // import `undefined` and throws on the very first call.
+  //
+  // `activeHostIdOrNull` is that read now: the spine stopped carrying an
+  // identity at P4.2/D17, so it resolves the authority projection instead.
+  // Same knob as the spine below, so a test that moves the host moves both.
+  activeHostIdOrNull: () => homeMocks.getActiveHostId(),
+  getHostBindingSnapshot: () => ({
+    hostClient: {
+      request: homeMocks.request,
+      getActiveHostId: homeMocks.getActiveHostId,
+      getActiveHost: homeMocks.getActiveHost,
+      getRequestContextUserId: homeMocks.getRequestContextUserId,
+    },
+  }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgent: () => ({
+  useCreateTuiAgentForClient: () => ({
     create: () => Promise.resolve(),
     isPending: false,
   }),
@@ -136,7 +170,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
     // The real composer reads surface activity from context (provided by
     // HomePage); the mock mirrors that so the gating stays observable.
     const activityEnabled = useSurfaceActivity();
-    const actions = useLandingComposerActions();
+    const actions = useLandingComposerActions(useTestPlacementTarget());
     const draftId = props.draftId;
     const pendingCreateId = props.pendingCreateId;
     const effectiveKey = draftId ?? pendingCreateId;
@@ -259,6 +293,22 @@ vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
 }));
 import { HomePage } from "@/components/home/home-page";
 
+// The workspace-folders store buckets by host; every fixture in this suite
+// resolves the active host through `homeMocks.getActiveHostId()`, so seed and
+// read that same host's bucket.
+const TEST_HOST_ID = "host-home";
+
+function setGlobalWorkspaceFolders(
+  folders: ReadonlyArray<string>,
+  folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>,
+): void {
+  useWorkspaceFoldersStore.setState({
+    byHost: {
+      [TEST_HOST_ID]: { folders, folderInfoByPath, primaryPath: null },
+    },
+  });
+}
+
 describe("<HomePage />", () => {
   beforeEach(() => {
     __resetTabNavigationControllerForTesting();
@@ -297,10 +347,7 @@ describe("<HomePage />", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
   });
 
   afterEach(() => {
@@ -312,10 +359,7 @@ describe("<HomePage />", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useMobileNavStore.setState({ open: false });
     useAuthStore.setState({
       status: "signed-out",
@@ -443,28 +487,22 @@ describe("<HomePage />", () => {
   });
 
   it("passes the active draft workspace folders to the hero", () => {
-    useWorkspaceFoldersStore.setState({
-      folders: ["/tmp/draft-app"],
-      folderInfoByPath: {
-        "/tmp/draft-app": {
-          path: "/tmp/draft-app",
-          name: "draft-app",
-          repoIdentifier: null,
-          hostId: null,
-        },
+    setGlobalWorkspaceFolders(["/tmp/draft-app"], {
+      "/tmp/draft-app": {
+        path: "/tmp/draft-app",
+        name: "draft-app",
+        repoIdentifier: null,
+        hostId: TEST_HOST_ID,
       },
     });
     const draftId = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore.getState().setActiveDraft(draftId);
-    useWorkspaceFoldersStore.setState({
-      folders: ["/tmp/global-app"],
-      folderInfoByPath: {
-        "/tmp/global-app": {
-          path: "/tmp/global-app",
-          name: "global-app",
-          repoIdentifier: null,
-          hostId: null,
-        },
+    setGlobalWorkspaceFolders(["/tmp/global-app"], {
+      "/tmp/global-app": {
+        path: "/tmp/global-app",
+        name: "global-app",
+        repoIdentifier: null,
+        hostId: TEST_HOST_ID,
       },
     });
     const queryClient = new QueryClient({
@@ -484,15 +522,12 @@ describe("<HomePage />", () => {
   });
 
   it("creates a host-backed epic and navigates to the returned route", async () => {
-    useWorkspaceFoldersStore.setState({
-      folders: ["/tmp/traycer"],
-      folderInfoByPath: {
-        "/tmp/traycer": {
-          path: "/tmp/traycer",
-          name: "traycer",
-          repoIdentifier: null,
-          hostId: null,
-        },
+    setGlobalWorkspaceFolders(["/tmp/traycer"], {
+      "/tmp/traycer": {
+        path: "/tmp/traycer",
+        name: "traycer",
+        repoIdentifier: null,
+        hostId: TEST_HOST_ID,
       },
     });
     homeMocks.request.mockResolvedValue({ roomInfo: null });
@@ -582,21 +617,18 @@ describe("<HomePage />", () => {
   });
 
   it("includes selected workspace folders and detected repos when creating an epic", async () => {
-    useWorkspaceFoldersStore.setState({
-      folders: ["/tmp/gui-app", "/tmp/host"],
-      folderInfoByPath: {
-        "/tmp/gui-app": {
-          path: "/tmp/gui-app",
-          name: "gui-app",
-          repoIdentifier: { owner: "traycerai", repo: "gui-app" },
-          hostId: null,
-        },
-        "/tmp/host": {
-          path: "/tmp/host",
-          name: "host",
-          repoIdentifier: { owner: "traycerai", repo: "host" },
-          hostId: null,
-        },
+    setGlobalWorkspaceFolders(["/tmp/gui-app", "/tmp/host"], {
+      "/tmp/gui-app": {
+        path: "/tmp/gui-app",
+        name: "gui-app",
+        repoIdentifier: { owner: "traycerai", repo: "gui-app" },
+        hostId: TEST_HOST_ID,
+      },
+      "/tmp/host": {
+        path: "/tmp/host",
+        name: "host",
+        repoIdentifier: { owner: "traycerai", repo: "host" },
+        hostId: TEST_HOST_ID,
       },
     });
     homeMocks.request.mockResolvedValue({ roomInfo: null });

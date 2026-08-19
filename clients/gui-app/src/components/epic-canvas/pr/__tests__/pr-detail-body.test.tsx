@@ -58,6 +58,11 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
+  // Added when the PR detail spinner became a BOUNDED load (invariant 6):
+  // past its budget it renders `TileHostLoadState`, whose Report-issue action
+  // reaches the barrel's `useHostBinding`. `null` is the production shape for
+  // "no binding", which that surface already handles.
+  useHostBinding: () => null,
   useHostDirectory: () => ({
     onChange: () => ({ dispose() {} }),
     findById: () => null,
@@ -71,6 +76,8 @@ vi.mock("@/lib/host", () => ({
   // these tests already assert nothing about. `PrDetailFilesTab` has its own
   // file for the diff/stale/unavailable states.
   useHostClient: () => null,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => null,
 }));
 
 vi.mock("@/lib/epic-selectors", async (importActual) => ({

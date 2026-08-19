@@ -6,12 +6,17 @@ import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import {
   ensureHistoryTab,
   ensureSettingsTab,
@@ -349,6 +354,7 @@ function buildHeaderEpicHandle(
     awareness: awareness as never,
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
@@ -549,6 +555,7 @@ describe("<TabStrip />", () => {
     toastTestState.actionLabel = null;
     toastTestState.undo = null;
     notificationIndicatorTestState.request = null;
+    __resetAppLocalNotificationsStoreForTests();
     resetStores();
   });
 
@@ -557,6 +564,7 @@ describe("<TabStrip />", () => {
     queryClient.clear();
     headerActivityByEpic.clear();
     resetAgentActivity();
+    __resetAppLocalNotificationsStoreForTests();
     resetStores();
   });
 
@@ -915,6 +923,23 @@ describe("<TabStrip />", () => {
     expect(newTabButton.className).toContain("shrink-0");
   });
 
+  it("shows the New task shortcut on the trailing button", async () => {
+    openEpicFixture(EPIC_A);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const newTaskButton = await screen.findByRole("button", {
+      name: "Start Page",
+    });
+    expect(
+      anyTooltipHasText(`New task (${formatChordForDisplay("mod+n")})`),
+    ).toBe(true);
+    expect(
+      anyTooltipHasText(`New task (${formatChordForDisplay("mod+t")})`),
+    ).toBe(false);
+    expect(newTaskButton).toBeDefined();
+  });
+
   it("scrolls the active header tab into view after any route activation", async () => {
     const scrollTargets: Element[] = [];
     const scrollSpy = vi
@@ -982,6 +1007,48 @@ describe("<TabStrip />", () => {
     expect(
       await screen.findByTestId(`header-tab-title-generating-${EPIC_A.id}`),
     ).toBeDefined();
+  });
+
+  it("shows the chat error glyph on a task tab when chat and terminal failures coexist", async () => {
+    openEpicFixture(EPIC_A);
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "chat-failure",
+      updatedAt: 1,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-1",
+      payload: { kind: "chat", epicId: EPIC_A.id, chatId: "chat-1" },
+      message: "Chat failed",
+      detail: null,
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "terminal-failure",
+      updatedAt: 2,
+      readAt: null,
+      kind: "terminal.crashed",
+      sourceRef: "terminal-1",
+      payload: {
+        kind: "terminal",
+        epicId: EPIC_A.id,
+        terminalId: "terminal-1",
+        tabId: EPIC_A.id,
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance-1",
+      },
+      message: "Terminal failed",
+      detail: null,
+    });
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const indicator = await screen.findByTestId(
+      `header-tab-failure-${EPIC_A.id}`,
+    );
+    expect(indicator.getAttribute("class")).toContain(
+      "lucide-message-square-x",
+    );
+    expect(screen.queryByTestId(`header-tab-done-${EPIC_A.id}`)).toBeNull();
   });
 
   it("shows a task activity spinner while any chat is active in the epic", async () => {

@@ -10,33 +10,55 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 const mockGetActiveHostId = vi.fn<() => string | null>(() => "host-1");
-vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => ({ getActiveHostId: mockGetActiveHostId }),
+// The EPIC SESSION's client, which is what these three hooks resolve: they are
+// mounted only by the Sharing panel, inside the Epic canvas, and their cache
+// writes must key the host that panel's list is read on. This suite used to
+// mock the app-wide `useHostClient` instead - a mock that, after the hooks
+// were re-pointed, would have been stranded (still installed, no longer read)
+// and the suite would have gone red at the ctx read below rather than told
+// us which host it was testing.
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => ({ getActiveHostId: mockGetActiveHostId }),
 }));
 
-const capturedOptions: Record<
-  string,
-  {
-    onSuccess: ((data: unknown, variables: unknown) => void) | undefined;
-    onError: ((err: unknown) => void) | undefined;
-  }
-> = {};
+interface MutateContext {
+  readonly hostId: string | null;
+}
+
+interface CapturedMutationOptions {
+  onMutate: (() => MutateContext) | undefined;
+  onSuccess:
+    | ((data: unknown, variables: unknown, ctx: MutateContext) => void)
+    | undefined;
+  onError: ((err: unknown) => void) | undefined;
+}
+
+const capturedOptions: Record<string, CapturedMutationOptions> = {};
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: (args: {
     method: string;
-    options: {
-      onSuccess: ((data: unknown, variables: unknown) => void) | undefined;
-      onError: ((err: unknown) => void) | undefined;
-    } | null;
+    options: CapturedMutationOptions | null;
   }) => {
     capturedOptions[args.method] = args.options ?? {
+      onMutate: undefined,
       onSuccess: undefined,
       onError: undefined,
     };
     return { mutate: vi.fn(), isPending: false };
   },
 }));
+
+/**
+ * Drives `onSuccess` the way `useHostMutation` does: the context is whatever
+ * `onMutate` captured at mutate time (the host-swap convention), so a hook
+ * that reads the host at success time instead of mutate time cannot pass.
+ */
+function fireSuccess(method: string, data: unknown, variables: unknown): void {
+  const options = capturedOptions[method];
+  const ctx = options.onMutate?.() ?? { hostId: null };
+  options.onSuccess?.(data, variables, ctx);
+}
 
 import { toast } from "sonner";
 import { renderHook } from "@testing-library/react";
@@ -101,7 +123,7 @@ describe("useEpicGrantAccess", () => {
       epicId: "epic-abc",
       input: { kind: "users" as const, invites: [] },
     };
-    capturedOptions["epic.grantAccess"].onSuccess?.(data, variables);
+    fireSuccess("epic.grantAccess", data, variables);
     expect(mockSetQueryData).toHaveBeenCalledWith(
       ["host", "host-1", "epic.listCollaborators", { epicId: "epic-abc" }],
       data,
@@ -117,7 +139,7 @@ describe("useEpicGrantAccess", () => {
       epicId: "epic-abc",
       input: { kind: "users" as const, invites: [] },
     };
-    capturedOptions["epic.grantAccess"].onSuccess?.(data, variables);
+    fireSuccess("epic.grantAccess", data, variables);
     expect(mockSetQueryData).not.toHaveBeenCalled();
   });
 });
@@ -150,7 +172,7 @@ describe("useEpicBatchUpdateRoles", () => {
     renderHook(() => useEpicBatchUpdateRoles());
     const data = makeCollabResponse();
     const variables = { epicId: "epic-xyz", input: { changes: [] } };
-    capturedOptions["epic.batchUpdateRoles"].onSuccess?.(data, variables);
+    fireSuccess("epic.batchUpdateRoles", data, variables);
     expect(mockSetQueryData).toHaveBeenCalledWith(
       ["host", "host-1", "epic.listCollaborators", { epicId: "epic-xyz" }],
       data,
@@ -163,7 +185,7 @@ describe("useEpicBatchUpdateRoles", () => {
     renderHook(() => useEpicBatchUpdateRoles());
     const data = makeCollabResponse();
     const variables = { epicId: "epic-xyz", input: { changes: [] } };
-    capturedOptions["epic.batchUpdateRoles"].onSuccess?.(data, variables);
+    fireSuccess("epic.batchUpdateRoles", data, variables);
     expect(mockSetQueryData).not.toHaveBeenCalled();
   });
 });
@@ -209,7 +231,7 @@ describe("useEpicRevokeCollaborator", () => {
       epicId: "epic-rev",
       input: { kind: "users" as const, userId: "u-1" },
     };
-    capturedOptions["epic.revokeCollaborator"].onSuccess?.(data, variables);
+    fireSuccess("epic.revokeCollaborator", data, variables);
     expect(mockSetQueryData).toHaveBeenCalledWith(
       ["host", "host-1", "epic.listCollaborators", { epicId: "epic-rev" }],
       data,
@@ -225,7 +247,7 @@ describe("useEpicRevokeCollaborator", () => {
       epicId: "epic-rev",
       input: { kind: "users" as const, userId: "u-1" },
     };
-    capturedOptions["epic.revokeCollaborator"].onSuccess?.(data, variables);
+    fireSuccess("epic.revokeCollaborator", data, variables);
     expect(mockSetQueryData).not.toHaveBeenCalled();
   });
 });

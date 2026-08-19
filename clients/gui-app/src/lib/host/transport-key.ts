@@ -149,6 +149,28 @@ export function dialableHostEndpointFor(
  * that decides whether to `acquireRemoteSession` again keep or replace what
  * it holds) and must not be conflated with dialability.
  */
+/**
+ * LATENT HAZARD, harmless only while the relay attach URL is shared.
+ *
+ * ⚠ Read the scope precisely, because an earlier wording of this note said the
+ * comment above "argues it should not be folded in" full stop, and that is not
+ * what it says. The argument against folding the URL in is made for
+ * LOCAL/MOCK, and the local arm below duly omits it. For REMOTE the comment
+ * above positively endorses including it - one fixed relay URL for every
+ * remote host is exactly what makes a same-host public-key rotation legible as
+ * an identity change. So the code and the comment above AGREE today, and a
+ * reader who checked the imprecise version against them would have found no
+ * contradiction and been entitled to delete this note along with the real
+ * warning it carries.
+ *
+ * The hazard is a PREMISE, not an inconsistency: the remote arm's safety rests
+ * on `remote-fetcher.ts` supplying one shared relay attach URL. If that ever
+ * becomes per-instance, every routine same-host respawn changes the key, the
+ * epic session provider's identity comparison takes the rebuild arm, and the
+ * handle is disposed. That is not a re-render cost; it is the data-loss path
+ * (audit finding B5) reached by a different trigger. Make the URL per-instance
+ * and this needs the same treatment the room-swap path got.
+ */
 export function remoteAwareOwnerIdentity(
   target: HostDirectoryEntry,
   userId: string,

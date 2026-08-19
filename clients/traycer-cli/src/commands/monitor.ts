@@ -50,6 +50,7 @@ import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../store/credentials-store";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 /**
  * `traycer monitor` — long-running background command spawned inside a Claude
@@ -214,6 +215,9 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       bearer: () => readLeaseBearer(lease),
       diag: (message) => diag(message),
     }),
+    // The CLI has no selection authority to feed: it holds no lease
+    // state and never fails a window over.
+    evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,

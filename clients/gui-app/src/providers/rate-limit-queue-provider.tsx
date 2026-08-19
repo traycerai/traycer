@@ -1,14 +1,19 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useConfiguredRateLimitProviders } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import {
   configureRateLimitQueue,
   enqueueRateLimitFetch,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import {
+  BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
+  backgroundRateLimitMembershipKey,
+  selectBackgroundRateLimitTargets,
+} from "@/lib/rate-limits/background-rate-limit-targets";
 import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 /**
@@ -29,13 +34,10 @@ export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
  * 1. Binds the `ephemeralProcess` serial queue to the default host
  *    (`configureRateLimitQueue`), re-binding on host/client swap and unbinding
  *    on host loss so a stale client can't service an enqueue.
- * 2. Drives the single shared interval timer for the `ephemeralProcess` lane,
- *    walking the currently-configured providers and enqueuing a `force: false`
- *    pull for each (the queue serializes them, one subprocess at a time). It
- *    also enqueues the same safe pull immediately when the configured
- *    `ephemeralProcess` provider set changes, so the header glyph/popover can
- *    recover from a failed first read without waiting for a transient surface
- *    mount.
+ * 2. Drives the single shared interval timer for the `ephemeralProcess` lane.
+ *    Each window chooses at most three authenticated targets: selected stale
+ *    profiles first, then the oldest persisted readings. Targets enqueue
+ *    separately so the queue staggers subprocess work rather than fanning out.
  * 3. Keeps OpenCode's HTTP-lane turn refresh mounted even while its popover and
  *    Settings surfaces are closed.
  *
@@ -51,10 +53,11 @@ export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
  * into table-owned polling and never enter this queue.
  */
 export function RateLimitQueueProvider(): null {
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const client = useHostClient();
   const queryClient = useQueryClient();
   const configuredProviders = useConfiguredRateLimitProviders();
+  const profileSelection = useRateLimitProfileSelection();
   useRefreshProviderRateLimitsOnTurn(
     "opencode",
     null,
@@ -67,6 +70,14 @@ export function RateLimitQueueProvider(): null {
   // enqueue) so a queued fetch can't be reassigned to a different host
   // mid-flight. `useHostClient()` is non-null once the runtime is mounted, so
   // only host presence needs gating here.
+  //
+  // A queued item can outlive a host switch, so the client it captures must
+  // stay aimed where it was enqueued - otherwise an item enqueued for host A
+  // fetches B and writes the answer under A's cache key, showing one machine's
+  // usage on another's row. That guarantee is `useHostClient()`'s own: it
+  // resolves a requester PINNED to the host it named (redesign D17 / P2.1), so
+  // a call already in flight completes against the outgoing host and this
+  // effect simply re-binds with a fresh client when the effective host moves.
   useEffect(() => {
     if (hostId === null) {
       configureRateLimitQueue(null);
@@ -75,38 +86,42 @@ export function RateLimitQueueProvider(): null {
     configureRateLimitQueue({
       hostId,
       queryClient,
-      request: (_hostId, method, params) => client.request(method, params),
+      // `responseTimeoutMs` is the queue's own budget, not the client's default
+      // frame timeout: an `ephemeralProcess` read spawns a provider CLI and
+      // legitimately outruns that default.
+      request: (_hostId, method, params, responseTimeoutMs) =>
+        client.requestWithResponseTimeout(method, params, responseTimeoutMs),
     });
     return () => {
       configureRateLimitQueue(null);
     };
   }, [hostId, client, queryClient]);
 
-  // Latest `ephemeralProcess` provider ids, read live by the interval callback
-  // through a ref so a credential change re-gates the walked set on the very
-  // next tick WITHOUT resetting the timer (which a dependency would, pushing the
-  // first tick a full interval into the future on every list change).
-  const ephemeralProviderIds = useMemo(
+  const membershipKey = useMemo(
     () =>
-      configuredProviders
-        .filter((provider) => provider.lane === "ephemeralProcess")
-        .map((provider) => provider.providerId),
-    [configuredProviders],
+      backgroundRateLimitMembershipKey(configuredProviders, profileSelection),
+    [configuredProviders, profileSelection],
   );
-  const ephemeralProviderIdsRef = useRef(ephemeralProviderIds);
-  useEffect(() => {
-    ephemeralProviderIdsRef.current = ephemeralProviderIds;
-  }, [ephemeralProviderIds]);
+
+  const enqueuePollingWindow = useEffectEvent((): void => {
+    const targets = selectBackgroundRateLimitTargets(
+      configuredProviders,
+      profileSelection,
+      Date.now(),
+      BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
+    );
+    for (const target of targets) {
+      void enqueueRateLimitFetch(target.providerId, target.accountContext, {
+        force: false,
+        profileId: target.profileId,
+      });
+    }
+  });
 
   useEffect(() => {
     if (hostId === null) return;
-    ephemeralProviderIds.forEach((providerId) => {
-      void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-        force: false,
-        profileId: null,
-      });
-    });
-  }, [hostId, ephemeralProviderIds]);
+    enqueuePollingWindow();
+  }, [hostId, membershipKey]);
 
   // The single shared interval timer, gated on host presence and paused while
   // the window is hidden. Initial per-provider data still populates through the
@@ -120,12 +135,7 @@ export function RateLimitQueueProvider(): null {
       // Defensive: the timer is cleared while hidden, but guard the body too so
       // a tick that races a `visibilitychange` can't spawn a subprocess.
       if (document.visibilityState === "hidden") return;
-      ephemeralProviderIdsRef.current.forEach((providerId) => {
-        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-          force: false,
-          profileId: null,
-        });
-      });
+      enqueuePollingWindow();
     };
     const start = (): void => {
       if (intervalHandle !== null) return;

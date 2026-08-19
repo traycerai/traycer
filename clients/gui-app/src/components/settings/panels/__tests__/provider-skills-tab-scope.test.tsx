@@ -52,8 +52,8 @@ const skillMocks = vi.hoisted(() => ({
   listScopes: [] as ProviderNativeScope[],
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -229,13 +229,18 @@ function skillsState(): ProviderCliState {
 
 function seedWorkspace(): void {
   useWorkspaceFoldersStore.setState({
-    folders: ["/Users/dev/app"],
-    folderInfoByPath: {
-      "/Users/dev/app": {
-        path: "/Users/dev/app",
-        name: "app",
-        repoIdentifier: null,
-        hostId: "host-1",
+    byHost: {
+      "host-1": {
+        folders: ["/Users/dev/app"],
+        folderInfoByPath: {
+          "/Users/dev/app": {
+            path: "/Users/dev/app",
+            name: "app",
+            repoIdentifier: null,
+            hostId: "host-1",
+          },
+        },
+        primaryPath: null,
       },
     },
   });
@@ -352,8 +357,13 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
 
   it("shows project-needs-workspace empty state when project has no root", () => {
     useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
+      byHost: {
+        "host-1": {
+          folders: [],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      },
     });
     nativeScopeResolvedWorkspaceMocks.folders = [];
     useProvidersWorkspaceSelectionStore.setState({

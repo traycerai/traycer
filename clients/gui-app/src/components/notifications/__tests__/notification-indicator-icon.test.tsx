@@ -5,6 +5,7 @@ import {
   NotificationIndicatorIcon,
   type IndicatorRunningKind,
 } from "@/components/notifications/notification-indicator-icon";
+import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import {
   contrastRatio,
   DARK_THEME_SURFACES,
@@ -167,6 +168,63 @@ describe("<NotificationIndicatorIcon />", () => {
     expect(screen.queryByTestId("indicator-done-subject-1")).toBeNull();
   });
 
+  it("shows completion above a terminal-only failure", () => {
+    renderIcon(
+      {
+        unreadFailure: true,
+        unreadTerminalFailure: true,
+        pendingFork: false,
+        pendingApproval: false,
+        pendingInterview: false,
+        unreadDone: true,
+      },
+      false,
+    );
+
+    expect(
+      screen.getByTestId("indicator-done-subject-1").getAttribute("class"),
+    ).toContain("lucide-message-square-check");
+    expect(screen.queryByTestId("indicator-failure-subject-1")).toBeNull();
+  });
+
+  it("shows a chat failure above a coexisting terminal failure", () => {
+    renderIcon(
+      {
+        unreadFailure: true,
+        unreadNonTerminalFailure: true,
+        unreadTerminalFailure: true,
+        pendingFork: false,
+        pendingApproval: false,
+        pendingInterview: false,
+        unreadDone: true,
+      },
+      false,
+    );
+
+    expect(
+      screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
+    ).toContain("lucide-message-square-x");
+    expect(screen.queryByTestId("indicator-done-subject-1")).toBeNull();
+  });
+
+  it("shows the terminal glyph when no higher-priority state exists", () => {
+    renderIcon(
+      {
+        unreadFailure: true,
+        unreadTerminalFailure: true,
+        pendingFork: false,
+        pendingApproval: false,
+        pendingInterview: false,
+        unreadDone: false,
+      },
+      false,
+    );
+
+    expect(
+      screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
+    ).toContain("lucide-square-terminal");
+  });
+
   it("renders the background tier as a muted waiting chat distinct from the turn spinner", () => {
     renderIcon(DEFAULT_STATE, "background");
 
@@ -236,26 +294,14 @@ describe("<NotificationIndicatorIcon />", () => {
 });
 
 function renderIcon(
-  state: {
-    readonly unreadFailure: boolean;
-    readonly pendingFork: boolean;
-    readonly pendingApproval: boolean;
-    readonly pendingInterview: boolean;
-    readonly unreadDone: boolean;
-  },
+  state: NotificationIndicatorState,
   running: IndicatorRunningKind,
 ) {
   return render(renderIconContent(state, running));
 }
 
 function renderIconContent(
-  state: {
-    readonly unreadFailure: boolean;
-    readonly pendingFork: boolean;
-    readonly pendingApproval: boolean;
-    readonly pendingInterview: boolean;
-    readonly unreadDone: boolean;
-  },
+  state: NotificationIndicatorState,
   running: IndicatorRunningKind,
 ) {
   return (

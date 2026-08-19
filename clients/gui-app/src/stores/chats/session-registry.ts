@@ -6,6 +6,8 @@ import {
 interface RegistryEntry {
   readonly key: string;
   readonly scopeKey: string;
+  /** Part of this entry's identity (see the class doc), kept readable. */
+  readonly hostId: string;
   readonly handle: ChatSessionStoreHandle;
   leases: number;
   lastUsedAt: number;
@@ -78,7 +80,9 @@ export interface ChatSessionRegistryOptions {
  * a mismatch there is still a legitimate in-place rebuild.
  *
  * Time-based keep-alive: when a chat's last lease is dropped (its tile
- * unmounts on a tab switch) the session is NOT torn down. Its websocket stays
+ * unmounts - no longer on a mere tab switch, since pane chat retention keeps
+ * the tile mounted, but still on eviction or close) the session is NOT torn
+ * down. Its websocket stays
  * open and its loaded snapshot is retained so switching back paints instantly
  * - no reconnect, no loading spinner. A lease-free ("idle") session is held
  * until it goes untouched for `idleTtlMs`, at which point it is disposed.
@@ -134,6 +138,21 @@ export class ChatSessionRegistry {
     return Array.from(this.entries.values(), (entry) => entry.handle);
   }
 
+  /**
+   * The live sessions of ONE host in one epic. The host is part of a session's
+   * identity, so a surface bound to a host - a tab, a card - must read through
+   * this rather than filtering `listHandles` on the chat id alone: chat ids are
+   * host-minted, and a cross-host clone carries the source's ids verbatim.
+   */
+  listHandlesForHost(epicId: string, hostId: string): ChatSessionStoreHandle[] {
+    const handles: ChatSessionStoreHandle[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.hostId !== hostId || entry.handle.epicId !== epicId) continue;
+      handles.push(entry.handle);
+    }
+    return handles;
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -172,6 +191,7 @@ export class ChatSessionRegistry {
     this.entries.set(key, {
       key,
       scopeKey,
+      hostId,
       handle,
       leases: 1,
       lastUsedAt: now(),

@@ -7,7 +7,7 @@ import {
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
 /**
@@ -49,7 +49,7 @@ export function ChatRecordsStreamMount(): ReactNode {
   // it feeds are rebuilt on a host change too (`EpicSessionProvider`'s session
   // key), so the subscription has to be torn down and reopened with them rather
   // than keep pushing a previous host's rows into fresh stores.
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
 
   useEffect(() => {
     if (

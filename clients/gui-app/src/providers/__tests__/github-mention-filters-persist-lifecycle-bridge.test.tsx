@@ -45,15 +45,23 @@ const BOB_FILTERS: Record<string, GithubMentionFilter> = {
   },
 };
 
+const ALICE_EMAIL = "alice@example.com";
+const BOB_EMAIL = "bob@example.com";
+const ALICE_ID = `user:${ALICE_EMAIL}`;
+const BOB_ID = `user:${BOB_EMAIL}`;
+
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
   email: string | null,
 ): void {
   if (status === "signed-in" && email !== null) {
+    // userId and email deliberately DIFFER: a fixture that equates them
+    // cannot detect email-keyed scoping.
+    const userId = `user:${email}`;
     useAuthStore.setState({
       status,
-      profile: { userId: email, userName: email, email },
-      contextMetadata: { userId: email, username: email },
+      profile: { userId, userName: email, email },
+      contextMetadata: { userId, username: email },
     });
     return;
   }
@@ -68,11 +76,11 @@ function resetGithubMentionFilterStore(): void {
 }
 
 function persistSnapshot(
-  email: string | null,
+  bucketIdentity: string | null,
   filtersByKey: Record<string, GithubMentionFilter>,
 ): void {
   window.localStorage.setItem(
-    githubMentionFiltersKey(email),
+    githubMentionFiltersKey(bucketIdentity),
     JSON.stringify({
       state: { filtersByKey },
       version: 1,
@@ -94,9 +102,11 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
     resetGithubMentionFilterStore();
   });
 
-  it("retargets to the signed-in user's mention-filter bucket", async () => {
-    persistSnapshot("alice@example.com", ALICE_FILTERS);
-    resetAuth("signed-in", "alice@example.com");
+  it("adopts the legacy email-keyed bucket into the signed-in user's canonical bucket", async () => {
+    // Seeds ONLY the legacy (email-keyed) bucket, so a successful load can
+    // only be explained by the one-shot adoption path onto the userId key.
+    persistSnapshot(ALICE_EMAIL, ALICE_FILTERS);
+    resetAuth("signed-in", ALICE_EMAIL);
 
     render(
       <GithubMentionFiltersPersistLifecycleBridge>
@@ -106,7 +116,7 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
 
     await waitFor(() => {
       expect(useGithubMentionFilterStore.persist.getOptions().name).toBe(
-        githubMentionFiltersKey("alice@example.com"),
+        githubMentionFiltersKey(ALICE_ID),
       );
       expect(useGithubMentionFilterStore.getState().filtersByKey).toEqual(
         ALICE_FILTERS,
@@ -115,8 +125,8 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
   });
 
   it("loads the second user's bucket without leaking the first user's repository selection", async () => {
-    persistSnapshot("alice@example.com", ALICE_FILTERS);
-    persistSnapshot("bob@example.com", BOB_FILTERS);
+    persistSnapshot(ALICE_ID, ALICE_FILTERS);
+    persistSnapshot(BOB_ID, BOB_FILTERS);
 
     render(
       <GithubMentionFiltersPersistLifecycleBridge>
@@ -125,7 +135,7 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
@@ -135,12 +145,12 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
     });
 
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", BOB_EMAIL);
     });
 
     await waitFor(() => {
       expect(useGithubMentionFilterStore.persist.getOptions().name).toBe(
-        githubMentionFiltersKey("bob@example.com"),
+        githubMentionFiltersKey(BOB_ID),
       );
       const filters = useGithubMentionFilterStore.getState().filtersByKey;
       expect(filters).toEqual(BOB_FILTERS);
@@ -162,12 +172,12 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", ALICE_EMAIL);
     });
 
     await waitFor(() => {
       expect(useGithubMentionFilterStore.persist.getOptions().name).toBe(
-        githubMentionFiltersKey("alice@example.com"),
+        githubMentionFiltersKey(ALICE_ID),
       );
     });
 
@@ -188,7 +198,7 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
 
     await waitFor(() => {
       const raw = window.localStorage.getItem(
-        githubMentionFiltersKey("alice@example.com"),
+        githubMentionFiltersKey(ALICE_ID),
       );
       expect(raw).not.toBeNull();
       expect(raw ?? "").toContain(ALICE_REPOSITORY.repo);
@@ -206,9 +216,7 @@ describe("<GithubMentionFiltersPersistLifecycleBridge />", () => {
       // owner and repo must not survive sign-out into the next account's
       // read of this profile.
       expect(
-        window.localStorage.getItem(
-          githubMentionFiltersKey("alice@example.com"),
-        ),
+        window.localStorage.getItem(githubMentionFiltersKey(ALICE_ID)),
       ).toBeNull();
       expect(useGithubMentionFilterStore.persist.getOptions().name).toBe(
         githubMentionFiltersKey(null),

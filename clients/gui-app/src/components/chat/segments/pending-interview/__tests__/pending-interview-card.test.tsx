@@ -160,6 +160,19 @@ describe("PendingInterviewCard keyboard navigation", () => {
     setMobileApp(false);
   });
 
+  it("keeps the Submit shortcut keycaps at the primary action contrast", () => {
+    renderCard([singleSelect("free", "Describe it", [])], vi.fn(), null);
+
+    const submit = screen.getByRole("button", { name: "Submit" });
+    const keycaps = submit.querySelectorAll('[data-slot="kbd"]');
+    expect(keycaps).toHaveLength(2);
+    for (const keycap of keycaps) {
+      expect(keycap.className).toContain("border-current");
+      expect(keycap.className).toContain("bg-transparent");
+      expect(keycap.className).toContain("text-current");
+    }
+  });
+
   it("restores each chat's current question and answers after remount", () => {
     const questions = [
       multiSelect("q1", "Pick some", ["Alpha", "Beta"]),

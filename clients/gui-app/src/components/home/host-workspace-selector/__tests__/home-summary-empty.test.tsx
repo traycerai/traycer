@@ -17,6 +17,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import { useHostClient } from "@/lib/host";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -57,6 +59,9 @@ interface MockHostClient {
   };
   getActiveHostId(): string;
   getRequestContextUserId(): string;
+  // Read at render by `useHostClientFor`, which every host-scoped surface now
+  // routes through (`useHostClientForHostId`).
+  getRequestContext(): object;
   request(method: string, payload: unknown): Promise<unknown>;
   onChange(): () => void;
 }
@@ -75,6 +80,7 @@ function createMockHostClient(
     }),
     getActiveHostId: () => "host-home",
     getRequestContextUserId: () => "user-home",
+    getRequestContext: () => ({}),
     request,
     onChange: () => () => undefined,
   };
@@ -196,6 +202,8 @@ vi.mock("@/lib/host", () => ({
     directory: { selectById: mocks.selectHost },
   }),
   useHostClient: () => mocks.hostClient.current,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => mocks.hostClient.current,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -203,7 +211,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
-  useCreateTuiAgent: () => ({
+  useCreateTuiAgentForClient: () => ({
     create: () => Promise.resolve(),
     isPending: false,
   }),
@@ -220,8 +228,23 @@ vi.mock("@/lib/composer/landing-image-gc", () => ({
   scheduleLandingImageReconcile: () => undefined,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-home",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-home",
+}));
+
+// Every host-scoped surface resolves its client through this hook now
+// (redesign P1.2). Mocked at that boundary rather than standing up a real
+// `<HostRuntimeProvider>`, matching how this suite already fakes the host
+// list and the workspace queries.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => mocks.hostClient.current,
+}));
+
+// The composer's picker resolves `pin ?? effective` now (redesign P1.2). This
+// suite is about workspace/folder handling, not selection derivation, so the
+// effective host is mocked at the same boundary as the host list above.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-home",
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -336,7 +359,11 @@ function renderControl(layout: "inline" | "stacked") {
       <TooltipProvider>
         <ActiveHostWorkspaceControls
           disabled={false}
-          stagingKey={{ surface: "landing", draftId: null }}
+          stagingKey={{
+            surface: "landing",
+            hostId: "host-home",
+            draftId: null,
+          }}
           workspaceSeed={null}
           seedIntent={null}
           seedIntentOverride={null}
@@ -349,13 +376,24 @@ function renderControl(layout: "inline" | "stacked") {
   return queryClient;
 }
 
+/** The composer's resolved placement (P1.2), pointed at the mocked host. */
+function useTestPlacementTarget(): LandingPlacementTarget {
+  return {
+    resolvedHostId: "host-home",
+    client: useHostClient(),
+    hostLabel: "Home Mac",
+    isPinned: false,
+    namedHostDead: false,
+  };
+}
+
 function DelayedBranchValidationHarness() {
-  const actions = useLandingComposerActions();
+  const actions = useLandingComposerActions(useTestPlacementTarget());
   return (
     <>
       <ActiveHostWorkspaceControls
         disabled={false}
-        stagingKey={{ surface: "landing", draftId: null }}
+        stagingKey={{ surface: "landing", hostId: "host-home", draftId: null }}
         workspaceSeed={null}
         seedIntent={null}
         seedIntentOverride={null}
@@ -442,11 +480,7 @@ describe("landing workspace summary empty state", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSettingsStore.setState({
@@ -466,11 +500,7 @@ describe("landing workspace summary empty state", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
-    useWorkspaceFoldersStore.setState({
-      folders: [],
-      folderInfoByPath: {},
-      primaryPath: null,
-    });
+    useWorkspaceFoldersStore.setState({ byHost: {} });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSettingsStore.setState({
@@ -707,18 +737,23 @@ describe("landing workspace summary empty state", () => {
       isLoading: false,
     };
     useWorkspaceFoldersStore.setState({
-      folders: [GIT_SUMMARY.workspacePath],
-      folderInfoByPath: {
-        [GIT_SUMMARY.workspacePath]: {
-          path: GIT_SUMMARY.workspacePath,
-          name: "app",
-          repoIdentifier: GIT_SUMMARY.repoIdentifier,
-          hostId: null,
+      byHost: {
+        "host-home": {
+          folders: [GIT_SUMMARY.workspacePath],
+          folderInfoByPath: {
+            [GIT_SUMMARY.workspacePath]: {
+              path: GIT_SUMMARY.workspacePath,
+              name: "app",
+              repoIdentifier: GIT_SUMMARY.repoIdentifier,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: GIT_SUMMARY.workspacePath,
         },
       },
-      primaryPath: GIT_SUMMARY.workspacePath,
     });
     useWorktreeIntentMemoryStore.getState().setFolderIntent(
+      "host-home",
       {
         kind: "worktree",
         scripts: null,
@@ -754,7 +789,11 @@ describe("landing workspace summary empty state", () => {
       }),
     );
     expect(
-      readStagedWorktreeIntent({ surface: "landing", draftId: null }),
+      readStagedWorktreeIntent({
+        surface: "landing",
+        hostId: "host-home",
+        draftId: null,
+      }),
     ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Create task" }));
@@ -864,20 +903,28 @@ describe("landing workspace summary empty state", () => {
       isLoading: false,
     };
     useWorkspaceFoldersStore.setState({
-      folders: [folderAPath],
-      folderInfoByPath: {
-        [folderAPath]: {
-          path: folderAPath,
-          name: "app",
-          repoIdentifier: GIT_REPO_IDENTIFIER,
-          hostId: null,
+      byHost: {
+        "host-home": {
+          folders: [folderAPath],
+          folderInfoByPath: {
+            [folderAPath]: {
+              path: folderAPath,
+              name: "app",
+              repoIdentifier: GIT_REPO_IDENTIFIER,
+              hostId: "host-home",
+            },
+          },
+          primaryPath: folderAPath,
         },
       },
-      primaryPath: folderAPath,
     });
 
     const queryClient = renderControl("stacked");
-    const stagingKey = { surface: "landing" as const, draftId: null };
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: "host-home",
+      draftId: null,
+    };
 
     await waitFor(() => {
       const staged = readStagedWorktreeIntent(stagingKey);
@@ -933,22 +980,26 @@ describe("landing workspace summary empty state", () => {
         isLoading: false,
       };
       useWorkspaceFoldersStore.setState({
-        folders: [folderAPath, folderBPath],
-        folderInfoByPath: {
-          [folderAPath]: {
-            path: folderAPath,
-            name: "app",
-            repoIdentifier: GIT_REPO_IDENTIFIER,
-            hostId: null,
-          },
-          [folderBPath]: {
-            path: folderBPath,
-            name: "lib",
-            repoIdentifier: folderBRepo,
-            hostId: null,
+        byHost: {
+          "host-home": {
+            folders: [folderAPath, folderBPath],
+            folderInfoByPath: {
+              [folderAPath]: {
+                path: folderAPath,
+                name: "app",
+                repoIdentifier: GIT_REPO_IDENTIFIER,
+                hostId: "host-home",
+              },
+              [folderBPath]: {
+                path: folderBPath,
+                name: "lib",
+                repoIdentifier: folderBRepo,
+                hostId: "host-home",
+              },
+            },
+            primaryPath: folderAPath,
           },
         },
-        primaryPath: folderAPath,
       });
     });
 

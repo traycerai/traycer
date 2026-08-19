@@ -2,6 +2,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
+import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { GitStage } from "@traycer/protocol/host";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type {
@@ -95,25 +96,21 @@ export interface EpicArtifactRef {
   readonly pendingTuiHarnessId?: TuiHarnessId;
 }
 
-/**
- * Raw terminal tab. Same host-for-life and `instanceId` semantics as
- * `EpicArtifactRef`, but the content is a renderer-local PTY session, not
- * a Y.Doc record. `cwd` is the concrete working directory requested at
- * `terminal.create`. The PTY is created lazily by the tile and may be
- * re-created when the host has no record of the session (e.g. after a
- * host restart), so `cwd` must persist in the ref rather than live in
- * transient open-time state. A PTY the host reports as `exited` is NOT
- * re-created - the tile closes instead (see `useTerminalTileBootstrap`'s
- * `hostSessionExited` gate).
- */
-export interface EpicTerminalRef {
+export interface LegacyEpicTerminalEvidence {
+  readonly name: string;
+  readonly titleSource: TerminalTitleSource;
+  readonly cwd: string;
+  readonly shellCommand?: string;
+  readonly shellArgs?: readonly string[];
+}
+
+interface EpicTerminalRefBase {
   readonly id: string;
   readonly instanceId: string;
   readonly type: "terminal";
+  /** Local presentation fallback only; the capable host owns semantic title. */
   readonly name: string;
-  readonly titleSource: TerminalTitleSource;
   readonly hostId: string;
-  readonly cwd: string;
   /**
    * Who created the session behind this tile. Absent (the overwhelming
    * majority) and `"shell"` both mean the ordinary case: the tile owns the
@@ -126,11 +123,16 @@ export interface EpicTerminalRef {
    * cannot sign them in and no error saying why. It renders a retry affordance
    * that re-runs the RPC instead.
    *
+   * `"setup"` means the HOST created it for worktree setup. It is not an
+   * import candidate (import would persist the setup command as durable
+   * launch evidence). Unlike provider-login it may still recreate as an
+   * ordinary shell on the legacy tile path.
+   *
    * Optional rather than required: making it required would force every
    * existing terminal-ref construction site to state `origin: "shell"` for no
    * behavioural gain, and absent already means the same thing.
    */
-  readonly origin?: "shell" | "provider-login";
+  readonly origin?: "shell" | "provider-login" | "setup";
   /**
    * Which provider's sign-in this terminal was opened for. Meaningful only
    * alongside `origin: "provider-login"`, and required for the retry
@@ -139,6 +141,108 @@ export interface EpicTerminalRef {
    * provider it is standing in for.
    */
   readonly originProviderId?: ProviderId;
+}
+
+/** Pre-migration ref. These semantic fields are import/old-host evidence only. */
+export interface LegacyEpicTerminalRef extends EpicTerminalRefBase {
+  readonly authority?: undefined;
+  readonly titleSource: TerminalTitleSource;
+  readonly cwd: string;
+}
+
+/**
+ * Canonical local presentation pointer. Layout, order, selection and
+ * `instanceId` remain renderer-local; terminal semantics resolve through the
+ * lifetime `(hostId, id)` binding. `legacyFallback` is retained solely so a
+ * downgraded host can keep the released behavior during the rollout window.
+ */
+export interface HostEpicTerminalRef extends EpicTerminalRefBase {
+  readonly authority: "host";
+  readonly legacyFallback: LegacyEpicTerminalEvidence;
+  /** Absent by construction; declared only so union consumers can narrow. */
+  readonly titleSource?: undefined;
+  /** Absent by construction; declared only so union consumers can narrow. */
+  readonly cwd?: undefined;
+}
+
+/**
+ * Presentation-only fallback for an authority discriminator this client does
+ * not understand yet. `rawAuthority` is persisted verbatim so a downgrade or
+ * later upgrade does not erase the future owner's marker. Current clients may
+ * render the local presentation, but must never treat the rollback fields as
+ * semantic import/bootstrap/mutation evidence.
+ */
+export interface UnsupportedEpicTerminalRef extends EpicTerminalRefBase {
+  readonly authority: "unsupported";
+  readonly rawAuthority: DesktopJsonValue;
+  readonly legacyFallback: LegacyEpicTerminalEvidence;
+  readonly titleSource?: undefined;
+  readonly cwd?: undefined;
+}
+
+export type SupportedEpicTerminalRef =
+  LegacyEpicTerminalRef | HostEpicTerminalRef;
+
+export type EpicTerminalRef =
+  SupportedEpicTerminalRef | UnsupportedEpicTerminalRef;
+
+export function isHostEpicTerminalRef(
+  ref: EpicTerminalRef,
+): ref is HostEpicTerminalRef {
+  return ref.authority === "host";
+}
+
+export function isUnsupportedEpicTerminalRef(
+  ref: EpicTerminalRef,
+): ref is UnsupportedEpicTerminalRef {
+  return ref.authority === "unsupported";
+}
+
+export function isLegacyEpicTerminalRef(
+  ref: EpicTerminalRef,
+): ref is LegacyEpicTerminalRef {
+  return ref.authority === undefined;
+}
+
+/**
+ * Host-spawned sessions that must never enter `terminal.plain.importLegacy`.
+ * They stay on the legacy tile path even against a capable host.
+ */
+export function isImportExemptEpicTerminalOrigin(
+  origin: EpicTerminalRef["origin"],
+): boolean {
+  return origin === "provider-login" || origin === "setup";
+}
+
+export function existingSessionOriginFields(
+  signInProviderId: ProviderId | null,
+  setupSession: boolean,
+):
+  | { readonly origin: "provider-login"; readonly originProviderId: ProviderId }
+  | { readonly origin: "setup" }
+  | Record<string, never> {
+  if (signInProviderId !== null) {
+    return {
+      origin: "provider-login",
+      originProviderId: signInProviderId,
+    };
+  }
+  if (setupSession) {
+    return { origin: "setup" };
+  }
+  return {};
+}
+
+export function legacyEpicTerminalEvidence(
+  ref: SupportedEpicTerminalRef,
+): LegacyEpicTerminalEvidence {
+  return isHostEpicTerminalRef(ref)
+    ? ref.legacyFallback
+    : {
+        name: ref.name,
+        titleSource: ref.titleSource,
+        cwd: ref.cwd,
+      };
 }
 
 export function makeOpenableNodeRef(args: {
@@ -182,6 +286,21 @@ export type GitDiffBundleGroup = "merge" | "staged" | "changes";
 
 export interface GitDiffTileViewState {
   readonly collapsedFilePaths: ReadonlyArray<string>;
+}
+
+/**
+ * The PR diff tile's OWN persisted view state, structurally separate from
+ * {@link GitDiffTileViewState} on purpose. Entries are tagged canonical file
+ * keys (`prLocalDiffFileKey`: `b:<token>` / `p:<path>`), not bare paths - and
+ * the field is a DIFFERENT field, not a reinterpretation of
+ * `collapsedFilePaths`, because no value-level rule can tell a legacy bare
+ * entry for a file literally named `p:foo` apart from the tagged key of
+ * `foo`. The PR tile's codec reads only this field and ignores any legacy
+ * `collapsedFilePaths` in a stored record: a one-time collapse-state reset
+ * for PR diff tiles, in exchange for keys that cannot alias.
+ */
+export interface PrDiffTileViewState {
+  readonly collapsedFileKeys: ReadonlyArray<string>;
 }
 
 export interface GitDiffFileTilePayload {
@@ -432,7 +551,7 @@ export interface PrDiffTileRef {
   readonly owner: string;
   readonly repo: string;
   readonly prNumber: number;
-  readonly view: GitDiffTileViewState;
+  readonly view: PrDiffTileViewState;
 }
 
 export type EpicCanvasTileRef =

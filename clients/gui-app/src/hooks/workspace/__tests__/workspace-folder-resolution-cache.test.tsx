@@ -36,7 +36,7 @@ describe("workspace folder resolution cache", () => {
     const source = workspaceSource(fixture);
     const rendered = renderHook(
       () => ({
-        resolved: useResolvedWorkspaceFolders(source, fixture.client),
+        resolved: useResolvedWorkspaceFolders(source, fixture.client, null),
         actions: useWorkspaceFolderActionsForClient(fixture.client),
       }),
       { wrapper: fixture.Wrapper },
@@ -76,7 +76,7 @@ describe("workspace folder resolution cache", () => {
     const source = workspaceSource(fixture);
     const rendered = renderHook(
       () => ({
-        resolved: useResolvedWorkspaceFolders(source, fixture.client),
+        resolved: useResolvedWorkspaceFolders(source, fixture.client, null),
         actions: useWorkspaceFolderActionsForClient(fixture.client),
       }),
       { wrapper: fixture.Wrapper },
@@ -127,7 +127,11 @@ describe("workspace folder resolution cache", () => {
     const source = workspaceSource(fixture);
     const rendered = renderHook(
       () => {
-        const resolved = useResolvedWorkspaceFolders(source, fixture.client);
+        const resolved = useResolvedWorkspaceFolders(
+          source,
+          fixture.client,
+          null,
+        );
         return {
           resolved,
           availability: deriveFolderlessAllowedWorkspaceAvailability(
@@ -169,7 +173,11 @@ describe("workspace folder resolution cache", () => {
     const source = workspaceSource(fixture);
     const rendered = renderHook(
       () => {
-        const resolved = useResolvedWorkspaceFolders(source, fixture.client);
+        const resolved = useResolvedWorkspaceFolders(
+          source,
+          fixture.client,
+          null,
+        );
         return {
           resolved,
           availability: deriveFolderlessAllowedWorkspaceAvailability(
@@ -218,6 +226,9 @@ interface WorkspaceFixtureOptions {
   readonly startsResolved: boolean;
 }
 
+// `hostId` only backs the `source === null` global-fallback path inside
+// `useResolvedWorkspaceFolders`; every fixture here always supplies an
+// explicit `source`, so `null` is a valid, inert value for it in this suite.
 function workspaceSource(fixture: WorkspaceFixture) {
   return {
     folders: [fixture.workspacePath],
@@ -294,15 +305,17 @@ function createFixture(options: WorkspaceFixtureOptions): WorkspaceFixture {
       },
     },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger,
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://traycer.invalid/sign-in",
     authnBaseUrl: "https://traycer.invalid/auth",

@@ -20,7 +20,7 @@ import type {
   TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
-import { canParticipateInA2A } from "@traycer/protocol/host/agent/shared";
+import { canReceiveA2AMessages } from "@traycer/protocol/host/agent/shared";
 import type { EpicMentionArtifactSuggestion } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   epicArtifactMentionId,
@@ -331,6 +331,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     refetch: refetchEpicMentions,
   } = useEpicMentionEntries({
     requests: epicRequests,
+    client: hostClient,
   });
   const epicTitleByIdFromCache = useMemo(() => {
     if (cachedEpicTasks.length === 0) return EMPTY_TITLE_MAP;
@@ -763,7 +764,7 @@ function buildChatMentionEntry(
     archived: chat.archivedAt !== null,
     agentInterface: "chat",
     // Every GUI-backed Agent's runtime supports A2A (provider-native via the
-    // MCP bridge) - mirrors `canParticipateInA2A`'s `surface === "gui"` arm.
+    // MCP bridge) - mirrors `canReceiveA2AMessages`'s `surface === "gui"` arm.
     runtimeSupportsMessageDelivery: true,
   };
 }
@@ -792,7 +793,7 @@ function buildTerminalAgentMentionEntry(
     // Delivery support is a runtime capability, not a referenceability gate:
     // Codex and OpenCode Terminal Agents stay listed with `false` here rather
     // than being filtered out. Single-sourced from the protocol's A2A gate.
-    runtimeSupportsMessageDelivery: canParticipateInA2A({
+    runtimeSupportsMessageDelivery: canReceiveA2AMessages({
       surface: "tui",
       harnessId: agent.harnessId,
     }),

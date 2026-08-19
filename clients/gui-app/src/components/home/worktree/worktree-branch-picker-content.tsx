@@ -16,6 +16,7 @@ import {
 } from "@/components/home/worktree/worktree-branch-picker-options";
 import {
   pickerElementId,
+  pickerEmptyStateLabel,
   pickerEntryId,
   type PickerEntry,
   type WorktreeBranchPickerContentProps,
@@ -239,9 +240,7 @@ function WorktreeBranchPickerListbox(props: WorktreeBranchPickerListboxProps) {
       )}
       <div className="min-h-0 flex-1 overflow-hidden p-1">
         {filteredRows.length === 0 ? (
-          <PickerStateRow
-            label={hasQuery ? "No matching branches" : emptyLabel}
-          />
+          <PickerStateRow label={pickerEmptyStateLabel(hasQuery, emptyLabel)} />
         ) : (
           <Virtuoso<WorktreeBranchPickerRow>
             key={listKey}

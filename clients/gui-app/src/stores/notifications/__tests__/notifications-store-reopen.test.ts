@@ -9,9 +9,11 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import {
+  createHostReconnectEngine,
   HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
   HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
-} from "@/lib/host/stream-reopen";
+  type HostReconnectEngine,
+} from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   __resetNotificationsStoreForTests,
   openNotificationsStream,
@@ -64,6 +66,7 @@ function appendLocalEntry(id: string): void {
 
 describe("openNotificationsStream terminal-close reopen", () => {
   let clients: ControlledClient[];
+  let reconnectEngine: HostReconnectEngine;
 
   const factory = (
     callbacks: NotificationsStreamCallbacks,
@@ -87,16 +90,18 @@ describe("openNotificationsStream terminal-close reopen", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     clients = [];
+    reconnectEngine = createHostReconnectEngine();
     __resetNotificationsStoreForTests();
   });
 
   afterEach(() => {
+    reconnectEngine.dispose();
     vi.useRealTimers();
     __resetNotificationsStoreForTests();
   });
 
   it("re-invokes the factory with backoff after a terminal close", () => {
-    const close = openNotificationsStream(factory, null);
+    const close = openNotificationsStream(reconnectEngine, factory, null);
     expect(clients).toHaveLength(1);
     clients[0].callbacks.onConnectionStatus("open", null);
 
@@ -120,7 +125,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
   });
 
   it("keeps escalating while replacements die before a snapshot and resets on one", () => {
-    const close = openNotificationsStream(factory, null);
+    const close = openNotificationsStream(reconnectEngine, factory, null);
 
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
@@ -147,7 +152,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
   });
 
   it("re-sends local Y.Doc state a reopened session's snapshot lacks", () => {
-    const close = openNotificationsStream(factory, null);
+    const close = openNotificationsStream(reconnectEngine, factory, null);
     clients[0].callbacks.onConnectionStatus("open", null);
     // A snapshot matching the (empty) local doc produces no reconcile send.
     emptyServerSnapshot(clients[0]);
@@ -180,7 +185,11 @@ describe("openNotificationsStream terminal-close reopen", () => {
 
   it("still routes UNAUTHORIZED terminal closes to the auth revalidator while scheduling the reopen", () => {
     const onAuthError = vi.fn();
-    const close = openNotificationsStream(factory, onAuthError);
+    const close = openNotificationsStream(
+      reconnectEngine,
+      factory,
+      onAuthError,
+    );
 
     clients[0].callbacks.onConnectionStatus(
       "closed",
@@ -194,7 +203,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
   });
 
   it("never reopens after the dormant entitlement terminal refusal", () => {
-    const close = openNotificationsStream(factory, null);
+    const close = openNotificationsStream(reconnectEngine, factory, null);
 
     clients[0].callbacks.onConnectionStatus(
       "closed",
@@ -207,7 +216,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
   });
 
   it("cancels a pending reopen on dispose", () => {
-    const close = openNotificationsStream(factory, null);
+    const close = openNotificationsStream(reconnectEngine, factory, null);
     clients[0].callbacks.onConnectionStatus("closed", fatalClose("INTERNAL"));
     close();
     vi.advanceTimersByTime(4 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);

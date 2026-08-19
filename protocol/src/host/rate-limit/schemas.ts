@@ -8,7 +8,6 @@ import {
   providerIdSchemaV40,
   providerIdSchemaV50,
   providerIdSchemaV60,
-  providerIdSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -69,6 +68,37 @@ export type RateLimitUsageRequestV12 = z.infer<
   typeof rateLimitUsageRequestSchemaV12
 >;
 
+// v4.0 request adds `force`: whether this provider pull must initiate a fresh
+// read, or may be served from the host's per-`(provider, profile)` gauge cache
+// within that lane's cooldown floor. Every released version (1.2 / 2.0 / 2.1 /
+// 3.0) keeps `rateLimitUsageRequestSchemaV12` untouched, so no released peer's
+// request schema moves; `4` is the newest major and no peer in the field has
+// ever negotiated it (see `rateLimitUsageResponseSchemaV40`), which is why this
+// rides the live line instead of a further minor.
+//
+// ABSENT means force. That is the released behavior this field carves an
+// opt-out from: the host resolver has always passed `force: true`, so a v3.0
+// caller upgraded onto this line, and a v4.0 caller that omits the key, both
+// keep getting a fresh spawn. Only a caller that explicitly says `false` opts
+// into the cached-gauge path - the GUI's automatic sweeps, which already gate
+// their own cadence client-side and do not need to re-spawn a CLI for a gauge
+// the passive per-turn capture (or another surface's pull) refreshed seconds
+// ago. Optional rather than `.default(true)` so it stays absent from a request
+// that never opts out: the GUI keys its rate-limit query cache on this params
+// object, and a defaulted key would make an automatic pull and a manual refresh
+// address two different cache entries.
+//
+// Travelling down to a released peer (the 4->3/2/1 bridges in `contracts.ts`)
+// drops the key, so an old host still forces - a strictly safe degradation
+// (an extra spawn), never a stale read.
+export const rateLimitUsageRequestSchemaV40 =
+  rateLimitUsageRequestSchemaV12.extend({
+    force: z.boolean().optional(),
+  });
+export type RateLimitUsageRequestV40 = z.infer<
+  typeof rateLimitUsageRequestSchemaV40
+>;
+
 // A normalized rolling rate-limit window, shared by every provider arm below.
 // `resetsAt` is epoch-ms (each provider's native reset representation is
 // normalized to this at the host boundary).
@@ -93,6 +123,7 @@ export const rateLimitCapableProviderIdSchema = z.enum([
   "grok",
   "huggingface",
   "opencode",
+  "cursor",
 ]);
 export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
@@ -295,6 +326,98 @@ const grokRateLimitsSchema = z
     }
   });
 
+// Cursor arm - httpFetch-class provider (two plain POSTs, no subprocess).
+//
+// Cursor's API-key-authenticated PUBLIC API carries no account quota at all:
+// it exposes `/v1/me`, `/v1/models`, `/v1/repositories`, `/v1/agents` and a
+// per-AGENT token/cost read, and signals pressure only reactively via
+// `retry-after` on a 429. The account-wide numbers live on the dashboard API
+// the Cursor app itself uses, so the host exchanges the configured API key for
+// a short-lived session token (`/auth/exchange_user_api_key`) and calls
+// `aiserver.v1.DashboardService/GetCurrentPeriodUsage` with it.
+//
+// Deriving the session FROM the same key that runs turns is load-bearing, not
+// incidental: it is what makes the account this arm reports and the account
+// Traycer bills the same account by construction. Reading Cursor's own CLI
+// session out of the OS keychain would report whichever account happened to
+// run `cursor-agent login`, which need not be the key's owner.
+//
+// Hybrid shape, like grok's: synthesized windows (so severity rollups, a2a
+// `rateLimitStatus`, and GUI status logic reuse the shared window primitive
+// with no special-casing) plus the raw money fields.
+//
+// TWO windows, mirroring the buckets Cursor's own Spending page renders -
+// "Cursor Models" (the payload's `autoPercentUsed`; Cursor Grok + Composer)
+// and "Other Models" (`apiPercentUsed`; named third-party models). The
+// payload ALSO carries a blended included-usage pool (`totalSpend`/`limit`,
+// the number `displayMessage` narrates), but that percentage appears nowhere
+// on Cursor's dashboard, and rendering it produced a rail (78%) that
+// contradicted the Spending page beside it (38%) - a confirmed live-account
+// mismatch. The blended pool therefore travels as MONEY only (`usedUsd` /
+// `includedLimitUsd` / `remainingUsd`), never as a window.
+//
+// Every payload-derived field is nullable because the endpoint speaks proto3
+// JSON, which OMITS zero-valued fields entirely - an account with no
+// usage-based spend simply has no `spendLimitUsage.individualUsed` key rather
+// than a `0`. Absent therefore cannot be distinguished from zero here, and
+// the host sends null rather than inventing either.
+//
+// ALL money is USD, and EVERY wire money value is integer CENTS the host
+// divides - including the on-demand (spend-limit) fields: a live account with
+// a $1 on-demand limit reports `individualLimit: 100`. (An earlier revision
+// read those as whole dollars and displayed $100; the cents rule has no
+// exceptions.) The on-demand fields carry the dashboard's "On-Demand
+// Spending" numbers and are named for it.
+const cursorRateLimitsSchema = z
+  .object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.cursor),
+    available: z.literal(true),
+    cycleStart: z.number().nullable(),
+    cycleEnd: z.number().nullable(),
+    cursorModels: providerRateLimitWindowSchema.nullable(),
+    otherModels: providerRateLimitWindowSchema.nullable(),
+    includedLimitUsd: z.number().nullable(),
+    usedUsd: z.number().nullable(),
+    remainingUsd: z.number().nullable(),
+    // Spend covered by Cursor's bonus grant ("free usage beyond what you've
+    // purchased") - the payload's `bonusSpend`, expected to populate once
+    // `usedUsd` crosses `includedLimitUsd`. Null until then (proto3 omits
+    // zero-valued fields), so a consumer can distinguish "no bonus consumed"
+    // from a payload that never carried the field.
+    bonusUsedUsd: z.number().nullable(),
+    onDemandLimitType: z.string().nullable(),
+    onDemandLimitUsd: z.number().nullable(),
+    onDemandUsedUsd: z.number().nullable(),
+    onDemandRemainingUsd: z.number().nullable(),
+    // Cursor's own rendering of the blended headline ("You've used 79% of
+    // your included usage"). Carried so a consumer can show the provider's
+    // wording for the pool the money fields describe.
+    displayMessage: z.string().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    // Same invariant grok's arm enforces, for the same reason: the host
+    // synthesizes each window's reset FROM the billing-cycle end, so the two
+    // denote one instant by construction. `cycleEnd` is kept as its own field
+    // so the cycle bounds survive a snapshot whose usage could not be
+    // measured (both windows null, `cycleEnd` still known). Enforce it at the
+    // wire boundary so a measured window can never omit or disagree with the
+    // known reset.
+    for (const key of ["cursorModels", "otherModels"] as const) {
+      const window = value[key];
+      if (
+        value.cycleEnd !== null &&
+        window !== null &&
+        window.resetsAt !== value.cycleEnd
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `cursor ${key}.resetsAt must equal cycleEnd when the window is set`,
+          path: [key, "resetsAt"],
+        });
+      }
+    }
+  });
+
 // Closed, Traycer-owned set of reasons a provider pull can fail to report
 // rate limits - unlike a provider's own plan/reached-type tokens (owned by
 // that provider, legitimately forward-compat as a bare string), every one of
@@ -424,27 +547,19 @@ export const providerRateLimitsSchemaV21 = z.union([
 ]);
 export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 
-// Frozen provider union carried by host.getRateLimitUsage@4.0 and
-// agent.getProviderProfileRateLimits@4.0. It includes Hugging Face but not
-// OpenCode Go.
-export const providerRateLimitsSchemaV70 = z.union([
-  codexRateLimitsSchema,
-  claudeCodeRateLimitsSchema,
-  openRouterRateLimitsSchema,
-  kiloCodeRateLimitsSchema,
-  grokRateLimitsSchema,
-  huggingFaceRateLimitsSchema,
-  z.object({
-    provider: providerIdSchemaV70,
-    available: z.literal(false),
-    reason: rateLimitUnavailableReasonSchemaV2,
-  }),
-]);
-export type ProviderRateLimitsV70 = z.infer<typeof providerRateLimitsSchemaV70>;
-
-// Latest provider union: the frozen v4 union plus OpenCode Go. The new
-// available arm travels behind the next RPC major; the unavailable arm's
-// optional cache generation is stripped naturally by older object schemas.
+// Latest provider union, carried by `host.getRateLimitUsage@4.0` and
+// `agent.getProviderProfileRateLimits@4.0`. Both the Hugging Face and the
+// OpenCode Go available arms ride 4.0: neither had shipped when the release
+// collapsed them onto one major, so there is no peer that negotiated one
+// without the other. The unavailable arm's optional cache generation is
+// stripped naturally by older object schemas.
+//
+// A pre-collapse `providerRateLimitsSchemaV70` used to sit here as the frozen
+// pre-image these two lines parsed through. Nothing binds it now - 4.0 ranges
+// over this live union directly - so it was removed rather than left as an
+// unbound union documenting a freeze that no longer exists. Adding an arm here
+// therefore GROWS THE 4.0 WIRE immediately; the bridges below are what keep the
+// released 3.0/2.1/1.2 lines parsing.
 export const providerRateLimitsSchema = z.union([
   codexRateLimitsSchema,
   claudeCodeRateLimitsSchema,
@@ -453,6 +568,7 @@ export const providerRateLimitsSchema = z.union([
   grokRateLimitsSchema,
   huggingFaceRateLimitsSchema,
   openCodeRateLimitsSchema,
+  cursorRateLimitsSchema,
   unavailableProviderRateLimitsSchema,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
@@ -522,6 +638,33 @@ export function mapHuggingFaceAvailableToUnavailable(
   ) {
     return {
       provider: "huggingface",
+      available: false,
+      reason: "unsupported_provider",
+    };
+  }
+  return providerRateLimits;
+}
+
+/**
+ * The Cursor analogue of `mapGrokAvailableToUnavailable`, for every bridge
+ * below the live 4.0 line. A cursor-available snapshot has no representation in
+ * any frozen union (Cursor was not a rate-limit-capable provider then), so it
+ * degrades to the unavailable `unsupported_provider` shape - the exact row a
+ * pre-Cursor host returns for it today. `"cursor"` is in EVERY frozen
+ * `provider` enum (it long predates Hermes/omp, and is present in
+ * `providerIdSchemaV40`/`V50`/`V60`), so the result reparses cleanly through
+ * every older union. Any other snapshot (or `null`) passes through unchanged.
+ */
+export function mapCursorAvailableToUnavailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available &&
+    providerRateLimits.provider === "cursor"
+  ) {
+    return {
+      provider: "cursor",
       available: false,
       reason: "unsupported_provider",
     };
@@ -712,24 +855,24 @@ export type RateLimitUsageResponseV30 = z.infer<
   typeof rateLimitUsageResponseSchemaV30
 >;
 
-// v4.0 response - identical to v3.0 except its frozen provider snapshot adds
-// the Hugging Face available arm. Same reasoning as the v3.0 cut for grok: a
-// new available union arm needs an explicit downgrade bridge, so it is a major
-// rather than a v3.1 minor. The request shape is unchanged from v1.2/v2.x/v3.0.
+// v4.0 response - identical to v3.0 except the provider-account snapshot ranges
+// over the LIVE `providerRateLimitsSchema`, which adds the Hugging Face and
+// OpenCode Go available arms. Same reasoning as the v3.0 cut for grok: a new
+// available union arm is not strippable by the within-major skew handler, so it
+// needs an explicit downgrade bridge that degrades it to the unavailable
+// `unsupported_provider` shape. The request shape is unchanged from
+// v1.2/v2.x/v3.0.
+//
+// This is the LIVE line: it ranges over `providerRateLimitsSchema` rather than
+// a frozen snapshot, because `4` is the newest major and no released peer has
+// ever negotiated it (the newest released baseline tops out at `3`). Freezing
+// it costs a pre-image and buys nothing until it ships.
 export const rateLimitUsageResponseSchemaV40 =
-  rateLimitUsageResponseSchema.extend({
-    providerRateLimits: providerRateLimitsSchemaV70.nullable(),
-  });
-export type RateLimitUsageResponseV40 = z.infer<
-  typeof rateLimitUsageResponseSchemaV40
->;
-
-export const rateLimitUsageResponseSchemaV50 =
   rateLimitUsageResponseSchema.extend({
     providerRateLimits: providerRateLimitsSchema.nullable(),
   });
-export type RateLimitUsageResponseV50 = z.infer<
-  typeof rateLimitUsageResponseSchemaV50
+export type RateLimitUsageResponseV40 = z.infer<
+  typeof rateLimitUsageResponseSchemaV40
 >;
 
 /**

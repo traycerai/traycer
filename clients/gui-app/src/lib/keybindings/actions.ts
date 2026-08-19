@@ -46,6 +46,11 @@ export const ACTION_IDS = [
   "group.focus-editor",
   "tile.find.replace",
   "app.sidebar.toggle",
+  "nav.back",
+  "nav.forward",
+  "app.resources.open",
+  "app.rate-limits.open",
+  "app.notifications.open",
   "app.history.open",
   "app.settings.open",
   "app.settings.section.byDigit",
@@ -350,6 +355,53 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+b",
   },
+  "nav.back": {
+    id: "nav.back",
+    label: "Go back",
+    description: "Go back through the app's navigation history.",
+    category: "app",
+    kind: "chord",
+    // `<` / `>` mnemonic without stealing arrow or Option-word navigation.
+    defaultChord: "mod+shift+,",
+  },
+  "nav.forward": {
+    id: "nav.forward",
+    label: "Go forward",
+    description: "Go forward through the app's navigation history.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+shift+.",
+  },
+  "app.resources.open": {
+    id: "app.resources.open",
+    label: "Open Resource Monitor",
+    description: "Open the global Resource Monitor.",
+    category: "app",
+    kind: "chord",
+    // Chromium's task-manager shortcut on Windows/Linux; kept on macOS for
+    // cross-platform consistency. Clearing the binding lets Shift+Esc pass
+    // through to a focused terminal.
+    defaultChord: "shift+escape",
+  },
+  "app.rate-limits.open": {
+    id: "app.rate-limits.open",
+    label: "Open usage limits",
+    description: "Open the provider usage and rate-limit monitor.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+shift+u",
+  },
+  "app.notifications.open": {
+    id: "app.notifications.open",
+    label: "Open notifications",
+    description:
+      "Open the notification center, then use Up/Down to move between notifications. Pressing the chord again closes it.",
+    category: "app",
+    kind: "chord",
+    // ⌘⇧N - N for notifications, in the same ⌘⇧ family as the other global
+    // panel openers (⌘⇧U usage limits). ⌘N is taken by "New task".
+    defaultChord: "mod+shift+n",
+  },
   "app.history.open": {
     id: "app.history.open",
     label: "Open history",
@@ -498,12 +550,6 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "digit",
     defaultChord: "mod+shift",
   },
-  // In-app back/forward (`nav.back` / `nav.forward`) intentionally has NO
-  // keyboard chord: `mod`/`alt`+Arrow both collide with native text-editing
-  // caret movement inside the always-focused chat composer. Back/forward are
-  // explicit affordances only — the header arrow buttons, the command palette
-  // ("Go back" / "Go forward"), and mouse buttons 3/4 — all routed through the
-  // shared `goBack`/`goForward` actions.
 };
 export function getDefaultBindings(): Readonly<
   Record<ActionId, ChordString | null>

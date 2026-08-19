@@ -48,6 +48,8 @@ import {
   listEpicCollaboratorsResponseSchema,
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
+  getTaskContextsResponseSchemaV10,
+  isFoundTaskContext,
   listTasksRequestSchema,
   listTasksRequestSchemaV11,
   listTasksResponseSchema,
@@ -76,6 +78,8 @@ import {
   recordEpicViewedResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  chatPublicationStateRequestSchema,
+  chatPublicationStateResponseSchema,
   setChatArchivedRequestSchema,
   setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
@@ -92,9 +96,14 @@ import {
   updateEpicRequestSchema,
   updateEpicResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  GetTaskContextsResponse,
+  GetTaskContextsResponseV10,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   epicSubscribeV10,
   epicSubscribeV11,
+  epicSubscribeV12,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -212,8 +221,55 @@ export const epicGetTaskContextsV10 = defineRpcContract({
   method: "epic.getTaskContexts",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: getTaskContextsRequestSchema,
+  responseSchema: getTaskContextsResponseSchemaV10,
+});
+
+// v1.1 replaces v1.0's ambiguous nullable row with an explicit resolution
+// outcome. The request is unchanged. A v1.0 response upgrades every legacy
+// null to `unknown` because an old host could not establish why it was absent.
+export const epicGetTaskContextsV11 = defineRpcContract({
+  method: "epic.getTaskContexts",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: getTaskContextsRequestSchema,
   responseSchema: getTaskContextsResponseSchema,
 });
+
+export const epicGetTaskContextsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicGetTaskContextsV10,
+  typeof epicGetTaskContextsV11
+>({
+  from: epicGetTaskContextsV10.schemaVersion,
+  to: epicGetTaskContextsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    tasks: Object.fromEntries(
+      Object.entries(response.tasks).map(([taskId, task]) => [
+        taskId,
+        task === null
+          ? { status: "unknown" as const, reason: "legacy" as const }
+          : { status: "found" as const, task },
+      ]),
+    ),
+  }),
+});
+
+/**
+ * A v1.0 caller cannot represent the v1.1 row union. Host dispatch uses this
+ * at the negotiated-version boundary, preserving its released nullable wire
+ * shape while the canonical resolver continues to return the v1.1 contract.
+ */
+export function projectEpicGetTaskContextsResponseToV10(
+  response: GetTaskContextsResponse,
+): GetTaskContextsResponseV10 {
+  return {
+    tasks: Object.fromEntries(
+      Object.entries(response.tasks).map(([taskId, resolution]) => [
+        taskId,
+        isFoundTaskContext(resolution) ? resolution.task : null,
+      ]),
+    ),
+  };
+}
 
 // `epic.create@1.0` - host-side entry point for the CloudData epic create
 // mutation. The host request accepts local workspace paths before they are
@@ -356,6 +412,11 @@ export const epicCreateChatV11 = defineRpcContract({
 // `boundary: "assistantMessage"` and leaves every other field untouched.
 // `null`/`undefined` pass through unchanged (no fork requested). The response
 // is identical between the two minors.
+//
+// `sourceOwnerUserId` is filled with the honest `null` - "the client genuinely
+// does not know who owns this" - which the host reads as "no hint" and falls
+// back to its own registry facts exactly as before. A v1.0 caller has no owner
+// hint to give: the field did not exist on its fork source at all.
 export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
   typeof epicCreateChatV10,
   typeof epicCreateChatV11
@@ -378,10 +439,12 @@ export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
             assistantMessageId: request.forkSource.assistantMessageId,
             interviewBlockId: request.forkSource.interviewBlockId,
             carriedInterviews: request.forkSource.carriedInterviews,
+            sourceOwnerUserId: null,
           },
   }),
   upgradeResponse: (response) => response,
 });
+
 
 export const epicRenameChatV10 = defineRpcContract({
   method: "epic.renameChat",
@@ -458,6 +521,19 @@ export const epicSetChatArchivedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setChatArchivedRequestSchema,
   responseSchema: setChatArchivedResponseSchema,
+});
+
+/**
+ * Optional (non-floor) capability - see the registry entry for why a new method
+ * NAME may only ride the optional channel. Old source hosts simply do not
+ * advertise it, the caller gets `E_HOST_UNSUPPORTED` for this call alone, and
+ * the fork dialog treats that as "unknown" rather than as "unpublished".
+ */
+export const epicChatPublicationStateV10 = defineRpcContract({
+  method: "epic.chatPublicationState",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatPublicationStateRequestSchema,
+  responseSchema: chatPublicationStateResponseSchema,
 });
 
 export const epicPrepareArtifactImageV10 = defineRpcContract({
@@ -763,4 +839,4 @@ export const epicGetChatRunSettingsV10 = defineRpcContract({
   responseSchema: getChatRunSettingsResponseSchema,
 });
 
-export { epicSubscribeV10, epicSubscribeV11 };
+export { epicSubscribeV10, epicSubscribeV11, epicSubscribeV12 };
