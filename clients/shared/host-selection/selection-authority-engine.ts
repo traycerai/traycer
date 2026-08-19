@@ -1884,6 +1884,18 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    *    authority itself called dead for the remaining seventeen - the
    *    enumeration above asks only about the destination, and this is the one
    *    question about the origin.
+   *  - An incumbent held usable ONLY by the engine's own in-flight ensure: NO
+   *    window either. The in-flight arm reports the local host `connecting`
+   *    so that ∅ never shows for a host the engine is starting FOR the user -
+   *    a claim about candidacy, not about service. Since the ensure fires for
+   *    a down local host whichever host is the target (2026-08-19), the arm
+   *    now also fires for a dead INCUMBENT: the window failed over onto the
+   *    local host, the target came back, and then the local host died - the
+   *    same pass that publishes it dead starts booting it and would otherwise
+   *    hand the return window a `connecting` incumbent that cannot serve
+   *    anyone for the remaining seventeen seconds. A live session is the one
+   *    thing that makes an in-flight ensure's host genuinely serving (the
+   *    lease arm says so too), so it is the one thing that keeps the window.
    *
    * Explicit writes bypass all of it. Activate is valid from any state (M5)
    * and must land immediately - a user who picks a host in Settings and waits
@@ -1909,7 +1921,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       effectiveHostId === null ||
       effectiveHostId === targetHostId ||
       desired === null ||
-      !this.isUsable(effectiveHostId, leases)
+      !this.isUsable(effectiveHostId, leases) ||
+      this.isHeldOnlyByOwnEnsure(effectiveHostId)
     ) {
       this.pendingDampingDeadline = null;
       return desired;
@@ -1980,6 +1993,21 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   ): boolean {
     const lease = leases.find((entry) => entry.hostId === hostId);
     return lease !== undefined && isUsableForSelection(lease);
+  }
+
+  /**
+   * Whether this host reads usable ONLY because the engine's own ensure for it
+   * is in flight - the in-flight arm of `deriveLease`, minus its live-session
+   * exception. Read by the damping's incumbent check: such a host is a
+   * candidate (so ∅ never shows while it boots) but not something to keep
+   * SERVING a window from against a target that can.
+   */
+  private isHeldOnlyByOwnEnsure(hostId: string): boolean {
+    return (
+      this.localEnsureToken !== null &&
+      this.localEnsureToken.hostId === hostId &&
+      !this.hasLiveSession(hostId)
+    );
   }
 
   /**
@@ -2106,31 +2134,38 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    * "local first" candidate systematically absent at exactly the moment
    * failover needed it. Nothing in the app would boot a deselected local host,
    * so ∅ was reachable with a perfectly working machine sitting idle. The
-   * engine may now ask for it, and only for it: the registry still never
-   * drives processes, and the rejected alternative (keeping the local host
-   * booted whenever signed in) would charge every deliberate remote user for
-   * an idle host.
+   * engine may ask for it, and only it may: the registry still never drives
+   * processes.
    *
-   * Requested only when derivation genuinely WANTS the local host - it is the
-   * target, or the target cannot serve so local is the next candidate. A
-   * healthy preferred remote leaves the local host alone: that want-local
-   * conjunct is the whole of the narrow rule, and it is what keeps a
-   * deliberate-remote user from paying for an idle local boot.
+   * INDEPENDENT OF THE TARGET, by decision (2026-08-19). This landed with a
+   * narrower rule - request only when derivation WANTED the local host (it was
+   * the target, or the target could not serve), so a healthy preferred remote
+   * left the local host alone and a deliberate-remote user never paid for an
+   * idle local boot. That rule was reversed: the local host's lifecycle is the
+   * same whichever host a window is pointed at - down means bring it back, as
+   * the released desktop always did for the machine it runs on - and only the
+   * NARRATION is target-scoped (a window serving a remote says nothing about
+   * a local boot). So there is no want-local conjunct here any more. What
+   * survives of the C5 argument is where the action lives: this engine, once,
+   * paced by the same cooldowns whichever host is effective.
    *
-   * WANTED + NOT-KNOWN-USABLE, where not-known-usable is `dead` OR
-   * NEVER-DIALED. The dead-only reading was too narrow in exactly one case and
-   * it was the commonest one: a cold boot has no evidence at all, so the local
-   * lease reads `connecting` - which is *usable* - and the engine would refrain
-   * until three confirmed refusals accumulated against a socket that does not
-   * exist yet. Never-dialed is not "up"; and since the ensure is what makes the
-   * socket dialable in the first place, waiting for dial evidence to justify it
-   * is circular. A host that HAS been dialed is excluded either way: mid-streak
-   * it is still connecting, and once it reaches `dead` the first arm takes it.
+   * DOWN means `dead` OR NEVER-DIALED. The dead-only reading was too narrow in
+   * exactly one case and it was the commonest one: a cold boot has no evidence
+   * at all, so the local lease reads `connecting` - which is *usable* - and the
+   * engine would refrain until three confirmed refusals accumulated against a
+   * socket that does not exist yet. Never-dialed is not "up"; and since the
+   * ensure is what makes the socket dialable in the first place, waiting for
+   * dial evidence to justify it is circular. A host that HAS been dialed is
+   * excluded either way: mid-streak it is still connecting, and once it reaches
+   * `dead` the first arm takes it. A never-dialed local host that is up (a
+   * remote is serving the window, nothing has reason to dial it) draws exactly
+   * ONE ensure: the converge answers `ok`, that is proof of life, and proof of
+   * life creates the evidence record that ends never-dialed.
    *
    * Returns whether a request was started, because the caller must re-derive:
    * the request itself changes the local lease.
    */
-  private requestLocalEnsureIfWanted(
+  private requestLocalEnsureIfDown(
     leases: readonly HostLeaseSnapshot[],
     now: number,
   ): boolean {
@@ -2178,10 +2213,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       return false;
     }
 
-    const targetHostId = this.preferredHostId ?? localHostId;
-    if (targetHostId !== localHostId && this.isUsable(targetHostId, leases)) {
-      return false;
-    }
+    // Deliberately NO "is the target serving?" gate here - see the doc above.
     const cooldownUntil = this.localEnsureFailedUntil;
     if (cooldownUntil !== null && now < cooldownUntil) return false;
     const retryHoldUntil = this.localEnsureRetryHoldUntil;
@@ -2266,7 +2298,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // been applied - a guard one step downstream of the damage.
       //
       // Clearing the token is part of the fix, not bookkeeping: while it
-      // stands, `requestLocalEnsureIfWanted` refuses to start anything, so B
+      // stands, `requestLocalEnsureIfDown` refuses to start anything, so B
       // could not ask for its own ensure until A's ceiling lapsed. No
       // cooldown is armed - the failure describes a host this engine is no
       // longer pointed at - and the commit re-derives so B may ask at once.
@@ -2407,7 +2439,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // ours. That stamp is provably always false: an ensure is minted from
       // exactly two arms, and both guarantee a false signal at mint - the
       // never-dialed arm is guarded on it explicitly (see
-      // `requestLocalEnsureIfWanted`), and `dead` is unreachable while
+      // `requestLocalEnsureIfDown`), and `dead` is unreachable while
       // `inExpectedOutage` is true because THIS ORDER puts the outage arm
       // above every dead arm. The one residue - a ceiling-lapsed outage whose
       // start is still recorded - has `inExpectedOutage` answering false
@@ -2446,7 +2478,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // the cooldown would otherwise render an answering host `dead`.
       //
       // Arm order alone was never sufficient, in two places it cannot reach:
-      // `requestLocalEnsureIfWanted` reads the cooldown DIRECTLY, under no arm
+      // `requestLocalEnsureIfDown` reads the cooldown DIRECTLY, under no arm
       // ordering at all (it is separately declined under a live session, by
       // the never-dialed conjunct), and the masking lapses the moment the
       // session drops, resurfacing a cooldown whose premise the host has since
@@ -2674,14 +2706,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // still be reporting `connecting` into the leases computed below (B2).
     this.expireLocalEnsureIfLapsed(now);
     // TWO PASSES, because the two answers depend on each other: the ensure
-    // decision needs the leases to know whether the local host is down and
-    // whether the target can serve, and the leases then need to reflect that a
-    // request is in flight. Deriving twice is cheap (a map over the fleet) and
+    // decision needs the leases to know whether the local host is down, and
+    // the leases then need to reflect that a request is in flight. Deriving twice is cheap (a map over the fleet) and
     // keeps both answers from the same instant; the alternative - deciding
     // ensure from raw evidence - would duplicate the arm order that IS the
     // evidence hierarchy.
     const initialLeases = this.deriveLeases(now);
-    const leases = this.requestLocalEnsureIfWanted(initialLeases, now)
+    const leases = this.requestLocalEnsureIfDown(initialLeases, now)
       ? this.deriveLeases(now)
       : initialLeases;
     this.trackUsability(leases, now);

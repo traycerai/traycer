@@ -404,7 +404,7 @@ function resolveUpdateHost(
  *    argument that the bootstrap log describes this computer. It does - and
  *    that is TRUE information under a remote-target start too: on a desktop
  *    the main process starts this machine's host whichever host is effective
- *    (`armFirstInstallOnSignIn` and `runLaunchHostConvergeReconcile` in
+ *    (`armLocalHostBootOnSignIn` and `runLaunchHostConvergeReconcile` in
  *    `clients/desktop/src/electron-main/startup/host-launch-converge.ts`
  *    consult sign-in and removal, never the selection), so the tail behind
  *    `Show details` is the log of a start that is happening right now on

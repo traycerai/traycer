@@ -3222,7 +3222,10 @@ describe("SelectionAuthorityEngineImpl - P1.3 failover scenarios", () => {
     authority.dispose();
   });
 
-  it("A6: healthy remote preferred does not ensure local; killing it requests ensure once", async () => {
+  it("A6: a healthy remote preferred still ensures a DOWN local host (target-independent lifecycle), and stays on the remote while it boots", async () => {
+    // Decision 2026-08-19: the local host's lifecycle does not depend on which
+    // host a window is pointed at. This test used to pin the opposite ("does
+    // not ensure local; killing the remote requests ensure once").
     const clock = createFakeAuthorityClock(0);
     const ensure = createDeferredEnsure();
     const authority = createTestAuthority({
@@ -3241,14 +3244,30 @@ describe("SelectionAuthorityEngineImpl - P1.3 failover scenarios", () => {
     expect(engine.snapshot().preferredHostId).toBe("P");
     expect(engine.snapshot().effectiveHostId).toBe("P");
 
-    killHostWithRefusals(engine, "A", incarnation, "L");
-    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("dead");
-    expect(engine.snapshot().effectiveHostId).toBe("P");
-    expect(ensure.calls.count).toBe(0);
-
-    killHostWithRefusals(engine, "A", incarnation, "P");
+    // Cold boot: L is never-dialed, so the ensure fires at once - exactly as
+    // it would with L preferred - and the window keeps serving P meanwhile.
     expect(ensure.calls.count).toBe(1);
     expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    // The converge answers: proof of life for L. Nothing moves - P is the
+    // preferred host and it is serving.
+    await ensure.resolve(true);
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+    expect(ensure.calls.count).toBe(1);
+
+    // L dies later (something pinned to it dialed it and was refused). The
+    // engine brings it back although P is healthy and effective: down means
+    // ensure, whichever host is the target.
+    killHostWithRefusals(engine, "A", incarnation, "L");
+    expect(ensure.calls.count).toBe(2);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    // And when P dies too, L - already booting - is the fallback, with no
+    // second request stacked on the one in flight.
+    killHostWithRefusals(engine, "A", incarnation, "P");
+    expect(ensure.calls.count).toBe(2);
     expect(engine.snapshot().effectiveHostId).toBe("L");
 
     authority.dispose();
@@ -3296,19 +3315,114 @@ describe("SelectionAuthorityEngineImpl - P1.3 failover scenarios", () => {
     expect(engine.snapshot().effectiveHostId).toBe("L");
 
     // 4. Now L - the INCUMBENT the hold is protecting - dies too, the same
-    // three-refusal recipe used against P in step 2.
+    // three-refusal recipe used against P in step 2. The engine's ensure fires
+    // in that same pass (down means bring it back, whichever host is the
+    // target), so the PUBLISHED lease is the in-flight arm's `connecting`,
+    // not `dead` - L is being started, not written off.
     killHostWithRefusals(engine, "A", incarnation, "L");
-    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("dead");
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
 
     // 5. The engine must not keep serving a host it has itself called dead
-    // for the remaining ~17s of the 20s window (clock is at 3_000ms, well
-    // inside RETURN_TO_TARGET_STABILITY_MS). Under the old code - the
-    // bypass arm asks only about the destination, never the origin - this
-    // read L until t=20_000.
+    // (and is now merely booting) for the remaining ~17s of the 20s window
+    // (clock is at 3_000ms, well inside RETURN_TO_TARGET_STABILITY_MS). Under
+    // the old code - the bypass arm asks only about the destination, never
+    // the origin - this read L until t=20_000; and an incumbent held usable
+    // only by the engine's own in-flight ensure is no more able to serve than
+    // a dead one, so that hold does not keep the window either.
     expect(engine.snapshot().effectiveHostId).toBe("P");
     expect(lastSelectionChange(authority.events).cause).toBe("recovery");
 
     authority.dispose();
+  });
+
+  it("returns to a revived target at once when the incumbent is a local host held usable only by the engine's own in-flight ensure", async () => {
+    // The consequence of the incumbent rule stated for the decided lifecycle:
+    // a booting local host is a CANDIDATE (∅ never shows for it) but not
+    // something to keep serving a window from once the target can. Before,
+    // the return window would sit on it for up to 20s.
+    const clock = createFakeAuthorityClock(0);
+    const ensure = createDeferredEnsure();
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: ensure.port,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+    // The cold-boot ensure for the never-dialed L is in flight from attach.
+    expect(ensure.calls.count).toBe(1);
+
+    // 1. Activate P -> effective P.
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+
+    // 2. Kill P -> failover to L, whose only claim to usability is the ensure
+    // still in flight (no dial, no session).
+    killHostWithRefusals(engine, "A", incarnation, "P");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+
+    // 3. P proves alive. No 20s hold on a host that is not serving anyone:
+    // the window goes home now.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      dialOutcome("P", "revive", "success", clock.now()),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("P");
+    expect(lastSelectionChange(authority.events).cause).toBe("recovery");
+
+    // 4. And a live session on L is what WOULD have kept the window - the
+    // in-flight arm reads `ready` for it, which is service. Prove the guard
+    // is about service, not about the token: with a session, the same revive
+    // is damped for the full window.
+    //
+    // The first authority is disposed HERE, not at the end: the control below
+    // shares this `clock`, so an engine left armed would also take timer
+    // callbacks from the `advance` that drives the control's return window.
+    // Nothing above is asserted again, so those callbacks could not change a
+    // verdict - but a second engine reacting to the first one's deadlines is
+    // not a fixture anyone should have to reason about.
+    authority.dispose();
+    const authority2 = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("P", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      localHostEnsure: createDeferredEnsure().port,
+    });
+    const incarnation2 = attachReporter(authority2.engine, "A");
+    expect(await authority2.engine.activate("A", incarnation2, "P")).toEqual({
+      ok: true,
+    });
+    killHostWithRefusals(authority2.engine, "A", incarnation2, "P");
+    expect(authority2.engine.snapshot().effectiveHostId).toBe("L");
+    authority2.engine.ingestEvidence(
+      "A",
+      incarnation2,
+      sessionEvidence("L", "s-local", "established", clock.now()),
+    );
+    expect(findLease(authority2.engine.snapshot().leases, "L")?.status).toBe(
+      "ready",
+    );
+    authority2.engine.ingestEvidence(
+      "A",
+      incarnation2,
+      dialOutcome("P", "revive", "success", clock.now()),
+    );
+    expect(authority2.engine.snapshot().effectiveHostId).toBe("L");
+    clock.advance(RETURN_TO_TARGET_STABILITY_MS);
+    expect(authority2.engine.snapshot().effectiveHostId).toBe("P");
+
+    authority2.dispose();
   });
 });
 
@@ -4023,7 +4137,7 @@ describe("SelectionAuthorityEngineImpl - local proof-of-life clears the ensure c
 // completion lands into a fleet whose local host is B. The fix compares
 // `token.hostId` to the CURRENT `this.fleet.localHostId` and discards a
 // mismatch - clearing the token too, which is a second, separately
-// assertable defect: while it stood, `requestLocalEnsureIfWanted` refused to
+// assertable defect: while it stood, `requestLocalEnsureIfDown` refused to
 // start anything, so B could not ask for its own ensure until A's ceiling
 // lapsed.
 
@@ -4226,7 +4340,7 @@ describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", ()
    * predicate never fires, and the lease falls through to `connecting` -
    * which is usable. No failover, no empty state, no error.
    */
-  it("a host whose session dies with no further dial evidence still leaves `connecting`", () => {
+  it("a host whose session dies with no further dial evidence still leaves `connecting`", async () => {
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -4241,6 +4355,13 @@ describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", ()
     });
     const { engine } = authority;
     const incarnation = attachReporter(engine, "A");
+    // The cold-boot ensure for L fires at attach whichever host is preferred
+    // (target-independent lifecycle). Let the ready port answer it: this test
+    // jumps the clock 30 minutes below, past the in-flight ceiling, and an
+    // ensure that was never given its microtask would lapse into the failed
+    // cooldown and read L dead at exactly the moment the fallback needs it.
+    await Promise.resolve();
+    await Promise.resolve();
 
     engine.ingestEvidence(
       "A",

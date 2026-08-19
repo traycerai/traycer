@@ -6,13 +6,13 @@ import type {
 import { deriveHostHealth } from "@/components/settings/host-scope/host-health";
 
 /**
- * `stopped` and `not-installed` are the only two health states a person can
- * ACT on — Start, or Install — and for a long time nothing could produce
- * them: `useHostScope` passed `undefined` for the installed record, so
- * `deriveStatus` could only answer `running` or nothing, and a stopped local
- * host fell through to its registry connectivity and read "Offline · last
- * seen 3h ago". True about the cloud's answer, useless to someone whose host
- * is sitting right there with a Start button one click away.
+ * `stopped` and `not-installed` are the two health states that name what this
+ * machine's own host is doing about itself — being restarted, or being
+ * installed — and for a long time nothing could produce them: `useHostScope`
+ * passed `undefined` for the installed record, so `deriveStatus` could only
+ * answer `running` or nothing, and a stopped local host fell through to its
+ * registry connectivity and read "Offline · last seen 3h ago". True about the
+ * cloud's answer, useless to someone whose host is sitting right there.
  *
  * Nothing covered `deriveHostHealth` at all, which is how that shipped.
  */
