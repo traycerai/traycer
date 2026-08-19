@@ -1,3 +1,4 @@
+import type { ReactElement, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -187,7 +188,7 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
 };
 
 /** The stand-in for `AppHeader variant="host-loading"`: its height and nothing else. */
-function FrameHeaderBand(): React.ReactElement {
+function FrameHeaderBand(): ReactElement {
   return (
     <div
       data-gallery-header-band
@@ -202,9 +203,7 @@ function FrameHeaderBand(): React.ReactElement {
 }
 
 /** The gate frame (`DefaultHostReadyGate`): header band over a `min-h-svh` column. */
-function GateFrame(props: {
-  readonly children: React.ReactNode;
-}): React.ReactElement {
+function GateFrame(props: { readonly children: ReactNode }): ReactElement {
   return (
     <div className="flex min-h-svh w-full flex-col bg-background text-foreground">
       <FrameHeaderBand />
@@ -214,7 +213,7 @@ function GateFrame(props: {
 }
 
 /** The failed-attempt body, exactly as `buildBootBody`'s settled arm composes it. */
-function settledBody(): React.ReactNode {
+function settledBody(): ReactNode {
   return (
     <LocalHostBodyShell>
       <LocalBootstrapAttempts />
@@ -227,7 +226,7 @@ function settledBody(): React.ReactNode {
 function loadingBody(
   progress: WindowHostModalProps["progress"],
   settingsOnly: boolean,
-): React.ReactNode {
+): ReactNode {
   return (
     <LocalHostLoadingContent
       progress={progress}
@@ -346,7 +345,7 @@ function gatePresentation(
   return PRESENTATION;
 }
 
-function Face(): React.ReactElement {
+function Face(): ReactElement {
   switch (face) {
     case "runtime":
       return (
@@ -411,7 +410,7 @@ function Face(): React.ReactElement {
   }
 }
 
-export function HostBootFamilyGalleryFixture(): React.ReactElement {
+export function HostBootFamilyGalleryFixture(): ReactElement {
   return (
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={buildRunnerHost()}>

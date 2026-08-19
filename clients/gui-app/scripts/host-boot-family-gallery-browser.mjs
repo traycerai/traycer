@@ -4,7 +4,7 @@
 //
 // Manual instrument, not a CI gate. Run it when touching the boot-card family:
 //
-//   bun scripts/host-boot-family-gallery-browser.mjs [--out DIR] [--dark]
+//   bun scripts/host-boot-family-gallery-browser.mjs [--out DIR] [--dark] [--viewport WxH]
 //
 // It writes `<face>.png` (and `<face>.dark.png` with --dark) into DIR (default:
 // a fresh temp dir, printed), then prints one row per face: the card's left,
@@ -51,13 +51,31 @@ const FACES = [
 const WAIT_FACES = new Set(["runtime", "attach", "restoring", "narrator-idle"]);
 
 const args = process.argv.slice(2);
-const outFlag = args.indexOf("--out");
 const dark = args.includes("--dark");
-const viewportFlag = args.indexOf("--viewport");
+/** The value after `--flag`, or a usage error - never `undefined` into `split`. */
+const flagValue = (flag) => {
+  const index = args.indexOf(flag);
+  if (index === -1) return null;
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+};
+const viewportValue = flagValue("--viewport");
 const [viewportWidth, viewportHeight] =
-  viewportFlag === -1
+  viewportValue === null
     ? [1200, 900]
-    : args[viewportFlag + 1].split("x").map((n) => Number(n));
+    : viewportValue.split("x").map((n) => Number(n));
+if (
+  !Number.isInteger(viewportWidth) ||
+  !Number.isInteger(viewportHeight) ||
+  viewportWidth <= 0 ||
+  viewportHeight <= 0
+) {
+  throw new Error("--viewport expects WIDTHxHEIGHT, e.g. 1200x900");
+}
+const outValue = flagValue("--out");
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -67,9 +85,9 @@ const fixtureUrlPath = "/src/__tests__/browser/host-boot-family-gallery.html";
 const chromePath = await findChrome();
 const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-gallery-"));
 const outDir =
-  outFlag === -1
+  outValue === null
     ? await mkdtemp(path.join(tmpdir(), "traycer-boot-gallery-"))
-    : path.resolve(args[outFlag + 1]);
+    : path.resolve(outValue);
 await mkdir(outDir, { recursive: true });
 const vitePort = await freePort();
 let devtoolsPort = await freePort();
@@ -369,9 +387,24 @@ function connectCdp(url) {
       () => reject(new Error("CDP connect timed out")),
       15_000,
     );
-    socket.addEventListener("error", (event) =>
-      reject(new Error(String(event))),
-    );
+    // A socket that dies mid-run must FAIL the run, not hang it: every
+    // in-flight request is rejected on close/error, and a send on a socket
+    // that is not open rejects immediately, so a Chrome crash surfaces as an
+    // error with a message rather than as a driver that never exits.
+    const failAll = (reason) => {
+      for (const [id, request] of pending) {
+        pending.delete(id);
+        request.reject(reason);
+      }
+    };
+    socket.addEventListener("error", (event) => {
+      const error = new Error(`CDP socket error: ${String(event)}`);
+      reject(error);
+      failAll(error);
+    });
+    socket.addEventListener("close", (event) => {
+      failAll(new Error(`CDP socket closed (${event.code})`));
+    });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
       if (typeof message.id !== "number") return;
@@ -385,6 +418,11 @@ function connectCdp(url) {
       clearTimeout(connectTimer);
       resolve({
         send(method, params = {}) {
+          if (socket.readyState !== WebSocket.OPEN) {
+            return Promise.reject(
+              new Error(`CDP socket not open for ${method}`),
+            );
+          }
           return new Promise((requestResolve, requestReject) => {
             const id = ++nextId;
             pending.set(id, { resolve: requestResolve, reject: requestReject });
