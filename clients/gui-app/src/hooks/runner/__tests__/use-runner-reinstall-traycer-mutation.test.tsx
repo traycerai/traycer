@@ -65,6 +65,62 @@ function createWrapper(options: {
 }
 
 describe("useRunnerReinstallTraycer", () => {
+  it("rejects a BUSY converge - nothing was reinstalled, and busy is a fail-safe", async () => {
+    // `busy` is the CLI declining to swap the bytes of a live host, so the
+    // reinstall did not happen - and `E_HOST_BUSY` is raised as a FAIL-SAFE
+    // whenever a live PID's idle state cannot be determined at all, so it is
+    // not even evidence the host serves. A leftover process from the removal
+    // is exactly that case. Resolving it ran the success toast and, with the
+    // sentinel now cleared, left `isError` false - which is what takes the
+    // Reinstall verb off the page for a computer that still has no host.
+    const management = createManagement({
+      kind: "busy",
+      continuation: "retry-with-force",
+      message: "The running host has work in progress",
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const { result } = renderHook(useRunnerReinstallTraycer, {
+      wrapper: createWrapper({
+        management,
+        traycerCli: new MockTraycerCli(),
+        queryClient,
+      }),
+    });
+
+    await expect(result.current.mutateAsync()).rejects.toThrow(
+      "The running host has work in progress",
+    );
+  });
+
+  it("rejects an ok converge that started NO host - the sentinel clear did not take", async () => {
+    // `ok` with `running: false` is `HostController.convergeReady`'s removal
+    // -sentinel short-circuit, which after `clearRemoval` means the clear did
+    // not land: the converge did nothing, under consent that was supposed to
+    // have been revoked. Same shape as the `busy` case above and the ensure
+    // port's, and the same rule - an `ok`-ish outcome is not an answer to the
+    // question this verb asked.
+    const management = createManagement({
+      kind: "ok",
+      value: { running: false, version: null },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const { result } = renderHook(useRunnerReinstallTraycer, {
+      wrapper: createWrapper({
+        management,
+        traycerCli: new MockTraycerCli(),
+        queryClient,
+      }),
+    });
+
+    await expect(result.current.mutateAsync()).rejects.toThrow(
+      "no host started on this computer",
+    );
+  });
+
   it("refreshes install state after a converge that FAILED with the bytes already committed", async () => {
     // `installed-not-converged` says in as many words that the install
     // committed and only the post-commit service invariant failed. The
