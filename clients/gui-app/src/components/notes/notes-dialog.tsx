@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
   defaultNoteScope,
   groupVisibleNotes,
@@ -30,7 +30,7 @@ export function NotesDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const notesBucket = useProjectNotesStore((state) =>
     selectProjectNotesBucket(state, hostId),
   );

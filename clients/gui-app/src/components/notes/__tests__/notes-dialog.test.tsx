@@ -7,8 +7,8 @@ import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-sto
 
 const HOST = "host-a";
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => HOST,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => HOST,
 }));
 
 function mount() {
