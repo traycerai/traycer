@@ -26,6 +26,9 @@ import {
   usePersistOpenEpicWorkspaceStamps,
   useProjectScopedHeaderStripItemIds,
 } from "@/hooks/workspace/use-project-scoped-header-strip";
+import { hiddenActiveTabFallback } from "@/lib/workspace/hidden-active-tab-fallback";
+import { createDraftAndReplaceRoute } from "@/lib/draft-entry-route";
+import { flattenStripItemRefs, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -48,7 +51,6 @@ import {
   type TabSplitCommandId,
 } from "@/stores/tabs/tab-split-commands";
 import { activatePreparedPairTabIntent } from "@/lib/tab-navigation";
-import type { StripItem } from "@/stores/tabs/layout";
 import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
@@ -90,11 +92,31 @@ function TabStripBody() {
 
   const isLandingPage = activePathname === "/";
   useEffect(() => {
-    if (isLandingPage) return;
-    if (activeItemId === null) return;
-    if (visibleHeaderItemIdSet.has(activeItemId)) return;
-    void navigate({ to: "/" });
-  }, [activeItemId, isLandingPage, navigate, visibleHeaderItemIdSet]);
+    const fallback = hiddenActiveTabFallback({
+      isLandingPage,
+      activeItemId,
+      visibleItemIds: visibleHeaderItemIds,
+    });
+    if (fallback.kind === "keep") return;
+    if (fallback.kind === "new-draft") {
+      createDraftAndReplaceRoute(navigate);
+      return;
+    }
+    const item = layoutItems.find((entry) => entry.id === fallback.itemId);
+    const ref = item === undefined ? undefined : flattenStripItemRefs(item)[0];
+    const tab = ref === undefined ? null : getHeaderTab(ref);
+    if (tab === null) {
+      createDraftAndReplaceRoute(navigate);
+      return;
+    }
+    navigateToTabIntent(navigate, tabResolveIntent(tab), { replace: true });
+  }, [
+    activeItemId,
+    isLandingPage,
+    layoutItems,
+    navigate,
+    visibleHeaderItemIds,
+  ]);
   const indicatorEpicIds = useMemo(
     () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
     [allTabs],
