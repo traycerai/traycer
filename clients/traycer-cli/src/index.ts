@@ -618,7 +618,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--allow-self-invocation",
-        "Dev only: register the current (non-packaged) CLI as the service command.",
+        "Dev only: register an interpreter-run (non-packaged) CLI as the service command. Packaged binaries always self-register when nothing else resolves.",
       )
       .option(
         "--no-service-register",
@@ -696,7 +696,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--allow-self-invocation",
-        "Dev only: register the current (non-packaged) CLI as the service command.",
+        "Dev only: register an interpreter-run (non-packaged) CLI as the service command. Packaged binaries always self-register when nothing else resolves.",
       )
       .option(
         "--no-service-register",
@@ -1111,7 +1111,7 @@ function registerServiceCommands(host: Command): void {
       )
       .option(
         "--allow-self-invocation",
-        "Dev only: register the current (non-packaged) CLI as the service command.",
+        "Dev only: register an interpreter-run (non-packaged) CLI as the service command. Packaged binaries always self-register when nothing else resolves.",
       )
       .option(
         "--takeover",

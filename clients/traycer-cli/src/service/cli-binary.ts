@@ -1,9 +1,11 @@
 import { access } from "node:fs/promises";
-import { join } from "node:path";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { readCliManifest } from "../manifest/cli-manifest";
-import { cliInstallHomeDir } from "../store/paths";
+import {
+  stageWellKnownCliBinary,
+  wellKnownCliBinaryPath,
+} from "../store/well-known-cli";
 
 // Resolve the stable per-user CLI binary that OS service manifests
 // should invoke. Discovery order:
@@ -20,13 +22,18 @@ import { cliInstallHomeDir } from "../store/paths";
 //        - The dev orchestrator (`scripts/dev-desktop.js` stages a
 //          bun wrapper at `~/.traycer/cli/dev-runs/<slot>/bin/traycer`
 //          when `DEV_DESKTOP_SLOT` is present)
+//        - `cli mark-source` / `cli re-anchor` (stage a symlink to the
+//          anchored binary alongside the manifest write)
 //      Lets the orchestrator hand off to the CLI without any
 //      explicit flag or env-var coupling - convention over
 //      configuration.
-//   3. Self-invocation: `process.execPath` + first argv entry. Opt-in
-//      via `allowSelfInvocation`; used when the running CLI binary
-//      itself is the right thing to point launchd at (brew /
-//      manual install with no manifest yet, NP-2 dev smoke testing).
+//   3. Self-invocation: the running binary itself is the right thing to
+//      point the supervisor at. Always available to a PACKAGED (SEA)
+//      binary - npm/brew/hand-placed installs with no manifest yet -
+//      which also stages the well-known slot so the host daemon (whose
+//      own CLI discovery reads ONLY that slot) can shell this CLI.
+//      Interpreter runs (tsx dev, smoke tests) must opt in via
+//      `allowSelfInvocation`.
 //
 // Steps 1 and 2 always run; (3) is the final fallback.
 
@@ -46,11 +53,12 @@ export interface ResolveCliInvocationOptions {
   // Programmatic in-process callers can still pass an explicit
   // override when needed.
   readonly override: string | null;
-  // When true and no manifest / bin-dir binary is found, fall back
-  // to invoking the currently-running process (`process.execPath`
-  // plus the entry script). Used by package-manager-installed CLIs
-  // (brew, manual) where the running binary IS the right thing to
-  // register.
+  // When true and no manifest / bin-dir binary is found, allow an
+  // INTERPRETER run (tsx dev, smoke tests) to register the currently
+  // running process (`process.execPath` plus the entry script). A
+  // packaged (SEA) binary never needs this flag: self-invocation is
+  // always safe for it, so npm/brew/hand-placed installs register
+  // without ever staging `~/.traycer` first.
   readonly allowSelfInvocation: boolean;
 }
 
@@ -104,21 +112,45 @@ export async function resolveServiceCliInvocation(
     return { command: conventionalBinary, args: [] };
   }
 
-  if (!opts.allowSelfInvocation) {
+  const packaged = await isPackagedRun();
+  if (!packaged && !opts.allowSelfInvocation) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
-      message: `service install: no CLI manifest at <cliHomeDir>/manifest.json and no binary at ${conventionalBinary}; stage a CLI binary at the well-known location or run from a packaged CLI`,
+      message: `service install: no CLI manifest at <cliHomeDir>/manifest.json and no binary at ${conventionalBinary}; stage a CLI binary at the well-known location, run from a packaged CLI, or pass --allow-self-invocation for an interpreter-run dev CLI`,
       details: { environment: opts.environment, conventionalBinary },
       exitCode: 1,
     });
   }
 
-  // Self-invocation fallback: register the service against the
-  // running process. On POSIX the supervisor command becomes
-  // `<execPath> <argv[1]> host start`, which works
-  // regardless of whether we're invoked via `node`, `bun`, or a SEA
-  // binary. Walking argv lets dev / smoke-test invocations re-use
-  // the same tsx-shebanged entry that's already on disk.
+  // Self-invocation fallback: register the service against the running
+  // process.
+  //
+  // A PACKAGED (SEA) binary's `process.argv[1]` is the raw invocation
+  // spelling (`traycer`, `./traycer`, an absolute path) - never an entry
+  // script - so re-invoking `<execPath> <argv[1]>` produces
+  // `error: unknown command`. The binary itself is the whole program:
+  // register `<execPath>` with no leading args. Stage the well-known slot
+  // at the same time so the host daemon (whose CLI discovery reads ONLY
+  // `<cliInstallHomeDir>/bin/traycer`) can shell this CLI for doctor /
+  // update, and point the service at that slot when staging succeeds - a
+  // later `cli re-anchor` then retargets the service without
+  // re-registration. Staging failure degrades to the real binary path:
+  // the service still works, only the host's slot view stays cold.
+  if (packaged) {
+    const staged = await stageWellKnownCliBinary({
+      environment: opts.environment,
+      binaryPath: process.execPath,
+    });
+    return {
+      command:
+        staged.staged === "failed" ? process.execPath : staged.wellKnownPath,
+      args: [],
+    };
+  }
+
+  // Interpreter run (tsx dev, smoke tests): walking argv re-uses the same
+  // tsx-shebanged entry that's already on disk, so the supervisor command
+  // becomes `<node|bun> <entry> host start`.
   const command = process.execPath;
   const entryArg = process.argv[1];
   const args: readonly string[] =
@@ -126,13 +158,14 @@ export async function resolveServiceCliInvocation(
   return { command, args };
 }
 
-function wellKnownCliBinaryPath(environment: Environment): string {
-  // Mirrors what Desktop's `cliBinDir()` / `cliBinaryName()` helpers and the
-  // dev orchestrator's per-run `cliBinDir` (scripts/dev-desktop.js,
-  // `buildDevDesktopRunPaths`) agree on. Windows uses `.exe` for SEA
-  // binaries; `.cmd` wrappers (dev orchestrator on Windows) are NOT included
-  // here - Windows service registration goes through Scheduled Tasks via
-  // `windows.ts`, which has its own convention.
-  const binaryName = process.platform === "win32" ? "traycer.exe" : "traycer";
-  return join(cliInstallHomeDir(environment), "bin", binaryName);
+// Whether this process is a compiled single-executable (SEA) binary, i.e.
+// the program IS `process.execPath` with no entry script. `node:sea` is
+// absent under some interpreters (bun), where the answer is "no" anyway.
+async function isPackagedRun(): Promise<boolean> {
+  try {
+    const { isSea } = await import("node:sea");
+    return isSea();
+  } catch {
+    return false;
+  }
 }

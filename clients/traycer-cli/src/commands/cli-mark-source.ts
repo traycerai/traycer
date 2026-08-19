@@ -11,6 +11,7 @@ import {
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { withCliLock } from "../store/cli-lock";
+import { stageWellKnownCliBinary } from "../store/well-known-cli";
 import { errorFromUnknown } from "../logger";
 
 // `traycer cli mark-source` - internal, hidden command. Package-manager
@@ -213,14 +214,50 @@ export async function writeMarkSource(opts: {
         hasVersion: opts.version.length > 0,
         hadPreviousManifest: previous !== null,
       });
+      // Anchor time is also when the well-known slot must start pointing
+      // at this binary: the host daemon's own CLI discovery (doctor /
+      // update / service status) reads ONLY `<cliInstallHomeDir>/bin/`,
+      // never this manifest, so an npm/brew/hand-placed install stays
+      // invisible to it - "has no Traycer CLI installed" in the GUI -
+      // until the slot is staged. Best-effort by design: the manifest
+      // above is this command's primary contract, so a staging failure
+      // is reported, not thrown.
+      const wellKnown = await stageWellKnownCliBinary({
+        environment: opts.ctx.runtime.environment,
+        binaryPath: opts.binaryPath,
+      });
+      if (wellKnown.staged === "failed") {
+        opts.ctx.runtime.logger.warn(
+          "CLI install source well-known staging failed",
+          {
+            environment: opts.ctx.runtime.environment,
+            reason: opts.reason,
+            errorName: wellKnown.errorName,
+            errorMessage: wellKnown.errorMessage,
+          },
+        );
+      } else {
+        opts.ctx.runtime.logger.info(
+          "CLI install source well-known slot staged",
+          {
+            environment: opts.ctx.runtime.environment,
+            reason: opts.reason,
+            staged: wellKnown.staged,
+          },
+        );
+      }
+      const anchoredLine = `marked CLI as ${opts.source}-owned at ${opts.binaryPath} (version ${opts.version})`;
       return {
         data: {
           previous,
           current: next,
+          wellKnown,
         },
         human: opts.ctx.runtime.json
           ? null
-          : `marked CLI as ${opts.source}-owned at ${opts.binaryPath} (version ${opts.version})`,
+          : wellKnown.staged === "failed"
+            ? `${anchoredLine}\nwarning: could not stage ${wellKnown.wellKnownPath} (${wellKnown.errorMessage}); the host daemon resolves the CLI only at that path, so host-driven doctor/update will not see this install until it is staged`
+            : anchoredLine,
         exitCode: 0,
       };
     },
