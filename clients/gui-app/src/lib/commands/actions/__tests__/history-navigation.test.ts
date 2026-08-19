@@ -286,7 +286,7 @@ afterEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   for (const handle of liveEpicHandles.splice(0)) {
-    getOpenEpicRegistry().release(handle.epicId, "discard");
+    getOpenEpicRegistry().release(handle.epicId, "discard", null);
   }
   boundHostClient.value = null;
   queryClient.clear();

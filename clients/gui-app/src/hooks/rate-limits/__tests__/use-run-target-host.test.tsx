@@ -12,7 +12,9 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { ReactNode } from "react";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
+import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 // One global (default-host) client shared between the mocked `useHostClient`
 // and the tests, mirroring `use-host-client-for.test.tsx`'s harness so
@@ -79,6 +81,7 @@ function buildClient(
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     messenger,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     findHostById: (requestedHostId) =>
       directoryRef.entries.find((entry) => entry.hostId === requestedHostId) ??
       (requestedHostId === entry.hostId ? entry : null),
@@ -158,6 +161,7 @@ describe("useRunTargetHost", () => {
         providerId: "codex",
         profileId: null,
       },
+      RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     );
     expect(messengerRef.value?.calls).toHaveLength(1);
     expect(messengerRef.value?.calls[0]?.authority.endpoint).toEqual({

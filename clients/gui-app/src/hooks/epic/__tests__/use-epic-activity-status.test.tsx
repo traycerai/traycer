@@ -181,7 +181,7 @@ describe("useEpicActivityStatus", () => {
     expect(result.current).toBe("idle");
 
     act(() => {
-      __getOpenEpicRegistryForTests().release(EPIC_ID, "discard");
+      __getOpenEpicRegistryForTests().release(EPIC_ID, "discard", null);
     });
 
     expect(result.current).toBe("turn");

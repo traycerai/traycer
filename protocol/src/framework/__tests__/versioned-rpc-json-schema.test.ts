@@ -537,6 +537,127 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
     );
   });
 
+  it("does not let the discriminator STAMP alone justify a major bump", () => {
+    // `x-traycer-discriminator` is metadata this framework writes onto the
+    // emitted schema so arm identity can be resolved; it constrains no value.
+    // A union that merely moves its declaration between two equally valid tag
+    // columns accepts and emits byte-identical JSON - so it is NOT a breaking
+    // change, and the major must still be rejected as "could have shipped as a
+    // minor". Compared raw, the stamp differs and would have justified a major
+    // on our own bookkeeping.
+    const stampV10 = defineRpcContract({
+      method: "stampOnly",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("a"), outcome: z.literal("x") }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const stampV20 = defineRpcContract({
+      method: "stampOnly",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        // Identical arms; only the DECLARED column moved. `outcome` is just as
+        // valid a tag here - each arm pins it to its own literal.
+        row: z.discriminatedUnion("outcome", [
+          z.object({ kind: z.literal("a"), outcome: z.literal("x") }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const stampUpgrade = defineUpgradePath<typeof stampV10, typeof stampV20>({
+      from: stampV10.schemaVersion,
+      to: stampV20.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({ row: response.row }),
+    });
+    const registry = {
+      stampOnly: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: stampV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: stampV20,
+              upgradeFromPreviousVersion: stampUpgrade,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Major bump 1 -> 2 for method 'stampOnly' is not a breaking change (could have shipped as a minor)",
+    );
+  });
+
+  it("still justifies a major from a keyword that is annotation-only for a LEAF", () => {
+    // The mirror of the arm above, and the reason the stamp is stripped by
+    // itself rather than through `constrainingShape`. That helper drops all of
+    // `NON_CONSTRAINING_SCHEMA_KEYS`, which answers a different question - what
+    // constrains a LEAF's accepted values in the additivity walk - and `default`
+    // sits in it. `.catch([])` renders as `default`, so dropping the catch turns
+    // a payload that used to parse into one that fails outright. Strip it here
+    // and this real major reads as "could have shipped as a minor".
+    const catchV10 = defineRpcContract({
+      method: "catchTolerance",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        tags: z.array(z.string()).catch([]),
+      }),
+    });
+    const catchV20 = defineRpcContract({
+      method: "catchTolerance",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        // The ONLY change: the tolerance is gone.
+        tags: z.array(z.string()),
+      }),
+    });
+    const catchUpgrade = defineUpgradePath<typeof catchV10, typeof catchV20>({
+      from: catchV10.schemaVersion,
+      to: catchV20.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({ tags: response.tags }),
+    });
+    const registry = {
+      catchTolerance: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: catchV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: catchV20,
+              upgradeFromPreviousVersion: catchUpgrade,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
   it("accepts a major bump that adds a newly required field", () => {
     const requiredV10 = defineRpcContract({
       method: "required",
@@ -1184,6 +1305,557 @@ describe("response-lane value-growth strictness", () => {
     expect(() => validateVersionedRpcRegistry(registry)).toThrow(
       "Minor 1.1 for method 'reduceLoneArmMixed' response drops field 'row.value' from 1.0",
     );
+  });
+
+  it("rejects a gated minor that drops a field from an arm whose DECLARED discriminator is unchanged, even though a secondary literal moved", () => {
+    // The other side of the incidental-literal coin, and the one the inferred
+    // tuple got wrong. `kind` and `outcome` BOTH qualify as tags on both
+    // sides, so the tuple identity of the old "a" arm was ("a","x") - which
+    // matches nothing once `outcome` moves to "z". The arm then read as
+    // REPLACED, and the exemption swallowed the dropped `value` silently.
+    //
+    // Structurally this is indistinguishable from the permitted replacement
+    // two tests up: one qualifying field agrees and one differs in BOTH. Only
+    // the DECLARATION separates them - `z.discriminatedUnion("kind", ...)`
+    // says `kind` is identity, so here the arm survived and was edited, and
+    // there it did not.
+    const declaredV10 = defineRpcContract({
+      method: "declaredTagEdit",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("a"),
+            outcome: z.literal("x"),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const declaredV11 = defineRpcContract({
+      method: "declaredTagEdit",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Same arm - `kind` is still "a" - with a moved secondary literal
+          // and `value` dropped.
+          z.object({ kind: z.literal("a"), outcome: z.literal("z") }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const declaredUpgrade = defineUpgradePath<
+      typeof declaredV10,
+      typeof declaredV11
+    >({
+      from: declaredV10.schemaVersion,
+      to: declaredV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "a"
+            ? { kind: "a" as const, outcome: "z" as const }
+            : response.row,
+      }),
+    });
+    const registry = {
+      declaredTagEdit: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: declaredV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: declaredV11,
+              upgradeFromPreviousVersion: declaredUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    // The FIRST reduction the property walk meets on the now-matched arm is
+    // the moved literal itself (`outcome` is walked before `value`), and it is
+    // a real one: an old peer expecting "x" cannot project "z". What matters
+    // is that the arm was matched as an EDIT at all - under the tuple it was
+    // unmatchable, so NOTHING on it was reported. The arm below pins the
+    // dropped FIELD by declaring it ahead of the moved tag.
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'declaredTagEdit' response drops enum value 'x' from 1.0",
+    );
+  });
+
+  it("honours a declared discriminator whose arm groups SEVERAL tag values", () => {
+    // A declared tag may legitimately group values in one arm - this repo does
+    // it with `kind: z.enum(["subagent", "monitor"])` in `agent/gui/subscribe`.
+    // INFERENCE has to reject such a column (nothing distinguishes a deliberate
+    // grouping from an ordinary enum field), so requiring the declared field to
+    // survive inference dropped every multi-value union back onto the
+    // incidental-tuple fallback - i.e. straight back into the defect the two
+    // arms above pin. Here `kind` is unchanged, a secondary literal moves, and
+    // a field is dropped: an EDIT, and its reduction must be reported rather
+    // than exempted as an arm replacement.
+    const groupedV10 = defineRpcContract({
+      method: "declaredTagGrouped",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            outcome: z.literal("x"),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("command"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const groupedV11 = defineRpcContract({
+      method: "declaredTagGrouped",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Same arm - the `kind` VALUE SET is untouched - with the secondary
+          // literal moved and `value` dropped.
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            outcome: z.literal("z"),
+          }),
+          z.object({ kind: z.literal("command"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const groupedUpgrade = defineUpgradePath<
+      typeof groupedV10,
+      typeof groupedV11
+    >({
+      from: groupedV10.schemaVersion,
+      to: groupedV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "command"
+            ? response.row
+            : { kind: response.row.kind, outcome: "z" as const },
+      }),
+    });
+    const registry = {
+      declaredTagGrouped: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: groupedV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: groupedV11,
+              upgradeFromPreviousVersion: groupedUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'declaredTagGrouped' response drops enum value 'x' from 1.0",
+    );
+  });
+
+  it("keeps the arm's identity when its grouped tag set GROWS", () => {
+    // Matching a grouped tag by set EQUALITY made a growing arm unmatchable,
+    // and unmatchable is the PERMISSIVE outcome: no successor means "replaced",
+    // and under `responseGrowthProjectionGated` a replacement is exempt. So the
+    // dropped field below - which still breaks every response pinned to the
+    // values the arm KEPT - sailed through. Identity is a SHARED value.
+    const grownV10 = defineRpcContract({
+      method: "declaredTagGrown",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const grownV11 = defineRpcContract({
+      method: "declaredTagGrown",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Same arm, one more tag value - and `value` dropped. A response with
+          // `kind: "subagent"` still lands here and has lost a field.
+          z.object({ kind: z.enum(["subagent", "monitor", "worker"]) }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const grownUpgrade = defineUpgradePath<typeof grownV10, typeof grownV11>({
+      from: grownV10.schemaVersion,
+      to: grownV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "command"
+            ? response.row
+            : { kind: response.row.kind },
+      }),
+    });
+    const registry = {
+      declaredTagGrown: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: grownV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: grownV11,
+              upgradeFromPreviousVersion: grownUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'declaredTagGrown' response drops field 'row.value' from 1.0",
+    );
+  });
+
+  it("keeps BOTH halves' identity when a grouped arm SPLITS", () => {
+    // The case a first-match index still misses, and the reason identity is a
+    // LIST. One arm becomes two, each taking part of the tag set; both still
+    // carry traffic the old arm carried. Matching only the first leaves the
+    // second free to reduce - here `monitor` drops `value` while `subagent`
+    // keeps it, so the walk must look past its first successful match.
+    const splitV10 = defineRpcContract({
+      method: "declaredTagSplit",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const splitV11 = defineRpcContract({
+      method: "declaredTagSplit",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Matched FIRST and perfectly clean.
+          z.object({ kind: z.literal("subagent"), value: z.string() }),
+          // The half that reduced.
+          z.object({ kind: z.literal("monitor") }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const splitUpgrade = defineUpgradePath<typeof splitV10, typeof splitV11>({
+      from: splitV10.schemaVersion,
+      to: splitV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "command"
+            ? response.row
+            : response.row.kind === "subagent"
+              ? { kind: "subagent" as const, value: response.row.value }
+              : { kind: "monitor" as const },
+      }),
+    });
+    const registry = {
+      declaredTagSplit: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: splitV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: splitV11,
+              upgradeFromPreviousVersion: splitUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'declaredTagSplit' response drops field 'row.value' from 1.0",
+    );
+  });
+
+  it("permits a split that drops NOTHING, rather than reading each half's narrower tag as a loss", () => {
+    // The false witness that matching every successor introduces, and the
+    // reason the declared column is ALIGNED before the comparison. Each half of
+    // a split pins a narrower slice of the old tag set, so compared as-is the
+    // clean `subagent` half reports "drops enum value 'monitor'" - even though
+    // the sibling arm took `monitor` and the union accepts exactly what it did
+    // before. Nothing is lost here and nothing may be reported.
+    const cleanV10 = defineRpcContract({
+      method: "declaredTagSplitClean",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const cleanV11 = defineRpcContract({
+      method: "declaredTagSplitClean",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          // Split in two, both halves carrying everything the grouped arm did.
+          z.object({ kind: z.literal("subagent"), value: z.string() }),
+          z.object({ kind: z.literal("monitor"), value: z.string() }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const cleanUpgrade = defineUpgradePath<typeof cleanV10, typeof cleanV11>({
+      from: cleanV10.schemaVersion,
+      to: cleanV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "command"
+            ? response.row
+            : response.row.kind === "subagent"
+              ? { kind: "subagent" as const, value: response.row.value }
+              : { kind: "monitor" as const, value: response.row.value },
+      }),
+    });
+    const registry = {
+      declaredTagSplitClean: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: cleanV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: cleanV11,
+              upgradeFromPreviousVersion: cleanUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
+  it("still reports a tag value that NO arm took after a split", () => {
+    // The other side of alignment: it applies only when the whole old tag set
+    // is still handled somewhere. Here `monitor` is simply gone - no sibling
+    // absorbs it - so the arm's own column stays in place and reports it.
+    const lostV10 = defineRpcContract({
+      method: "declaredTagLost",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.enum(["subagent", "monitor"]),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const lostV11 = defineRpcContract({
+      method: "declaredTagLost",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("subagent"), value: z.string() }),
+          z.object({ kind: z.literal("command"), label: z.string() }),
+        ]),
+      }),
+    });
+    const lostUpgrade = defineUpgradePath<typeof lostV10, typeof lostV11>({
+      from: lostV10.schemaVersion,
+      to: lostV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "command"
+            ? response.row
+            : { kind: "subagent" as const, value: response.row.value },
+      }),
+    });
+    const registry = {
+      declaredTagLost: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: lostV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: lostV11,
+              upgradeFromPreviousVersion: lostUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'declaredTagLost' response drops enum value 'monitor' from 1.0",
+    );
+  });
+
+  it("reports the DROPPED FIELD on that same arm when it is walked before the moved tag", () => {
+    const orderedV10 = defineRpcContract({
+      method: "declaredTagEditOrdered",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        // `value` declared BEFORE `outcome`, so the property walk reaches the
+        // dropped field first. Same defect, different first witness.
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("a"),
+            value: z.string(),
+            outcome: z.literal("x"),
+          }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const orderedV11 = defineRpcContract({
+      method: "declaredTagEditOrdered",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("a"), outcome: z.literal("z") }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const orderedUpgrade = defineUpgradePath<
+      typeof orderedV10,
+      typeof orderedV11
+    >({
+      from: orderedV10.schemaVersion,
+      to: orderedV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "a"
+            ? { kind: "a" as const, outcome: "z" as const }
+            : response.row,
+      }),
+    });
+    const registry = {
+      declaredTagEditOrdered: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: orderedV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: orderedV11,
+              upgradeFromPreviousVersion: orderedUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'declaredTagEditOrdered' response drops field 'row.value' from 1.0",
+    );
+  });
+
+  it("still permits the replacement when the DECLARED discriminator itself moves, with the same secondary literal shared", () => {
+    // The mirror of the arm above, and the reason the fix had to be the
+    // declaration rather than a looser match: identical structure - one
+    // qualifying field agrees (`outcome`), one differs (`kind`) - but here the
+    // field that differs is the declared one, so the arm genuinely has no
+    // successor and the gated exemption applies.
+    const swapV10 = defineRpcContract({
+      method: "declaredTagSwap",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("a"),
+            outcome: z.literal("x"),
+            value: z.string(),
+          }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const swapV11 = defineRpcContract({
+      method: "declaredTagSwap",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        row: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("c"), outcome: z.literal("x") }),
+          z.object({ kind: z.literal("b"), outcome: z.literal("y") }),
+        ]),
+      }),
+    });
+    const swapUpgrade = defineUpgradePath<typeof swapV10, typeof swapV11>({
+      from: swapV10.schemaVersion,
+      to: swapV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({
+        row:
+          response.row.kind === "a"
+            ? { kind: "c" as const, outcome: "x" as const }
+            : response.row,
+      }),
+    });
+    const registry = {
+      declaredTagSwap: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: swapV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: swapV11,
+              upgradeFromPreviousVersion: swapUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
   });
 
   it("rejects a projection-gated minor whose reduced surviving arm comes AFTER a replaced arm", () => {

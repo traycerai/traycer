@@ -1558,7 +1558,11 @@ describe("<EpicSessionProvider />", () => {
     expect(streams).toHaveLength(1);
 
     act(() => {
-      __getOpenEpicRegistryForTests().release("epic-session-test", "discard");
+      __getOpenEpicRegistryForTests().release(
+        "epic-session-test",
+        "discard",
+        null,
+      );
     });
     await waitFor(() => {
       expect(calls.releases).toEqual(["epic-session-test"]);

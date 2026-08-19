@@ -76,7 +76,7 @@ describe("releaseOpenEpicSessionIfUnused", () => {
     // legitimately-open second view of the same epic.
     openTabFor("epic-1");
 
-    releaseOpenEpicSessionIfUnused("epic-1", "keep");
+    releaseOpenEpicSessionIfUnused("epic-1", "keep", null);
 
     expect(__getOpenEpicRegistryForTests().peek("epic-1")).not.toBeNull();
   });
@@ -90,7 +90,7 @@ describe("releaseOpenEpicSessionIfUnused", () => {
     mountSession("epic-1");
     closeAllTabs();
 
-    releaseOpenEpicSessionIfUnused("epic-1", "keep");
+    releaseOpenEpicSessionIfUnused("epic-1", "keep", null);
 
     expect(__getOpenEpicRegistryForTests().peek("epic-1")).toBeNull();
   });
@@ -99,7 +99,7 @@ describe("releaseOpenEpicSessionIfUnused", () => {
     mountSession("epic-1");
     openTabFor("epic-2");
 
-    releaseOpenEpicSessionIfUnused("epic-1", "keep");
+    releaseOpenEpicSessionIfUnused("epic-1", "keep", null);
 
     expect(__getOpenEpicRegistryForTests().peek("epic-1")).toBeNull();
   });

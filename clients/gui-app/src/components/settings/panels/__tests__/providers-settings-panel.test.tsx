@@ -615,6 +615,13 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
     isRefreshing: false,
   }),
 }));
+// The section also asks whether a read we stopped waiting for still has its
+// delayed follow-up coming. That reads the queue registry through
+// `useRateLimitQueueScope`, which needs the QueryClient this harness has none
+// of; no target is ever enqueued here, so an idle answer is the truthful one.
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
+  useIsRateLimitReadFollowUpExhausted: () => false,
+}));
 
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`

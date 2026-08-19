@@ -1197,7 +1197,7 @@ describe("RemoteSession host_detached readiness evidence", () => {
         expect(session.isClosed()).toBe(false);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null)
+          .sendUnary("host.status", {}, null, undefined)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -1477,7 +1477,7 @@ describe("RemoteSession dial-failure logging", () => {
     expect(session.isClosed()).toBe(true);
 
     const error: unknown = await session
-      .sendUnary("host.status", {}, null)
+      .sendUnary("host.status", {}, null, undefined)
       .then(
         () => null,
         (reason: unknown) => reason,
@@ -1528,7 +1528,12 @@ describe("RemoteSession dial-failure logging", () => {
         expect(session.isReady()).toBe(false);
         expect(session.isClosed()).toBe(false);
 
-        const resultPromise = session.sendUnary("host.status", {}, null);
+        const resultPromise = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          undefined,
+        );
         // Still not ready when the call is issued - the await-ready path must
         // hold rather than reject.
         expect(session.isReady()).toBe(false);
@@ -1580,7 +1585,7 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null)
+          .sendUnary("host.status", {}, null, undefined)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -1612,7 +1617,7 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null)
+          .sendUnary("host.status", {}, null, undefined)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -1644,7 +1649,12 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         expect(session.isReady()).toBe(false);
-        const pending = session.sendUnary("host.status", {}, controller.signal);
+        const pending = session.sendUnary(
+          "host.status",
+          {},
+          controller.signal,
+          undefined,
+        );
         controller.abort();
 
         const error: unknown = await pending.then(
@@ -1685,7 +1695,7 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, controller.signal)
+          .sendUnary("host.status", {}, controller.signal, undefined)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -1852,7 +1862,7 @@ describe("RemoteSession absent optional method", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.syntheticUnsupported", {}, null)
+          .sendUnary("host.syntheticUnsupported", {}, null, undefined)
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -1971,6 +1981,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
           "host.syntheticSkewFallback",
           { label: "x" },
           null,
+          undefined,
         );
         // adaptResponse ran over the DECLARED 1.0 response shape: no `detail`
         // key, i.e. no canonical-version upgrade was applied on the way back.
@@ -2348,6 +2359,69 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
       },
     });
 
+  // The caller's response budget has to reach the remote unary TIMER, not just
+  // the messenger. It used to be dropped on the reasoning that the mux session
+  // owns its own response-wait semantics - so a method sized for a slow
+  // host-side probe (`host.getRateLimitUsage` allows ~180s) was silently cut
+  // off at the shared 30s default on every REMOTE host, while the local
+  // transport honored it.
+  it(
+    "arms the unary timer with the CALLER's budget, not the shared default",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      // The host never answers; only the timer can settle these.
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // A budget far BELOW the 30s default, so only a timer that honors the
+        // argument can fire this fast.
+        const budgeted = session.sendUnary("host.status", {}, null, 60);
+        // The positive control: same request, no budget. If the argument were
+        // still ignored, both would behave identically - and this one must NOT
+        // settle inside the window, or the assertion above proves nothing.
+        const defaulted = session.sendUnary("host.status", {}, null, undefined);
+        let defaultedSettled = false;
+        void defaulted.then(
+          () => {
+            defaultedSettled = true;
+          },
+          () => {
+            defaultedSettled = true;
+          },
+        );
+
+        const error: unknown = await budgeted.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        expect((error as HostRpcError).message).toContain(
+          "timed out awaiting a response",
+        );
+        // Dispatched-but-unheard, not a delivered answer. A caller that can
+        // recover from an unheard read (the rate-limit queue collects the
+        // host's gauge cache shortly after) can only do so if it can TELL, and
+        // a plain `HostRpcError` reads as an answer. Same line `WsRpcClient`
+        // draws once the request is on the wire.
+        expect(error).toBeInstanceOf(HostTransportFailureError);
+        // ...but still NOT retryable: the host may already have applied it, so
+        // nothing should resend on its own.
+        expect(error).not.toBeInstanceOf(RetryableTransportError);
+        expect(defaultedSettled).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    WAIT.timeout,
+  );
+
   it(
     "rejects the pending sendUnary promptly with the FATAL's code, and the client CLOSEs the stream",
     async () => {
@@ -2365,7 +2439,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        const pending = session.sendUnary("host.status", {}, null);
+        const pending = session.sendUnary("host.status", {}, null, undefined);
         await vi.waitFor(
           () => expect(relay.unaryRequests).toHaveLength(1),
           WAIT,

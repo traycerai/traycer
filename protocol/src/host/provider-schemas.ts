@@ -1150,7 +1150,9 @@ export const providerProfileSchema = z.object({
   // Epoch-ms the last passive (live-turn) or active (on-demand probe) usage
   // read landed for this profile; null before any read. Lets the usage
   // popover badge a gauge as stale without a background poll - see the
-  // decision log's "Usage data".
+  // decision log's "Usage data". Describes the age of the READING the host
+  // holds, so a probe that failed transiently (timeout, connection, usage
+  // fetch) does NOT advance it - it is not evidence that anything was read.
   usageUpdatedAt: z.number().nullable(),
   // `.catch("unknown")` tolerates old host builds that predate this field.
   rateLimitStatus: providerProfileRateLimitStatusSchema.catch("unknown"),

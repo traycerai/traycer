@@ -262,7 +262,9 @@ function findMergeTarget(
  *   - `acquire(epicId, factory)` returns the existing handle or constructs a
  *     new one via `factory(epicId)`; recency is bumped on every call so the
  *     most-recently-interacted Epic stays alive.
- *   - `release(epicId)` disposes that entry unconditionally (tab closed).
+ *   - `release(epicId, retainedBuffers, dirtyLiveHandle)` ends that entry (tab
+ *     closed): disposed, or retained as an unsynced buffer when it is dirty
+ *     and the caller named an identity to retain it under.
  *   - `prune()` is run after every acquire; it disposes the least-recently
  *     used clean/inactive entries until size <= maxLive, skipping dirty or
  *     active entries.
@@ -573,7 +575,34 @@ export class OpenEpicSessionRegistry {
    * methods up on the grounds that the result has no owner it could honestly
    * flush to.
    */
-  release(epicId: string, retainedBuffers: "discard" | "keep"): void {
+  /**
+   * `dirtyLiveHandle` is the identity to RETAIN the live entry under when it
+   * holds unsynced edits, or `null` to destroy it with them.
+   *
+   * It exists because `"keep"` used to mean only "spare the buffers already
+   * retained", while the LIVE handle - the one actually holding the user's
+   * unsynced edits - was disposed either way. On an involuntary path that is
+   * exactly the silent loss the flag's own doc says it prevents: an
+   * owner-identity rotation leaves `userId` unchanged, so a dirty session was
+   * destroyed with no confirmation and no retention, and the edits were gone.
+   *
+   * Retention here follows the rule `replaceMounted` already follows for a
+   * re-point - never destroy a session holding unsynced edits - and produces
+   * the same kind of buffer: transport detached, reachable through the
+   * unsynced-edits projection, merged into an existing retention only on
+   * positive proof of the same epic, host and owner identity.
+   *
+   * `null` is a DECISION, not a default, which is why it is a required
+   * argument: a caller that has shown the user a decision (`"discard"`), or
+   * one whose loss is deliberate, says so at the call site rather than
+   * inheriting it. `"discard"` ignores it - the user was asked about these
+   * edits.
+   */
+  release(
+    epicId: string,
+    retainedBuffers: "discard" | "keep",
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+  ): void {
     const entry = this.entries.get(epicId);
     if (retainedBuffers === "discard") {
       // Ordered before the early return: a retention must not outlive the tab
@@ -585,7 +614,21 @@ export class OpenEpicSessionRegistry {
       return;
     }
     this.entries.delete(epicId);
-    this.disposeEntry(entry, true);
+    const retainsLiveEdits =
+      retainedBuffers === "keep" &&
+      dirtyLiveHandle !== null &&
+      entry.handle.store.getState().isDirty;
+    if (retainsLiveEdits) {
+      this.retainDirtyHandle(entry, dirtyLiveHandle);
+      // Still announced: the live SESSION is gone either way, and the listener
+      // it drives releases this window's desktop ownership of the epic. A
+      // retained buffer has no transport and claims nothing, so holding that
+      // ownership open for it would pin the epic to a window that can no
+      // longer serve it.
+      this.releaseListener?.(epicId);
+    } else {
+      this.disposeEntry(entry, true);
+    }
     this.emit();
   }
 

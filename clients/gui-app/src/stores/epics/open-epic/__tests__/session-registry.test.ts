@@ -312,7 +312,7 @@ describe("OpenEpicSessionRegistry", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const th = buildTestHandle("e0", false);
     registry.acquire("e0", () => h(th));
-    registry.release("e0", "discard");
+    registry.release("e0", "discard", null);
     expect(th.disposed).toBe(true);
     expect(registry.get("e0")).toBeNull();
   });
@@ -568,7 +568,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     repoint(registry, previous.handle, next.handle, IDENTITY_A);
     expect(registry.getUnsyncedEdits()).toHaveLength(1);
 
-    registry.release(EPIC, "discard");
+    registry.release(EPIC, "discard", null);
 
     // `prune()` cannot reach retentions and must not, so tab close is one of
     // the few real reclamation paths. It is also the point where the user has
@@ -625,12 +625,73 @@ describe("release states its meaning for retained buffers", () => {
     // Deleting it here would be strictly more destructive than the
     // cross-identity MERGE `findMergeTarget` refuses, and would happen with
     // no decision and no log.
-    registry.release(EPIC, "keep");
+    registry.release(EPIC, "keep", null);
 
     expect(registry.retainedCountForTests(EPIC)).toBe(1);
     const rows = registry.getUnsyncedEdits();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.queueSize).toBe(6);
+  });
+
+  it("retains the DIRTY LIVE handle when an owner-identity rotation releases it", () => {
+    // Codex #1243 post-merge. `"keep"` spared only buffers ALREADY retained;
+    // the live handle - the one actually holding the user's unsynced edits -
+    // was disposed either way. An owner-identity rotation leaves `userId`
+    // unchanged, so the provider takes this arm, and a same-host
+    // re-enrollment therefore destroyed a dirty Y.Doc with no confirmation
+    // and no retention.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const live = buildRetentionHandle(EPIC, true, 4);
+    registry.acquireMounted(EPIC, () => live.handle);
+    expect(registry.getUnsyncedEdits()).toHaveLength(1);
+
+    registry.release(EPIC, "keep", {
+      hostStamp: "host-a",
+      ownerIdentityKey: "key-before-rotation",
+    });
+
+    // The live session is gone, but its edits are not: they are now a
+    // retained buffer, reachable through the same projection every close and
+    // quit gate reads.
+    expect(registry.get(EPIC)).toBeNull();
+    expect(registry.retainedCountForTests(EPIC)).toBe(1);
+    const rows = registry.getUnsyncedEdits();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.queueSize).toBe(4);
+    // Retained, not destroyed - and its transport is detached so it stops
+    // dialing a host this window has left.
+    expect(live.closed()).toBe(true);
+  });
+
+  it("disposes a CLEAN live handle on the same path rather than retaining an empty buffer", () => {
+    // The control: retention is for unsynced edits, not for every release.
+    // Retaining a clean handle would put an empty row in the quit sheet and
+    // nothing would ever retire it.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const live = buildRetentionHandle(EPIC, false, 0);
+    registry.acquireMounted(EPIC, () => live.handle);
+
+    registry.release(EPIC, "keep", {
+      hostStamp: "host-a",
+      ownerIdentityKey: "key-before-rotation",
+    });
+
+    expect(registry.retainedCountForTests(EPIC)).toBe(0);
+    expect(registry.getUnsyncedEdits()).toHaveLength(0);
+  });
+
+  it("destroys the dirty live handle when the caller names NO identity, which is how a user change stays a security boundary", () => {
+    // `null` is the decision the user-change arm takes: another person is at
+    // the keyboard and no prior identity's document may survive it. The
+    // rotation arm above is the one that must not.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const live = buildRetentionHandle(EPIC, true, 4);
+    registry.acquireMounted(EPIC, () => live.handle);
+
+    registry.release(EPIC, "keep", null);
+
+    expect(registry.retainedCountForTests(EPIC)).toBe(0);
+    expect(registry.getUnsyncedEdits()).toHaveLength(0);
   });
 
   it("still reclaims on tab close, where the user answered for the buffer", () => {
@@ -644,7 +705,7 @@ describe("release states its meaning for retained buffers", () => {
       editsTransferredToReplacement: false,
     });
 
-    registry.release(EPIC, "discard");
+    registry.release(EPIC, "discard", null);
 
     // The control for the arm above: `"keep"` must not have made reclamation
     // unreachable, or the retention would simply leak instead.

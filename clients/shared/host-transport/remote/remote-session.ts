@@ -262,6 +262,13 @@ export interface IRemoteSession<
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
     abortSignal: AbortSignal | null,
+    /**
+     * Per-request response budget, overriding `UNARY_RESPONSE_TIMEOUT_MS`.
+     * `undefined` keeps the shared default, so only a caller that has a reason
+     * to wait longer changes anything - the extension is scoped to that call
+     * rather than re-scoring every unary this session carries.
+     */
+    responseTimeoutMs: number | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -627,11 +634,25 @@ export class RemoteSession<
    *
    * Any failure AFTER the request frame is enqueued still surfaces as a plain
    * `HostRpcError` — the host may already have begun applying it.
+   *
+   * The RESPONSE TIMEOUT is the one carve-out, and it is not an exception to
+   * that reasoning but an expression of it: the request provably reached the
+   * wire and we merely stopped waiting, which is exactly what
+   * `HostTransportFailureError` means. It stays non-retryable (only
+   * `RetryableTransportError` asks for another attempt), so "may already have
+   * been applied" still holds — the class says dispatched-but-unheard, not
+   * safe-to-resend. `WsRpcClient` has always drawn the line here
+   * (`transientFailure` picks the transport failure once `requestSent`), so
+   * this is the two transports agreeing rather than a new semantic. A caller
+   * that can recover from an unheard read — `host.getRateLimitUsage` collects
+   * the host's gauge cache shortly after — can only do so if it can TELL, and
+   * a plain `HostRpcError` reads as a delivered answer.
    */
   async sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
     abortSignal: AbortSignal | null,
+    responseTimeoutMs: number | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
@@ -714,6 +735,7 @@ export class RemoteSession<
         connection.hostRpcMerged ?? {},
         params,
         requestId,
+        responseTimeoutMs,
       );
     }
 
@@ -725,6 +747,7 @@ export class RemoteSession<
       hostCanonical,
       params,
       requestId,
+      responseTimeoutMs,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -853,6 +876,7 @@ export class RemoteSession<
     hostCanonical: SchemaVersion,
     params: unknown,
     requestId: string,
+    responseTimeoutMs: number | undefined,
   ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
@@ -873,7 +897,7 @@ export class RemoteSession<
       {
         const timer = setTimeout(() => {
           this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
-        }, UNARY_RESPONSE_TIMEOUT_MS);
+        }, responseTimeoutMs ?? UNARY_RESPONSE_TIMEOUT_MS);
         this.pendingUnary.set(streamId, {
           requestId,
           method,
@@ -1652,6 +1676,7 @@ export class RemoteSession<
     hostRpcMerged: ConnectionManifest,
     params: RequestOfMethod<RpcRegistry, Method>,
     requestId: string,
+    responseTimeoutMs: number | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return resolveUnavailableMethodDegrade({
       registry: this.options.rpcRegistry,
@@ -1677,6 +1702,10 @@ export class RemoteSession<
           input.hostCanonical,
           input.params,
           requestId,
+          // The degraded retry is the SAME caller request on an older
+          // contract, so it keeps that caller's budget rather than silently
+          // reverting to the shared default.
+          responseTimeoutMs,
         ),
     }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
@@ -2935,8 +2964,11 @@ function abortedRequestError(
   });
 }
 
-function unaryTimeoutError(requestId: string, method: string): HostRpcError {
-  return new HostRpcError({
+function unaryTimeoutError(
+  requestId: string,
+  method: string,
+): HostTransportFailureError {
+  return new HostTransportFailureError({
     code: "RPC_ERROR",
     message: `Remote unary '${method}' timed out awaiting a response`,
     requestId,
