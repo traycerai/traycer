@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -33,6 +34,11 @@ afterEach(() => {
 });
 
 const PLATFORM_ARCH = "darwin-arm64";
+
+// Root ignores directory permission bits, so the EACCES-enumerate case below
+// would read the chmod-0o000 dir cleanly and assert nothing.
+const runsAsRoot =
+  typeof process.getuid === "function" && process.getuid() === 0;
 
 // The nested `host-runtime/resources/...` shape a release archive extracts
 // into - `resolveResourcesDir`'s "one level down" branch.
@@ -221,6 +227,8 @@ describe("preserveLegacyProviders", () => {
       preserveLegacyProviders(oldInstall, newInstall, logger),
     ).resolves.toBeUndefined();
 
+    // A genuinely absent source (ENOENT) is `isExpectedAbsence` territory -
+    // silent, not warned. This already pins that: zero warn calls.
     expect(warnings).toEqual([]);
     expect(existsSync(join(newResources, "legacy-providers"))).toBe(false);
   });
@@ -287,4 +295,51 @@ describe("preserveLegacyProviders", () => {
       ),
     ).toBe(true);
   });
+
+  it.skipIf(platform() === "win32" || runsAsRoot)(
+    "warns with the source path (not silently skipping) when a source dir exists but cannot be enumerated, and still processes the OTHER source",
+    async () => {
+      const oldInstall = join(sandboxRoot, "old-install");
+      const newInstall = join(sandboxRoot, "new-install");
+      const oldResources = wrappedResources(oldInstall);
+      const newResources = wrappedResources(newInstall);
+
+      const oldProvidersDir = join(oldResources, "providers");
+      mkdirSync(oldProvidersDir, { recursive: true });
+      // Seed the OTHER source ("legacy-providers") so this proves it is
+      // still processed despite "providers" being unreadable.
+      writePack(oldResources, "legacy-providers", "opencode", "0.9.0");
+      writePack(newResources, "providers", "ripgrep", "14.0.0");
+
+      // EACCES, not ENOENT/ENOTDIR: the dir genuinely exists but this
+      // process cannot list it - the one case `isExpectedAbsence` must NOT
+      // swallow silently.
+      chmodSync(oldProvidersDir, 0o000);
+
+      const { logger, warnings } = capturingLogger();
+      try {
+        await expect(
+          preserveLegacyProviders(oldInstall, newInstall, logger),
+        ).resolves.toBeUndefined();
+
+        expect(warnings.length).toBe(1);
+        expect(warnings[0]?.message).toBe(
+          "Host install carryover could not enumerate a provider source",
+        );
+        expect(warnings[0]?.fields.source).toBe(oldProvidersDir);
+
+        // The other source is still processed despite the first one's
+        // enumeration failure - one bad source must not abort the loop.
+        expect(
+          existsSync(
+            join(newResources, "legacy-providers", "opencode", PLATFORM_ARCH),
+          ),
+        ).toBe(true);
+      } finally {
+        // Restore permissions so afterEach's rmSync(sandboxRoot) can actually
+        // enumerate and delete it.
+        chmodSync(oldProvidersDir, 0o755);
+      }
+    },
+  );
 });

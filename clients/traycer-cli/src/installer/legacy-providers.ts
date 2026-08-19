@@ -40,6 +40,17 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
+// The one readdir failure that means "no source here" rather than "a source
+// we could not look at": a slim old install legitimately has no providers
+// dir at all (ENOENT), or a stray file sits where the dir would be (ENOTDIR).
+function isExpectedAbsence(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
+}
+
 // Locate `resources/` inside an install directory: at the top level, or one
 // level down - the same two-level strategy `resolveHostExecutable` uses for
 // the binary, since release archives wrap the runtime in `host-runtime/`.
@@ -91,7 +102,20 @@ export async function preserveLegacyProviders(
       let entries: Dirent[];
       try {
         entries = await readdir(source, { withFileTypes: true });
-      } catch {
+      } catch (cause) {
+        // Any other failure (EACCES, transient I/O) means packs that DO
+        // exist were never enumerated and will die with the old install
+        // when `invalidateAsideDir` runs - name the source and cause; the
+        // per-pack warn below cannot, because no pack was ever seen.
+        if (!isExpectedAbsence(cause)) {
+          logger.warn(
+            "Host install carryover could not enumerate a provider source",
+            {
+              source,
+              message: cause instanceof Error ? cause.message : String(cause),
+            },
+          );
+        }
         continue;
       }
       for (const entry of entries) {
