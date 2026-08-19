@@ -22,7 +22,7 @@ import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
-import { useHostClient } from "@/lib/host";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -64,8 +64,10 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const deleteChat = useEpicDeleteChat();
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact();
+  // The row's terminal lives on the host the switcher LISTS (the Epic
+  // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(
-    useHostClient(),
+    useEpicSessionHostClient(),
     "Couldn't close the terminal.",
     true,
   );

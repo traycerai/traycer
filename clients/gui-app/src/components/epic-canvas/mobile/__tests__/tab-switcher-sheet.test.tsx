@@ -55,8 +55,8 @@ vi.mock("@/components/epic-canvas/mobile/switcher-panel-embed", () => ({
     <div data-testid="mock-panel-embed" data-category={props.category} />
   ),
 }));
-vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => HOST_ID,
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => HOST_ID,
 }));
 
 // Method support is client-wide handshake evidence; drive it directly so the

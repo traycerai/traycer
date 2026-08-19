@@ -3,7 +3,7 @@ import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicRenameTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
-import { useHostClient } from "@/lib/host";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /** The renameable kinds a mobile surface can address, and how they rename. */
@@ -47,7 +47,7 @@ export function useSwitcherRename(
   const renameChat = useEpicRenameChat();
   const renameTuiAgent = useEpicRenameTuiAgent();
   const renameArtifact = useEpicRenameArtifact(true);
-  const renameTerminal = useTerminalRenameFor(useHostClient());
+  const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
 
   return useCallback(
     (kind, nodeId, title) => {

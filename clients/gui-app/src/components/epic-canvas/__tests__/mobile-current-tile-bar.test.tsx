@@ -51,8 +51,11 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
     isPending: false,
   }),
 }));
-vi.mock("@/hooks/terminal/use-terminal-rename-mutation", () => ({
-  useTerminalRename: () => ({
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => null,
+}));
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({
     mutate: mutateSpies.renameTerminal,
     isPending: false,
   }),

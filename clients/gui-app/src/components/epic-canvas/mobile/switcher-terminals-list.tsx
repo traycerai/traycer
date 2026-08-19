@@ -11,9 +11,9 @@ import { SwitcherNewTerminalRow } from "@/components/epic-canvas/mobile/switcher
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { useHostClient } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
@@ -36,7 +36,11 @@ interface SwitcherListProps {
  */
 export function SwitcherTerminalsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
-  const hostClient = useHostClient();
+  // The Epic SESSION's client, never the ambient one: during a re-point the
+  // window can address host B while this canvas still projects host A's Epic,
+  // and an ambient read would list (and mutate) B's terminals under A's rows -
+  // the same defect the desktop sidebar fixed (see epic-terminal-sidebar).
+  const hostClient = useEpicSessionHostClient();
   const list = useTerminalList({ kind: "epic", epicId }, hostClient);
   const sessions = (list.data?.sessions ?? []).filter((session) =>
     isVisibleEpicTerminalSession(session, epicId),
@@ -82,7 +86,7 @@ function SwitcherTerminalRow(props: {
   const { session, epicId, tabId, onClose } = props;
   const activate = useSwitcherActivate(epicId, tabId, onClose);
   const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
-  const hostId = useAddressableHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const hostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const label = terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,

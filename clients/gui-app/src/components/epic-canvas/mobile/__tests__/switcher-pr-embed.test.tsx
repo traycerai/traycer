@@ -27,8 +27,8 @@ vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   isMobileViewport: () => viewportState.isMobile,
 }));
 
-vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => HOST_ID,
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => HOST_ID,
 }));
 
 const tileNavigationMocks = vi.hoisted(() => ({
