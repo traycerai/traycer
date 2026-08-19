@@ -59,6 +59,72 @@ export function resolveMinimapWindow(input: {
   };
 }
 
+export interface MinimapListRevealGeometry {
+  /** Row top in scroll-content coordinates (`offsetTop` within the scroller). */
+  readonly rowTop: number;
+  readonly rowHeight: number;
+  /** The scroller's own inline padding, revealed alongside an end row. */
+  readonly paddingTop: number;
+  readonly paddingBottom: number;
+  readonly scrollTop: number;
+  /** The scroller's `clientHeight`. */
+  readonly viewHeight: number;
+  readonly scrollHeight: number;
+}
+
+function finite(value: number): number | null {
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Minimal scroll that reveals the active row, in **layout** coordinates — the
+ * caller must not feed this `getBoundingClientRect()` values. The card mounts
+ * mid `zoom-in-95` entry animation, and a scaled rect shrinks every measured
+ * distance by 5%, which left a card opened deep in a long list short of the
+ * row it was opening on.
+ *
+ * The scroller's padding counts as part of an end row, so the first row lands
+ * at 0 and the last lands at the very end of the track rather than flush
+ * against the card's edge.
+ *
+ * Returns `null` when the row is already revealed (no write).
+ */
+export function resolveMinimapListScrollTop(
+  geometry: MinimapListRevealGeometry,
+): number | null {
+  const rowTop = finite(geometry.rowTop);
+  const rowHeight = finite(geometry.rowHeight);
+  const scrollTop = finite(geometry.scrollTop);
+  const viewHeight = finite(geometry.viewHeight);
+  const scrollHeight = finite(geometry.scrollHeight);
+  if (
+    rowTop === null ||
+    rowHeight === null ||
+    scrollTop === null ||
+    viewHeight === null ||
+    scrollHeight === null
+  ) {
+    return null;
+  }
+
+  const maxScroll = Math.max(0, scrollHeight - viewHeight);
+  if (maxScroll === 0) return null;
+
+  const revealTop = rowTop - Math.max(0, finite(geometry.paddingTop) ?? 0);
+  const revealBottom =
+    rowTop + rowHeight + Math.max(0, finite(geometry.paddingBottom) ?? 0);
+
+  let next = scrollTop;
+  if (revealTop < scrollTop) {
+    next = revealTop;
+  } else if (revealBottom > scrollTop + viewHeight) {
+    next = revealBottom - viewHeight;
+  }
+
+  const clamped = Math.max(0, Math.min(next, maxScroll));
+  return clamped === scrollTop ? null : clamped;
+}
+
 export interface MinimapTrackMetrics {
   readonly itemCount: number;
   /** Gap between adjacent markers on the visible track. */

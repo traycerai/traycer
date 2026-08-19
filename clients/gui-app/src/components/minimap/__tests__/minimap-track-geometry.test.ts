@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MINIMAP_TRACK_END_HIT_PADDING,
   MINIMAP_TRACK_ITEM_SPACING,
+  resolveMinimapListScrollTop,
   resolveMinimapTrackHeightStyle,
   resolveMinimapTrackTopPercent,
   resolveMinimapTrackTopStyle,
@@ -135,5 +136,72 @@ describe("equivalence with the chat rail's wrappers", () => {
         ),
       ).toBe(resolveChatTurnMinimapTopStyle(index, itemCount));
     }
+  });
+});
+
+describe("resolveMinimapListScrollTop", () => {
+  // 20 rows of 28px inside an 8px-padded scroller, showing 160px at a time.
+  const ROW_HEIGHT = 28;
+  const PADDING_TOP = 4;
+  const PADDING_BOTTOM = 8;
+  const VIEW_HEIGHT = 160;
+  const SCROLL_HEIGHT = PADDING_TOP + 20 * ROW_HEIGHT + PADDING_BOTTOM;
+  const MAX_SCROLL = SCROLL_HEIGHT - VIEW_HEIGHT;
+
+  function geometryForRow(index: number, scrollTop: number) {
+    return {
+      rowTop: PADDING_TOP + index * ROW_HEIGHT,
+      rowHeight: ROW_HEIGHT,
+      paddingTop: PADDING_TOP,
+      paddingBottom: PADDING_BOTTOM,
+      scrollTop,
+      viewHeight: VIEW_HEIGHT,
+      scrollHeight: SCROLL_HEIGHT,
+    };
+  }
+
+  it("lands at the very end when the last row is current", () => {
+    expect(resolveMinimapListScrollTop(geometryForRow(19, 0))).toBe(MAX_SCROLL);
+  });
+
+  it("lands at the very top when the first row is current", () => {
+    expect(resolveMinimapListScrollTop(geometryForRow(0, MAX_SCROLL))).toBe(0);
+  });
+
+  it("reveals a row below the fold at the bottom edge, padding included", () => {
+    expect(resolveMinimapListScrollTop(geometryForRow(9, 0))).toBe(
+      PADDING_TOP + 10 * ROW_HEIGHT + PADDING_BOTTOM - VIEW_HEIGHT,
+    );
+  });
+
+  it("leaves an already-revealed row alone", () => {
+    expect(resolveMinimapListScrollTop(geometryForRow(2, 0))).toBeNull();
+  });
+
+  it("does not scroll a list that fits", () => {
+    expect(
+      resolveMinimapListScrollTop({
+        ...geometryForRow(1, 0),
+        scrollHeight: VIEW_HEIGHT,
+      }),
+    ).toBeNull();
+  });
+
+  it("aligns a row taller than the viewport to its top", () => {
+    expect(
+      resolveMinimapListScrollTop({
+        ...geometryForRow(10, MAX_SCROLL),
+        rowHeight: VIEW_HEIGHT * 2,
+      }),
+    ).toBe(PADDING_TOP + 10 * ROW_HEIGHT - PADDING_TOP);
+  });
+
+  it("ignores non-finite geometry rather than scrolling to NaN", () => {
+    expect(
+      resolveMinimapListScrollTop({
+        ...geometryForRow(19, 0),
+        rowTop: Number.NaN,
+      }),
+    ).toBeNull();
   });
 });

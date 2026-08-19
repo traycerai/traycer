@@ -3,6 +3,7 @@ import {
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { resolveMinimapListScrollTop } from "@/components/minimap/minimap-track-geometry";
 import { cn } from "@/lib/utils";
 
 export interface MinimapListEntry {
@@ -35,16 +36,28 @@ export function MinimapListCard({
   const listRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<number, HTMLButtonElement>());
 
+  // Layout boxes, never `getBoundingClientRect()`: the card measures itself on
+  // the mount that also starts its `zoom-in-95` entry animation, whose 0.95
+  // scale is already live on the first style resolution. Rect math read every
+  // distance 5% short, so a card opened at the end of a long list stopped
+  // short of the end. `offsetTop` / `clientHeight` / `scrollTop` are
+  // transform-independent; the list carries `relative` so it is the rows'
+  // offsetParent and `offsetTop` is read in its own content coordinates.
   useLayoutEffect(() => {
     const row = currentRowRef.current;
     const list = listRef.current;
     if (row === null || list === null) return;
-    const rowRect = row.getBoundingClientRect();
-    const listRect = list.getBoundingClientRect();
-    const above = rowRect.top - listRect.top;
-    const below = rowRect.bottom - listRect.bottom;
-    if (above >= 0 && below <= 0) return;
-    list.scrollTop = Math.max(0, list.scrollTop + (above < 0 ? above : below));
+    const listStyle = window.getComputedStyle(list);
+    const next = resolveMinimapListScrollTop({
+      rowTop: row.offsetTop,
+      rowHeight: row.offsetHeight,
+      paddingTop: Number.parseFloat(listStyle.paddingTop),
+      paddingBottom: Number.parseFloat(listStyle.paddingBottom),
+      scrollTop: list.scrollTop,
+      viewHeight: list.clientHeight,
+      scrollHeight: list.scrollHeight,
+    });
+    if (next !== null) list.scrollTop = next;
   }, [currentIndex]);
 
   const moveFocus = (index: number): void => {
@@ -89,7 +102,7 @@ export function MinimapListCard({
         {title}
       </div>
       <div
-        className="min-h-0 overflow-y-auto overscroll-contain p-2 pt-1"
+        className="relative min-h-0 overflow-y-auto overscroll-contain p-2 pt-1"
         ref={listRef}
       >
         <div className="flex flex-col gap-0.5">
