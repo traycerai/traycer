@@ -1290,6 +1290,67 @@ describe("armLocalHostBootOnSignIn", () => {
     expect(gate.listenerCount()).toBe(0);
   });
 
+  it("the disposer stops an attempt BEFORE it can start provisioning", async () => {
+    // The sibling test above proves a disposed actor cannot re-ARM. This one
+    // proves it cannot START: teardown landing inside the `getStatus()` round
+    // trip left the continuation free to walk on to `convergeReady`, spawning
+    // a CLI `host ensure` against a controller the app was tearing down.
+    // Recording terminal in `dispose()` alone did not cover that - the guard
+    // has to be read again AFTER the await, which is what this asserts.
+    //
+    // Deterministic, not a scheduler race: `getStatus` parks on a promise this
+    // test holds the resolver for, so `dispose()` runs from the test body
+    // while the attempt is provably inside that await.
+    vi.useFakeTimers();
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const convergeReadyCalls: boolean[] = [];
+    let statusCalls = 0;
+    let releaseStatus: (status: HostControllerStatus) => void = () => undefined;
+    const controller: IpcHostController = {
+      ...base,
+      getStatus: () => {
+        statusCalls += 1;
+        return new Promise<HostControllerStatus>((resolve) => {
+          releaseStatus = resolve;
+        });
+      },
+      convergeReady: (force: boolean) => {
+        convergeReadyCalls.push(force);
+        return Promise.resolve({
+          kind: "ok" as const,
+          value: { running: true, version: "1.4.0" },
+        });
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    const dispose = armLocalHostBootOnSignIn(controller, gate);
+    await vi.advanceTimersByTimeAsync(0);
+    // Premise: the attempt is parked inside the status round trip, and has
+    // not yet decided anything.
+    expect(statusCalls).toBe(1);
+    expect(convergeReadyCalls).toEqual([]);
+
+    dispose();
+    // The account is STILL SIGNED IN, so nothing else in the continuation
+    // would turn it back: without the post-await guard the status below
+    // (never installed, `activation: "unavailable"`) sends it straight into
+    // `convergeReady`.
+    expect(gate.isSignedIn()).toBe(true);
+    releaseStatus(neverInstalled(false));
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
+
+    expect(convergeReadyCalls).toEqual([]);
+    expect(gate.listenerCount()).toBe(0);
+  });
+
   it("the disposer fences an attempt that is already in flight", async () => {
     // `dispose()` used to clear the timer and the subscription without
     // setting `settled` - so an attempt already in flight when it ran had its

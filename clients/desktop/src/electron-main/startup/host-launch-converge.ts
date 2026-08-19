@@ -290,6 +290,15 @@ export function armLocalHostBootOnSignIn(
     void (async () => {
       try {
         const status = await hostController.getStatus();
+        // DISPOSAL RE-READ, and it belongs here for the same reason the
+        // consent re-read below does: the decision to act was taken before a
+        // round trip, and teardown can land inside it. Recording terminal in
+        // `dispose()` stops this continuation from arming another RETRY, but
+        // by itself it would let this one still reach `convergeReady` and
+        // enqueue a provisioning mutation - a CLI `host ensure` starting
+        // against a controller the app is tearing down. The check has to be
+        // before the mutation, not only after it.
+        if (settled) return;
         if (status.removedByUser) {
           log.info(
             "[host-controller] local host boot skipped for removed host",
