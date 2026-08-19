@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   queryOptions,
   useQuery,
+  useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type {
@@ -77,10 +78,11 @@ function traycerHostStatusQueryKey(
   onMount: "when-stale" | "fresh-read",
   freshReadId: number,
 ): readonly unknown[] {
-  if (traycerCli === null) return ["runner.traycer.hostStatus", "disabled"];
-  const shared = runnerQueryKeys.traycerHostStatus(traycerCli);
-  if (onMount === "when-stale") return shared;
-  return [...shared, "fresh-read", freshReadId];
+  if (traycerCli === null) return runnerQueryKeys.traycerHostStatusDisabled();
+  if (onMount === "when-stale") {
+    return runnerQueryKeys.traycerHostStatus(traycerCli);
+  }
+  return runnerQueryKeys.traycerHostStatusFreshRead(traycerCli, freshReadId);
 }
 
 function traycerHostStatusQueryOptions(
@@ -133,7 +135,7 @@ export function useRunnerTraycerHostStatusQuery(
   // renders, and a hook cannot be taken conditionally - so `when-stale`
   // callers burn an integer and ignore it.
   const [freshReadId] = useState(nextFreshReadId);
-  return useQuery(
+  const query = useQuery(
     traycerHostStatusQueryOptions(
       runnerHost.traycerCli,
       opts.pollIntervalMs,
@@ -141,4 +143,50 @@ export function useRunnerTraycerHostStatusQuery(
       freshReadId,
     ),
   );
+  usePublishFreshReadToSharedEntry({
+    enabled: opts.onMount === "fresh-read",
+    traycerCli: runnerHost.traycerCli,
+    data: query.data,
+  });
+  return query;
+}
+
+/**
+ * A private entry keeps the failure panel's read out of everyone else's
+ * dedup - it should not also keep the answer to itself.
+ *
+ * The disclosure beside that panel is CLOSED at the moment of a failure, so it
+ * is not polling, and its shared entry still holds the snapshot it took while
+ * the start was healthy. Opening `Show details` does not refresh it either:
+ * `shouldFetchOptionally` gates on `query !== prevQuery || prevOptions.enabled
+ * === false`, and a disclosure merely toggling its own `pollIntervalMs`
+ * satisfies neither - so the interval it just armed is the first thing that
+ * refetches, up to 1.5s later. Until then the user reads a bootstrap.log tail
+ * from before the crash, beside a panel describing the crash.
+ *
+ * So the fresh read is published to the shared entry: it is a newer sample of
+ * the same file, and the canonical key is where every other reader looks.
+ *
+ * Written unconditionally rather than behind a "only if newer" timestamp
+ * guard. Such a guard reads as prudent and is in fact unreachable: this effect
+ * re-runs only when THIS reader's own data changes, which happens only when
+ * this reader refetches - and that sample is always the newest one it has. A
+ * later poll by the disclosure cannot provoke a re-run, so there is nothing to
+ * roll back. (`dataUpdatedAt` would not even discriminate: `setQueryData` and
+ * a resolving read routinely stamp the same millisecond.)
+ */
+function usePublishFreshReadToSharedEntry(args: {
+  readonly enabled: boolean;
+  readonly traycerCli: ITraycerCli | null;
+  readonly data: TraycerHostStatusSnapshot | undefined;
+}): void {
+  const queryClient = useQueryClient();
+  const { enabled, traycerCli, data } = args;
+  useEffect(() => {
+    if (!enabled || traycerCli === null || data === undefined) return;
+    queryClient.setQueryData(
+      runnerQueryKeys.traycerHostStatus(traycerCli),
+      data,
+    );
+  }, [enabled, traycerCli, data, queryClient]);
 }

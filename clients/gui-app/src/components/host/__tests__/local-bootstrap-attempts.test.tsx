@@ -300,6 +300,34 @@ describe("<LocalBootstrapAttempts />", () => {
     });
   });
 
+  it("publishes its fresh sample to the SHARED entry the closed disclosure reads", async () => {
+    // The private key must not keep the answer to itself. `Show details` is
+    // closed when a start fails, so the disclosure is not polling and its
+    // shared entry still holds the pre-crash snapshot; opening it does not
+    // refetch either (`shouldFetchOptionally` needs a changed query or a
+    // previously-disabled one, and toggling `pollIntervalMs` is neither), so
+    // the interval it arms is the first refresh - up to 1.5s of a pre-crash
+    // bootstrap.log tail beside a panel describing the crash.
+    const traycerCli = new MockTraycerCli();
+    traycerCli.hostStatusSnapshot = AFTER_FAILURE;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(
+      runnerQueryKeys.traycerHostStatus(traycerCli),
+      BEFORE_FAILURE,
+    );
+
+    mount(traycerCli, queryClient);
+    await screen.findByTestId("local-host-bootstrap-details");
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData(runnerQueryKeys.traycerHostStatus(traycerCli)),
+      ).toEqual(AFTER_FAILURE);
+    });
+  });
+
   it("draws the fetched attempt once, then holds it without polling", async () => {
     // A single read, not a poll: the user is reading a crash report and the CLI
     // is not re-run underneath them. `refetchInterval` is off for this reader;
