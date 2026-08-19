@@ -2360,7 +2360,7 @@ describe("RemoteSession wake", () => {
       // backoff already owns; it does NOT hurry it. If arriving were enough,
       // ambient polling reads would collapse the long tiers continuously and
       // an unavailable host would be dialed in a loop.
-      const pending = session.sendUnary("host.status", {}, null);
+      const pending = session.sendUnary("host.status", {}, null, undefined);
       await new Promise((resolve) => setTimeout(resolve, 1_200));
       // A collapse would have dialed by now (its draw tops out at 1s); the
       // jittered 4s tier cannot have fired this early.
@@ -2397,7 +2397,7 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       await expect(
-        session.sendUnary("host.status", {}, null),
+        session.sendUnary("host.status", {}, null, undefined),
       ).rejects.toBeInstanceOf(RetryableTransportError);
       // Still pre-send, so the caller keeps its retry license - and the
       // failure it just proved has accelerated the NEXT redial rather than
@@ -2436,7 +2436,12 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      const pending = session.sendUnary("host.status", {}, controller.signal);
+      const pending = session.sendUnary(
+        "host.status",
+        {},
+        controller.signal,
+        undefined,
+      );
       controller.abort();
       // An abandoned read is not evidence anybody is waiting, so its
       // rejection carries no wake - the abort error is not retryable.
