@@ -34,7 +34,18 @@ export function LocalBootstrapAttempts(): ReactNode {
     pollIntervalMs: null,
     onMount: "always",
   });
-  if (!status.isFetchedAfterMount || status.data === undefined) return null;
+  // BOTH halves, and the second one is not redundant. `isFetchedAfterMount` is
+  // `dataUpdateCount > initial || errorUpdateCount > initial` (query-core's
+  // `queryObserver`), so a forced refetch that REJECTS flips it true - while
+  // React Query keeps serving the cached snapshot, which on a refetch error is
+  // by design. That pair is precisely the state this component exists to
+  // refuse: fetched-after-mount, and the data is still the pre-failure one.
+  // `isSuccess` is what says the fetch this mount forced actually landed.
+  //
+  // A read we could not take is narrated as nothing, not as an older attempt:
+  // the card around this still has its heading, the error, Retry and the log
+  // path, so the user is not left without the affordance that matters.
+  if (!status.isFetchedAfterMount || !status.isSuccess) return null;
   const summary = summariseBootstrapAttempts(status.data.bootstrapMarkers);
   if (summary === null) return null;
   return (

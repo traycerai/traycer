@@ -109,6 +109,49 @@ describe("<LocalBootstrapAttempts />", () => {
     expect(hostStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("draws NOTHING when the forced refetch rejects, rather than the cached snapshot it kept", async () => {
+    // THE OTHER HALF of the guard above, and the reason it is two conditions.
+    // `isFetchedAfterMount` is `dataUpdateCount > initial || errorUpdateCount >
+    // initial` (query-core's `queryObserver`), so a REJECTED refetch flips it
+    // true - and React Query deliberately keeps serving the cached data on a
+    // refetch error. Fetched-after-mount plus pre-failure data is exactly the
+    // state this component must refuse, and a guard written on
+    // `isFetchedAfterMount` alone renders it.
+    const traycerCli = new MockTraycerCli();
+    const hostStatus = vi
+      .spyOn(traycerCli, "hostStatus")
+      .mockRejectedValue(new Error("traycer host status exited with code 1"));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(
+      runnerQueryKeys.traycerHostStatus(traycerCli),
+      BEFORE_FAILURE,
+    );
+
+    mount(traycerCli, queryClient);
+
+    // The refetch is attempted and fails...
+    await waitFor(() => {
+      expect(hostStatus).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryState(runnerQueryKeys.traycerHostStatus(traycerCli))
+          ?.status,
+      ).toBe("error");
+    });
+    // ...the cached snapshot survives in the cache (which is the premise, not
+    // an incidental)...
+    expect(
+      queryClient.getQueryData(runnerQueryKeys.traycerHostStatus(traycerCli)),
+    ).toEqual(BEFORE_FAILURE);
+    // ...and nothing is drawn from it. The card around this still carries its
+    // heading, the error, Retry and the log path.
+    expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
+    expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
+  });
+
   it("draws the fetched attempt once, then holds it without polling", async () => {
     // A single read, not a poll: the user is reading a crash report and the CLI
     // is not re-run underneath them. `refetchInterval` is off for this reader;

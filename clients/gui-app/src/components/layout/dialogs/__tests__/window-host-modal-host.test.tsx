@@ -33,17 +33,24 @@ const hostStatus = vi.hoisted(() => ({
         readonly bootstrapLogTail: string;
       }
     | undefined,
-  // A result that HAS BEEN FETCHED since the reader mounted. The attempt panel
-  // (`LocalBootstrapAttempts`) refuses the cached snapshot and waits for a fresh
-  // read, so a mock that only carried `data` would hide the panel from every
-  // test here. That fresh-read behaviour is exercised against the real hook in
-  // `local-bootstrap-attempts.test.tsx`; this seam is only about what the
-  // surfaces do with a snapshot once they have one.
-  isFetchedAfterMount: true,
 }));
 
+// The reader flags are DERIVED from `data`, never set beside it. The attempt
+// panel (`LocalBootstrapAttempts`) refuses a cached snapshot and refuses the
+// one a failed refetch retained, so it reads `isFetchedAfterMount` and
+// `isSuccess` as well - and a seam that let a fixture assert `isSuccess` while
+// `data` was `undefined` would be a state the real hook cannot produce, which
+// is how a mock ends up testing itself. `success` means "there is a snapshot"
+// here exactly as it does there. The fresh-read behaviour itself is exercised
+// against the real hook in `local-bootstrap-attempts.test.tsx`; this seam is
+// only about what the surfaces do with a snapshot once they legitimately have
+// one.
 vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
-  useRunnerTraycerHostStatusQuery: () => hostStatus,
+  useRunnerTraycerHostStatusQuery: () => ({
+    data: hostStatus.data,
+    isFetchedAfterMount: hostStatus.data !== undefined,
+    isSuccess: hostStatus.data !== undefined,
+  }),
 }));
 
 /**

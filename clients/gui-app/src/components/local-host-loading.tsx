@@ -307,11 +307,16 @@ function HostProgress(props: HostProgressProps) {
           the bar and fall back to the stage's short label ("Setting up…"),
           which merely repeated the heading two lines up in fewer words - the
           third of the three "Setting up"s - and later carried the byte count
-          (see above). The row keeps its height either way (`min-h-4` is
-          `text-ui-xs`'s line height) so a percentage appearing at the
-          download stage does not bounce the centred card, and `tabular-nums`
-          keeps "9%" -> "10%" from shifting as it counts. */}
-      <div className="flex min-h-4 items-center justify-center text-ui-xs text-muted-foreground tabular-nums">
+          (see above). The row keeps its height either way so a percentage
+          appearing at the download stage does not bounce the centred card,
+          and `tabular-nums` keeps "9%" -> "10%" from shifting as it counts.
+
+          `min-h-[1lh]`, not a fixed `min-h-4`: the reserved slot is exactly
+          one line OF THIS ROW, so it follows `text-ui-xs`'s line height
+          instead of restating today's value of it in `rem` - the two agree
+          now and a token change is where they would stop. The unit is
+          already used across the composer surfaces. */}
+      <div className="flex min-h-[1lh] items-center justify-center text-ui-xs text-muted-foreground tabular-nums">
         {indeterminate ? null : <span>{props.percent}%</span>}
       </div>
     </div>
