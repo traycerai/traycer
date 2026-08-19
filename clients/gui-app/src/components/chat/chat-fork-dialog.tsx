@@ -192,8 +192,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     };
   }, []);
 
+  // The rare case where the source itself is still untitled: there is no name
+  // to inherit, so the dialog defaults to EMPTY instead of baking the
+  // "Untitled agent" render fallback into a permanent stored title. An empty
+  // submit stores "" and the fork is AI-titled from its first message, same
+  // as the automatic fork paths; the input's placeholder says what happens.
+  const sourceUntitled =
+    target !== null && target.sourceChatTitle.trim().length === 0;
   const defaultTitle =
-    target === null
+    target === null || sourceUntitled
       ? ""
       : `${forkModeTitlePrefix(target.forkMode)} - ${displayChatTitle(target.sourceChatTitle)}`;
 
@@ -503,6 +510,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const canSubmit = canSubmitFork({
     target,
     trimmedTitle,
+    sourceUntitled,
     modelResolved,
     hasStagedPreselection: stagedIntentForKey !== null,
     createPending: createChat.isPending,
@@ -789,6 +797,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               }}
               disabled={createChat.isPending}
               aria-label="Fork agent title"
+              placeholder={sourceUntitled ? "Untitled agent" : ""}
             />
           </label>
           <section className="flex min-w-0 flex-col gap-2">
@@ -1013,6 +1022,10 @@ function ChatForkHostCapabilityProbe(props: {
 function canSubmitFork(input: {
   readonly target: ChatForkDialogTarget | null;
   readonly trimmedTitle: string;
+  /** The source chat's stored title is empty - the one case an empty title
+   *  field may submit: it stores "" and the fork is AI-titled on its first
+   *  send, instead of freezing the "Untitled agent" render fallback. */
+  readonly sourceUntitled: boolean;
   readonly modelResolved: boolean;
   readonly hasStagedPreselection: boolean;
   readonly createPending: boolean;
@@ -1028,7 +1041,7 @@ function canSubmitFork(input: {
   readonly requiresStagedPreselection: boolean;
 }): boolean {
   if (input.target === null) return false;
-  if (input.trimmedTitle.length === 0) return false;
+  if (input.trimmedTitle.length === 0 && !input.sourceUntitled) return false;
   if (!input.modelResolved) return false;
   if (input.createPending) return false;
   if (!input.hostClientResolved) return false;

@@ -21,6 +21,12 @@ export interface UseChatCloneOnHostSwitchArgs {
   readonly chatId: string;
   readonly sourceHostId: string;
   readonly sourceSettings: ChatRunSettings | null;
+  /** The source chat's RAW stored title, or `""` when this banner has no
+   *  record to read one from - a dead tile whose record was retracted is
+   *  exactly that case. Empty leaves the clone's name to the host's
+   *  fork-seed gap-fill, which reads the title off the copy the history
+   *  came from. */
+  readonly sourceTitle: string;
   /** The owner this banner was showing, or `null` when it does not know. */
   readonly sourceOwnerUserId: string | null;
 }
@@ -98,6 +104,7 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
       sourceChatId: args.chatId,
       sourceOwnerUserId: args.sourceOwnerUserId,
       sourceHostId: args.sourceHostId,
+      sourceTitle: args.sourceTitle,
       targetHostId: cloneTargetHostId,
       directory: binding.directory,
       sourceSettings: args.sourceSettings,
@@ -140,6 +147,7 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
     args.sourceOwnerUserId,
     args.sourceHostId,
     args.sourceSettings,
+    args.sourceTitle,
   ]);
 
   return { clone, cloning };

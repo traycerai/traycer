@@ -17,6 +17,7 @@ import type {
 import type { CreateChatCommand } from "@/lib/commands/actions/new-chat";
 import {
   cloneChatOnHostSwitch,
+  cloneChatTitle,
   type CloneChatOnHostSwitchArgs,
 } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import {
@@ -225,6 +226,7 @@ function baseCloneArgs(
     // so they answer it the way a surface that does not know does.
     sourceOwnerUserId: null,
     sourceHostId: "source-host",
+    sourceTitle: "",
     targetHostId: "target-host",
     directory: fakeDirectory([]),
     createChat: vi.fn<CreateChatCommand>(),
@@ -507,6 +509,76 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
       // the request still states that explicitly rather than omitting it.
       sourceOwnerUserId: null,
     });
+  });
+
+  it("stamps a fork-decorated sourceTitle (prefix + target host label) as the request's title, so a clone keeps its name", async () => {
+    const createChat = vi.fn<CreateChatCommand>();
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        sourceSettings: null,
+        sourceTitle: "Source chat title",
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+    const [request] = createChat.mock.calls[0];
+    expect(request.title).toBe("Fork - Source chat title (Target)");
+  });
+
+  it("carries the decorated title through to the settings-only retry too, where no fork seed exists to gap-fill it", async () => {
+    // The fork BOUNDARY rather than the whole `forkSource`: it is the only
+    // part this test is about, and recording the discriminator keeps the
+    // assertion a plain value comparison (an `expect.objectContaining` here
+    // would be an `any` assignment).
+    const calls: Array<{
+      readonly boundary: string | null;
+      readonly title: string;
+    }> = [];
+    const createChat: CreateChatCommand = (request, callbacks) => {
+      const forkSource = request.forkSource ?? null;
+      calls.push({
+        boundary: forkSource === null ? null : forkSource.boundary,
+        title: request.title,
+      });
+      if (forkSource !== null) {
+        callbacks.onError(checkpointUnavailableError());
+        return;
+      }
+      callbacks.onSuccess({ chatId: "cloned-chat" });
+    };
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        sourceSettings: null,
+        sourceTitle: "Source chat title",
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(calls).toEqual([
+      { boundary: "latest", title: "Fork - Source chat title (Target)" },
+      { boundary: null, title: "Fork - Source chat title (Target)" },
+    ]);
+  });
+
+  it("cloneChatTitle: untitled source stays empty (AI-titling eligible); a vanished target drops only the label", () => {
+    expect(cloneChatTitle("", "Target")).toBe("");
+    expect(cloneChatTitle("   ", "Target")).toBe("");
+    expect(cloneChatTitle("My agent", null)).toBe("Fork - My agent");
+    expect(cloneChatTitle("My agent", "Target")).toBe(
+      "Fork - My agent (Target)",
+    );
   });
 
   it("retries settings-only exactly once on a checkpoint-unavailable refusal, and reports it exactly once", async () => {
