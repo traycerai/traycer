@@ -4,6 +4,7 @@ import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
+import { NotesHeaderControl } from "@/components/notes/notes-header-control";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
 import { ProjectProfileSwitcher } from "@/components/layout/header/project-profile-switcher";
 import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
@@ -139,6 +140,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         {!navDisabled && showGlobalResourceMonitor ? (
           <ResourceMonitorPopover className={undefined} />
         ) : null}
+        {!navDisabled ? <NotesHeaderControl /> : null}
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
