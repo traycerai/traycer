@@ -177,6 +177,21 @@ describe("historyItemMatchesProject", () => {
     ).toBe(true);
   });
 
+  it("matches equivalent UNC paths that differ only in casing", () => {
+    const uncProfile: ProjectProfile = {
+      ...PROFILE,
+      folderPaths: ["\\\\Fileserver\\Repos\\Titanos"],
+      primaryPath: "\\\\Fileserver\\Repos\\Titanos",
+      epicIds: [],
+    };
+    expect(
+      historyItemMatchesProject(
+        item("unc-case", [], ["\\\\FILESERVER\\repos\\titanos"]),
+        uncProfile,
+      ),
+    ).toBe(true);
+  });
+
   it("does not treat POSIX paths as case-insensitive", () => {
     expect(
       historyItemMatchesProject(
