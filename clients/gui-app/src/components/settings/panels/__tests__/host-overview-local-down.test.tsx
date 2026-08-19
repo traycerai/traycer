@@ -39,6 +39,7 @@ vi.mock("sonner", () => ({
 }));
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -287,6 +288,111 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
         name: "Reinstall Traycer",
       });
       expect(stillThere.disabled).toBe(false);
+    });
+  });
+
+  it("a second reinstall attempt keeps the button mounted while it is in flight", async () => {
+    // `removalRepairable` used to read `removed || reinstall.isError` alone.
+    // The FIRST attempt never exposes the missing `isPending` term: `removed`
+    // stays true until the removal-state refetch lands, so the button
+    // survives on that alone regardless of `isError`. It takes a SECOND click
+    // to expose the hole - by then the refetch has landed (`removed: false`),
+    // and starting a new attempt resets `reinstall.isError` back to false the
+    // instant it goes pending. With `isPending` missing from the disjunction,
+    // every term is false and the whole cluster - the Button, its testid, its
+    // own inline spinner - unmounts for the length of the retry. The fix
+    // (`host-overview-panel.tsx`'s `removalRepairable`) adds
+    // `reinstall.isPending` back into the disjunction; without it, the
+    // `getByRole` lookup below the second click finds no button at all.
+    const getRemovalState =
+      vi.fn<() => Promise<{ readonly removedByUser: boolean }>>();
+    getRemovalState.mockResolvedValueOnce({ removedByUser: true });
+    getRemovalState.mockResolvedValue({ removedByUser: false });
+    const clearRemoval = vi.fn((): Promise<void> => Promise.resolve());
+
+    // The SECOND convergeReady call is parked on this gate so the test can
+    // assert the retry is provably still in flight before letting it finish -
+    // the same manually-released-promise idiom
+    // `host-overview-mutations.test.tsx` uses for its arm-time-capture suite.
+    // The first call resolves immediately to a failure, exactly like the
+    // sibling test above.
+    let releaseSecondConverge: (() => void) | null = null;
+    const secondConvergeGate = new Promise<void>((resolve) => {
+      releaseSecondConverge = resolve;
+    });
+    let convergeCalls = 0;
+    const convergeReady = vi.fn(
+      async (force: boolean): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        void force;
+        convergeCalls += 1;
+        if (convergeCalls === 1) {
+          return {
+            kind: "failed",
+            message: "installer could not write to the prefix",
+          };
+        }
+        await secondConvergeGate;
+        return { kind: "ok", value: { running: true, version: "1.5.0" } };
+      },
+    );
+    const management = buildOverviewManagement({
+      getRemovalState,
+      clearRemoval,
+      convergeReady,
+    });
+    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+
+    const reinstallButton = await screen.findByRole("button", {
+      name: "Reinstall Traycer",
+    });
+    fireEvent.click(reinstallButton);
+
+    // Let the first attempt fully settle, including its refetch - `removed`
+    // really is false now, not merely "hasn't answered yet".
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(getRemovalState.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't reinstall Traycer on This Mac.",
+        expect.objectContaining({
+          description: "installer could not write to the prefix",
+        }),
+      );
+    });
+
+    const retryButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Reinstall Traycer",
+    });
+    fireEvent.click(retryButton);
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledTimes(2);
+    });
+    // The retry is provably still in flight - parked on the gate above, not
+    // merely fast enough to have already finished - and the button must
+    // still be in the DOM, disabled by `busy` (which includes
+    // `reinstall.isPending`).
+    await waitFor(() => {
+      const stillMounted = screen.getByRole<HTMLButtonElement>("button", {
+        name: "Reinstall Traycer",
+      });
+      expect(stillMounted.disabled).toBe(true);
+    });
+
+    // Let the retry finish so no unhandled rejection is left dangling past
+    // the end of the test.
+    await act(async () => {
+      releaseSecondConverge?.();
+      await secondConvergeGate;
+    });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "Reinstalling Traycer on This Mac…",
+      );
     });
   });
 });

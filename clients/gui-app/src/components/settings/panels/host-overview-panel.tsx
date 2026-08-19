@@ -1033,7 +1033,14 @@ function LocalHostDownActions(props: {
   // main's boot actor settled at launch on the sentinel it saw then. Keeping
   // the button on `isError` makes the retry the user's to take now; the next
   // launch sees a cleared sentinel and boots on the ladder without them.
-  const removalRepairable = removed || reinstall.isError;
+  //
+  // `isPending` is in here for the RETRY, and its absence was a real hole: a
+  // second click flips the mutation error -> pending, so with the sentinel
+  // already cleared BOTH other terms go false and the button unmounted for
+  // the length of the attempt - taking its own spinner with it. The first
+  // attempt never showed that, because `removed` is still true until the
+  // sentinel refetch lands, which is why it needs its own test.
+  const removalRepairable = removed || reinstall.isError || reinstall.isPending;
   const busy = props.settingUp || reinstall.isPending;
   return (
     <div className="flex shrink-0 items-center gap-1.5">

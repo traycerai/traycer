@@ -23,8 +23,10 @@ import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
  *
  * Same settle mapping as `useRunnerConvergeReady`: `ok`/`busy` resolve, every
  * other outcome rejects with its message so the caller's `onError` toast says
- * why. Same cache invalidations too, plus the removal-state read the sentinel
- * clear just changed.
+ * why. It invalidates the same two reads that hook does, plus the removal
+ * state the sentinel clear just changed - but from `onSettled` rather than
+ * `onSuccess`, because a rejected converge can still have moved all three
+ * (see the comment on that handler).
  */
 export function useRunnerReinstallTraycer(): UseMutationResult<
   MutationOutcome<ConvergeReadyOk>,
@@ -47,26 +49,29 @@ export function useRunnerReinstallTraycer(): UseMutationResult<
       }
       throw new Error(outcome.message);
     },
+    // SETTLED, NOT SUCCESS - for all three reads, because every one of them
+    // can have been changed by an attempt that ends up rejecting:
+    //
+    //  - the sentinel clear lands first and survives a failed converge, so a
+    //    removal-state read that still says "removed" would keep offering
+    //    Reinstall for a host that is now merely not installed;
+    //  - `installed-not-converged` says in as many words that the BYTES
+    //    COMMITTED and only the post-commit service invariant failed, and
+    //    `failed` can follow a service cycle that already wrote its record.
+    //    Refreshing those two only on success left Settings reporting "Not
+    //    installed" for a machine whose install had landed.
     onSettled: () => {
-      // Settled, not success: the sentinel clear can have landed even when the
-      // converge that followed it failed, and a removal-state read that still
-      // says "removed" would keep offering Reinstall for a host that is now
-      // merely not installed.
       if (hostManagement !== null) {
         void queryClient.invalidateQueries({
           queryKey: runnerQueryKeys.hostRemovalState(hostManagement),
         });
+        void queryClient.invalidateQueries({
+          queryKey: runnerQueryKeys.hostInstalledRecord(hostManagement),
+        });
       }
-    },
-    onSuccess: () => {
       if (traycerCli !== null) {
         void queryClient.invalidateQueries({
           queryKey: runnerQueryKeys.traycerHostStatus(traycerCli),
-        });
-      }
-      if (hostManagement !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostInstalledRecord(hostManagement),
         });
       }
     },
