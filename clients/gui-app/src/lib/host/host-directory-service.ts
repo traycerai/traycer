@@ -787,58 +787,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return this.snapshot();
     }
     if (outcome.kind === "failed") {
-      // Retention is only safe for the SAME identity. The era fence above has
-      // already proven `era.identity` is the CURRENT identity, so a mismatch
-      // here means the retained list was committed by a previous account:
-      // keeping it would show (and keep bindable) A's machines under B's
-      // session until some later read succeeds. Dropping is not a genuine
-      // outcome - it clears the foreign list without claiming the registry
-      // said "empty".
-      //
-      // A previous account leaves behind TWO pieces of state, and the rows are
-      // only one of them: it also leaves the record that the registry has been
-      // read (`hasObservedRemoteListing`), which is what makes an empty merged
-      // directory mean "you own no hosts" rather than "nobody has managed to
-      // ask" (see `getCardinality`). Keying this branch on the rows alone
-      // misses the account that legitimately owned NO hosts - it committed an
-      // empty listing, so there is nothing to drop and the branch never ran,
-      // and its observation went on answering `zero` for the next account. The
-      // condition is therefore identity plus EITHER residue.
-      const foreignIdentity = this.lastCommitIdentity !== era.identity;
-      const foreignObservedListing =
-        foreignIdentity && this.hasObservedRemoteListing;
-      if (
-        foreignIdentity &&
-        (this.remoteEntries.length > 0 || foreignObservedListing)
-      ) {
-        appLogger.debug(
-          "[host-directory] dropping directory state committed under a previous identity after a failed refresh",
-          {
-            remoteCount: this.remoteEntries.length,
-            observedListing: this.hasObservedRemoteListing,
-          },
-        );
-        this.remoteEntries = [];
-        this.lastCommitIdentity = null;
-        this.hasObservedRemoteListing = false;
-        // Un-observing moves `getCardinality()` between its unknown and zero
-        // answers over a directory that is empty EITHER WAY, so the snapshot
-        // compare would swallow the one emit that redraws the readiness gate -
-        // the same reason the commit path emits unconditionally when the flag
-        // flips. Dropping rows always changes the snapshot, so that half can
-        // still take the compared emit.
-        if (foreignObservedListing) {
-          this.emit();
-        } else {
-          this.emitIfSnapshotChanged();
-        }
-        return this.snapshot();
-      }
-      appLogger.debug(
-        "[host-directory] refresh failed, retaining last-known remote entries",
-        { remoteCount: this.remoteEntries.length },
-      );
-      return this.snapshot();
+      return this.retainOrDropAfterFailedRefresh(era);
     }
     // The ORDERING fence, completing the era fences above. A constructive
     // read issued under a superseded credential is still ALLOWED to commit -
@@ -919,6 +868,70 @@ export class HostDirectoryService implements IHostDirectoryService {
       remoteCount: this.remoteEntries.length,
       totalCount: this.snapshot().length,
     });
+    return this.snapshot();
+  }
+
+  /**
+   * The `failed` arm of `performRefresh`, split out for the complexity
+   * budget: retention is only safe for the same identity, so a foreign
+   * residue (rows OR a foreign observed-listing flag) is dropped rather than
+   * retained, with the emit choice mirroring the commit path's
+   * flag-flip rule.
+   */
+  private retainOrDropAfterFailedRefresh(
+    era: AuthEra,
+  ): readonly HostDirectoryEntry[] {
+    // Retention is only safe for the SAME identity. The era fence above has
+    // already proven `era.identity` is the CURRENT identity, so a mismatch
+    // here means the retained list was committed by a previous account:
+    // keeping it would show (and keep bindable) A's machines under B's
+    // session until some later read succeeds. Dropping is not a genuine
+    // outcome - it clears the foreign list without claiming the registry
+    // said "empty".
+    //
+    // A previous account leaves behind TWO pieces of state, and the rows are
+    // only one of them: it also leaves the record that the registry has been
+    // read (`hasObservedRemoteListing`), which is what makes an empty merged
+    // directory mean "you own no hosts" rather than "nobody has managed to
+    // ask" (see `getCardinality`). Keying this branch on the rows alone
+    // misses the account that legitimately owned NO hosts - it committed an
+    // empty listing, so there is nothing to drop and the branch never ran,
+    // and its observation went on answering `zero` for the next account. The
+    // condition is therefore identity plus EITHER residue.
+    const foreignIdentity = this.lastCommitIdentity !== era.identity;
+    const foreignObservedListing =
+      foreignIdentity && this.hasObservedRemoteListing;
+    if (
+      foreignIdentity &&
+      (this.remoteEntries.length > 0 || foreignObservedListing)
+    ) {
+      appLogger.debug(
+        "[host-directory] dropping directory state committed under a previous identity after a failed refresh",
+        {
+          remoteCount: this.remoteEntries.length,
+          observedListing: this.hasObservedRemoteListing,
+        },
+      );
+      this.remoteEntries = [];
+      this.lastCommitIdentity = null;
+      this.hasObservedRemoteListing = false;
+      // Un-observing moves `getCardinality()` between its unknown and zero
+      // answers over a directory that is empty EITHER WAY, so the snapshot
+      // compare would swallow the one emit that redraws the readiness gate -
+      // the same reason the commit path emits unconditionally when the flag
+      // flips. Dropping rows always changes the snapshot, so that half can
+      // still take the compared emit.
+      if (foreignObservedListing) {
+        this.emit();
+      } else {
+        this.emitIfSnapshotChanged();
+      }
+      return this.snapshot();
+    }
+    appLogger.debug(
+      "[host-directory] refresh failed, retaining last-known remote entries",
+      { remoteCount: this.remoteEntries.length },
+    );
     return this.snapshot();
   }
 
