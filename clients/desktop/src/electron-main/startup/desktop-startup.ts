@@ -42,7 +42,7 @@ import { applyQuitDecision } from "./quit-decision";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
 import {
   applyHostUpdateMenuState,
-  armFirstInstallOnSignIn,
+  armLocalHostBootOnSignIn,
   refreshHostRegistryIfNotRemoved,
   runLaunchHostConvergeReconcile,
   signedInGateFromAuthSession,
@@ -255,7 +255,7 @@ interface AppServices {
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
   readonly zoomController: WindowZoomController;
-  /** Consent gate for the first install; see `armFirstInstallOnSignIn`. */
+  /** Consent gate for booting the local host; see `armLocalHostBootOnSignIn`. */
   readonly signedIn: SignedInGate;
 }
 
@@ -952,11 +952,12 @@ export function runDeferred<
 ): void {
   runBackground(state, services);
   // Two DIFFERENT actions, deliberately not merged. The reconciler settles the
-  // debt of a host that exists; the first install creates one that never has,
-  // and only for a signed-in user (see `armFirstInstallOnSignIn`). Arming is
+  // debt of a host that exists, once; the boot actor gets a host RUNNING -
+  // installing one that never existed if need be - only for a signed-in user,
+  // and keeps retrying until it is (see `armLocalHostBootOnSignIn`). Arming is
   // synchronous and cheap - it either acts now or waits for the sign-in that
   // the pre-retirement renderer gate also waited for.
-  armFirstInstallOnSignIn(services.hostController, services.signedIn);
+  armLocalHostBootOnSignIn(services.hostController, services.signedIn);
   void timed("deferred", "host-launch-converge", () =>
     runLaunchHostConvergeReconcile(services.hostController, services.menu),
   );

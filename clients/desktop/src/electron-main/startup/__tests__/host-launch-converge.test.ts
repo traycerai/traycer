@@ -53,9 +53,10 @@ vi.mock("../../ipc/host-management-ipc", () => ({
 // Imported after the mocks above so the module under test picks them up.
 const {
   runLaunchHostConvergeReconcile,
-  armFirstInstallOnSignIn,
+  armLocalHostBootOnSignIn,
   refreshHostRegistryIfNotRemoved,
   applyHostUpdateMenuState,
+  LOCAL_HOST_BOOT_RETRY_LADDER_MS,
 } = await import("../host-launch-converge");
 const { __setDesktopStartupTestHooks, runDesktopStartup } =
   await import("../desktop-startup");
@@ -686,17 +687,29 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   });
 });
 
-describe("armFirstInstallOnSignIn", () => {
+describe("armLocalHostBootOnSignIn", () => {
   const neverInstalled = (removedByUser: boolean): HostControllerStatus => ({
     ...fakeStatus(false, "unavailable", removedByUser),
     installedVersion: null,
   });
 
-  it("re-arms after an attempt that THREW, instead of retiring the only first-install actor", async () => {
+  afterEach(() => {
+    // Several tests below arm real ladder timers via `vi.useFakeTimers()`;
+    // leaving fake timers active would leak into whatever test runs next in
+    // this file.
+    vi.useRealTimers();
+  });
+
+  it("re-arms after an attempt that THREW, and retries on the ladder rather than a sign-in edge", async () => {
     // `settled` used to be set before the async work started, and the detached
     // promise had no catch: one transient IPC failure retired first-install for
     // the whole process, leaving a signed-in user in the unavailable-host flow
-    // until a manual retry or a relaunch.
+    // until a manual retry or a relaunch. The retry now comes from the LADDER
+    // TIMER a throw schedules (when still signed in), not from waiting on
+    // another sign-in edge - so this also proves a same-state sign-in change
+    // (e.g. a token refresh) does not bypass the ladder while a timer is
+    // already pending.
+    vi.useFakeTimers();
     const controller = fakeHostController(
       neverInstalled(false),
       {
@@ -718,30 +731,36 @@ describe("armFirstInstallOnSignIn", () => {
     };
     const gate = fakeSignedInGate(true);
 
-    armFirstInstallOnSignIn(throwsFirstTime, gate);
+    armLocalHostBootOnSignIn(throwsFirstTime, gate);
+    await vi.advanceTimersByTimeAsync(0);
 
-    await vi.waitFor(() => {
-      expect(statusCalls).toBe(1);
-    });
+    expect(statusCalls).toBe(1);
     expect(controller.convergeReadyCalls).toEqual([]);
     // The subscription is what the failure re-arms against, so it must still
     // be there - the immediate-attempt path used to skip subscribing entirely.
     expect(gate.listenerCount()).toBe(1);
 
+    // A same-state "signed in" edge must not bypass the ladder while a retry
+    // timer is already pending.
     gate.signIn();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusCalls).toBe(1);
 
-    await vi.waitFor(() => {
-      expect(controller.convergeReadyCalls).toEqual([false]);
-    });
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0]);
+    expect(controller.convergeReadyCalls).toEqual([false]);
     // And the retry that succeeded settles it: no third attempt.
     expect(gate.listenerCount()).toBe(0);
   });
 
-  it("stays armed after a RESOLVED non-ok outcome, and retries on the next sign-in edge", async () => {
-    // Deliberately NOT a throw. The throw path was fixed in `2e05de85` and its
-    // test sits directly above; this is the surviving half - `busy`,
-    // `deferred` and `failed` are ordinary resolved values, so they never
-    // reach the catch, and `outcome.kind` was logged without being read.
+  it("stays armed after a RESOLVED non-ok outcome, and retries on the ladder without a sign-in edge", async () => {
+    // Deliberately NOT a throw. The throw path is the test directly above;
+    // this is the surviving half - `busy`, `deferred` and `failed` are
+    // ordinary resolved values, so they never reach the catch, and
+    // `outcome.kind` was logged without being read. Before the ladder this
+    // arm only retried on the NEXT SIGN-IN EDGE, which for a user who stays
+    // signed in never comes - the local host used to come up again without
+    // anyone signing in again, and the user has ruled it must keep doing so.
+    // This test drives the whole ladder with NO sign-in edge at all.
     //
     // `convergeReady` is OVERRIDDEN rather than configured, because
     // `fakeHostController` hardcodes it to `ok` - its second parameter is
@@ -749,6 +768,7 @@ describe("armFirstInstallOnSignIn", () => {
     // there drives the SUCCESS path while looking like a failure fixture, and
     // an earlier version of this test did exactly that and passed for the
     // wrong reason.
+    vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
       {
@@ -778,11 +798,9 @@ describe("armFirstInstallOnSignIn", () => {
     };
     const gate = fakeSignedInGate(true);
 
-    armFirstInstallOnSignIn(failsConverge, gate);
-
-    await vi.waitFor(() => {
-      expect(convergeCalls).toEqual([false]);
-    });
+    armLocalHostBootOnSignIn(failsConverge, gate);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(convergeCalls).toEqual([false]);
 
     // Premise, positively: the convergence really ran and really came back
     // non-ok, and nothing is installed. Without this the assertions below are
@@ -791,23 +809,32 @@ describe("armFirstInstallOnSignIn", () => {
     expect(await failsConverge.getStatus()).toMatchObject({
       installedVersion: null,
     });
-
-    // Fixed: the arm survives, so the sign-in edge it retries from is still
-    // subscribed...
     expect(gate.listenerCount()).toBe(1);
 
-    // ...and that edge produces a REAL second attempt which, this time
-    // succeeding, settles the arm. Asserting only the listener count would
-    // pass on a build that kept the subscription and never acted on it - the
-    // point is the retry, not the bookkeeping.
+    // Nothing happens until rung 0 actually elapses - no sign-in edge fires
+    // anywhere in this test.
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0] - 1);
+    expect(convergeCalls).toEqual([false]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(convergeCalls).toEqual([false, false]);
+
+    // Rung 1 is longer than rung 0 - the ladder actually backs off between
+    // failures rather than retrying at a flat interval.
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[1] - 1);
+    expect(convergeCalls).toEqual([false, false]);
+
+    // ...and that third attempt, this time succeeding, settles the arm.
+    // Asserting only the listener count would pass on a build that kept the
+    // subscription and never acted on it - the point is the retry, not the
+    // bookkeeping.
     outcomeKind = "ok";
-    gate.signIn();
-    await vi.waitFor(() => {
-      expect(convergeCalls).toEqual([false, false]);
-    });
-    await vi.waitFor(() => {
-      expect(gate.listenerCount()).toBe(0);
-    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(convergeCalls).toEqual([false, false, false]);
+    expect(gate.listenerCount()).toBe(0);
+
+    // Settled arms never re-arm, no matter how long the process keeps running.
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
+    expect(convergeCalls).toEqual([false, false, false]);
   });
 
   it("installs once for a signed-in user on a machine that has never had a host", async () => {
@@ -820,7 +847,7 @@ describe("armFirstInstallOnSignIn", () => {
       { kind: "ok", value: { activated: true } },
     );
 
-    armFirstInstallOnSignIn(controller, fakeSignedInGate(true));
+    armLocalHostBootOnSignIn(controller, fakeSignedInGate(true));
 
     await vi.waitFor(() => {
       expect(controller.convergeReadyCalls).toEqual([false]);
@@ -841,7 +868,7 @@ describe("armFirstInstallOnSignIn", () => {
     );
     const gate = fakeSignedInGate(false);
 
-    armFirstInstallOnSignIn(controller, gate);
+    armLocalHostBootOnSignIn(controller, gate);
     await Promise.resolve();
 
     // Installing a background service is consent-bearing: the retired renderer
@@ -863,7 +890,7 @@ describe("armFirstInstallOnSignIn", () => {
       { kind: "ok", value: { activated: true } },
     );
     const gate = fakeSignedInGate(false);
-    armFirstInstallOnSignIn(controller, gate);
+    armLocalHostBootOnSignIn(controller, gate);
 
     gate.signIn();
 
@@ -911,7 +938,7 @@ describe("armFirstInstallOnSignIn", () => {
       },
     };
 
-    armFirstInstallOnSignIn(signsOutMidStatus, gate);
+    armLocalHostBootOnSignIn(signsOutMidStatus, gate);
 
     await vi.waitFor(() => {
       expect(statusCalls).toBe(1);
@@ -949,7 +976,7 @@ describe("armFirstInstallOnSignIn", () => {
       { kind: "ok", value: { activated: true } },
     );
 
-    armFirstInstallOnSignIn(controller, fakeSignedInGate(true));
+    armLocalHostBootOnSignIn(controller, fakeSignedInGate(true));
     await vi.waitFor(() => {
       expect(controller.getStatusCalls).toBeGreaterThan(0);
     });
@@ -960,7 +987,12 @@ describe("armFirstInstallOnSignIn", () => {
     expect(controller.convergeReadyCalls).toEqual([]);
   });
 
-  it("does nothing when a host is already installed - that debt is the reconciler's", async () => {
+  it("does nothing when a host is already RUNNING - activation debt is the reconciler's", async () => {
+    // Fixture is `activated` (a live runtime), so this still describes a
+    // one-shot no-op for THIS actor. What changed is the neighbour case: an
+    // INSTALLED host that is NOT running is no longer the reconciler's alone
+    // to catch - see "boots an INSTALLED host that is not running at launch"
+    // below, which is this actor's now too.
     const controller = fakeHostController(
       fakeStatus(false, "activated", false),
       {
@@ -970,12 +1002,292 @@ describe("armFirstInstallOnSignIn", () => {
       { kind: "ok", value: { activated: true } },
     );
 
-    armFirstInstallOnSignIn(controller, fakeSignedInGate(true));
+    armLocalHostBootOnSignIn(controller, fakeSignedInGate(true));
     await vi.waitFor(() => {
       expect(controller.getStatusCalls).toBeGreaterThan(0);
     });
 
     expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  it("boots an INSTALLED host that is not running at launch, and leaves a running one alone", async () => {
+    // The widened contract: the owed condition is "no host RUNNING"
+    // (`activation === "unavailable"`), not "nothing installed"
+    // (`installedVersion === null`). An installed host with no running
+    // service is owed a boot from THIS actor now - not only from the
+    // one-shot reconciler, which can miss it entirely (see the regression
+    // test right below this one) - and a host that answers with any other
+    // activation value is already running and must settle without ever
+    // calling `convergeReady`.
+    const downController = fakeHostController(
+      fakeStatus(false, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const downGate = fakeSignedInGate(true);
+
+    armLocalHostBootOnSignIn(downController, downGate);
+
+    await vi.waitFor(() => {
+      expect(downController.convergeReadyCalls).toEqual([false]);
+    });
+    expect(downGate.listenerCount()).toBe(0);
+
+    const runningController = fakeHostController(
+      fakeStatus(false, "activated", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const runningGate = fakeSignedInGate(true);
+
+    armLocalHostBootOnSignIn(runningController, runningGate);
+
+    await vi.waitFor(() => {
+      expect(runningController.getStatusCalls).toBeGreaterThan(0);
+    });
+    expect(runningController.convergeReadyCalls).toEqual([]);
+    // Settling because a host is running IS the point - assert it directly
+    // rather than only the absence of a converge call, which would pass just
+    // as happily against an arm that got stuck.
+    await vi.waitFor(() => {
+      expect(runningGate.listenerCount()).toBe(0);
+    });
+  });
+
+  it("a half-completed first install (bytes landed, service never started) is still owed a boot", async () => {
+    // THE regression this widening exists to prevent: before it, `settle()`
+    // fired the moment `installedVersion !== null`, so an install whose bytes
+    // landed but whose service never registered looked "done" to this actor
+    // on its very first status read - a half-completed first install left the
+    // machine hostless with nothing retrying. The status read below models
+    // exactly that machine: `neverInstalled` on the FIRST read, then
+    // `installed but unavailable` on every read after - and the arm must ask
+    // `convergeReady` a second time rather than treat the now-installed bytes
+    // as a settled outcome.
+    vi.useFakeTimers();
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    let getStatusCalls = 0;
+    let convergeOutcome: MutationOutcome<ConvergeReadyOk> = {
+      kind: "failed",
+      message: "installer could not write to the prefix",
+    };
+    const convergeReadyCalls: boolean[] = [];
+    const controller: IpcHostController = {
+      ...base,
+      getStatus: () => {
+        getStatusCalls += 1;
+        return Promise.resolve(
+          getStatusCalls === 1
+            ? neverInstalled(false)
+            : fakeStatus(false, "unavailable", false),
+        );
+      },
+      convergeReady: (force: boolean) => {
+        convergeReadyCalls.push(force);
+        return Promise.resolve(convergeOutcome);
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armLocalHostBootOnSignIn(controller, gate);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(convergeReadyCalls).toEqual([false]);
+    expect(gate.listenerCount()).toBe(1);
+
+    convergeOutcome = {
+      kind: "ok",
+      value: { running: true, version: "1.4.0" },
+    };
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0]);
+    // The second read now carries a real `installedVersion` - and the arm did
+    // NOT settle on that; it asked `convergeReady` again.
+    expect(convergeReadyCalls).toEqual([false, false]);
+    expect(gate.listenerCount()).toBe(0);
+  });
+
+  it("a `busy` outcome is a running host and settles the arm", async () => {
+    // `busy` is the CLI's HOST_BUSY: only a LIVE host declines a byte swap, so
+    // this is a running host by the same reading the selection authority's
+    // ensure port makes elsewhere - not a resolved failure that earns a
+    // retry.
+    vi.useFakeTimers();
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const convergeReadyCalls: boolean[] = [];
+    const controller: IpcHostController = {
+      ...base,
+      convergeReady: (force: boolean) => {
+        convergeReadyCalls.push(force);
+        return Promise.resolve({
+          kind: "busy" as const,
+          continuation: "retry-with-force" as const,
+          message: "host is mid-mutation",
+        });
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armLocalHostBootOnSignIn(controller, gate);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(convergeReadyCalls).toEqual([false]);
+    expect(gate.listenerCount()).toBe(0);
+
+    // No timer was ever scheduled - a settled arm has nothing left to fire.
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0]);
+    expect(convergeReadyCalls).toEqual([false]);
+  });
+
+  it("a `deferred` outcome (CLI lock held elsewhere) earns the next rung, not a sign-in wait", async () => {
+    // `deferred` is an ordinary resolved outcome, same as `failed` above - it
+    // never reaches the catch, and it clears on its own once the other
+    // Traycer process releases the CLI lock, so it earns a ladder retry
+    // exactly like `failed` rather than falling back to the pre-ladder
+    // "wait for a sign-in edge" behaviour.
+    vi.useFakeTimers();
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    let outcomeKind: MutationOutcome<ConvergeReadyOk>["kind"] = "deferred";
+    const convergeReadyCalls: boolean[] = [];
+    const controller: IpcHostController = {
+      ...base,
+      convergeReady: (force: boolean) => {
+        convergeReadyCalls.push(force);
+        return Promise.resolve(
+          outcomeKind === "ok"
+            ? {
+                kind: "ok" as const,
+                value: { running: true, version: "1.4.0" },
+              }
+            : {
+                kind: "deferred" as const,
+                message: "another Traycer process holds the CLI lock",
+              },
+        );
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armLocalHostBootOnSignIn(controller, gate);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(convergeReadyCalls).toEqual([false]);
+    expect(gate.listenerCount()).toBe(1);
+
+    outcomeKind = "ok";
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0]);
+    expect(convergeReadyCalls).toEqual([false, false]);
+    expect(gate.listenerCount()).toBe(0);
+  });
+
+  it("CONSENT: a sign-out mid-ladder cancels the pending retry, and the next sign-in starts the ladder over", async () => {
+    // The other half of consent-as-precondition: a sign-out must stop a
+    // pending retry from firing into an account that just left, and the
+    // ladder itself must not carry over - a real re-login gets the same
+    // rung-0 pace a fresh sign-in would, never the tail end of the previous
+    // attempt's backoff.
+    vi.useFakeTimers();
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const convergeReadyCalls: boolean[] = [];
+    const controller: IpcHostController = {
+      ...base,
+      convergeReady: (force: boolean) => {
+        convergeReadyCalls.push(force);
+        return Promise.resolve({
+          kind: "failed" as const,
+          message: "installer could not write to the prefix",
+        });
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    armLocalHostBootOnSignIn(controller, gate);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(convergeReadyCalls).toEqual([false]);
+
+    gate.signOut();
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
+    // No attempt fires while signed out, however long the process runs.
+    expect(convergeReadyCalls).toEqual([false]);
+
+    gate.signIn();
+    await vi.advanceTimersByTimeAsync(0);
+    // A real re-login attempts immediately - there is no timer left pending
+    // to gate it.
+    expect(convergeReadyCalls).toEqual([false, false]);
+
+    // The ladder reset: the NEXT retry lands after rung 0, not rung 1.
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0] - 1);
+    expect(convergeReadyCalls).toEqual([false, false]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(convergeReadyCalls).toEqual([false, false, false]);
+  });
+
+  it("the disposer clears a pending retry", async () => {
+    // The returned disposer is the one thing standing between an armed retry
+    // ladder and a leaked timer once main no longer wants this actor running.
+    vi.useFakeTimers();
+    const base = fakeHostController(
+      neverInstalled(false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const convergeReadyCalls: boolean[] = [];
+    const controller: IpcHostController = {
+      ...base,
+      convergeReady: (force: boolean) => {
+        convergeReadyCalls.push(force);
+        return Promise.resolve({
+          kind: "failed" as const,
+          message: "installer could not write to the prefix",
+        });
+      },
+    };
+    const gate = fakeSignedInGate(true);
+
+    const dispose = armLocalHostBootOnSignIn(controller, gate);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(convergeReadyCalls).toEqual([false]);
+
+    dispose();
+    await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
+
+    expect(convergeReadyCalls).toEqual([false]);
+    expect(gate.listenerCount()).toBe(0);
   });
 });
 

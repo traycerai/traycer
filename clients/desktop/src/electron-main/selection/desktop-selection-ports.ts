@@ -682,9 +682,9 @@ export class DesktopLocalHostOutageSignal implements LocalHostOutageSignal {
  * provisioning controller.
  *
  * P1.1 composes it and NEVER calls it: the caller is P1.3's derivation, which
- * requests `ensure` when it wants the local host and that host is down, and
- * surfaces the outcome as the local lease's own status. Wiring it now means
- * P1.3 adds a call site, not a port.
+ * requests `ensure` whenever the local host is down (target-independent by
+ * decision, 2026-08-19), and surfaces the outcome as the local lease's own
+ * status. Wiring it now means P1.3 adds a call site, not a port.
  */
 export function createDesktopLocalHostEnsurePort(
   hostController: IpcHostController,
@@ -693,15 +693,26 @@ export function createDesktopLocalHostEnsurePort(
     ensureReady: async () => {
       const outcome = await hostController.convergeReady(false);
       if (outcome.kind === "ok") return { ok: true };
-      // Two non-ok outcomes say nothing dead-worthy about the host, and the
-      // engine must not turn either into a dead lease: `deferred` is the
-      // controller's word for "the lane or its CLI lock was busy, nothing
-      // ran", and `busy` is a HOST that is up with active work - the converge
-      // declined to disrupt it, which is proof of life, not death.
+      // `busy` is a HOST that is up with active work: the converge wanted to
+      // swap its bytes and declined to disrupt it. For the engine that IS the
+      // answer it asked for - "is the local host running?" - so it resolves
+      // `ok`, which is what lets proof of life create the evidence record that
+      // ends never-dialed. It used to resolve `deferred` (paced retry, lease
+      // left alone), which was harmless while the ensure only fired for a
+      // WANTED local host: a window pointed at it dialed it and ended
+      // never-dialed on its own. The ensure now fires whichever host is
+      // effective, and a local host nothing dials would otherwise draw one
+      // converge - a CLI spawn - every pacing hold for as long as it stayed
+      // busy. The pending swap is not this port's business: the launch
+      // reconciler and the idle-apply monitors own updates.
+      if (outcome.kind === "busy") return { ok: true };
+      // `deferred` says nothing dead-worthy about the host, and the engine
+      // must not turn it into a dead lease: it is the controller's word for
+      // "the lane or its CLI lock was busy, nothing ran".
       return {
         ok: false,
         reason: outcome.kind,
-        deferred: outcome.kind === "deferred" || outcome.kind === "busy",
+        deferred: outcome.kind === "deferred",
       };
     },
   };

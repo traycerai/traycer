@@ -1630,22 +1630,26 @@ describe("createDesktopLocalHostEnsurePort", () => {
     await expect(port.ensureReady()).resolves.toEqual({ ok: true });
   });
 
-  it("maps busy/failed/deferred outcomes to {ok: false, reason: <kind>}, with only failed non-deferred", async () => {
+  it("maps a busy outcome to {ok: true} - a host with work in progress is a running host", async () => {
     const controller = new FakeHostController();
     const port = createDesktopLocalHostEnsurePort(controller);
-
-    // `busy` is a host UP with active work - the converge declined to
-    // disrupt it. Proof of life must not become a dead lease, so it defers.
+    // The converge wanted to swap bytes and declined to disrupt live work.
+    // The engine asked "is the local host running?", and it is. Resolving
+    // `deferred` here instead paced a retry that re-spawned the CLI every
+    // hold for as long as the host stayed busy, once the ensure stopped being
+    // gated on the local host being the window's target (nothing dials a
+    // non-target local host, so nothing else could end never-dialed).
     controller.outcome = {
       kind: "busy",
       continuation: "retry-with-force",
       message: "busy",
     };
-    await expect(port.ensureReady()).resolves.toEqual({
-      ok: false,
-      reason: "busy",
-      deferred: true,
-    });
+    await expect(port.ensureReady()).resolves.toEqual({ ok: true });
+  });
+
+  it("maps failed/deferred outcomes to {ok: false, reason: <kind>}, with only failed non-deferred", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
 
     // `failed` actually ran and concluded - the one arm allowed to arm the
     // engine's dead-lease cooldown.

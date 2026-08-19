@@ -1,0 +1,216 @@
+// `LocalHostDownActions` is the header cluster `HostOverviewPanel` renders
+// for THIS machine's own host when it is unreachable and the shell has a CLI
+// bridge. There is no Start verb (decision 2026-08-19): the local host's
+// lifecycle is automatic and target-independent, so all that remains is a
+// "Run doctor" button (disabled while this machine's lifecycle lane is busy)
+// and, only after the user has removed Traycer, a "Reinstall Traycer" escape
+// hatch that clears the removal sentinel and converges.
+
+// Same boundary as the sibling Overview suites: mock `useHostScope` and
+// `@/lib/host`'s `useHostBinding` rather than standing up a host runtime.
+const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
+  current: {},
+}));
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture(scopeOverrides.current),
+  };
+});
+
+const hostBindingMock = vi.hoisted(
+  (): { current: { readonly hostClient: unknown } | null } => ({
+    current: null,
+  }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => hostBindingMock.current };
+});
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+  },
+}));
+
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type {
+  ConvergeReadyOk,
+  IHostManagement,
+  IRunnerHost,
+  MutationOutcome,
+} from "@traycer-clients/shared/platform/runner-host";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { buildOverviewManagement } from "@/components/settings/panels/__tests__/host-overview-test-support";
+
+afterEach(() => {
+  cleanup();
+  resetNegotiatedManifests();
+  scopeOverrides.current = {};
+  hostBindingMock.current = null;
+});
+
+/**
+ * Renders `HostSettingsPanel` scoped to THIS machine's own host, affirmatively
+ * down: `status: "unreachable"`, a local-machine host fixture with no live
+ * client, and a CLI bridge (`hostManagement`) so `LocalHostDownActions` is the
+ * header cluster that mounts. `localHost: null` on the mock runner host mirrors
+ * the down process — no live snapshot to answer with.
+ */
+function renderLocalDown(options: {
+  readonly settingUp: boolean;
+  readonly management: IHostManagement;
+  readonly name: string;
+}): void {
+  const hostId = "host-local-down";
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId,
+      name: options.name,
+      isLocalMachine: true,
+      connectable: false,
+      settingUp: options.settingUp,
+    }),
+    hostId,
+    status: "unreachable",
+    client: null,
+  };
+  hostBindingMock.current = null;
+
+  const runnerHost: IRunnerHost = new MockRunnerHost({
+    signInUrl: "https://example.invalid/signin",
+    authnBaseUrl: "https://example.invalid",
+    // No live snapshot — this machine's host is down, which is the whole
+    // scenario under test.
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+    hostManagement: options.management,
+  });
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostSettingsPanel />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+}
+
+describe("Overview — this machine's own host, down (LocalHostDownActions)", () => {
+  it("a down local host offers Run doctor and no Start verb", async () => {
+    const management = buildOverviewManagement({
+      getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
+    });
+    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+
+    const doctorButton = await screen.findByTestId(
+      "host-overview-recovery-doctor",
+    );
+    expect(doctorButton.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("host-overview-start-local")).toBeNull();
+    expect(screen.queryByTestId("host-overview-reinstall-local")).toBeNull();
+    // No Start verb anywhere on the page — not merely absent under its old
+    // test id.
+    expect(screen.queryByText("Start host")).toBeNull();
+  });
+
+  it("Run doctor is locked while this machine's lifecycle lane is busy", async () => {
+    const management = buildOverviewManagement({
+      getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
+    });
+    renderLocalDown({ settingUp: true, management, name: "This Mac" });
+
+    const doctorButton = await screen.findByTestId(
+      "host-overview-recovery-doctor",
+    );
+    expect(doctorButton.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("a removed host gets Reinstall Traycer, which clears the sentinel and converges", async () => {
+    // Captures the ORDER the two bridge calls actually land in, not merely
+    // that both happened — `reinstall()` chains `convergeReady` off
+    // `clearRemoval`'s resolution, and that is the behaviour worth pinning.
+    const callOrder: string[] = [];
+    const clearRemoval = vi.fn((): Promise<void> =>
+      Promise.resolve().then(() => {
+        callOrder.push("clearRemoval");
+      }),
+    );
+    const convergeReady = vi.fn(
+      (force: boolean): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        void force;
+        callOrder.push("convergeReady");
+        return Promise.resolve({
+          kind: "ok",
+          value: { running: true, version: "1.5.0" },
+        });
+      },
+    );
+    const management = buildOverviewManagement({
+      getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: true })),
+      clearRemoval,
+      convergeReady,
+    });
+    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+
+    // The removal read is async (the sentinel query starts disabled-shaped
+    // and resolves after mount), so the button only appears once it settles.
+    const reinstallButton = await screen.findByTestId(
+      "host-overview-reinstall-local",
+    );
+    fireEvent.click(reinstallButton);
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "Reinstalling Traycer on This Mac…",
+      );
+    });
+
+    expect(clearRemoval).toHaveBeenCalledTimes(1);
+    expect(convergeReady).toHaveBeenCalledWith(false);
+    expect(callOrder).toEqual(["clearRemoval", "convergeReady"]);
+  });
+
+  it("a NOT-removed down host gets no Reinstall", async () => {
+    const getRemovalState = vi.fn(() =>
+      Promise.resolve({ removedByUser: false }),
+    );
+    const management = buildOverviewManagement({ getRemovalState });
+    renderLocalDown({ settingUp: false, management, name: "This Mac" });
+
+    await screen.findByTestId("host-overview-recovery-doctor");
+    // Let the removal-state query actually settle before trusting the
+    // absence below — otherwise a still-pending query would pass this
+    // assertion for the wrong reason.
+    await waitFor(() => {
+      expect(getRemovalState).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-reinstall-local")).toBeNull();
+    });
+  });
+});

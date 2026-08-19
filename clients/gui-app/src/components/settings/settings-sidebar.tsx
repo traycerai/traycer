@@ -135,14 +135,20 @@ function SettingsSidebarHostPicker(props: {
         onRetryLists={scope.retryLists}
       />
       {/* Said at rest, not on discovery: sections describing a host that is
-          NOT the one this window runs on is the single most confusing state
-          this surface can be in, so it never waits to be noticed. */}
+          NOT the app's active one is the single most confusing state this
+          surface can be in, so it never waits to be noticed.
+
+          "Active host", not "this window runs on": `activeHost` is the
+          app-wide EFFECTIVE host, and after a failover or an explicit pick
+          that can be a machine across the room - a developer on their laptop
+          read "this window runs on <their iMac>" as a claim about the
+          computer in front of them. */}
       {scope.host === null || scope.isViewingActive ? null : (
         <p
           className="px-1 text-[0.6875rem] leading-snug text-muted-foreground/80"
           data-testid="settings-host-viewing-note"
         >
-          Viewing — this window runs on{" "}
+          Viewing — the active host is{" "}
           {scope.activeHost?.name ?? "another host"}.
         </p>
       )}
