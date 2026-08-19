@@ -217,9 +217,9 @@ export const LOCAL_HOST_BOOT_RETRY_LADDER_MS: readonly number[] = [
  * must not have it reinstalled underneath them.
  *
  * Returns a disposer for the subscription and any pending retry. Settles -
- * disposes itself - once a host is running (its own `convergeReady` came back
- * `ok`, or a status read shows a live runtime, or the host answered `busy`,
- * which only a live host does) or the user has removed Traycer.
+ * disposes itself - only once a host is RUNNING (its own `convergeReady` came
+ * back `ok`, or a status read shows a live runtime) or the user has removed
+ * Traycer. Notably NOT on `busy`: see the outcome branch below.
  */
 export function armLocalHostBootOnSignIn(
   hostController: IpcHostController,
@@ -338,22 +338,32 @@ export function armLocalHostBootOnSignIn(
           return;
         }
         const outcome = await hostController.convergeReady(false);
-        if (outcome.kind === "ok" || outcome.kind === "busy") {
-          // `busy` is the CLI's HOST_BUSY: a live host with active work
-          // declined a byte swap. That is a running host, which is all this
-          // actor wants - the same reading the authority's ensure port makes.
+        if (outcome.kind === "ok") {
           settle();
           log.info("[host-controller] local host boot complete", {
             kind: outcome.kind,
           });
           return;
         }
-        // A RESOLVED non-ok is not a running host. `deferred` (CLI lock held
-        // by another Traycer process), `failed`, `installed-not-converged`
-        // and `stage-fingerprint-mismatch` are ordinary return values, so
-        // they never reach the catch below - and every one of them can clear
-        // on its own, so every one of them earns the next rung. `inFlight`
-        // clears in `finally`, so nothing blocks that retry.
+        // A RESOLVED non-ok is not a running host, and `busy` is the one that
+        // argues otherwise. It reads as "a live host with active work declined
+        // a byte swap" - but `E_HOST_BUSY` is a FAIL-SAFE, raised by
+        // `assertHostNotBusy` whenever a live PID's idle state cannot be
+        // determined at all (`/activity` timed out, refused, answered
+        // malformed, or 404'd), which is exactly what a WEDGED host looks
+        // like. Settling on it retired this process's only retry ladder for a
+        // host that may never serve, and nothing downstream necessarily
+        // covers that: the authority can only ensure a host the fleet can
+        // NAME, and `readLastKnownLocalHostId` answers null outright for an
+        // UNUSABLE enrollment record - it deliberately does not fall back to
+        // `pid.json` there - so the wedge would wait for a relaunch.
+        //
+        // `deferred` (CLI lock held by another Traycer process), `failed`,
+        // `installed-not-converged` and `stage-fingerprint-mismatch` are
+        // ordinary return values too, so none of them reach the catch below -
+        // and every one of them, `busy` included, can clear on its own, so
+        // every one earns the next rung. `inFlight` clears in `finally`, so
+        // nothing blocks that retry.
         log.warn("[host-controller] local host boot did not complete", {
           kind: outcome.kind,
         });

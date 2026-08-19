@@ -1118,11 +1118,16 @@ describe("armLocalHostBootOnSignIn", () => {
     expect(gate.listenerCount()).toBe(0);
   });
 
-  it("a `busy` outcome is a running host and settles the arm", async () => {
-    // `busy` is the CLI's HOST_BUSY: only a LIVE host declines a byte swap, so
-    // this is a running host by the same reading the selection authority's
-    // ensure port makes elsewhere - not a resolved failure that earns a
-    // retry.
+  it("a `busy` outcome earns the next rung - it is a fail-safe, not a running host", async () => {
+    // The tempting reading is "only a LIVE host declines a byte swap", and an
+    // earlier revision of this actor settled on it. `assertHostNotBusy` raises
+    // `E_HOST_BUSY` whenever a live PID's idle state cannot be DETERMINED -
+    // `/activity` timed out, refused, answered malformed, or 404'd - which is
+    // what a WEDGED host looks like. Settling there retired this process's
+    // only retry ladder for a host that may never serve, and the authority
+    // cannot always cover it: it can only ensure a host the fleet can NAME,
+    // and an unusable enrollment record makes `readLastKnownLocalHostId`
+    // answer null outright.
     vi.useFakeTimers();
     const base = fakeHostController(
       neverInstalled(false),
@@ -1150,11 +1155,14 @@ describe("armLocalHostBootOnSignIn", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(convergeReadyCalls).toEqual([false]);
-    expect(gate.listenerCount()).toBe(0);
+    // STILL ARMED: the ladder is what a wedged host needs, so the
+    // subscription is not released here.
+    expect(gate.listenerCount()).toBe(1);
 
-    // No timer was ever scheduled - a settled arm has nothing left to fire.
+    // And the rung really fires - asserting the listener count alone would
+    // pass against an arm that kept its subscription and never acted.
     await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0]);
-    expect(convergeReadyCalls).toEqual([false]);
+    expect(convergeReadyCalls).toEqual([false, false]);
   });
 
   it("a `deferred` outcome (CLI lock held elsewhere) earns the next rung, not a sign-in wait", async () => {
