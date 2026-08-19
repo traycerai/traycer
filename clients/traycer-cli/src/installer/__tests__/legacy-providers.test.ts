@@ -342,4 +342,54 @@ describe("preserveLegacyProviders", () => {
       }
     },
   );
+
+  it.skipIf(platform() === "win32" || runsAsRoot)(
+    "warns 'could not enumerate an install dir' when the OLD INSTALL DIR itself cannot be listed, and resolves without throwing",
+    async () => {
+      const oldInstall = join(sandboxRoot, "old-install-locked");
+      const newInstall = join(sandboxRoot, "new-install");
+      // A real nested layout first, so this models an install that GENUINELY
+      // has packs - not an empty stub - before locking the dir down.
+      writePack(wrappedResources(oldInstall), "providers", "codex", "1.2.3");
+      const newResources = wrappedResources(newInstall);
+      writePack(newResources, "providers", "ripgrep", "14.0.0");
+
+      // EACCES on the install dir itself: neither `stat` on a path inside
+      // it (the direct "<install>/resources" probe) nor `readdir` on it
+      // directly can succeed - both fail EACCES, not ENOENT/ENOTDIR, so
+      // BOTH must be warned rather than silently swallowed.
+      chmodSync(oldInstall, 0o000);
+
+      const { logger, warnings } = capturingLogger();
+      try {
+        await expect(
+          preserveLegacyProviders(oldInstall, newInstall, logger),
+        ).resolves.toBeUndefined();
+
+        expect(warnings.length).toBe(2);
+
+        const enumerateWarning = warnings.find(
+          (w) =>
+            w.message ===
+            "Host install carryover could not enumerate an install dir",
+        );
+        expect(enumerateWarning).toBeDefined();
+        expect(enumerateWarning?.fields.installDir).toBe(oldInstall);
+
+        // The direct "<install>/resources" stat probe fails through the
+        // same unreadable parent - also EACCES, also warned.
+        const statWarning = warnings.find(
+          (w) => w.message === "Host install carryover could not stat a path",
+        );
+        expect(statWarning).toBeDefined();
+
+        // Nothing from the unreachable old install was carried.
+        expect(existsSync(join(newResources, "legacy-providers"))).toBe(false);
+      } finally {
+        // Restore permissions so afterEach's rmSync(sandboxRoot) can
+        // actually enumerate and delete it.
+        chmodSync(oldInstall, 0o755);
+      }
+    },
+  );
 });
