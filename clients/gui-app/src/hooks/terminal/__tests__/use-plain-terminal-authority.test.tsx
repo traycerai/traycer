@@ -154,6 +154,7 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       webSocketFactory: {
         create: () => {
           throw new Error("controlled stream must not dial");
@@ -228,6 +229,7 @@ class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> 
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       webSocketFactory: {
         create: () => {
           throw new Error("logical stream fixture must not dial");

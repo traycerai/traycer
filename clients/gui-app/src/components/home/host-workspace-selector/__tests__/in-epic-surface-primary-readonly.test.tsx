@@ -1,9 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   useWorktreeIntentStagingStore,
@@ -20,7 +28,23 @@ const FAKE_CLIENT = {
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
-const mutationMocks = vi.hoisted(() => ({ createWorktree: vi.fn() }));
+const mutationMocks = vi.hoisted(() => ({
+  addBindingFolder: vi.fn(),
+  createWorktree: vi.fn(),
+  recordRecent: vi.fn(),
+  removeBindingFolder: vi.fn(),
+}));
+const recentMocks = vi.hoisted(() => ({
+  prepareRecent: vi.fn(),
+  recordRecentAsync: vi.fn(),
+}));
+
+const RECENT_FOLDER: PreparedWorkspaceFolder = {
+  workspacePath: "/repo/recent",
+  workspaceName: "recent",
+  repoIdentifier: null,
+  repoUrl: null,
+};
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
@@ -55,8 +79,6 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
     isLoading: false,
   }),
 }));
-// Its sibling above is mocked, so the real hook's `useQueryClient` would be
-// the only thing in this file demanding a provider it deliberately has none of.
 vi.mock("@/hooks/worktree/use-worktree-workspaces-refresh", () => ({
   useWorktreeWorkspacesRefresh: () => ({
     refresh: () => Promise.resolve(),
@@ -86,7 +108,7 @@ vi.mock(
   "@/hooks/workspace/use-workspace-binding-remove-entry-mutation",
   () => ({
     useWorkspaceBindingRemoveEntryForClient: () => ({
-      mutate: vi.fn(),
+      mutate: mutationMocks.removeBindingFolder,
       isPending: false,
     }),
     usePendingRemoveBindingEntryPaths: () => new Set<string>(),
@@ -94,9 +116,33 @@ vi.mock(
 );
 vi.mock("@/hooks/workspace/use-workspace-binding-add-folder-mutation", () => ({
   useWorkspaceBindingAddFolderForClient: () => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: mutationMocks.addBindingFolder,
     isPending: false,
   }),
+}));
+vi.mock(
+  "@/hooks/workspace/use-workspace-record-recent-workspace-mutation",
+  () => ({
+    useWorkspaceRecordRecentWorkspace: () => ({
+      mutate: mutationMocks.recordRecent,
+      mutateAsync: recentMocks.recordRecentAsync,
+    }),
+  }),
+);
+vi.mock("@/hooks/workspace/use-workspace-list-recent-workspaces-query", () => ({
+  useWorkspaceListRecentWorkspaces: () => ({
+    data: {
+      recentWorkspaces: [
+        {
+          path: RECENT_FOLDER.workspacePath,
+          lastOpenedAt: "2026-08-20T00:00:00.000Z",
+        },
+      ],
+    },
+  }),
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => ({ major: 1, minor: 2 }),
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   // Host-parametric clone create (redesign P1.2, D6): the panel now runs the
@@ -115,7 +161,7 @@ vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
 }));
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
   useWorkspaceFolderActionsForClient: () => ({
-    pickAndPrepareFolders: vi.fn(),
+    pickAndPrepareFolders: vi.fn(() => Promise.resolve(null)),
     isPreparing: false,
   }),
   preparedWorkspaceFolderToWorkspaceFolderInfo: (value: unknown) => value,
@@ -125,6 +171,11 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: undefined, isLoading: false }),
+  useHostMutation: () => ({
+    mutate: vi.fn(),
+    mutateAsync: recentMocks.prepareRecent,
+    isPending: false,
+  }),
 }));
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture, hostScopeOptionFixture } =
@@ -189,33 +240,51 @@ const BINDING: WorktreeBinding = {
   ],
 };
 
-function renderBoundSurface(kind: "chat" | "terminal-agent"): void {
+function renderBoundSurface(
+  kind: "chat" | "terminal-agent",
+  bindingResolved: boolean,
+): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   render(
-    <TooltipProvider>
-      <HostWorkspaceSelector
-        disabled={false}
-        surface={{
-          kind,
-          hostId: "host-test",
-          epicId: "epic-1",
-          tabId: "tab-1",
-          ownerId: "owner-1",
-          binding: BINDING,
-          isOwnerActive: false,
-          hasActiveTurn: false,
-          missingWorktreePaths: [],
-          bindingResolved: true,
-          onBindingCommitted: null,
-          onForkOnHost: null,
-        }}
-      />
-    </TooltipProvider>,
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <HostWorkspaceSelector
+          disabled={false}
+          surface={{
+            kind,
+            hostId: "host-test",
+            epicId: "epic-1",
+            tabId: "tab-1",
+            ownerId: "owner-1",
+            binding: BINDING,
+            isOwnerActive: false,
+            hasActiveTurn: false,
+            missingWorktreePaths: [],
+            bindingResolved,
+            onBindingCommitted: null,
+            onForkOnHost: null,
+          }}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
+beforeEach(() => {
+  recentMocks.prepareRecent.mockResolvedValue({ folders: [RECENT_FOLDER] });
+  recentMocks.recordRecentAsync.mockResolvedValue({});
+});
+
 afterEach(() => {
   cleanup();
+  mutationMocks.addBindingFolder.mockReset();
   mutationMocks.createWorktree.mockReset();
+  mutationMocks.recordRecent.mockReset();
+  mutationMocks.removeBindingFolder.mockReset();
+  recentMocks.prepareRecent.mockReset();
+  recentMocks.recordRecentAsync.mockReset();
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
 
@@ -223,10 +292,10 @@ describe.each(["chat", "terminal-agent"] as const)(
   "InEpicSurface (%s owner)",
   (kind) => {
     it("renders the primary pin read-only and offers NO Set-as-primary action on any bound row", async () => {
-      renderBoundSurface(kind);
+      renderBoundSurface(kind, true);
 
       // Open the folder-rows popover from the collapsed summary.
-      fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+      fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
       const rows = await screen.findAllByTestId("folder-row");
       expect(rows).toHaveLength(2);
 
@@ -234,20 +303,22 @@ describe.each(["chat", "terminal-agent"] as const)(
       expect(screen.getByTestId("folder-primary-pin")).toBeTruthy();
       // ...and the collapsed chip agreed with it (isPrimary, not items[0]).
       expect(
-        screen.getByTestId("workspace-summary-trigger").textContent,
+        screen.getByRole("button", { name: /^beta/ }).textContent,
       ).toContain("beta");
 
       // No atomic set-primary RPC exists for a live binding - the action
       // must be absent on EVERY row of a bound surface.
       expect(screen.queryByTestId("folder-make-primary")).toBeNull();
       // The other row actions are still there (the rows are editable).
-      expect(screen.getAllByTestId("folder-remove").length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByRole("button", { name: /^(?:Move|Remove) / }).length,
+      ).toBeGreaterThan(0);
     });
   },
 );
 
 it("explains why a terminal agent's host selector is locked", async () => {
-  renderBoundSurface("terminal-agent");
+  renderBoundSurface("terminal-agent", true);
 
   const switcher = screen.getByTestId("composer-host-trigger");
   expect(switcher instanceof HTMLButtonElement && switcher.disabled).toBe(true);
@@ -255,6 +326,94 @@ it("explains why a terminal agent's host selector is locked", async () => {
   expect((await screen.findByRole("tooltip")).textContent).toContain(
     "Terminal host is fixed",
   );
+});
+
+it("shows Recent folders in a live chat picker but not a terminal-agent binding", async () => {
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  expect(
+    await screen.findByRole("button", { name: "Recent folders, 1" }),
+  ).toBeTruthy();
+
+  cleanup();
+  renderBoundSurface("terminal-agent", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  expect(
+    screen.queryByRole("button", { name: "Recent folders, 1" }),
+  ).toBeNull();
+});
+
+it("keeps Recent unavailable until a chat binding snapshot resolves", () => {
+  renderBoundSurface("chat", false);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+
+  expect(
+    screen.queryByRole("button", { name: "Recent folders, 1" }),
+  ).toBeNull();
+});
+
+it("adds a Recent folder through the chat owner binding", async () => {
+  mutationMocks.addBindingFolder.mockResolvedValue({});
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Recent folders, 1" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Add recent to context" }),
+  );
+
+  await waitFor(() => {
+    expect(mutationMocks.addBindingFolder).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "chat",
+      workspacePath: "/repo/recent",
+    });
+  });
+});
+
+it("removes a chat folder only after moving it to Recent succeeds", async () => {
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    (
+      await screen.findAllByRole("button", {
+        name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
+      })
+    )[0],
+  );
+
+  await waitFor(() => {
+    expect(recentMocks.recordRecentAsync).toHaveBeenCalledWith({
+      path: "/repo/alpha",
+      bumpRecency: false,
+      failureFeedback: "move_warning",
+    });
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledTimes(1);
+  });
+
+  cleanup();
+  recentMocks.recordRecentAsync.mockRejectedValueOnce(new Error("nope"));
+  mutationMocks.removeBindingFolder.mockClear();
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    (
+      await screen.findAllByRole("button", {
+        name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
+      })
+    )[0],
+  );
+
+  await waitFor(() => {
+    expect(recentMocks.recordRecentAsync).toHaveBeenCalledWith({
+      path: "/repo/alpha",
+      bumpRecency: false,
+      failureFeedback: "move_warning",
+    });
+  });
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
 });
 
 it("refuses terminal Update when metadata regresses to unresolved", async () => {
@@ -283,8 +442,8 @@ it("refuses terminal Update when metadata regresses to unresolved", async () => 
     ],
   });
 
-  renderBoundSurface("terminal-agent");
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  renderBoundSurface("terminal-agent", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const update = await screen.findByRole("button", { name: "Update" });
   fireEvent.click(update);
 

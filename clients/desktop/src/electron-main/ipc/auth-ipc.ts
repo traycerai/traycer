@@ -262,6 +262,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearerToken,
         parseMintHostCredentialRequest(request),
+        null,
       );
     },
   );

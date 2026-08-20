@@ -20,6 +20,7 @@ import {
   unavailableHostOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { activeRunNoticeFor } from "./active-run-notice";
+import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   RepoBranchPrefixState,
   WorktreeBinding,
@@ -56,7 +57,11 @@ import { useWorkspaceBindingAddFolderForClient } from "@/hooks/workspace/use-wor
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
-import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
+import {
+  preparedWorkspaceFolderToWorkspaceFolderInfo,
+  useWorkspaceFolderActionsForClient,
+} from "@/hooks/workspace/use-workspace-folder-actions";
+import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { locateReplaceBoundFolder } from "./locate-replace-bound-folder";
@@ -679,10 +684,25 @@ function HomeWorkspaceRows(props: {
     activeHostClient,
     workspaceSource,
   );
+  const activatePreparedRecentFolders = useCallback(
+    (
+      folders: ReadonlyArray<PreparedWorkspaceFolder>,
+      hostId: string,
+    ): Promise<ReadonlyArray<string>> => {
+      workspaceSource.addResolvedFolders(
+        folders.map((folder) =>
+          preparedWorkspaceFolderToWorkspaceFolderInfo(folder, hostId),
+        ),
+      );
+      return Promise.resolve(folders.map((folder) => folder.workspacePath));
+    },
+    [workspaceSource],
+  );
   const recentWorkspaces = useRecentWorkspaces({
     client: activeHostClient,
     hostId: props.activeHostId,
-    workspaceSource,
+    activePaths: workspaceSource.folders,
+    activatePreparedFolders: activatePreparedRecentFolders,
     disabled: props.disabled,
     surface: stagingKey.surface,
   });
@@ -1932,6 +1952,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const addFolderMutation = useWorkspaceBindingAddFolderForClient(
     props.hostClient,
   );
+  const addBindingFolder = addFolderMutation.mutateAsync;
+  const recordRecentWorkspace = useWorkspaceRecordRecentWorkspace({
+    client: props.hostClient,
+  }).mutate;
   const pendingRemovePaths = usePendingRemoveBindingEntryPaths({
     epicId: surface.epicId,
     ownerId: surface.ownerId,
@@ -2108,8 +2132,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // off the working tree (or the user's remembered choice, unless that is Local)
   // once its disk metadata resolves, then dropped - so a later adjustment is
   // never re-clobbered. Established binding folders are untouched (binding wins).
-  const pendingDefaultPathsRef = useRef<Set<string> | null>(null);
-  const pendingDefaultPaths = (pendingDefaultPathsRef.current ??= new Set());
+  const pendingDefaultPathsRef = useRef(new Set<string>());
 
   // Terminal-agent "Update": apply every staged folder edit to the binding in a
   // single worktree.create (resolveIntent merges per-folder), then resume the
@@ -2142,7 +2165,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     // A just-added git folder may still be waiting for metadata so the default
     // new-worktree seed can be staged. Keep Update enabled, but don't resume
     // until those pending defaults either stage or resolve as no-op.
-    if ((pendingDefaultPathsRef.current?.size ?? 0) > 0) return;
+    if (pendingDefaultPathsRef.current.size > 0) return;
     // Defensive: the button is already gated on the same condition, but guard
     // against an empty apply (nothing staged AND no committed add/remove).
     if (stagedEntries.length === 0 && editor.dirtyPathsSinceResume.size === 0) {
@@ -2239,7 +2262,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
 
   useEffect(() => {
     const pending = pendingDefaultPathsRef.current;
-    if (pending === null || pending.size === 0) return;
+    if (pending.size === 0) return;
     for (const path of [...pending]) {
       const summary = resolvedSummariesByPath.get(path) ?? null;
       if (summary === null) continue; // unresolved or not loaded yet - wait
@@ -2296,6 +2319,57 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const activeRunLocksBinding =
     surface.kind === "chat" && surface.isOwnerActive;
+  const activeRunLocksBindingRef = useRef(activeRunLocksBinding);
+  useLayoutEffect(() => {
+    activeRunLocksBindingRef.current = activeRunLocksBinding;
+  }, [activeRunLocksBinding]);
+
+  const activatePreparedFoldersForOwner = useCallback(
+    async (
+      folders: ReadonlyArray<PreparedWorkspaceFolder>,
+    ): Promise<ReadonlyArray<string>> => {
+      const activePaths = new Set(bindingWorkspacePaths);
+      const activatedPaths: string[] = [];
+      const addedPaths: string[] = [];
+      for (const folder of folders) {
+        if (surface.kind === "chat" && activeRunLocksBindingRef.current) break;
+        if (activePaths.has(folder.workspacePath)) {
+          activatedPaths.push(folder.workspacePath);
+          continue;
+        }
+        // oxlint-disable-next-line react-doctor/async-await-in-loop -- sequential is required: concurrent setEntryMode writes race on the single owner-binding row and lose folders.
+        const added = await addBindingFolder({
+          epicId: surface.epicId,
+          ownerId: surface.ownerId,
+          ownerKind,
+          workspacePath: folder.workspacePath,
+        })
+          .then(() => true)
+          .catch(() => false);
+        if (!added) continue;
+        pendingDefaultPathsRef.current.add(folder.workspacePath);
+        activatedPaths.push(folder.workspacePath);
+        addedPaths.push(folder.workspacePath);
+      }
+      if (addedPaths.length === 0) return activatedPaths;
+      if (surface.kind === "terminal-agent") {
+        markBindingDirtyWithoutResume(addedPaths);
+      } else {
+        handleBindingCommitted(addedPaths);
+      }
+      return activatedPaths;
+    },
+    [
+      addBindingFolder,
+      bindingWorkspacePaths,
+      handleBindingCommitted,
+      markBindingDirtyWithoutResume,
+      ownerKind,
+      surface.epicId,
+      surface.kind,
+      surface.ownerId,
+    ],
+  );
 
   // Free functions (not useCallback) matching HEAD: they close over render
   // locals and are only invoked from event handlers / item onLocate, never
@@ -2303,37 +2377,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const addFoldersToOwnerBinding = async (): Promise<boolean> => {
     const result = await folderActions.pickAndPrepareFolders(false);
     if (result === null) return false;
-    const addedWorkspacePaths: string[] = [];
-    // Add each picked folder independently and sequentially: the binding is a
-    // single read-modify-write row, so parallel writes would clobber one
-    // another - but one folder failing must not abort the rest (the add
-    // mutation's onError already surfaces a per-folder toast).
-    for (const folder of result.folders) {
-      // oxlint-disable-next-line react-doctor/async-await-in-loop -- sequential is required: concurrent setEntryMode writes race on the single owner-binding row and lose folders.
-      const ok = await addFolderMutation
-        .mutateAsync({
-          epicId: surface.epicId,
-          ownerId: surface.ownerId,
-          ownerKind,
-          workspacePath: folder.workspacePath,
-        })
-        .then(() => true)
-        .catch(() => false);
-      if (ok) {
-        pendingDefaultPaths.add(folder.workspacePath);
-        addedWorkspacePaths.push(folder.workspacePath);
+    const activatedPaths = await activatePreparedFoldersForOwner(
+      result.folders,
+    );
+    if (surface.kind === "chat") {
+      for (const path of activatedPaths) {
+        recordRecentWorkspace({
+          path,
+          bumpRecency: true,
+          failureFeedback: "silent",
+        });
       }
     }
-    if (addedWorkspacePaths.length === 0) return false;
-    // The folders are in the binding now, but adding never resumes the PTY —
-    // the explicit "Update" does. Mark dirty so "Update" is enabled (a non-git
-    // add stages nothing). Chat has no PTY to resume (no-op callback).
-    if (surface.kind === "terminal-agent") {
-      markBindingDirtyWithoutResume(addedWorkspacePaths);
-    } else {
-      handleBindingCommitted(addedWorkspacePaths);
-    }
-    return true;
+    return activatedPaths.length > 0;
   };
 
   // One folder intent from the unified picker maps to the existing in-Epic
@@ -2564,7 +2620,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                             ownerKind,
                             workspacePath,
                           });
-                          pendingDefaultPathsRef.current?.add(workspacePath);
+                          pendingDefaultPathsRef.current.add(workspacePath);
                           return true;
                         } catch {
                           return false;
@@ -2578,7 +2634,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                             ownerKind,
                             workspacePath,
                           });
-                          pendingDefaultPathsRef.current?.delete(workspacePath);
+                          pendingDefaultPathsRef.current.delete(workspacePath);
                           unstageWorktreeEntry(stagedKey, workspacePath);
                           return true;
                         } catch {
@@ -2617,7 +2673,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 },
                 {
                   onSuccess: () => {
-                    pendingDefaultPathsRef.current?.delete(ws.workspacePath);
+                    pendingDefaultPathsRef.current.delete(ws.workspacePath);
                     unstageWorktreeEntry(stagedKey, ws.workspacePath);
                     if (surface.kind === "terminal-agent") {
                       markBindingDirtyWithoutResume([ws.workspacePath]);
@@ -2708,7 +2764,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   // to seed - its summary never arrives, so left in place the
                   // path would pin the pending-defaults guard and block
                   // Update's resume forever.
-                  pendingDefaultPathsRef.current?.delete(ws.workspacePath);
+                  pendingDefaultPathsRef.current.delete(ws.workspacePath);
                   // And if metadata DID resolve first, the seeding effect may
                   // already have staged a default worktree intent for this
                   // path - unstage it, or the next Update would call
@@ -2746,6 +2802,61 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       workspaces,
     ],
   );
+
+  const recentWorkspaces = useRecentWorkspaces({
+    client: props.hostClient,
+    hostId: props.activeHostId,
+    activePaths: bindingWorkspacePaths,
+    activatePreparedFolders: activatePreparedFoldersForOwner,
+    disabled:
+      surface.kind !== "chat" ||
+      activeRunLocksBinding ||
+      !surface.bindingResolved,
+    surface: stagedKey.surface,
+  });
+  const {
+    moveToRecent: moveBoundWorkspaceToRecent,
+    movingPath: recentWorkspacesMovingPath,
+    supported: recentWorkspacesSupported,
+  } = recentWorkspaces;
+  const recentAwareWorkspaceRunItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+    () =>
+      workspaceRunItems.map((item) => {
+        if (!recentWorkspacesSupported || item.onRemove === null) return item;
+        const removeFromBinding = item.onRemove;
+        return {
+          ...item,
+          removePending:
+            item.removePending ||
+            recentWorkspacesMovingPath === item.displayPath,
+          onRemove: () => {
+            if (activeRunLocksBindingRef.current) return;
+            void moveBoundWorkspaceToRecent(item.displayPath).then((moved) => {
+              if (moved && !activeRunLocksBindingRef.current) {
+                removeFromBinding();
+              }
+            });
+          },
+        };
+      }),
+    [
+      moveBoundWorkspaceToRecent,
+      recentWorkspacesMovingPath,
+      recentWorkspacesSupported,
+      workspaceRunItems,
+    ],
+  );
+  const recentWorkspacesSection = recentWorkspacesSupported ? (
+    <RecentWorkspacesSection
+      entries={recentWorkspaces.entries}
+      activeCount={bindingWorkspacePaths.length}
+      pendingPath={recentWorkspaces.pendingPath}
+      failedPaths={recentWorkspaces.failedPaths}
+      onAdd={recentWorkspaces.add}
+      onLocate={recentWorkspaces.locate}
+      onForget={recentWorkspaces.forget}
+    />
+  ) : null;
 
   // Setup/teardown editor, hosted here so it outlives the popover. In-epic
   // surfaces carry the real owner + live binding, so an edit can target a bound
@@ -2824,7 +2935,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         </div>
         <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
           <WorkspaceFolderSummaryControl
-            items={workspaceRunItems}
+            items={recentAwareWorkspaceRunItems}
             readOnly={readOnly}
             bindingResolved={surface.bindingResolved}
             addFolderPending={
@@ -2854,9 +2965,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             onEditEnvironment={handleEditEnvironment}
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
-            recentWorkspaces={null}
-            recentWorkspaceCount={0}
-            moveToRecent={false}
+            recentWorkspaces={recentWorkspacesSection}
+            recentWorkspaceCount={recentWorkspaces.entries.length}
+            moveToRecent={recentWorkspacesSupported}
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).
             // Opening upward (chat's default, where the composer is bottom-anchored)

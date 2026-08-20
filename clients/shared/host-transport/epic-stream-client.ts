@@ -5,6 +5,7 @@ import {
   type EpicCloudSyncStatus,
   type EpicMigrationPhase,
   type EpicSubscribeClientFrame,
+  type EpicSubscribeClientSeedOffer,
   type EpicSubscribeServerFrame,
 } from "@traycer/protocol/host/epic/subscribe";
 
@@ -54,6 +55,18 @@ import type { IStreamClient } from "./i-stream-client";
  * forgot about.
  */
 export interface EpicStreamCallbacks {
+  /**
+   * Initial root-doc state for this subscribe cycle.
+   *
+   * `meta.seededFromOffer === true` means `snapshotBytes` is a **delta**
+   * against the state vector this client offered through
+   * `seedOfferProvider`, not a self-sufficient snapshot: it MUST be merged
+   * into the very doc that produced that offer, and MUST NOT be used to
+   * replace a doc or seed a fresh one. Anything else - including a full
+   * snapshot that arrived despite an offer - is self-sufficient and safe to
+   * apply either way. Both cases apply with the same `Y.applyUpdate`, so this
+   * distinction constrains WHICH DOC, never how.
+   */
   readonly onSnapshot: (
     meta: SnapshotMetaEpic,
     snapshotBytes: Uint8Array,
@@ -216,6 +229,26 @@ export interface EpicStreamClientOptions {
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly callbacks: EpicStreamCallbacks;
+  /**
+   * Reports the root-doc state this client ALREADY holds, so a reattach can be
+   * served as a delta instead of re-shipping the whole document. Read
+   * immediately before every wire subscribe, including the re-declare after a
+   * reconnect — so it must be a cheap, synchronous, side-effect-free read of
+   * live state, never a cached value computed once.
+   *
+   * Returns `null` whenever there is nothing safe to offer, and the caller is
+   * expected to use that freely: no doc yet (a cold open — first-open cost is
+   * not what this mechanism addresses), or a doc whose originating `roomId` is
+   * unknown, which happens for state seeded by a pre-`@1.2` host that never
+   * reported one. Offering a vector without its room would let the host diff
+   * against a doc from a room a migration has since replaced.
+   *
+   * Required rather than optional: every construction site must decide whether
+   * it can offer state. A wrapper that silently defaulted to "no offer" would
+   * leave the reattach cost this class exists to remove, and would do it
+   * invisibly.
+   */
+  readonly seedOfferProvider: () => EpicSubscribeClientSeedOffer | null;
 }
 
 /**
@@ -239,9 +272,24 @@ export class EpicStreamClient {
     this.callbacks = options.callbacks;
     this.closed = false;
 
-    this.session = options.wsStreamClient.subscribe("epic.subscribe", {
-      epicId: options.epicId,
-    });
+    // `subscribeWithParamsProvider`, not `subscribe`: the offer has to be read
+    // at each wire subscribe, because the reattach is the only moment it is
+    // worth anything. Freezing params at construction would send the state the
+    // doc had when the tab opened — on the first subscribe that is `null`
+    // (nothing loaded yet), so every later reconnect would re-request the whole
+    // document, which is the exact behaviour this class exists to remove.
+    this.session = options.wsStreamClient.subscribeWithParamsProvider(
+      "epic.subscribe",
+      () => {
+        const seedOffer = options.seedOfferProvider();
+        // Omit the key entirely rather than sending an explicit `undefined`:
+        // the field is `.optional()`, and absence is the wire encoding of
+        // "no offer".
+        return seedOffer === null
+          ? { epicId: options.epicId }
+          : { epicId: options.epicId, seedOffer };
+      },
+    );
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });

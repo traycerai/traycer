@@ -815,7 +815,23 @@ function buildHiddenHostLauncher(
     "If probeStatus = 0 Then",
     `  commandLine = ${quoteVbsString(labelledCommandLine)}`,
     "End If",
-    "exitCode = shell.Run(commandLine, 0, True)",
+    // Exit 75 is the CLI's restart-into-refreshed-slot signal (see
+    // EXIT_RESTART_INTO_REFRESHED_SLOT in index.ts): the supervised entry
+    // just replaced the slot binary and wants to be relaunched from it. On
+    // systemd and launchd the service manager does that relaunch; Task
+    // Scheduler's only knob is RestartOnFailure - minute-granularity, three
+    // attempts, and whether a nonzero action exit even counts as a
+    // "failure" is an OS semantic nothing here can pin down. So the
+    // launcher handles its own restart: bounded, because the refreshed slot
+    // reports itself current on the very next run, so a second 75 in a row
+    // means the refresh is NOT converging and looping on it would burn a
+    // ~100 MB copy per lap with the host never up.
+    "Dim attempts",
+    "attempts = 0",
+    "Do",
+    "  exitCode = shell.Run(commandLine, 0, True)",
+    "  attempts = attempts + 1",
+    "Loop While exitCode = 75 And attempts < 3",
     "WScript.Quit exitCode",
     "",
   ].join("\r\n");
