@@ -1566,11 +1566,26 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         port,
         pid,
       });
+      const { intent, abandonedWith } = userRepairIntent(
+        bridge,
+        expectedHostId,
+      );
       const outcome = await bridge.options.hostController.freePortAndRestart(
         pid,
         port,
-        userRepairIntent(bridge, expectedHostId).intent,
+        intent,
       );
+      // Reported as the identity refusal it is, using the shape this channel
+      // already has for one caught before submission. Without this the SAME
+      // mismatch reads as `host-changed` when the handler catches it and as a
+      // failed dispatch when the lane head does.
+      //
+      // The queued twin above deliberately does not need this: its early
+      // check THROWS, so an early and a late refusal already look alike there.
+      const lateRefusal = abandonedWith();
+      if (lateRefusal !== null) {
+        return { kind: "host-changed", message: lateRefusal };
+      }
       return {
         kind: "dispatched",
         outcome: outcome.kind === "ok" ? { kind: "ok", value: null } : outcome,

@@ -246,6 +246,7 @@ interface HandlerBridge {
       freePortAndRestart: (
         pid: number | undefined,
         port: number | undefined,
+        intent: LocalHostMutationIntent,
       ) => Promise<MutationOutcome<{ readonly activated: boolean }>>;
     };
   };
@@ -1965,6 +1966,79 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       throw new Error("expected a user-repair intent");
     }
     await expect(intent.guard()).resolves.toEqual({ kind: "proceed" });
+  });
+
+  it("a LATE identity refusal is reported like an early one, not as a failure", async () => {
+    // The presentation must not depend on WHEN the mismatch was noticed. A
+    // guard refusal arrives as the same `{kind:"failed"}` a real error does,
+    // so the handler asks its own closure what it decided. Getting this wrong
+    // is not cosmetic: the legacy console counts a failure toward the
+    // recurrence lock that disables Doctor after three clicks.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    // The controller runs the guard at the head of the lane, by which time
+    // this machine's host has been replaced.
+    bridge.options.hostController.convergeReady = async (
+      _force: boolean,
+      intent: LocalHostMutationIntent,
+    ) => {
+      if (intent.kind !== "user-repair")
+        throw new Error("expected user-repair");
+      writeEnrollment("some-other-host");
+      const verdict = await intent.guard();
+      return verdict.kind === "abandon"
+        ? { kind: "failed" as const, message: verdict.message }
+        : { kind: "ok" as const, value: null };
+    };
+
+    const result = await handler(null, {
+      repair: "converge-ready",
+      expectedHostId: LIVE_HOST_ID,
+    });
+    expect(result).toEqual({
+      kind: "declined",
+      message: expect.stringContaining("host changed"),
+    });
+  });
+
+  it("a LATE identity refusal on the watched free-port repair reports host-changed", async () => {
+    // The same rule on the other twin. Pinned separately because free-port
+    // was missed when the guard was first added to the lifecycle repairs.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerFreePortAndRestartIfIdle,
+    );
+    bridge.options.hostController.freePortAndRestart = async (
+      _pid: number | undefined,
+      _port: number | undefined,
+      intent: LocalHostMutationIntent,
+    ) => {
+      if (intent.kind !== "user-repair")
+        throw new Error("expected user-repair");
+      writeEnrollment("some-other-host");
+      const verdict = await intent.guard();
+      return verdict.kind === "abandon"
+        ? { kind: "failed" as const, message: verdict.message }
+        : { kind: "ok" as const, value: { activated: true } };
+    };
+
+    const result = await handler(null, {
+      pid: 4321,
+      port: 51234,
+      expectedHostId: LIVE_HOST_ID,
+    });
+    expect(result).toEqual({
+      kind: "host-changed",
+      message: expect.stringContaining("host changed"),
+    });
   });
 
   it("watched repair hands the controller a user-repair intent too", async () => {
