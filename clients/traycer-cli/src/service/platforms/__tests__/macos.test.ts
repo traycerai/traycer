@@ -1556,6 +1556,11 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(rejection).toMatchObject({
       message: expect.stringContaining("--takeover"),
     });
+    // Also steers toward the cheaper fix when the caller just wants the
+    // Desktop-managed host running again - no ownership change needed.
+    expect(rejection).toMatchObject({
+      message: expect.stringContaining("traycer host restart"),
+    });
     expect(rejection).not.toMatchObject({
       message: expect.stringContaining("no-service-register"),
     });

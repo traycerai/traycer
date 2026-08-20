@@ -47,6 +47,10 @@ export const runnerMutationKeys = {
   hostConvergeReady: () => ["runner.host.convergeReady"] as const,
   hostApplyStaged: () => ["runner.host.applyStaged"] as const,
   hostActivateInstalled: () => ["runner.host.activateInstalled"] as const,
+  // On-demand bridge read of this machine's host log, for a Doctor report on a
+  // host with no `diagnostics.*` family to ask. Mutation-shaped like the RPC
+  // card's own logs read: it is a button, not a subscription.
+  hostDoctorBridgeLogs: () => ["runner.host.doctorBridgeLogs"] as const,
   hostRestart: () => ["runner.host.restart"] as const,
   hostRegisterService: () => ["runner.host.registerService"] as const,
   hostDeregisterService: () => ["runner.host.deregisterService"] as const,
@@ -140,6 +144,27 @@ export const runnerQueryKeys = {
   // serialised.
   traycerHostStatus: (traycerCli: object) =>
     ["runner.traycer.hostStatus", traycerCli] as const,
+  // The host-status read on a shell with no CLI at all (mobile, web). A key of
+  // its own so the disabled query can never collide with a real runner's.
+  traycerHostStatusDisabled: () =>
+    ["runner.traycer.hostStatus", "disabled"] as const,
+  /**
+   * A PRIVATE host-status entry, one per mount of a reader that needs a sample
+   * it took itself rather than whatever the shared entry holds
+   * (`LocalBootstrapAttempts`, mounting on a settled failure). A key nothing
+   * else has used has no entry and no in-flight retryer, so the fetch cannot
+   * be deduplicated onto a request that started before the failure.
+   *
+   * It EXTENDS `traycerHostStatus` rather than standing beside it, and that is
+   * load-bearing: the recovery mutations invalidate the shared key by partial
+   * match, and only a prefix extension is still reached by them.
+   */
+  traycerHostStatusFreshRead: (traycerCli: object, readId: number) =>
+    [
+      ...runnerQueryKeys.traycerHostStatus(traycerCli),
+      "fresh-read",
+      readId,
+    ] as const,
   traycerShellConfig: (traycerCli: object) =>
     ["runner.traycer.shellConfig", traycerCli] as const,
   traycerShellList: (traycerCli: object) =>
@@ -187,8 +212,13 @@ export const runnerQueryKeys = {
     ["runner.host.installedRecord", "unavailable"] as const,
   hostLogs: (management: object, tailLines: number) =>
     ["runner.host.logs", management, tailLines] as const,
-  hostDoctor: (management: object) =>
-    ["runner.host.doctor", management] as const,
+  // Keyed on the HOST ID as well, unlike its neighbours. The `management`
+  // segment hashes to `{}` (see the note above) and the bridge is app-wide, so
+  // it survives a local host replacement — a report cached for host A would
+  // otherwise be served to host B's console, and this report's issues carry
+  // the port/pid numbers its repairs act on. A primitive is what discriminates.
+  hostDoctor: (management: object, expectedHostId: string) =>
+    ["runner.host.doctor", management, expectedHostId] as const,
   hostCliManifest: (management: object) =>
     ["runner.host.cliManifest", management] as const,
   // Same no-bridge placeholder contract as `hostInstalledRecordUnavailable`.

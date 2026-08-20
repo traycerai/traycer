@@ -500,6 +500,22 @@ export function forkableAssistantMessageId(
   return message.persistentMessageId;
 }
 
+/**
+ * The chat's most recent completed-turn fork boundary, or `null` when none
+ * exists yet — the agent has never replied, or its only assistant rows are
+ * still live. The host-switch fork gesture anchors on this: it means "fork the
+ * chat as it stands", not a specific message the user pointed at.
+ */
+export function latestForkableAssistantMessageId(
+  messages: ReadonlyArray<ChatMessageModel>,
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const messageId = forkableAssistantMessageId(messages[index]);
+    if (messageId !== null) return messageId;
+  }
+  return null;
+}
+
 // Fork boundary for a message containing a pending or resolved interview.
 // Unlike `forkableAssistantMessageId` it does NOT require the turn to be
 // finished (`completedAt`/`runState`) — question-level fork actions remain

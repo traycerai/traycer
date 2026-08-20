@@ -86,6 +86,7 @@ function makeClient(
     bearer: () => context.credentials,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 1_000,

@@ -317,7 +317,7 @@ export function resolvedHostLabel(
  *
  * Exported for every surface whose render reads session readiness: any
  * component that calls `hasReadyRemoteSession` (directly or through a
- * predicate like `hostSelectRowRefused`) without subscribing here has the
+ * host-selection predicate without subscribing here has the
  * same frozen-answer bug this hook was written for.
  */
 export function useRemoteSessionPollReadiness(hostId: string): boolean {

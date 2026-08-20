@@ -275,6 +275,7 @@ export async function mintHostCredentialViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
   request: MintHostCredentialRequest,
+  signal: AbortSignal | null,
 ): Promise<MintHostCredentialFetchResult> {
   const response = await fetchAuthn(
     authnBaseUrl,
@@ -284,7 +285,7 @@ export async function mintHostCredentialViaHttp(
       method: "POST",
       body: JSON.stringify(request),
     },
-    null,
+    signal,
   );
   if (response === null) {
     return { kind: "network-error" };

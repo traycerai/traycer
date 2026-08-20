@@ -19,6 +19,12 @@ import type {
   HostUninstallResult,
   HostRestartRequestResult,
   InstallVersionOk,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  DoctorRepairIntent,
   MutationOutcome,
   NotificationFeedSource,
   NotificationForegroundAppLocal,
@@ -52,6 +58,10 @@ import type {
   TraycerShellConfigSetInput,
   TraycerShellProbeResult,
 } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponse,
+} from "../ipc-contracts/host-management-types";
 import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
@@ -286,8 +296,11 @@ export interface DesktopHostManagementBridge {
   restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
-  runDoctor(): Promise<HostDoctorReport>;
+  runDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostDoctorReport>;
   availableVersions(
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
@@ -298,9 +311,37 @@ export interface DesktopHostManagementBridge {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
   freePortAndRestart(
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<FreePortAndRestartInput>;
+  freePortAndRestartIfIdle(
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  maintenanceUpdateCheck(
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
+  ): Promise<HostUpdateCheckResponse>;
+  maintenanceDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostGetInstallationInfoResponse>;
+  maintenanceInstallVersion(input: {
+    readonly version: string;
+    readonly force: boolean;
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceInstallDispatch>;
+  restartHostIfIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostRestartRequestResult>;
+  runDoctorRepairQueued(input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }): Promise<QueuedDoctorRepairResult>;
+  runDoctorRepairIfIdle(input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }): Promise<DoctorRepairDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -765,14 +806,28 @@ export class DesktopRunnerHost implements IRunnerHost {
       clearRemoval: () => managementBridge.clearRemoval(),
       restartHost: () => managementBridge.restartHost(),
       getHostLogs: (input) => managementBridge.getHostLogs(input),
-      runDoctor: () => managementBridge.runDoctor(),
+      runDoctor: (input) => managementBridge.runDoctor(input),
       availableVersions: (input) => managementBridge.availableVersions(input),
       installedRecord: () => managementBridge.installedRecord(),
       registerService: () => managementBridge.registerService(),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
+      freePortAndRestartIfIdle: (input) =>
+        managementBridge.freePortAndRestartIfIdle(input),
       cliManifest: () => managementBridge.cliManifest(),
+      maintenanceUpdateCheck: (input) =>
+        managementBridge.maintenanceUpdateCheck(input),
+      maintenanceDoctor: (input) => managementBridge.maintenanceDoctor(input),
+      maintenanceInstallationInfo: (input) =>
+        managementBridge.maintenanceInstallationInfo(input),
+      maintenanceInstallVersion: (input) =>
+        managementBridge.maintenanceInstallVersion(input),
+      restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
+      runDoctorRepairQueued: (input) =>
+        managementBridge.runDoctorRepairQueued(input),
+      runDoctorRepairIfIdle: (input) =>
+        managementBridge.runDoctorRepairIfIdle(input),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };

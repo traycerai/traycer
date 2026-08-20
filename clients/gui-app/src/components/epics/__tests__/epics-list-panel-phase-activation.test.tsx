@@ -171,6 +171,7 @@ function phaseHistoryItem(): HistoryItem {
     updatedBucket: "today",
     linkedRepos: [],
     linkedWorkspaces: [],
+    chatHostIds: null,
     pullRequestNumbers: [],
     worktreeBranches: [],
     worktreePaths: [],

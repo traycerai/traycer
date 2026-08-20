@@ -19,6 +19,11 @@ import type {
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import type {
+  HostDoctorIssue as MaintenanceDoctorIssue,
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponse,
+} from "@traycer/protocol/host/maintenance/index";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
@@ -1475,6 +1480,98 @@ export interface CliInstallManifestSnapshot {
   } | null;
 }
 
+/** Which Doctor repair to run; both are controller lifecycle intents. */
+export type DoctorRepairIntent = "converge-ready" | "register-service";
+
+/**
+ * The recovery console's repairs, which QUEUE rather than refusing.
+ *
+ * The same four Doctor fix actions the WATCHED sheet sends through its
+ * refusing dispatches — install and service-install to
+ * `runDoctorRepairIfIdle`, start and restart to `restartHostIfIdle` — minus
+ * the admission test. This console repairs a host that is already down, so
+ * waiting behind whatever is running is the point, and a surface reachable
+ * when Settings cannot render must never learn to say no.
+ *
+ * That exemption is about TIMING only. Identity is a separate question and is
+ * enforced here exactly as it is everywhere else — the console outlives the
+ * host it names, and a replacement must not inherit repairs aimed at its
+ * predecessor.
+ */
+export type QueuedDoctorRepair =
+  "converge-ready" | "register-service" | "restart";
+
+/**
+ * `declined` covers both "nothing was enqueued because this is no longer that
+ * host" and the HOST's own refusal of a restart — one informational,
+ * self-clearing arm, mapped in main so the renderer has no second place to get
+ * the taxonomy wrong. A repair that could not run for any other reason rejects.
+ */
+export type QueuedDoctorRepairResult =
+  | { readonly kind: "applied" }
+  | { readonly kind: "declined"; readonly message: string };
+
+/**
+ * A Doctor repair's answer. `lane-busy` and `host-changed` mean NOTHING was
+ * enqueued — the caller renders the message as information, the same way a
+ * host's own refusal is rendered.
+ */
+export type DoctorRepairDispatch =
+  | { readonly kind: "lane-busy"; readonly message: string }
+  | { readonly kind: "host-changed"; readonly message: string }
+  | { readonly kind: "dispatched"; readonly outcome: MutationOutcome<null> };
+
+/**
+ * What an atomic maintenance install submission answers.
+ *
+ * `lane-busy` is main's verdict that the exclusive mutation lane was already
+ * occupied at submission time, so NOTHING was enqueued — the compatibility
+ * lane maps it to the protocol's `already-updating`. Every other arm is the
+ * controller's own per-intent outcome, unchanged and mapped as before.
+ */
+export type MaintenanceInstallDispatch =
+  | {
+      readonly kind: "lane-busy";
+      /**
+       * Whether the lane is occupied by UPDATE work (an install or an apply)
+       * as opposed to anything else that takes the same exclusive lane — a
+       * service registration, a restart, a removal, a free-port repair, or
+       * the pending login-item refresh.
+       *
+       * The distinction is not cosmetic. The compatibility lane maps a busy
+       * lane to the protocol's `already-updating`, and that answer arms the
+       * caller's accepted-update latch to wait on `host.status.updateProgress`
+       * — a field these pre-1.2.0 hosts do not publish, and which an unrelated
+       * service cycle would never populate even if they did. Reporting a
+       * service registration as "already updating" therefore both lies and
+       * hangs the surface on progress that cannot arrive.
+       */
+      readonly updateInFlight: boolean;
+      /** Main's rendered reason, for the surfaces that show one. */
+      readonly message: string;
+    }
+  | {
+      readonly kind: "dispatched";
+      readonly outcome: MutationOutcome<InstallVersionOk>;
+    };
+
+/**
+ * `host.doctor` as the desktop lane can honestly answer it: the CLI's issue
+ * list (validated against the protocol issue schema) or the shared CLI-shell
+ * failure taxonomy — but WITHOUT `triviallyGreenIssueCodes`. That field is a
+ * statement about the transport the report travelled over, which the desktop
+ * main process cannot see; the consumer that knows its vantage supplies the
+ * set (see `doctorTriviallyGreenIssueCodesForVantage` in the protocol).
+ */
+export type MaintenanceDoctorProjection =
+  | {
+      readonly status: "ok";
+      readonly issues: readonly MaintenanceDoctorIssue[];
+    }
+  | { readonly status: "cli-unavailable" }
+  | { readonly status: "cli-failed" }
+  | { readonly status: "invalid-output" };
+
 /**
  * Renderer-facing host management surface. Each method either resolves
  * with the CLI's final NDJSON `result.data` payload (query commands), or -
@@ -1535,10 +1632,37 @@ export interface IHostManagement {
   // `IRunnerHost.requestHostRespawn`: resolves `declined` when the host
   // was deliberately not restarted; rejects only on genuine failures.
   readonly restartHost: () => Promise<HostRestartRequestResult>;
+  /**
+   * This machine's host log.
+   *
+   * Carries `expectedHostId` for the same reason the maintenance block below
+   * does, and it is the one READ in that set: the log is host-scoped content
+   * rendered under a named host, so when local host A is replaced by B while
+   * A's Doctor report is still on screen, an unfenced read puts B's log —
+   * paths, ports, workspace names — under A's name. Main compares against the
+   * live local identity and refuses a mismatch.
+   *
+   * An EMPTY string is the fail-CLOSED value, not an opt-out: it matches no
+   * host that can name itself, so it is refused everywhere except a legacy
+   * install with no identity machinery at all — exactly the population where
+   * there is no second host to confuse this one with.
+   */
   readonly getHostLogs: (input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }) => Promise<HostLogsTailResult>;
-  readonly runDoctor: () => Promise<HostDoctorReport>;
+  /**
+   * This machine's Doctor report.
+   *
+   * Fenced for the same reason `getHostLogs` is: the report is host-scoped
+   * content rendered under a named host, and its issues carry the port and pid
+   * numbers the repairs then act on. A report produced for a replacement host
+   * but shown under its predecessor hands someone another machine's repair
+   * inputs.
+   */
+  readonly runDoctor: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostDoctorReport>;
   readonly availableVersions: (
     input: HostAvailableVersionsInput,
   ) => Promise<HostAvailableSnapshot>;
@@ -1556,10 +1680,131 @@ export interface IHostManagement {
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
+  /**
+   * Kill the process holding the host's port and restart it, QUEUEING behind
+   * whatever the lane is running. The down-host recovery console's route: it
+   * repairs a host that is already not answering, where waiting is the point.
+   *
+   * Fenced on identity even though it queues. The consent this carries out
+   * was given for a SPECIFIC host's port and pid, and those numbers describe
+   * the machine as the report saw it - running them against a replacement
+   * kills whatever now holds that port. The lane exemption is about WHEN the
+   * repair may run, not about WHICH host it may run against.
+   */
   readonly freePortAndRestart: (
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ) => Promise<FreePortAndRestartInput>;
+  /**
+   * The refusing twin, for the Doctor sheet a person is WATCHING.
+   *
+   * Same reasoning as `restartHostIfIdle` and `runDoctorRepairIfIdle`: the
+   * renderer's own gate can only see what it last rendered, so a lifecycle
+   * write that arms in main after that snapshot still lets a confirm through,
+   * and this repair QUEUES rather than refusing - the kill then lands after
+   * the competing write, against a host in a state nobody approved. Main
+   * tests the lane and submits with no await between.
+   */
+  readonly freePortAndRestartIfIdle: (
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ) => Promise<DoctorRepairDispatch>;
   readonly cliManifest: () => Promise<CliInstallManifestSnapshot | null>;
+  // The four `maintenance*` members below serve ONE consumer: the GUI's
+  // local-maintenance fallback, which answers the v1.2.0 `host.*` maintenance
+  // RPCs over this bridge for a LOCAL host too old to have them (≤ 1.1.11 —
+  // a frozen population; delete these when the supported fleet floor reaches
+  // the maintenance-RPC host version). Unlike the query members above, they
+  // return PROTOCOL response shapes: the desktop main process projects the
+  // same CLI JSON / on-disk records the host's own resolvers project, and it
+  // classifies CLI failures into the wire taxonomy there because an Electron
+  // invoke rejection loses its error shape crossing the boundary — the
+  // renderer could no longer tell "no CLI" from "CLI crashed".
+  //
+  // EVERY member below carries `expectedHostId`: the host the caller believes
+  // is local. These operate on "this machine's host" implicitly, so without it
+  // a request aimed at host A silently lands on its replacement B — the local
+  // identity can change under a scope that froze A's id, and an id nothing
+  // checks is worse than no id at all. Main compares against the live local
+  // identity and refuses a mismatch.
+  /** `host.update.check`'s answer from this machine's bundled CLI. */
+  readonly maintenanceUpdateCheck: (
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
+  ) => Promise<HostUpdateCheckResponse>;
+  /** `host.doctor`'s answer, minus the caller-owned transport vantage. */
+  readonly maintenanceDoctor: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<MaintenanceDoctorProjection>;
+  /** `host.getInstallationInfo`'s answer from the shared on-disk records. */
+  readonly maintenanceInstallationInfo: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostGetInstallationInfoResponse>;
+  /**
+   * `host.update.install`'s dispatch, refused when the mutation lane is
+   * already occupied.
+   *
+   * Distinct from {@link installVersion} because the REFUSAL has to be atomic
+   * with the submission. The lane is exclusive but it does not reject a
+   * distinct intent — it QUEUES it — so a renderer that reads
+   * `getHostControllerStatus` and then submits has a window in which the
+   * banner, the tray or the background reconciler can take the lane, and its
+   * install lands right after that one finishes (retargeting, possibly
+   * downgrading, a host nobody asked to move). Main tests the lane and
+   * submits in one synchronous stretch, which is what closes it.
+   *
+   * `installVersion` keeps its queueing semantics for the surfaces that want
+   * them; only the compatibility lane, whose caller has no other way to see
+   * the refusal, takes this one.
+   */
+  readonly maintenanceInstallVersion: (input: {
+    readonly version: string;
+    readonly force: boolean;
+    readonly expectedHostId: string;
+  }) => Promise<MaintenanceInstallDispatch>;
+  /**
+   * Respawn the local host, REFUSED (not queued) when the desktop's exclusive
+   * mutation lane already owns an intent.
+   *
+   * `restartHost` queues behind whatever is running, and stays that way for
+   * the tray and menu deliberately — those are RECOVERY surfaces, the ones
+   * still reachable when Settings cannot render, so they must never learn to
+   * say no (they confirm first, exactly like Settings does). Queueing IS
+   * wrong for a Settings restart the person is watching: by the time an
+   * install or service cycle finishes, the kill they authorised is aimed at a
+   * host in a different state, and the update they were waiting for has
+   * already restarted it once. Force overrides the HOST's veto (busy work, a
+   * live claim); it was never meant to override the desktop's own
+   * serialization.
+   *
+   * A lane refusal arrives as `declined` with a message, the same arm a host's
+   * own refusal uses — informational, self-clearing, retryable.
+   */
+  readonly restartHostIfIdle: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostRestartRequestResult>;
+  /**
+   * The down-host recovery console's four lifecycle repairs, identity-fenced
+   * and QUEUEING. See {@link QueuedDoctorRepair} for why those two properties
+   * belong together rather than being traded off.
+   */
+  readonly runDoctorRepairQueued: (input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }) => Promise<QueuedDoctorRepairResult>;
+  /**
+   * The WATCHED Doctor sheet's two lifecycle repairs, refused when the
+   * exclusive lane is occupied or this machine's host is no longer the
+   * expected one.
+   *
+   * `convergeReady` converges to LATEST and `registerService` adds a service
+   * cycle; both QUEUE behind a running intent rather than being refused, so a
+   * repair clicked during a pinned install would otherwise land after it and
+   * override the version the person actually chose. That sheet's start/restart
+   * take `restartHostIfIdle` above, not this method; the down-host console
+   * keeps the queueing path for all four via `runDoctorRepairQueued`.
+   */
+  readonly runDoctorRepairIfIdle: (input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }) => Promise<DoctorRepairDispatch>;
   readonly getHostName: () => Promise<HostNameSettings>;
   readonly setHostName: (input: {
     readonly customName: string | null;

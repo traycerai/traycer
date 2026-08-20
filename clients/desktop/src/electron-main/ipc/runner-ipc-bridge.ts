@@ -96,11 +96,14 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  GuardedMutationOutcome,
   HostControllerStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  LocalHostMutationIntent,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
@@ -360,8 +363,20 @@ export interface IpcHostLifecycle {
  * `implements` needed.
  */
 export interface IpcHostController {
+  /**
+   * The lifecycle admission verdict sampled synchronously, for a handler that
+   * must test it and submit in one stretch. `getStatus()` carries the lane
+   * half but only after awaiting disk reads, which is already too late to
+   * decide whether submitting would QUEUE behind a running intent — and it
+   * cannot see the pending-login-item revision cycle at all, which this
+   * includes. Deliberately the ONLY admission surface exposed here.
+   */
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
   getStatus(): Promise<HostControllerStatus>;
-  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  convergeReady(
+    force: boolean,
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
     trigger: ApplyStagedTrigger,
@@ -374,16 +389,21 @@ export interface IpcHostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>>;
-  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  registerService(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
-  respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
+  respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
   >;
   freePortAndRestart(
     pid: number | null,
     port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
   removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
   isPendingRevisionRefreshQuarantined(): boolean;

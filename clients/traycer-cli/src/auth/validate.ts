@@ -113,13 +113,15 @@ async function rotateStaleCredentials(
   logger: ILogger,
 ): Promise<ValidationOutcome> {
   const result = await runWithCliStore((store) =>
-    withCommitRetry(() =>
-      store.rotate({
-        expectedUserId: stored.user.id,
-        expectedToken: stored.token,
-        refreshTokenOverride: null,
-        signal: null,
-      }),
+    withCommitRetry(
+      () =>
+        store.rotate({
+          expectedUserId: stored.user.id,
+          expectedToken: stored.token,
+          refreshTokenOverride: null,
+          signal: null,
+        }),
+      null,
     ),
   );
   switch (result.outcome) {

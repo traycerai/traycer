@@ -3,19 +3,47 @@ import { homedir } from "node:os";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { log } from "../app/logger";
-import { runTraycerCliJson, TraycerCliError } from "../cli/traycer-cli";
+import {
+  runBundledTraycerCliJson,
+  runTraycerCliJson,
+  TraycerCliError,
+} from "../cli/traycer-cli";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type {
   HostAvailableSnapshot,
   HostAvailableVersionEntry,
   HostDoctorReport,
+  HostGetInstallationInfoResponse,
   HostInstalledRecord,
   HostLogsTailResult,
   HostRegistryUpdateState,
   HostRemovalState,
+  HostUpdateCheckResponse,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  HostRestartRequestResult,
+  MutationKind,
   FreePortAndRestartInput,
 } from "../../ipc-contracts/host-management-types";
-import type { MutationOutcome } from "../host/host-controller-types";
+import {
+  hostAvailableManifestSchema,
+  hostDoctorIssueSchema,
+} from "@traycer/protocol/host/maintenance/index";
+import {
+  readHostInstallRecordAtPath,
+  readHostStagedRecordAt,
+  readStoredCliInstallManifestAtPath,
+} from "@traycer/protocol/config/installation";
+import {
+  backgroundMutationOutcome,
+  type GuardedMutationOutcome,
+  type LifecycleAdmissionBlock,
+  type MutationOutcome,
+  type LocalHostMutationIntent,
+} from "../host/host-controller-types";
 import {
   clearHostRemovedByUser,
   isHostRemovedByUser,
@@ -33,6 +61,7 @@ import {
 } from "../host/host-display-name";
 import type { IpcHostController, RunnerIpcBridge } from "./runner-ipc-bridge";
 import { restartRequestResultFromOutcome } from "./host-ipc";
+import { classifyLocalHostIdentity } from "../host/local-host-identity";
 
 export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -104,10 +133,43 @@ function nullableString(raw: unknown, key: string): string | null {
   throw new Error(`${key} must be a string or null`);
 }
 
-/** Every non-"ok" outcome rejects the IPC invoke - matches the legacy
+/**
+ * Whether an admission block represents UPDATE work.
+ *
+ * `install` and `apply` are the two lane intents that move the host's
+ * version; every other kind (register, deregister, respawn, recoverIfDown,
+ * freePortAndRestart, uninstallHost, removeTraycer, ensure, activate) and the
+ * login-item refresh take the same exclusive lane without being an update.
+ * Listed positively so a NEW `MutationKind` defaults to "not an update" -
+ * the safe direction, since the alternative is telling someone an update is
+ * running when none is.
+ */
+function admissionBlockIsUpdateWork(block: LifecycleAdmissionBlock): boolean {
+  if (block.kind === "login-item-refresh") return false;
+  return block.lane.kind === "install" || block.lane.kind === "apply";
+}
+
+/**
+ * The failure message of a non-ok outcome, or `null` when it succeeded.
+ *
+ * Lets a Doctor repair route inspect an outcome WITHOUT throwing yet, after
+ * it has already narrowed away the `abandoned` arm - what is left non-ok is
+ * a genuine failure and gets the error path.
+ */
+function failureMessageOf<TOk>(outcome: MutationOutcome<TOk>): string | null {
+  return outcome.kind === "ok" ? null : outcome.message;
+}
+
+/**
+ * Every non-"ok" outcome rejects the IPC invoke - matches the legacy
  * CLI-throw contract for the handlers that never had a "keep the old
- * host, surface it for a compat probe" branch. */
-function okOrThrow<TOk>(outcome: MutationOutcome<TOk>): TOk {
+ * host, surface it for a compat probe" branch. An `abandoned` outcome (the
+ * lane-head identity guard refused a user repair) rejects identically: the
+ * one guarded caller that reaches this helper - the queued free-port
+ * restart - REFUSES its early identity check with a throw too, so early and
+ * late refusals present alike there by construction.
+ */
+function okOrThrow<TOk>(outcome: GuardedMutationOutcome<TOk>): TOk {
   if (outcome.kind !== "ok") {
     throw new Error(outcome.message);
   }
@@ -464,6 +526,197 @@ function isVerifyDisabledForBuild(err: unknown): boolean {
   return true;
 }
 
+/**
+ * Whether this machine's host is still the one the caller meant, with the
+ * refusal words when it is not.
+ *
+ * Every handler below acts on "the local host" implicitly — the channel
+ * carries no host id — so a request aimed at A lands on its replacement B
+ * without this. The scope that built the request can hold a FROZEN id (an
+ * explicitly-scoped requester keeps answering with the row it was created
+ * for), so the renderer cannot be the one to notice; main classifies the same
+ * durable identity `lastKnownLocalHostId` projects, in the same order.
+ *
+ * The two anonymous classifications go OPPOSITE ways, and the split is the
+ * fence's whole strength:
+ *
+ *  - `unverifiable` REFUSES. The enrollment record exists but cannot answer —
+ *    which is what a re-enrollment or replacement mid-write looks like, the
+ *    exact window where "assume no change" would submit A's install against
+ *    B. Refusing here still terminates: the tray/menu respawn and the copied
+ *    terminal commands stay reachable, and the condition clears when the
+ *    record settles.
+ *  - `unenrolled` ALLOWS. Nothing on this machine has ever named a host (a
+ *    legacy install predating the record, with no pid file left) — there is
+ *    no identity machinery a replacement could have gone through, and this is
+ *    exactly the down-legacy-host state the repair handlers exist for.
+ *
+ * Awaited BEFORE any lane test, never between one and its submission: this
+ * reads files, and an await there would reopen the window the lane test
+ * exists to close.
+ */
+async function checkLocalHostIsStill(
+  bridge: RunnerIpcBridge,
+  expectedHostId: string,
+): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly message: string }
+> {
+  const live = await classifyLocalHostIdentity({
+    identityEnrollmentFile: bridge.options.host.identityEnrollmentFile,
+    pidMetadataFile: bridge.options.host.pidMetadataFile,
+  });
+  switch (live.kind) {
+    case "named":
+      return live.hostId === expectedHostId
+        ? { ok: true }
+        : { ok: false, message: HOST_CHANGED_MESSAGE };
+    case "unverifiable":
+      return { ok: false, message: HOST_UNVERIFIED_MESSAGE };
+    case "unenrolled":
+      return { ok: true };
+  }
+}
+
+/**
+ * Run a host-scoped READ under an identity fence that spans the whole read,
+ * not just its start.
+ *
+ * Every one of these shells out to the CLI, so seconds pass between the
+ * question and the answer. Checking only beforehand proves the host was A
+ * when we asked - it says nothing about whose bytes came back, and the caller
+ * renders those bytes under A's name. So the same question is asked again
+ * after the read and a mismatch discards the result rather than attributing
+ * another machine's log, report or install record to the scope that froze A.
+ *
+ * Throwing on the second check is the same contract as the first: callers
+ * already surface a failed read as an error, whereas returning empty content
+ * would read as "this host has nothing to show".
+ */
+async function fencedLocalHostRead<T>(
+  bridge: RunnerIpcBridge,
+  expectedHostId: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  const before = await checkLocalHostIsStill(bridge, expectedHostId);
+  if (!before.ok) {
+    throw new Error(before.message);
+  }
+  const value = await read();
+  const after = await checkLocalHostIsStill(bridge, expectedHostId);
+  if (!after.ok) {
+    throw new Error(after.message);
+  }
+  return value;
+}
+
+/**
+ * The `user-repair` reprovision intent for a Doctor lifecycle fix.
+ *
+ * The guard is the SAME identity question `checkLocalHostIsStill` answers
+ * at the handler, deferred to the head of the mutation lane. Both repair
+ * routes build it: the queued one because its wait is unbounded, and the
+ * watched one because its lane test must stay atomic and so cannot afford the
+ * sentinel read inline. Asking twice is deliberate - the handler's check
+ * refuses cheaply and immediately, and this one refuses a job whose target
+ * moved while it waited.
+ *
+ * A lane-head refusal comes back as the `abandoned` arm of the OUTCOME, not
+ * as state parked in this factory: two windows submitting the same repair
+ * for the same host coalesce into one controller job, and only that job's
+ * intent ever runs - a closure armed here would be live for one waiter and
+ * dead for the rest, which would then misread the shared result as a genuine
+ * failure and count it toward the Doctor console's recurrence lock. The
+ * settled outcome is the only channel every coalesced waiter sees.
+ */
+function userRepairIntent(
+  bridge: RunnerIpcBridge,
+  expectedHostId: string,
+): LocalHostMutationIntent {
+  return {
+    kind: "user-repair",
+    targetHostId: expectedHostId,
+    guard: async () => {
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      return identity.ok
+        ? { kind: "proceed" }
+        : { kind: "abandon", message: identity.message };
+    },
+  };
+}
+
+const HOST_CHANGED_MESSAGE =
+  "This computer's host changed while that was open. Reopen Settings and try again.";
+
+const HOST_UNVERIFIED_MESSAGE =
+  "This computer's host can't confirm its identity right now. Try again in a moment.";
+
+/**
+ * Why a watched restart was refused, in the words of whatever holds the lane.
+ *
+ * The message is the whole value of the refusal — `declined` renders as plain
+ * information, so a generic "busy" would leave someone re-clicking a button
+ * that keeps saying no. Naming the operation says how long to wait instead.
+ */
+export function laneBusyRestartMessage(kind: MutationKind): string {
+  switch (kind) {
+    case "install":
+    case "apply":
+    case "activate":
+    case "ensure":
+      return "Traycer is installing an update on this host. Restart it once that finishes.";
+    case "register":
+    case "deregister":
+      return "Traycer is changing this host's background service. Restart it once that finishes.";
+    case "uninstallHost":
+    case "removeTraycer":
+      return "Traycer is removing this host. There is nothing to restart until that finishes.";
+    case "respawn":
+    case "recoverIfDown":
+    case "freePortAndRestart":
+      return "This host is already restarting.";
+  }
+}
+
+/**
+ * `laneBusyRestartMessage` widened to every admission block: the words for
+ * whatever lifecycle work caused a watched request to be refused, whichever
+ * tail it runs on.
+ */
+export function admissionBlockRestartMessage(
+  block: LifecycleAdmissionBlock,
+): string {
+  switch (block.kind) {
+    case "mutation":
+      return laneBusyRestartMessage(block.lane.kind);
+    case "login-item-refresh":
+      return "Traycer is refreshing this host's background service registration. Try again once that finishes.";
+  }
+}
+
+/**
+ * Classify a `runBundledTraycerCliJson` rejection into the wire taxonomy the
+ * host's own maintenance resolvers produce from the same CLI, so the GUI's
+ * local fallback renders the same words for the same fault on either lane.
+ *
+ * The mapping leans on `cli/traycer-cli.ts`'s throw shapes:
+ *  - a PLAIN `Error` is thrown only by invocation resolution — for this lane,
+ *    `resolveBundledTraycerCliInvocation` found no bundled CLI under app
+ *    resources — which is the host taxonomy's `cli-unavailable` (no CLI on
+ *    this machine to shell);
+ *  - `exitCode === 0 && code === null` is the "ran to a clean exit but emitted
+ *    no terminal result line" arm: a CLI speaking a shape this build cannot
+ *    read, the taxonomy's `invalid-output`;
+ *  - every other `TraycerCliError` (error envelope, crash, timeout) is the CLI
+ *    running and not completing — `cli-failed`.
+ */
+export function classifyCliShellError(
+  err: unknown,
+): "cli-unavailable" | "cli-failed" | "invalid-output" {
+  if (!(err instanceof TraycerCliError)) return "cli-unavailable";
+  if (err.exitCode === 0 && err.code === null) return "invalid-output";
+  return "cli-failed";
+}
+
 async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
   const checkedAt = new Date().toISOString();
   try {
@@ -637,7 +890,19 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostConvergeReady,
     async (_event, raw: unknown) => {
       const force = optionalBoolean(raw, "force");
-      return bridge.options.hostController.convergeReady(force);
+      // `background`, which keeps this channel byte-identical: it carries no
+      // `expectedHostId` to guard with and has never cleared the removal
+      // sentinel, so it still short-circuits on a removed host. That is the
+      // right contract for its caller - the provisioning controller, which
+      // converges on behalf of the app rather than of a click. The Doctor
+      // repairs that DO mean "give me the host back" pass `user-repair`.
+      // Narrowed before crossing IPC: the renderer's contract is plain
+      // `MutationOutcome`, and a guardless intent cannot be abandoned.
+      return backgroundMutationOutcome(
+        await bridge.options.hostController.convergeReady(force, {
+          kind: "background",
+        }),
+      );
     },
   );
 
@@ -767,35 +1032,101 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
 
   // Deliberately NOT `okOrThrow`: a busy/deferred respawn outcome resolves
   // as a `declined` result the renderer presents as information - see
-  // `restartRequestResultFromOutcome`.
+  // `restartRequestResultFromOutcome`. `background` because this legacy
+  // channel carries no `expectedHostId` to build a guard from - it restarts
+  // the local host as a role, whatever currently fills it.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostRestart, async () => {
     return restartRequestResultFromOutcome(
-      await bridge.options.hostController.respawn(),
+      await bridge.options.hostController.respawn({ kind: "background" }),
     );
   });
 
   bridge.handleInvoke(
-    RunnerHostInvoke.traycerHostLogs,
-    async (_event, raw: unknown) => {
-      const tail = optionalNumber(raw, "tailLines") ?? 200;
-      const args = ["host", "logs", "--tail", String(tail)];
-      const data = await runTraycerCliJson<unknown>([...args, "--json"]);
-      if (!isPlainObject(data)) {
-        const result: HostLogsTailResult = { path: null, tail: "" };
-        return result;
+    RunnerHostInvoke.traycerHostRestartIfIdle,
+    async (_event, raw: unknown): Promise<HostRestartRequestResult> => {
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "declined", message: identity.message };
       }
-      const result: HostLogsTailResult = {
-        path: typeof data.path === "string" ? data.path : null,
-        tail: typeof data.tail === "string" ? data.tail : "",
-      };
-      return result;
+      // The refusing twin of the handler above, for a restart someone is
+      // WATCHING. `respawn()` goes through the same exclusive lane as every
+      // other intent and queues behind it rather than being refused, so a
+      // Settings restart submitted while an install, apply or service cycle
+      // is running would fire its kill after that finished — against a host in
+      // a state the person never saw, and typically one the update just
+      // restarted anyway.
+      //
+      // Same atomicity rule as `maintenance:installVersion`: test admission
+      // and submit with NO await in between, because a read that crosses an
+      // await is already history. `respawn()` registers on the tail
+      // synchronously, and building the intent is synchronous too - only its
+      // guard runs later, at the head of the lane.
+      const block = bridge.options.hostController.lifecycleAdmissionBlock;
+      if (block !== null) {
+        return {
+          kind: "declined",
+          message: admissionBlockRestartMessage(block),
+        };
+      }
+      // `user-repair` even though an admitted job runs at the head of an
+      // EMPTY lane: admission to execution still crosses a microtask
+      // boundary, and this channel names a specific host, so the guard
+      // re-asks the identity question there. `abandoned` renders as the
+      // same `declined` the check above resolves.
+      return restartRequestResultFromOutcome(
+        await bridge.options.hostController.respawn(
+          userRepairIntent(bridge, expectedHostId),
+        ),
+      );
     },
   );
 
-  bridge.handleInvoke(RunnerHostInvoke.traycerHostDoctor, async () => {
-    const raw = await runTraycerCliJson<unknown>(["host", "doctor", "--json"]);
-    return projectDoctorReport(raw);
-  });
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostLogs,
+    async (_event, raw: unknown) => {
+      // Fenced like the maintenance projections, and for the same reason: this
+      // reads THIS machine's log, so a scope frozen on host A that has since
+      // been replaced would render B's log — its paths, ports and workspace
+      // names — under A's name. The fence SPANS the CLI call: `traycer host
+      // logs` takes long enough for A to be replaced while it runs, and the
+      // tail that comes back would be B's.
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        const tail = optionalNumber(raw, "tailLines") ?? 200;
+        const args = ["host", "logs", "--tail", String(tail)];
+        const data = await runTraycerCliJson<unknown>([...args, "--json"]);
+        if (!isPlainObject(data)) {
+          const empty: HostLogsTailResult = { path: null, tail: "" };
+          return empty;
+        }
+        const result: HostLogsTailResult = {
+          path: typeof data.path === "string" ? data.path : null,
+          tail: typeof data.tail === "string" ? data.tail : "",
+        };
+        return result;
+      });
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostDoctor,
+    async (_event, raw: unknown) => {
+      // Fenced like the log read: the report describes THIS machine, and its
+      // issues carry the port/pid the repairs act on, so attributing a
+      // replacement host's report to the scope that froze its predecessor
+      // hands out another machine's repair inputs.
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        const json = await runTraycerCliJson<unknown>([
+          "host",
+          "doctor",
+          "--json",
+        ]);
+        return projectDoctorReport(json);
+      });
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostAvailable,
@@ -825,12 +1156,347 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
+  // ── The maintenance-RPC projections ────────────────────────────────────
+  // These three answer the v1.2.0 `host.*` maintenance RPCs for the GUI's
+  // local fallback (a local host ≤ 1.1.11 negotiated the family away), so
+  // each resolves the PROTOCOL response shape rather than a renderer mirror.
+  // Failure classification lives here in main — an invoke rejection loses
+  // its error shape at the context-bridge boundary, so the renderer could
+  // never rebuild the taxonomy from a rethrow. The projections mirror the
+  // host's own resolvers over the same producers: the bundled CLI's JSON and
+  // the shared on-disk install records (read with the protocol's own
+  // schema-strict readers, so a field the wire contract requires can never
+  // be silently dropped or fabricated in between). "Bundled" is load-bearing:
+  // these shell `runBundledTraycerCliJson`, never the discovered
+  // manifest/PATH CLI the general-purpose handlers above resolve — a stale or
+  // keyless manual install would otherwise stay authoritative and disable
+  // this repair lane while a healthy version-matched CLI sits in resources
+  // (the same D7 rule `HostController` follows for host mutations).
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    async (_event, raw: unknown): Promise<HostUpdateCheckResponse> => {
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        const includePreReleases = optionalBoolean(raw, "includePreReleases");
+        const args = [
+          "host",
+          "available",
+          "--json",
+          ...(includePreReleases ? ["--include-pre-releases"] : []),
+        ];
+        let payload: unknown;
+        try {
+          payload = await runBundledTraycerCliJson<unknown>(args);
+        } catch (err) {
+          // Every failure classifies, including a build without trusted registry
+          // keys. Deliberately NOT `traycerHostAvailable`'s
+          // `emptyAvailableSnapshot()` normalisation: that lane's consumer reads
+          // an empty snapshot as "nothing to install", while a protocol manifest
+          // with `latest: ""` reaches a consumer that reads `latest` as a real
+          // version — it renders `v is available, but <host> can't install it.`
+          // whenever the installed version is unknown. The host's own
+          // `host.update.check` resolver returns the classified outcome for any
+          // non-ok CLI result and never synthesises a manifest, and this lane
+          // answers the same wire contract, so it classifies too.
+          return { outcome: classifyCliShellError(err) };
+        }
+        const manifest = hostAvailableManifestSchema.safeParse(
+          isPlainObject(payload) ? payload.manifest : undefined,
+        );
+        if (!manifest.success) {
+          log.warn(
+            "[host-management] maintenance update-check payload invalid",
+            {
+              issues: manifest.error.issues.slice(0, 3),
+            },
+          );
+          return { outcome: "invalid-output" };
+        }
+        return { outcome: "ok", manifest: manifest.data };
+      });
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceDoctor,
+    async (_event, raw: unknown): Promise<MaintenanceDoctorProjection> => {
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        let payload: unknown;
+        try {
+          payload = await runBundledTraycerCliJson<unknown>([
+            "host",
+            "doctor",
+            "--json",
+          ]);
+        } catch (err) {
+          return { status: classifyCliShellError(err) };
+        }
+        // Schema-strict, unlike `projectDoctorReport` above, whose tolerant
+        // coercions make a malformed payload indistinguishable from a clean
+        // bill of health. On this lane a report the protocol cannot parse IS
+        // the `invalid-output` arm — the same answer the host's resolver gives
+        // for the same bytes.
+        const issues = hostDoctorIssueSchema
+          .array()
+          .safeParse(isPlainObject(payload) ? payload.issues : undefined);
+        if (!issues.success) {
+          log.warn("[host-management] maintenance doctor payload invalid", {
+            issues: issues.error.issues.slice(0, 3),
+          });
+          return { status: "invalid-output" };
+        }
+        return { status: "ok", issues: issues.data };
+      });
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+    async (_event, raw: unknown): Promise<HostGetInstallationInfoResponse> => {
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        // Byte-for-byte the host resolver's `readInstallationInfo`, pointed at
+        // the desktop's own path authority for the same files: a missing
+        // install record IS the unmanaged/tree-run state, a corrupt one throws
+        // (never mistaken for "not installed"), and the staged sidecar stays
+        // best-effort tolerant. `readInstalledHostRecord` above is deliberately
+        // NOT reused: its lossy defaults (`archiveSha256: ""`,
+        // `installedAt` from mtime) would fabricate wire fields.
+        const layout = activeLayout();
+        const installRecord = await readHostInstallRecordAtPath(
+          layout.installRecordFile,
+        );
+        if (installRecord === null) return { status: "unmanaged" };
+        const [stagedRecord, cliManifest] = await Promise.all([
+          readHostStagedRecordAt(layout.stagedDir),
+          readStoredCliInstallManifestAtPath(
+            join(cliSlotRootForEnvironment(activeEnvironment), "manifest.json"),
+          ),
+        ]);
+        return { status: "managed", installRecord, stagedRecord, cliManifest };
+      });
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceInstallVersion,
+    async (_event, raw: unknown): Promise<MaintenanceInstallDispatch> => {
+      const version = optionalString(raw, "version") ?? "";
+      const force = optionalBoolean(raw, "force");
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      // BEFORE the lane test, never between it and the submission.
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
+      }
+      // ATOMIC test-and-submit, and the reason this is a separate channel from
+      // `traycerHostInstallVersion`. The lane is exclusive but it does not
+      // refuse a distinct intent — `enqueueMutation` chains it onto
+      // `mutationTail` — so a caller that tests the lane in one IPC round trip
+      // and submits in the next can be overtaken by the banner, the tray or
+      // the background reconciler, and its install lands right after theirs.
+      //
+      // Main is single-threaded and `installVersion` registers on the tail
+      // synchronously, so testing the lane and calling it with NO await in
+      // between admits no interleaving. Do not insert one: an `await
+      // clearHostRemovalIfSet()` here (as the sibling handler does) would
+      // reopen exactly the window this exists to close — `installVersion`
+      // clears the removed-by-user sentinel inside the mutation body anyway.
+      const installBlock =
+        bridge.options.hostController.lifecycleAdmissionBlock;
+      if (installBlock !== null) {
+        // WHAT holds the lane decides how the compatibility lane answers.
+        // Only real update work may be reported as `already-updating`;
+        // anything else is transient contention and says so.
+        return {
+          kind: "lane-busy",
+          updateInFlight: admissionBlockIsUpdateWork(installBlock),
+          message: admissionBlockRestartMessage(installBlock),
+        };
+      }
+      const outcome = await bridge.options.hostController.installVersion(
+        version,
+        force,
+      );
+      if (outcome.kind === "ok") {
+        // Same forced re-probe as `traycerHostInstallVersion` above, for the
+        // same stale-cache reason: the install record on disk now names the
+        // new version, and without `force` the pre-install cache — reachable
+        // and minutes old — would keep serving the OLD `installedVersion`
+        // (and `updateAvailable`) for the rest of the 24h TTL, so the tray
+        // and Updates row keep advertising the version this dispatch just
+        // installed. Fire-and-forget: the install already committed, so a
+        // rejection in this secondary probe must never turn the dispatched
+        // outcome into a rejected invoke.
+        void refreshRegistryUpdateState(bridge.options.hostController, {
+          force: true,
+          maxAgeMs: null,
+        }).catch((err: unknown) => {
+          log.warn(
+            "[host-management] registry refresh after maintenance install failed",
+            { err },
+          );
+        });
+      }
+      return { kind: "dispatched", outcome };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerDoctorRepairQueued,
+    async (_event, raw: unknown): Promise<QueuedDoctorRepairResult> => {
+      const repair = optionalString(raw, "repair");
+      if (
+        repair !== "converge-ready" &&
+        repair !== "register-service" &&
+        repair !== "restart"
+      ) {
+        throw new Error(`Unknown doctor repair: ${String(repair)}`);
+      }
+      // The recovery console's route. It QUEUES deliberately — see
+      // `QueuedDoctorRepair` — so there is no `lifecycleAdmissionBlock` test
+      // here, and that is the ONLY thing it gives up. Identity is still
+      // decided before anything is enqueued: this console can outlive the host
+      // it names, and a queued repair that lands on a replacement is a write
+      // nobody asked for.
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "declined", message: identity.message };
+      }
+      if (repair === "restart") {
+        // Queued like its two siblings, so the identity question rides the
+        // intent to the head of the lane: this restart can wait minutes
+        // behind an install, and a zero-argument respawn firing then would
+        // force-restart whatever host holds the slot by that time, killing
+        // sessions on a host nobody asked about. The host's own refusal
+        // (busy work, removed-by-user, lock contention) and the guard's late
+        // refusal are both informational, and
+        // `restartRequestResultFromOutcome` is the one place that taxonomy
+        // lives - it renders `abandoned` as the same `declined` the
+        // pre-enqueue check above resolves.
+        const result = restartRequestResultFromOutcome(
+          await bridge.options.hostController.respawn(
+            userRepairIntent(bridge, expectedHostId),
+          ),
+        );
+        return result.kind === "declined"
+          ? { kind: "declined", message: result.message }
+          : { kind: "applied" };
+      }
+      // Clicking Install host or Register service on a Doctor report IS an
+      // explicit user-driven reprovision - the same gesture as the Updates
+      // row's own install - so the removal sentinel has to come off, and the
+      // identity has to still hold when the job actually runs.
+      //
+      // Both now happen at the HEAD OF THE LANE rather than here. This route
+      // queues, so "here" can be minutes before the mutation: the host can be
+      // replaced or re-enrolled while the repair waits behind an install, and
+      // the check above would have proved nothing about the host that
+      // ultimately gets written. `user-repair` carries the same identity
+      // question as a guard and the controller asks it again once admitted.
+      // Restart is deliberately NOT a reprovision and keeps its own
+      // removed-by-user deferral.
+      const intent = userRepairIntent(bridge, expectedHostId);
+      // Widened to `unknown` because the two intents resolve DIFFERENT
+      // ok-value types and this handler never reads the value - it only
+      // classifies the kind.
+      const outcome: GuardedMutationOutcome<unknown> =
+        repair === "converge-ready"
+          ? await bridge.options.hostController.convergeReady(false, intent)
+          : await bridge.options.hostController.registerService(intent);
+      // A guard refusal is NOT a failure. It arrives as the `abandoned` arm
+      // of the SHARED settled outcome, so a caller that coalesced onto
+      // another window's identical repair classifies it exactly like the
+      // caller whose intent ran - rendered the same way as the pre-enqueue
+      // check above, and never counted toward the console's recurrence lock,
+      // which would let a merely-renamed host disable Doctor after three
+      // clicks.
+      if (outcome.kind === "abandoned") {
+        return { kind: "declined", message: outcome.message };
+      }
+      // Anything else that stopped this repair is a genuine failure and
+      // rejects, matching what the renderer did when it called the unfenced
+      // methods directly.
+      const failure = failureMessageOf(outcome);
+      if (failure !== null) {
+        throw new Error(failure);
+      }
+      return { kind: "applied" };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerDoctorRepairIfIdle,
+    async (_event, raw: unknown): Promise<DoctorRepairDispatch> => {
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const repair = optionalString(raw, "repair");
+      if (repair !== "converge-ready" && repair !== "register-service") {
+        throw new Error(`Unknown doctor repair: ${String(repair)}`);
+      }
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "host-changed", message: identity.message };
+      }
+      // The Doctor sheet's two LIFECYCLE repairs, refused rather than queued
+      // for the same reason a watched restart is: `convergeReady` converges to
+      // LATEST and `registerService` adds a service cycle, so either one
+      // landing after a pinned install overrides the version the person
+      // actually chose. The page cannot gate this on its own — its lifecycle
+      // state cannot see a lane the background reconciler armed.
+      //
+      // Atomic: the lane test and the submission have no await between them.
+      // The sentinel clear that this repair also needs is NOT done here for
+      // exactly that reason - it reads disk, and an await between the test
+      // and the submit reopens the window the test exists to close. It rides
+      // the `user-repair` intent into the controller instead, which runs it
+      // once admitted. `traycerHostInstallVersion` documents the same rule
+      // one handler up.
+      const block = bridge.options.hostController.lifecycleAdmissionBlock;
+      if (block !== null) {
+        return {
+          kind: "lane-busy",
+          message: admissionBlockRestartMessage(block),
+        };
+      }
+      const intent = userRepairIntent(bridge, expectedHostId);
+      const outcome: GuardedMutationOutcome<unknown> =
+        repair === "converge-ready"
+          ? await bridge.options.hostController.convergeReady(false, intent)
+          : await bridge.options.hostController.registerService(intent);
+      // Same rule as the queued twin: a late identity refusal is reported as
+      // the identity refusal it is, using the dispatch shape this channel
+      // already has for one caught before submission - and it rides the
+      // SHARED outcome, so a coalesced waiter classifies it identically.
+      if (outcome.kind === "abandoned") {
+        return { kind: "host-changed", message: outcome.message };
+      }
+      return {
+        kind: "dispatched",
+        outcome: outcome.kind === "ok" ? { kind: "ok", value: null } : outcome,
+      };
+    },
+  );
+
   bridge.handleInvoke(RunnerHostInvoke.traycerServiceRegister, async () => {
     await clearHostRemovalIfSet();
     // Dev-slot CLI argv (the staged wrapper / self-invocation flags, Ticket
     // f0ae4530) is owned by `HostController.registerService()` itself,
     // environment-aware since the controller already carries `environment`.
-    return bridge.options.hostController.registerService();
+    //
+    // `background` even though this IS user-driven: the clear it needs
+    // already happened on the line above, and this channel carries no
+    // `expectedHostId` to build a guard from. Passing the intent would change
+    // an unfenced legacy route this PR does not otherwise touch.
+    // Narrowed before crossing IPC: the renderer's contract is plain
+    // `MutationOutcome`, and a guardless intent cannot be abandoned.
+    return backgroundMutationOutcome(
+      await bridge.options.hostController.registerService({
+        kind: "background",
+      }),
+    );
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerServiceDeregister, async () => {
@@ -860,13 +1526,35 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const port = optionalNumber(raw, "port");
       const pid = optionalNumber(raw, "pid");
       const processName = optionalString(raw, "processName");
+      // The port and pid above describe the machine AS THE REPORT SAW IT, and
+      // the approval was given for that host. If this computer's host has been
+      // replaced since, the same numbers name whatever now holds the port, so
+      // the repair is refused rather than aimed at a host nobody approved.
+      // Queueing behind the lane stays deliberate here (see the contract) —
+      // this is the down-host recovery route, and identity is a separate
+      // question from timing.
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
+      }
       log.info("[host-management] free-port restart confirmed", {
         port,
         pid,
         processName,
       });
+      // The check above refuses cheaply and immediately; this one refuses a
+      // job whose target moved while it queued. `pid` and `port` were
+      // recorded against the host as it was at confirm time, so of all the
+      // queued repairs this is the one that most needs re-asking: the
+      // consequence of getting it wrong is killing a process nobody named.
+      const intent = userRepairIntent(bridge, expectedHostId);
       okOrThrow(
-        await bridge.options.hostController.freePortAndRestart(pid, port),
+        await bridge.options.hostController.freePortAndRestart(
+          pid,
+          port,
+          intent,
+        ),
       );
       // `ActivateInstalledOk` carries no port/pid/processName - echo the
       // confirmed input back, matching the renderer contract's shape.
@@ -876,6 +1564,60 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         processName,
       };
       return result;
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
+    async (_event, raw: unknown): Promise<DoctorRepairDispatch> => {
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "host-changed", message: identity.message };
+      }
+      const port = optionalNumber(raw, "port");
+      const pid = optionalNumber(raw, "pid");
+      // The refusing twin of the handler above, for the Doctor sheet someone
+      // is WATCHING. `freePortAndRestart` goes through the exclusive lane and
+      // QUEUES behind whatever is running, so a confirm that raced a lifecycle
+      // write arming in main fires its kill after that write finishes —
+      // against a host in a state the person never saw. The renderer's own
+      // gate cannot close this: it can only refuse on what it last rendered.
+      //
+      // Same atomicity rule as the other `*IfIdle` handlers: test admission
+      // and submit with NO await in between.
+      const block = bridge.options.hostController.lifecycleAdmissionBlock;
+      if (block !== null) {
+        return {
+          kind: "lane-busy",
+          message: admissionBlockRestartMessage(block),
+        };
+      }
+      log.info("[host-management] free-port restart confirmed (refusing)", {
+        port,
+        pid,
+      });
+      const outcome = await bridge.options.hostController.freePortAndRestart(
+        pid,
+        port,
+        userRepairIntent(bridge, expectedHostId),
+      );
+      // Reported as the identity refusal it is, using the shape this channel
+      // already has for one caught before submission. Without this the SAME
+      // mismatch reads as `host-changed` when the handler catches it and as a
+      // failed dispatch when the lane head does. The `abandoned` arm rides
+      // the SHARED outcome, so a coalesced waiter classifies it identically.
+      //
+      // The queued twin above deliberately needs no branch: its early check
+      // THROWS, and `okOrThrow` throws the late `abandoned` too, so early
+      // and late refusals already look alike there.
+      if (outcome.kind === "abandoned") {
+        return { kind: "host-changed", message: outcome.message };
+      }
+      return {
+        kind: "dispatched",
+        outcome: outcome.kind === "ok" ? { kind: "ok", value: null } : outcome,
+      };
     },
   );
 

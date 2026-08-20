@@ -17,10 +17,10 @@ import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-trayc
  * snapshot is within the 30-second `staleTime`, so an ordinary mount would
  * reuse it and describe the attempt BEFORE the one that just failed - or no
  * attempt at all. Only `convergeReady`'s SUCCESS invalidates the key. So the
- * mount refetches unconditionally (`onMount: "always"`) and the panel waits
- * for that fetch (`isFetchedAfterMount`) rather than drawing the stale one
- * for the beat it takes - a wrong attempt panel that corrects itself is still
- * a wrong attempt panel on a crash report.
+ * mount takes a read of its own (`onMount: "fresh-read"`) and the panel waits
+ * for it (`isFetchedAfterMount`) rather than drawing the stale one for the
+ * beat it takes - a wrong attempt panel that corrects itself is still a wrong
+ * attempt panel on a crash report.
  *
  * Shared by the two surfaces that can be on screen for a failed local start -
  * the window narrator's settled arm and the gate's `provisioning-error` card.
@@ -32,7 +32,7 @@ import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-trayc
 export function LocalBootstrapAttempts(): ReactNode {
   const status = useRunnerTraycerHostStatusQuery({
     pollIntervalMs: null,
-    onMount: "always",
+    onMount: "fresh-read",
   });
   // BOTH halves, and the second one is not redundant. `isFetchedAfterMount` is
   // `dataUpdateCount > initial || errorUpdateCount > initial` (query-core's

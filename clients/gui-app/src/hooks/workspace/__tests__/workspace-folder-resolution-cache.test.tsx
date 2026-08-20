@@ -53,6 +53,7 @@ describe("workspace folder resolution cache", () => {
         operation: "prepare",
         folderPaths: [fixture.workspacePath],
         path: null,
+        bumpRecency: null,
       });
     });
 
@@ -93,6 +94,7 @@ describe("workspace folder resolution cache", () => {
           operation: "prepare",
           folderPaths: [fixture.workspacePath],
           path: null,
+          bumpRecency: null,
         })
         .then(() => undefined);
     });

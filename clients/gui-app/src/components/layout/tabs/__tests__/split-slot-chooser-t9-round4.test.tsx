@@ -11,6 +11,7 @@ const chooserHistoryItem = vi.hoisted<HistoryItem>(() => ({
   updatedBucket: "today",
   linkedRepos: [],
   linkedWorkspaces: [],
+  chatHostIds: null,
   pullRequestNumbers: [],
   worktreeBranches: [],
   worktreePaths: [],

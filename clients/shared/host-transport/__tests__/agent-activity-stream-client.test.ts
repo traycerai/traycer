@@ -56,6 +56,7 @@ function makeWsStreamClient(
     bearer: () => null,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: {
       create: () => {

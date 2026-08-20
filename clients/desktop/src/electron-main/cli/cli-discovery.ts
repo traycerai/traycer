@@ -20,6 +20,7 @@ import { config, isDevBuild } from "../../config";
 import { environmentSubdir } from "../host/host-paths";
 import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
 import { log } from "../app/logger";
+import { withDesktopCliLock } from "../host/desktop-cli-lock";
 import devWrapperPaths from "./dev-wrapper-paths.json";
 
 /**
@@ -73,6 +74,19 @@ function resolveCliStagingDir(): string {
 function resolveCliManifestPath(): string {
   return join(resolveCliSlotHome(), "manifest.json");
 }
+
+// The CLI's own `store/paths.ts` `cliLockPath()`, resolved from this side.
+// It must stay literally the same file: the whole point is that a CLI
+// mutation and this desktop-held section exclude each other through ordinary
+// O_CREAT|O_EXCL contention on ONE path.
+function resolveCliLockPath(): string {
+  return join(resolveCliSlotHome(), ".lock");
+}
+
+// Long enough to outlast a CLI-side staging of a ~100 MB binary, which is
+// what this would normally be queued behind.
+const CLI_SLOT_LOCK_WAIT_MS = 15_000;
+const CLI_SLOT_LOCK_POLL_MS = 100;
 
 function resolveDesktopReconcileStatePath(): string {
   return join(resolveCliSlotHome(), "desktop-reconcile.json");
@@ -331,16 +345,51 @@ export async function writeCliManifestPendingUpgrade(
   pending: NonNullable<CliInstallManifest["pendingUpgrade"]>,
   existingManifest: CliInstallManifest | null,
 ): Promise<CliInstallManifest | null> {
-  const existing = existingManifest ?? (await readCliManifest());
-  if (existing === null) return null;
-  const next: CliInstallManifest = { ...existing, pendingUpgrade: pending };
-  await mkdir(dirname(resolveCliManifestPath()), { recursive: true });
-  await writeFile(
-    resolveCliManifestPath(),
-    JSON.stringify(next, null, 2),
-    "utf8",
+  // Under the CLI lock, with a RE-READ inside it, and the ordering is the
+  // whole point. This runs on the blocked-upgrade path, which means another
+  // writer was just active on this manifest - and the caller's snapshot is
+  // from reconcile START, seconds and one failed publish ago. Writing that
+  // snapshot back unlocked can clobber a `cli mark-source` that committed
+  // in between, leaving the machine running one installation's bytes under
+  // another's manifest: the precise state the lock exists to prevent. The
+  // caller's manifest is used only as a fallback when the locked re-read
+  // finds nothing (the manifest was deleted since - preserving the old
+  // behaviour of still recording the pending upgrade).
+  await ensurePrivateDir(resolveCliSlotHome());
+  const outcome = await withDesktopCliLock(
+    {
+      lockPath: resolveCliLockPath(),
+      reason: "desktop-record-pending-upgrade",
+      waitMs: CLI_SLOT_LOCK_WAIT_MS,
+      pollIntervalMs: CLI_SLOT_LOCK_POLL_MS,
+    },
+    async (): Promise<CliInstallManifest | null> => {
+      const existing = (await readCliManifest()) ?? existingManifest;
+      if (existing === null) return null;
+      const next: CliInstallManifest = { ...existing, pendingUpgrade: pending };
+      const manifestPath = resolveCliManifestPath();
+      await mkdir(dirname(manifestPath), { recursive: true });
+      // Tmp-and-rename, not a bare writeFile: the CLI's `readCliManifest`
+      // treats malformed JSON as a hard fault, so a reader catching a
+      // half-written manifest would diagnose corruption where there is
+      // only an unfinished write.
+      const tmpPath = `${manifestPath}.next-${process.pid}-${randomUUID()}`;
+      await writeFile(tmpPath, JSON.stringify(next, null, 2), "utf8");
+      await rename(tmpPath, manifestPath);
+      return next;
+    },
   );
-  return next;
+  if (outcome.kind === "acquired") return outcome.result;
+  // Past the wait: skip. A pendingUpgrade that goes unrecorded costs one
+  // launch of delay - the next reconcile recomputes the gap and retries -
+  // whereas writing without the lock is exactly the clobber described
+  // above. Logged with the real cause so the caller's generic warning is
+  // not the only trace.
+  log.warn("[cli] skipping pendingUpgrade record - the cli-lock is held", {
+    lockPath: resolveCliLockPath(),
+    holderPid: outcome.holder?.pid ?? null,
+  });
+  return null;
 }
 
 /**
@@ -471,22 +520,70 @@ async function inferNpmPathSource(
   }
 }
 
+// A probe that RAN and answered wrongly is a different fact from a probe
+// that was KILLED at the deadline, and the two must not share a verdict.
+// The failure (oss #872's squatter, a garbage binary) is an immediate exec
+// error or nonsense output - condemn it. The timeout is the one shape a
+// REAL slow CLI can produce: a packaged `traycer --version` runs its slot
+// refresh before commander parses, and on a first launch with a stale slot
+// that is a ~100 MB copy - killing it at 2s and calling the binary
+// not-a-CLI stages the bundled CLI over a working package-manager install,
+// which writes a Desktop-owned manifest that outranks PATH in every later
+// discovery. That consequence is permanent, not per-session, which is why
+// the caller's deadline (below) matters more than the verdict's cache.
+type CliVersionProbe =
+  | { readonly kind: "version"; readonly version: string }
+  | { readonly kind: "not-a-cli" }
+  | { readonly kind: "timeout" };
+
+/**
+ * How long a `--version` probe waits, chosen by what the CALLER can afford
+ * rather than by what the binary deserves.
+ *
+ * Impatient (`CLI_INVOCATION_PROBE_TIMEOUT_MS`): discovery on the invocation path runs
+ * on every status poll, and an uncached `timeout` verdict costs the full
+ * deadline every time. Two seconds is what that path can spend.
+ *
+ * Patient (`CLI_RECONCILE_PROBE_TIMEOUT_MS`): the launch reconcile runs
+ * once, detached (`void timed("deferred", "cli-reconcile", ...)`), and is
+ * the only prober whose verdict can hand slot OWNERSHIP to Desktop - a
+ * timed-out vet drops the PATH candidate, discovery falls through to the
+ * bundled CLI, and installing that writes a Desktop-owned manifest which
+ * wins every later discovery. Nothing re-probes PATH after that, so
+ * dropping the timeout from the cache buys the retry no chance to happen;
+ * the misclassification is permanent, not per-session. The one binary shape
+ * that legitimately blows a 2s deadline is a REAL packaged CLI refreshing
+ * its ~100 MB slot before commander parses - and it needs to be given the
+ * time to finish exactly once, because each killed probe abandons the copy
+ * and the next one starts over. Fifteen seconds covers that copy on a slow
+ * volume; past it the candidate is treated as unusable and the bundled CLI
+ * is staged, because refusing to stage on an unanswerable probe is how the
+ * oss #872 squatter bricked first launch.
+ */
+export const CLI_INVOCATION_PROBE_TIMEOUT_MS = 2_000;
+export const CLI_RECONCILE_PROBE_TIMEOUT_MS = 15_000;
+
 export async function probeCliVersion(
   binaryPath: string,
-): Promise<string | null> {
+  timeoutMs: number,
+): Promise<CliVersionProbe> {
   return new Promise((resolve) => {
     execFile(
       binaryPath,
       ["--version"],
-      { timeout: 2_000, windowsHide: true },
+      { timeout: timeoutMs, windowsHide: true },
       (error, stdout) => {
         if (error) {
-          resolve(null);
+          resolve(error.killed ? { kind: "timeout" } : { kind: "not-a-cli" });
           return;
         }
         const text = String(stdout).trim();
         const match = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(text);
-        resolve(match?.[1] ?? null);
+        resolve(
+          match?.[1] !== undefined
+            ? { kind: "version", version: match[1] }
+            : { kind: "not-a-cli" },
+        );
       },
     );
   });
@@ -500,14 +597,93 @@ export async function probeCliVersion(
 // concurrent discoveries share one exec. Accepted staleness: a PATH binary
 // replaced mid-session keeps its verdict until relaunch; the next launch's
 // reconcile re-probes and re-governs staging anyway.
-const pathProbeCache = new Map<string, Promise<string | null>>();
+//
+// A `timeout` verdict is deliberately NOT cached: it describes the probe's
+// patience, not the binary, and the very refresh that made the first probe
+// slow repairs the slot so the next one is fast. Pinning it would hold the
+// misclassification for the whole session.
+//
+// The two verdicts that ARE cached (`version`, `not-a-cli`) are facts about
+// the binary, so once settled they answer every caller whatever its
+// patience. A probe still RUNNING is not that: it carries the deadline it
+// was started with, and that deadline is only good enough for a caller
+// willing to wait no longer. The entry therefore says which of the two it
+// is rather than leaving the distinction to a sentinel value.
+type PathProbeEntry =
+  | { readonly kind: "settled"; readonly probe: Promise<CliVersionProbe> }
+  | {
+      readonly kind: "in-flight";
+      readonly deadlineMs: number;
+      readonly probe: Promise<CliVersionProbe>;
+    };
 
-function cachedProbeCliVersion(binaryPath: string): Promise<string | null> {
+const pathProbeCache = new Map<string, PathProbeEntry>();
+
+// Every (entry state x caller deadline) pair, stated once so none of them
+// is decided by accident:
+//
+//   settled                  -> answer from it, whatever the deadline.
+//   in-flight, D === T       -> join it.
+//   in-flight, D  >  T       -> join, but stop waiting at T. Otherwise a
+//                               status poll landing inside the reconcile's
+//                               15s probe would stall the invocation path
+//                               for all of it.
+//   in-flight, D  <  T       -> do NOT join: that probe gets killed at D
+//                               and hands back a `timeout` describing
+//                               someone else's patience. For the reconcile
+//                               that verdict is not recoverable - it drops
+//                               the PATH candidate and installs a
+//                               Desktop-owned manifest that outranks PATH
+//                               from then on. Start a probe that can
+//                               actually run for T and let it supersede.
+function cachedProbeCliVersion(
+  binaryPath: string,
+  timeoutMs: number,
+): Promise<CliVersionProbe> {
   const cached = pathProbeCache.get(binaryPath);
-  if (cached !== undefined) return cached;
-  const probe = probeCliVersion(binaryPath);
-  pathProbeCache.set(binaryPath, probe);
+  if (cached !== undefined) {
+    if (cached.kind === "settled") return cached.probe;
+    if (cached.deadlineMs === timeoutMs) return cached.probe;
+    if (cached.deadlineMs > timeoutMs) {
+      return raceProbeDeadline(cached.probe, timeoutMs);
+    }
+  }
+  const probe = probeCliVersion(binaryPath, timeoutMs);
+  const entry: PathProbeEntry = {
+    kind: "in-flight",
+    deadlineMs: timeoutMs,
+    probe,
+  };
+  pathProbeCache.set(binaryPath, entry);
+  void probe.then((verdict) => {
+    // Only ever replaces its OWN entry. A more patient probe may have
+    // superseded this one while it ran, and neither of this probe's
+    // outcomes may disturb that: a `timeout` deleting the entry would
+    // discard a probe that is still running, and a verdict overwriting it
+    // would put the shorter deadline's answer back in front of it.
+    if (pathProbeCache.get(binaryPath) !== entry) return;
+    if (verdict.kind === "timeout") {
+      pathProbeCache.delete(binaryPath);
+      return;
+    }
+    pathProbeCache.set(binaryPath, { kind: "settled", probe });
+  });
   return probe;
+}
+
+async function raceProbeDeadline(
+  probe: Promise<CliVersionProbe>,
+  timeoutMs: number,
+): Promise<CliVersionProbe> {
+  let timer: NodeJS.Timeout | null = null;
+  const ownDeadline = new Promise<CliVersionProbe>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+  });
+  try {
+    return await Promise.race([probe, ownDeadline]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 export function resetCliProbeCacheForTests(): void {
@@ -526,17 +702,27 @@ export function resetCliProbeCacheForTests(): void {
  */
 export async function vetPathCliCandidate(
   binaryPath: string,
+  probeTimeoutMs: number,
 ): Promise<{ readonly version: string; readonly source?: "npm" } | null> {
-  const version = await cachedProbeCliVersion(binaryPath);
-  if (version === null) {
+  const probed = await cachedProbeCliVersion(binaryPath, probeTimeoutMs);
+  if (probed.kind !== "version") {
+    // Both non-answers ignore the candidate for THIS discovery - adopting
+    // an unvetted binary is the oss #872 failure either way - but only
+    // `not-a-cli` is a verdict about the binary. A `timeout` is uncached
+    // (see the cache note above), so a slow-but-real CLI is retried rather
+    // than condemned for the session.
     log.warn(
-      "[cli] `traycer` on PATH failed the version probe - ignoring it for discovery",
+      probed.kind === "timeout"
+        ? "[cli] `traycer` on PATH did not answer the version probe in time - skipping it this pass"
+        : "[cli] `traycer` on PATH failed the version probe - ignoring it for discovery",
       { binaryPath },
     );
     return null;
   }
   const source = await inferNpmPathSource(binaryPath);
-  return source !== undefined ? { version, source } : { version };
+  return source !== undefined
+    ? { version: probed.version, source }
+    : { version: probed.version };
 }
 
 /**
@@ -604,8 +790,15 @@ function devCliWrapperPath(): string {
  * that cannot answer falls through to the bundled CLI instead of being
  * adopted (oss #872). Version-trust policy beyond that ("PATH CLI newer
  * than bundled, trust it") stays with the caller (cli-reconcile).
+ *
+ * `probeTimeoutMs` is that vet's deadline, and it is the caller's to choose
+ * rather than this function's: falling through to the bundled CLI costs a
+ * status poll nothing and costs the launch reconcile the slot's ownership.
+ * See `CLI_INVOCATION_PROBE_TIMEOUT_MS` / `CLI_RECONCILE_PROBE_TIMEOUT_MS`.
  */
-export async function discoverCli(): Promise<CliDiscoveryResult> {
+export async function discoverCli(
+  probeTimeoutMs: number,
+): Promise<CliDiscoveryResult> {
   const manifest = await readCliManifest();
   if (manifest !== null && (await isExecutable(manifest.binaryPath))) {
     return {
@@ -634,7 +827,7 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
     // squatter earlier in PATH hide a real CLI behind it (and report
     // "no CLI anywhere" when the app ships no bundled binary).
     for (const candidate of await findCliCandidatesOnPath()) {
-      const vetted = await vetPathCliCandidate(candidate);
+      const vetted = await vetPathCliCandidate(candidate, probeTimeoutMs);
       if (vetted !== null) {
         return { kind: "path", binaryPath: candidate, ...vetted };
       }
@@ -668,15 +861,133 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
  * along. The copy is staged beside the slot and renamed over it, so a
  * crash mid-stage never leaves a truncated binary at the stable name.
  *
- * Returns the stable path, or throws if the bundled CLI isn't present (a
- * packaging bug worth surfacing loudly).
+ * Returns the stable path and whether THIS call published to it, or throws if
+ * the bundled CLI isn't present (a packaging bug worth surfacing loudly).
+ *
+ * `published: false` means the CLI lock was held past the wait, so nothing
+ * was written. The path is the slot's EVENTUAL stable location, not a
+ * promise anything is there yet: the lock holder may still be mid-copy on a
+ * first install, in which case the path is momentarily absent or incomplete.
+ * Callers must check `published` before treating the path as an installed
+ * CLI, must not report an install or an upgrade on a deferral, and route it
+ * to a retryable outcome instead.
  */
 export async function installBundledCli(opts: {
   readonly bundledCliPath: string;
   readonly version: string;
   readonly source: CliInstallManifest["source"];
+}): Promise<BundledCliInstallResult> {
+  // Under the CLI lock, because this function is not the only writer of the
+  // slot it publishes. The CLI's startup refresh re-stages the same path from
+  // whatever its manifest names, and takes this same lock to do it. Without
+  // participating, the two interleave in a way neither can detect: the
+  // refresh selects source A, this publishes B plus a manifest naming the
+  // slot itself, and the refresh then publishes A over it - after which the
+  // manifest names the slot, so the refresh's own staleness check
+  // short-circuits and never notices the bytes are wrong. The machine runs A
+  // until Desktop reconciles again.
+  //
+  // Best-effort rather than a gate: installing the bundled CLI is part of
+  // app launch and must not fail because another process held a lock. On
+  // contention past the wait it DEFERS - returns without writing - and the
+  // caller routes that into a retryable outcome, so a held lock can delay a
+  // publish but never turn app launch into an error.
+  // The lock file lives IN the slot home, so that directory has to exist
+  // before it can be opened - `open(path, "wx")` on a missing parent is
+  // ENOENT, not contention. The CLI's own `withCliLock` wrapper ensures the
+  // same directory for the same reason; the shared lock module does not.
+  await ensurePrivateDir(resolveCliSlotHome());
+  const outcome = await withDesktopCliLock(
+    {
+      lockPath: resolveCliLockPath(),
+      reason: "desktop-install-bundled-cli",
+      waitMs: CLI_SLOT_LOCK_WAIT_MS,
+      pollIntervalMs: CLI_SLOT_LOCK_POLL_MS,
+    },
+    () => publishBundledCli(opts),
+  );
+  if (outcome.kind === "acquired") {
+    return { path: outcome.result, published: true };
+  }
+  // Past the wait: defer, unconditionally.
+  //
+  // Publishing anyway would re-admit the exact interleaving this lock was
+  // taken to prevent, and in the case most likely to produce it - a
+  // `traycer cli upgrade` holding this lock across a network download that
+  // routinely outlasts the wait. Two writers would publish a slot and a
+  // manifest in interleaved order, and because a Desktop manifest names the
+  // SLOT as its own `binaryPath`, the CLI's staleness check short-circuits on
+  // it and never repairs the mismatch: a machine running one installation's
+  // bytes under another's manifest, indefinitely.
+  //
+  // An earlier version of this made an exception when the slot was ABSENT,
+  // reasoning that with no installation there was nothing to make
+  // inconsistent. That inference is wrong, and the counter-example is the
+  // ordinary one: a first-time `cli mark-source` takes this lock, writes its
+  // manifest, and only then copies the binary - so the slot is legitimately
+  // absent for the whole copy, and "no slot" means "an install is IN
+  // PROGRESS" at least as often as it means "no install exists". Publishing
+  // into that window and letting the CLI writer rename over the result
+  // produces exactly the mismatch above. Absence of the slot is not evidence
+  // of safety; only absence of the LOCK is.
+  //
+  // Deferring is safe against the failure that actually matters here, which
+  // is leaving a machine with no CLI at all. A held lock means another writer
+  // is publishing one, and if that writer dies the lock is reclaimed on the
+  // next attempt by the shared module's holder-liveness check, so the wait
+  // cannot become permanent. The caller routes the deferral into an existing
+  // retryable outcome and reconcile runs again at the next launch.
+  log.warn("[cli] deferring bundled CLI publish - the cli-lock is held", {
+    lockPath: resolveCliLockPath(),
+    holderPid: outcome.holder?.pid ?? null,
+    holderReason: outcome.holder?.reason ?? null,
+  });
+  return { path: stableCliBinaryPath(), published: false };
+}
+
+// Create a directory at 0700, and REPAIR one that already exists.
+//
+// The mirror of the CLI's `ensurePrivateDir` (clients/traycer-cli,
+// src/store/paths.ts), duplicated for the same reason `withDesktopCliLock`
+// duplicates `withCliLock`: these two packages share no module, but they do
+// share this directory, and a rule only one of them enforces is not enforced.
+//
+// `mkdir`'s `mode` applies only to directories it creates, so an existing one
+// keeps whatever mode its first writer chose - which on any pre-existing
+// install is the process umask, 0755. Setting the mode without repairing it
+// would harden only machines that have never run Traycer, while every
+// installed user keeps a world-traversable slot home - the same directory the
+// credentials file lives in.
+//
+// POSIX only, best-effort, and narrowed to directories that are actually too
+// open: installing the bundled CLI happens during app launch and must not
+// fail over a directory this process may not even own.
+async function ensurePrivateDir(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  if (platform() === "win32") return;
+  try {
+    const current = await stat(path);
+    if ((current.mode & 0o077) !== 0) await chmod(path, 0o700);
+  } catch {
+    return;
+  }
+}
+
+export interface BundledCliInstallResult {
+  // The slot path. Usable whether or not this call wrote to it.
+  readonly path: string;
+  // Whether this call published the bundled bytes and the manifest. False
+  // only when the lock was held and a usable slot already existed.
+  readonly published: boolean;
+}
+
+async function publishBundledCli(opts: {
+  readonly bundledCliPath: string;
+  readonly version: string;
+  readonly source: CliInstallManifest["source"];
 }): Promise<string> {
-  await mkdir(resolveCliBinDir(), { recursive: true, mode: 0o755 });
+  // 0700, matching the CLI's `ensureCliInstallHomeDir`.
+  await ensurePrivateDir(resolveCliBinDir());
   const stablePath = stableCliBinaryPath();
   if (platform() === "win32") {
     // The slot binary is essentially ALWAYS running on Windows - the host's
@@ -688,9 +999,27 @@ export async function installBundledCli(opts: {
     // supervisor keeps executing the renamed image and the next host start
     // picks up the new bytes. Renamed leftovers are swept once their process
     // exits (same trash pattern as the host installer's `atomicSwap`).
+    // Copy FIRST, then sweep. The previous order (sweep, rename-aside,
+    // copy) had a failure shape whose second attempt destroyed the
+    // machine's last good CLI: a failed copy left the slot ABSENT with the
+    // old binary parked at `.old-<ts>`, and the NEXT publish's sweep then
+    // deleted that aside - the only surviving copy - before failing the
+    // copy again. Sweeping only after a successful publish means the aside
+    // from a failed attempt survives until some attempt actually lands.
+    const asidePath = await renameCliBinaryAside(stablePath);
+    try {
+      await copyFile(opts.bundledCliPath, stablePath);
+    } catch (error) {
+      // Mirror of the CLI's stageWellKnownCliBinary restore: the whole
+      // point of the aside is that publishing degrades to
+      // stale-but-functional, never to an absent slot the Scheduled Task
+      // has nothing to launch from.
+      if (asidePath !== null) {
+        await rename(asidePath, stablePath).catch(() => undefined);
+      }
+      throw error;
+    }
     await sweepAsideCliBinaries(stablePath);
-    await renameCliBinaryAside(stablePath);
-    await copyFile(opts.bundledCliPath, stablePath);
   } else {
     // Atomic replace: rename() over the slot also swallows a legacy
     // symlink from the pre-copy era in one step.
@@ -702,7 +1031,14 @@ export async function installBundledCli(opts: {
     // mid-write when A chmods and renames, so A publishes a truncated binary
     // onto the stable path. rename() is only atomic with respect to a source
     // nobody else is writing.
-    const staging = `${stablePath}.staging.${process.pid}.${randomUUID()}`;
+    // Hyphen separators, matching the CLI's `stageWellKnownCliBinary`
+    // convention (`.staging-<pid>-<uuid>`) on purpose: the CLI's
+    // `sweepSlotLeftovers` collects `.staging-` orphans by prefix with an
+    // age gate, and it is the only sweeper of this directory that handles
+    // staging leftovers at all. The previous dot-separated spelling made a
+    // hard-killed Electron's half-copied ~100 MB orphan invisible to every
+    // sweep forever.
+    const staging = `${stablePath}.staging-${process.pid}-${randomUUID()}`;
     try {
       await copyFile(opts.bundledCliPath, staging);
       await chmod(staging, 0o755);
@@ -737,17 +1073,22 @@ export async function installBundledCli(opts: {
 
 /**
  * Move the (possibly running) slot binary out of the stable name so a new
- * copy can take its place. A missing binary (fresh install, self-heal after
- * deletion) is not an error. Anything else - e.g. an AV scanner holding the
- * file without delete sharing, which blocks rename too - propagates to the
- * caller, where the reconcile's existing `binary-locked` staging path takes
- * over as the fallback.
+ * copy can take its place, returning where it went so a failed publish can
+ * restore it. A missing binary (fresh install, self-heal after deletion) is
+ * not an error and yields `null` - there is nothing to restore. Anything
+ * else - e.g. an AV scanner holding the file without delete sharing, which
+ * blocks rename too - propagates to the caller, where the reconcile's
+ * existing `binary-locked` staging path takes over as the fallback.
  */
-export async function renameCliBinaryAside(stablePath: string): Promise<void> {
+export async function renameCliBinaryAside(
+  stablePath: string,
+): Promise<string | null> {
+  const asidePath = `${stablePath}.old-${Date.now()}`;
   try {
-    await rename(stablePath, `${stablePath}.old-${Date.now()}`);
+    await rename(stablePath, asidePath);
+    return asidePath;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
   }
 }

@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { hostStopIntentPath as sharedHostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
@@ -327,6 +327,34 @@ export async function ensureHostHomeDirForStaged(
   await ensureHostHomeDir(environment);
 }
 
+// Create a directory at 0700, and REPAIR one that already exists.
+//
+// The repair is the point. `mkdir`'s `mode` applies only to directories it
+// actually creates, so an existing directory silently keeps whatever mode it
+// was first made with - and on any install predating the 0700 default, or one
+// whose home was first created by a sibling writer at the process umask, that
+// is 0755. Without a repair the hardening below only ever reaches machines
+// with no Traycer install yet, which is close to the opposite of the
+// population that needs it: these directories hold the credentials file.
+//
+// Narrowed to directories that are actually too open, so the common path
+// costs a `stat` and no write, and best-effort throughout - a home owned by
+// another user must not turn every CLI command into a hard failure.
+//
+// POSIX only. Windows has no mode bits worth setting (`chmod` there toggles
+// the read-only flag and nothing else); access is governed by an ACL
+// inherited from the user profile directory, which is already user-scoped.
+export async function ensurePrivateDir(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") return;
+  try {
+    const current = await stat(path);
+    if ((current.mode & 0o077) !== 0) await chmod(path, 0o700);
+  } catch {
+    return;
+  }
+}
+
 // Environment-aware CLI home mkdir. Non-environment callers pass undefined to
 // get the shared root; environment-aware callers pass the runtime environment.
 export async function ensureCliHomeDir(
@@ -335,11 +363,11 @@ export async function ensureCliHomeDir(
   // 0o700 keeps the credentials file readable only by the current user
   // even if the file's own mode is later relaxed. Environment subdir
   // inherits these permissions.
-  await mkdir(cliHomeDir(environment), { recursive: true, mode: 0o700 });
+  await ensurePrivateDir(cliHomeDir(environment));
 }
 
 export async function ensureCliInstallHomeDir(
   environment: Environment,
 ): Promise<void> {
-  await mkdir(cliInstallHomeDir(environment), { recursive: true, mode: 0o700 });
+  await ensurePrivateDir(cliInstallHomeDir(environment));
 }

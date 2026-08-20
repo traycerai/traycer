@@ -450,11 +450,13 @@ function useHostProvisioning(args: {
   // it reads from the fleet, and the fleet reads the local id from the
   // enrollment / pid-metadata files - so on a machine that has never had a
   // host the id is null and the authority structurally cannot ask. It owns
-  // SELECTION-TIME ensure: derivation wants the local host and that host
-  // exists but is down. The FIRST INSTALL belongs to the desktop's launch
-  // reconciler (`electron-main/startup/host-launch-converge.ts`), which is the
-  // launch-time process actor and gates on the removal sentinel. Retiring this
-  // effect without that arm left nobody installing a first-ever host.
+  // the STEADY-STATE ensure: the local host exists but is down, whichever host
+  // the window is pointed at. The FIRST BOOT belongs to the desktop's launch
+  // module (`armLocalHostBootOnSignIn` in
+  // `electron-main/startup/host-launch-converge.ts`), which is the launch-time
+  // process actor: sign-in and removal-sentinel gated, and retrying on a
+  // backoff ladder until a host runs. Retiring this effect without that arm
+  // left nobody installing a first-ever host.
   void attemptedRef;
 
   // Direct removal-sentinel check, independent of the retired one-shot

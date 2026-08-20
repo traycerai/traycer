@@ -161,11 +161,12 @@ export function useHostOptions(): HostOptions {
   }, [directory, binding]);
 
   // The installed record is what separates "stopped" from "not installed" — the
-  // two local states a person can actually act on. Without it `deriveStatus`
-  // can only answer `running` or `undefined`, and a stopped local host falls
-  // through to its registry lease and reads "Offline · last seen 3h ago": true
-  // of the lease, useless to someone whose host is sitting there stopped with a
-  // Start button one click away.
+  // two local states worth telling apart (one is being restarted for the user,
+  // the other installed; a removed one gets Reinstall). Without it
+  // `deriveStatus` can only answer `running` or `undefined`, and a stopped
+  // local host falls through to its registry lease and reads "Offline · last
+  // seen 3h ago": true of the lease, useless to someone whose host is sitting
+  // right there on this machine.
   //
   // Same query key as the Host panel's, so the two share one request rather
   // than doubling it, and `enabled` keeps shells without the CLI bridge on the

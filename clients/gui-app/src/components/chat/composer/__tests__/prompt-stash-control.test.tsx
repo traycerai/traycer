@@ -238,8 +238,8 @@ describe("PromptStashControl", () => {
     expect(popover?.className).toContain("p-0");
     expect(row?.className).toContain("min-h-9");
     expect(row?.className).toContain("py-1.5");
-    expect(row?.className).toContain("data-selected:border-primary/35");
-    expect(row?.className).toContain("data-selected:shadow-sm");
+    expect(row?.className).toContain("data-[selected=true]:border-primary/35");
+    expect(row?.className).toContain("data-[selected=true]:shadow-sm");
   });
 
   it("visibly tracks the active row as pointer selection changes", async () => {

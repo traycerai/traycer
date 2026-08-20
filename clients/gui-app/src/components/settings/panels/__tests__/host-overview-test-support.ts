@@ -1,6 +1,11 @@
+import { useEffect } from "react";
 import { vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { useMutation } from "@tanstack/react-query";
+import {
+  HostClient,
+  type IHostQueryInvalidator,
+} from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   MockHostMessenger,
@@ -12,8 +17,10 @@ import type {
   HostControllerStatus,
   HostInstalledRecord,
   HostRegistryUpdateState,
+  HostRestartRequestResult,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type {
   HostAvailableManifest,
@@ -68,6 +75,33 @@ export async function openHostOverviewMenu(): Promise<void> {
 }
 
 /**
+ * Mounts nothing and fires one host-restart mutation on demand, under the
+ * SAME mutation key the Overview's own restart button uses.
+ *
+ * Shared by the doctor-fixes and local-maintenance-fallback suites: both pin
+ * how the panel reacts to a restart that some OTHER surface started (the
+ * pending flag, the disabled states), so the trigger has to be an outside
+ * component publishing on `runnerMutationKeys.hostRestart()` rather than a
+ * click on the panel itself.
+ */
+export function ExternalHostRestartTrigger(props: {
+  readonly mutationFn: () => Promise<HostRestartRequestResult>;
+  readonly onReady: (mutate: () => void) => void;
+}): null {
+  const { mutate } = useMutation({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: props.mutationFn,
+  });
+  const { onReady } = props;
+  useEffect(() => {
+    onReady(() => {
+      mutate();
+    });
+  }, [mutate, onReady]);
+  return null;
+}
+
+/**
  * Open the Updates card's **Advanced** disclosure and wait for its body.
  *
  * The auto-update switch, the OS service controls and the whole version picker
@@ -112,6 +146,12 @@ export function buildOverviewHostFixture(options: {
    * update.
    */
   readonly overrideHandlers?: MockHandlerMap<HostRpcRegistry>;
+  /**
+   * Wired into the fixture's `HostClient` so a test can fire
+   * `notifyHostAvailabilityRecovered` against the real query-invalidation
+   * port. Omitted, the invalidator is a no-op (every other Overview suite).
+   */
+  readonly invalidator?: IHostQueryInvalidator;
 }): OverviewHostFixture {
   let identity: HostIdentity = {
     systemName: options.systemName ?? options.hostId,
@@ -200,7 +240,9 @@ export function buildOverviewHostFixture(options: {
   };
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
+    invalidator: options.invalidator ?? {
+      invalidateHostScope: () => undefined,
+    },
     // REQUIRED for the requester below: `captureAuthority` re-resolves a
     // requester's entry against the live directory and refuses one it cannot
     // find. `bind()` used to satisfy that lookup through the client's own
@@ -277,7 +319,7 @@ export function buildOverviewManagement(
     clearRemoval: vi.fn(() => Promise.resolve()),
     restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     getHostLogs: vi.fn(() => Promise.resolve({ path: null, tail: "" })),
-    runDoctor: vi.fn(() =>
+    runDoctor: vi.fn((_input: { readonly expectedHostId: string }) =>
       Promise.resolve({ issues: [], ranAt: "2026-08-12T00:00:00Z" }),
     ),
     availableVersions: vi.fn(() =>
@@ -303,7 +345,26 @@ export function buildOverviewManagement(
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
+    freePortAndRestartIfIdle: vi.fn((_input) =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
+    maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
+    maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),
+    maintenanceInstallationInfo: vi.fn(
+      notImplemented("maintenanceInstallationInfo"),
+    ),
+    maintenanceInstallVersion: vi.fn(
+      notImplemented("maintenanceInstallVersion"),
+    ),
+    restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "recovery-host",

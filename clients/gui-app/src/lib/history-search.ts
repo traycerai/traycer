@@ -25,6 +25,8 @@ export const historySearchParamsSchema = z.object({
   historyRepoMode: historyMatchModeSchema.optional(),
   historyWorkspaces: z.union([z.string(), z.array(z.string())]).optional(),
   historyWorkspaceMode: historyMatchModeSchema.optional(),
+  historyChatHosts: z.union([z.string(), z.array(z.string())]).optional(),
+  historyChatHostMode: historyMatchModeSchema.optional(),
   historyOwnership: z
     .union([historyOwnershipSchema, z.array(historyOwnershipSchema)])
     .optional(),
@@ -37,6 +39,14 @@ export interface HistorySearchState {
   readonly repoMode: HistoryMatchMode;
   readonly workspaces: ReadonlyArray<HistoryWorkspaceRef>;
   readonly workspaceMode: HistoryMatchMode;
+  /**
+   * Hosts that own chats in the task (`chats.owner_host_id`), NOT the hosts
+   * named by `workspaces` - a workspace is bound at create, a chat host is
+   * where the work actually happens. Raw host ids; display names are resolved
+   * against the host directory at render time.
+   */
+  readonly chatHosts: ReadonlyArray<string>;
+  readonly chatHostMode: HistoryMatchMode;
   readonly ownershipScopes: ReadonlyArray<HistoryOwnershipScope>;
   readonly sort: HistorySortOption;
   readonly sortExplicit: boolean;
@@ -50,6 +60,8 @@ export type HistorySearchPatch = Partial<
     | "repoMode"
     | "workspaces"
     | "workspaceMode"
+    | "chatHosts"
+    | "chatHostMode"
     | "ownershipScopes"
     | "sort"
   >
@@ -63,6 +75,8 @@ export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
   repoMode: "any",
   workspaces: [],
   workspaceMode: "any",
+  chatHosts: [],
+  chatHostMode: "any",
   ownershipScopes: [],
   sort: "recent",
   sortExplicit: false,
@@ -82,6 +96,9 @@ export function parseHistorySearch(
     workspaces: normalizeWorkspaces(parsed.data.historyWorkspaces),
     workspaceMode:
       parsed.data.historyWorkspaceMode ?? DEFAULT_HISTORY_SEARCH.workspaceMode,
+    chatHosts: normalizeChatHosts(parsed.data.historyChatHosts),
+    chatHostMode:
+      parsed.data.historyChatHostMode ?? DEFAULT_HISTORY_SEARCH.chatHostMode,
     ownershipScopes: normalizeArray(parsed.data.historyOwnership),
     sort:
       parsed.data.historySort ??
@@ -104,6 +121,8 @@ export function patchHistorySearch(
     repoMode: patch.repoMode ?? current.repoMode,
     workspaces: patch.workspaces ?? current.workspaces,
     workspaceMode: patch.workspaceMode ?? current.workspaceMode,
+    chatHosts: patch.chatHosts ?? current.chatHosts,
+    chatHostMode: patch.chatHostMode ?? current.chatHostMode,
     ownershipScopes: patch.ownershipScopes ?? current.ownershipScopes,
     sort,
     sortExplicit,
@@ -130,6 +149,12 @@ export function historySearchToParams(
       state.workspaceMode !== DEFAULT_HISTORY_SEARCH.workspaceMode
         ? state.workspaceMode
         : undefined,
+    historyChatHosts: state.chatHosts.length > 0 ? state.chatHosts : undefined,
+    historyChatHostMode:
+      state.chatHosts.length > 1 &&
+      state.chatHostMode !== DEFAULT_HISTORY_SEARCH.chatHostMode
+        ? state.chatHostMode
+        : undefined,
     historyOwnership:
       state.ownershipScopes.length > 0 ? state.ownershipScopes : undefined,
     historySort:
@@ -146,6 +171,8 @@ export type HistorySearchParamKey =
   | "historyRepoMode"
   | "historyWorkspaces"
   | "historyWorkspaceMode"
+  | "historyChatHosts"
+  | "historyChatHostMode"
   | "historyOwnership"
   | "historySort";
 
@@ -165,6 +192,8 @@ export function clearHistorySearchParams<
     historyRepoMode: _historyRepoMode,
     historyWorkspaces: _historyWorkspaces,
     historyWorkspaceMode: _historyWorkspaceMode,
+    historyChatHosts: _historyChatHosts,
+    historyChatHostMode: _historyChatHostMode,
     historyOwnership: _historyOwnership,
     historySort: _historySort,
     ...rest
@@ -192,6 +221,22 @@ function normalizeRepos(
       return trimmed.length > 0 ? [trimmed] : [];
     })
     .sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeChatHosts(
+  value: string | string[] | undefined,
+): ReadonlyArray<string> {
+  // Dedupe AFTER trimming. `normalizeArray` dedupes raw values, so
+  // `"host-a"` and `" host-a "` survive it as two entries and then trim into
+  // the same id - which would serialize the same host twice into the URL and
+  // double its contribution to the active-filter count.
+  const hostIds = normalizeArray(value).flatMap((hostId) => {
+    const trimmed = hostId.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  });
+  return Array.from(new Set(hostIds)).sort((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function normalizeWorkspaces(

@@ -272,7 +272,31 @@ export const RunnerHostInvoke = {
   traycerServiceDeregister: "runnerHost:traycer:service:deregister",
   traycerRegistryCheck: "runnerHost:traycer:registry:check",
   traycerFreePortAndRestart: "runnerHost:traycer:freePortAndRestart",
+  traycerFreePortAndRestartIfIdle:
+    "runnerHost:traycer:freePortAndRestartIfIdle",
+  traycerDoctorRepairQueued: "runnerHost:traycer:doctorRepairQueued",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
+  // The `maintenance:*` channels answer the v1.2.0 host maintenance RPCs for
+  // the GUI's local fallback (a local host ≤ 1.1.11 negotiated the family
+  // away). Each handler projects the same CLI JSON / on-disk records the
+  // host's own resolvers project, and resolves PROTOCOL response shapes — CLI
+  // failures are classified into the wire taxonomy in main, because an invoke
+  // rejection loses its error shape at the context-bridge boundary.
+  traycerMaintenanceUpdateCheck: "runnerHost:traycer:maintenance:updateCheck",
+  traycerMaintenanceDoctor: "runnerHost:traycer:maintenance:doctor",
+  traycerMaintenanceInstallationInfo:
+    "runnerHost:traycer:maintenance:installationInfo",
+  // Separate from `host:installVersion` because the lane refusal must be
+  // ATOMIC with the submission: main tests the exclusive mutation lane and
+  // enqueues in one synchronous stretch, which a renderer reading status and
+  // then submitting cannot do.
+  traycerMaintenanceInstallVersion:
+    "runnerHost:traycer:maintenance:installVersion",
+  // Same atomicity, for the respawn. `host:restart` keeps its queueing
+  // semantics for the tray/menu; a Settings restart refuses instead of
+  // firing a kill against state the person never saw.
+  traycerHostRestartIfIdle: "runnerHost:traycer:host:restartIfIdle",
+  traycerDoctorRepairIfIdle: "runnerHost:traycer:doctor:repairIfIdle",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
   // Selection authority (host-lifecycle redesign, D16 / P1.1). The engine

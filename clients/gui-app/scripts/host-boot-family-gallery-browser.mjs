@@ -210,7 +210,61 @@ try {
           const band = document.querySelector('[data-gallery-header-band]');
           const r = card.getBoundingClientRect();
           const round = (n) => Number(n.toFixed(1));
+          // CAN THE USER GET TO ALL OF IT? A tall card is only a problem when
+          // some of it cannot be brought into view, and which of those it is
+          // depends entirely on what encloses it: a card in a column that GROWS
+          // just makes the page scroll, the same card under a clipping or
+          // fixed ancestor loses whatever falls outside. That is the whole
+          // question behind \`viewportCapped\`, and it was argued rather than
+          // measured until this.
+          //
+          // A \`fixed\` ancestor pins the card to the viewport, so the viewport
+          // IS the bound (the narrator's layer - hence its cap). Otherwise the
+          // bound is the document's scrollable height, narrowed by any
+          // ancestor that CLIPS. \`auto\`/\`scroll\` ancestors do not narrow it:
+          // the user can scroll those.
+          const reach = (() => {
+            // The card can also hide its OWN content: capped height plus
+            // \`overflow-y: hidden\` clips the controls while the card's
+            // rectangle still sits comfortably inside every ancestor, so a
+            // check that only compares rectangles reports ok on a card whose
+            // buttons are gone. \`auto\`/\`scroll\` is the capped card's actual
+            // spelling and stays reachable - the user scrolls inside it.
+            const own = getComputedStyle(card).overflowY;
+            const cutInside =
+              (own === 'hidden' || own === 'clip') &&
+              card.scrollHeight > card.clientHeight + 0.5;
+            let fixed = false;
+            for (let el = card; el !== null; el = el.parentElement) {
+              if (getComputedStyle(el).position === 'fixed') { fixed = true; break; }
+            }
+            const scrollRoot = document.scrollingElement;
+            let top = 0;
+            let bottom = fixed ? window.innerHeight : scrollRoot.scrollHeight;
+            if (!fixed) {
+              for (let el = card.parentElement; el !== null; el = el.parentElement) {
+                const overflowY = getComputedStyle(el).overflowY;
+                if (overflowY !== 'hidden' && overflowY !== 'clip') continue;
+                const box = el.getBoundingClientRect();
+                top = Math.max(top, box.top + window.scrollY);
+                bottom = Math.min(bottom, box.top + window.scrollY + el.clientHeight);
+              }
+            }
+            // Fixed cards are already measured against the viewport, so their
+            // rect needs no scroll offset; everything else does.
+            const cardTop = fixed ? r.top : r.top + window.scrollY;
+            return {
+              bound: round(bottom - top),
+              cutAbove: cardTop < top - 0.5,
+              cutBelow: cardTop + r.height > bottom + 0.5,
+              cutInside,
+            };
+          })();
           return {
+            reachBound: reach.bound,
+            cutAbove: reach.cutAbove,
+            cutBelow: reach.cutBelow,
+            cutInside: reach.cutInside,
             sharedCard: card.getAttribute('data-surface') === 'host-boot-card',
             left: round(r.left),
             top: round(r.top),
@@ -254,6 +308,8 @@ try {
         pad("width", 7),
         pad("height", 7),
         pad("cY", 7),
+        pad("bound", 7),
+        pad("reach", 8),
         pad("settings", 9),
         pad("details", 8),
         "text",
@@ -270,6 +326,13 @@ try {
         pad(row.width, 7),
         pad(row.height, 7),
         pad(row.centerY, 7),
+        pad(row.reachBound, 7),
+        pad(
+          row.cutAbove || row.cutBelow || row.cutInside
+            ? `CUT ${row.cutAbove ? "^" : ""}${row.cutBelow ? "v" : ""}${row.cutInside ? "in" : ""}`
+            : "ok",
+          8,
+        ),
         pad(row.openSettings, 9),
         pad(row.showDetails, 8),
         row.text,
@@ -304,6 +367,19 @@ try {
   if (waitBoxes.size !== waitBoxesPerTheme) {
     findings.push(
       `wait faces do not share one box (top:height): ${[...waitBoxes].join(", ")}`,
+    );
+  }
+  const unreachable = rows.filter(
+    (row) => row.cutAbove || row.cutBelow || row.cutInside,
+  );
+  if (unreachable.length > 0) {
+    findings.push(
+      `content the user cannot scroll to: ${unreachable
+        .map(
+          (row) =>
+            `${row.face}${row.cutAbove ? " (above)" : ""}${row.cutBelow ? " (below)" : ""}${row.cutInside ? " (clipped by the card)" : ""}`,
+        )
+        .join(", ")}`,
     );
   }
   if (!everyFamilyShared) {

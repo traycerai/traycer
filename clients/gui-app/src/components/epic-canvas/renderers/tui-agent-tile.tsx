@@ -943,6 +943,9 @@ function TerminalAgentPreLaunchToolbar(
           missingWorktreePaths: bindingQuery.data?.missingWorktreePaths ?? [],
           bindingResolved: bindingQuery.isSuccess,
           onBindingCommitted: handleWorkspaceBindingCommitted,
+          // Terminal agents cannot fork — the host section is `locked`, so
+          // the switch gesture this handles is unreachable here anyway.
+          onForkOnHost: null,
         }}
       />
       <DropdownMenu>

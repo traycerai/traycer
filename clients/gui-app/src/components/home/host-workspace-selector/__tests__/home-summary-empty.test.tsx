@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -24,7 +24,10 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -68,17 +71,18 @@ interface MockHostClient {
 
 function createMockHostClient(
   request: (method: string, payload: unknown) => Promise<unknown>,
+  getHostId: () => string,
 ): MockHostClient {
   return {
     getActiveHost: () => ({
-      hostId: "host-home",
+      hostId: getHostId(),
       label: "Home Mac",
       kind: "local",
       websocketUrl: "ws://127.0.0.1:4917/rpc",
       version: "0.0.0-test",
       transportDialability: "dialable",
     }),
-    getActiveHostId: () => "host-home",
+    getActiveHostId: getHostId,
     getRequestContextUserId: () => "user-home",
     getRequestContext: () => ({}),
     request,
@@ -90,7 +94,7 @@ const mocks = vi.hoisted(() => {
   const request =
     vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
   const hostClient: { current: MockHostClient | null } = {
-    current: createMockHostClient(request),
+    current: createMockHostClient(request, () => "host-home"),
   };
   const resolvedWorkspace: {
     current: { readonly folders: readonly ResolvedFolder[] };
@@ -105,6 +109,20 @@ const mocks = vi.hoisted(() => {
       isLoading: false,
     },
   };
+  const negotiatedVersion: {
+    current: { readonly major: number; readonly minor: number } | null;
+  } = { current: null };
+  const recentsQuery: {
+    current: {
+      readonly data: {
+        readonly recentWorkspaces: ReadonlyArray<{
+          readonly path: string;
+          readonly lastOpenedAt: string;
+        }>;
+      };
+    };
+  } = { current: { data: { recentWorkspaces: [] } } };
+  const effectiveHostListeners = new Set<() => void>();
   return {
     pickAndPrepareFolders: vi.fn(() => Promise.resolve(null)),
     selectHost: vi.fn(),
@@ -115,6 +133,9 @@ const mocks = vi.hoisted(() => {
     hostClient,
     resolvedWorkspace,
     summariesQuery,
+    negotiatedVersion,
+    recentsQuery,
+    effectiveHostListeners,
   };
 });
 
@@ -244,7 +265,23 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 // suite is about workspace/folder handling, not selection derivation, so the
 // effective host is mocked at the same boundary as the host list above.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-home",
+  useEffectiveHostId: () => {
+    const getSnapshot = () =>
+      mocks.hostClient.current?.getActiveHostId() ?? "host-home";
+    const subscribe = (listener: () => void) => {
+      mocks.effectiveHostListeners.add(listener);
+      return () => mocks.effectiveHostListeners.delete(listener);
+    };
+    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  },
+}));
+
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => mocks.negotiatedVersion.current,
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-list-recent-workspaces-query", () => ({
+  useWorkspaceListRecentWorkspaces: () => mocks.recentsQuery.current,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -452,6 +489,63 @@ function renderDelayedBranchValidationHarness(): QueryClient {
   return queryClient;
 }
 
+function seedActiveWorkspaceForRecentTest(workspacePath: string): void {
+  mocks.negotiatedVersion.current = { major: 1, minor: 2 };
+  mocks.resolvedWorkspace.current = {
+    folders: [{ kind: "local-only", path: workspacePath, name: "app" }],
+  };
+  mocks.summariesQuery.current = {
+    data: { workspaces: [{ ...NON_GIT_SUMMARY, workspacePath }] },
+    isFetching: false,
+    isPending: false,
+    isLoading: false,
+  };
+  useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+    {
+      path: workspacePath,
+      name: "app",
+      repoIdentifier: null,
+      hostId: "host-home",
+    },
+  ]);
+}
+
+function mockRecentRequests(recordRecent: () => Promise<unknown>): void {
+  mocks.request.mockImplementation((_method, payload) => {
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "operation" in payload
+    ) {
+      if (payload.operation === "recordRecentWorkspace") {
+        return recordRecent();
+      }
+      if (payload.operation === "listRecentWorkspaces") {
+        return Promise.resolve({
+          operation: "listRecentWorkspaces",
+          folders: [],
+          repoIdentifiers: [],
+          homeDir: null,
+          validation: null,
+          recentWorkspaces: [],
+        });
+      }
+    }
+    return Promise.resolve({ roomInfo: null });
+  });
+}
+
+function successfulRecentRecordResponse(): unknown {
+  return {
+    operation: "recordRecentWorkspace",
+    folders: [],
+    repoIdentifiers: [],
+    homeDir: null,
+    validation: { ok: true },
+    recentWorkspaces: null,
+  };
+}
+
 describe("landing workspace summary empty state", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -462,7 +556,10 @@ describe("landing workspace summary empty state", () => {
     mocks.navigate.mockClear();
     mocks.request.mockReset();
     mocks.request.mockResolvedValue({ roomInfo: null });
-    mocks.hostClient.current = createMockHostClient(mocks.request);
+    mocks.hostClient.current = createMockHostClient(
+      mocks.request,
+      () => "host-home",
+    );
     mocks.resolvedWorkspace.current = { folders: [] };
     mocks.summariesQuery.current = {
       data: { workspaces: [] },
@@ -470,6 +567,8 @@ describe("landing workspace summary empty state", () => {
       isPending: false,
       isLoading: false,
     };
+    mocks.negotiatedVersion.current = null;
+    mocks.recentsQuery.current = { data: { recentWorkspaces: [] } };
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     draftRuntimeRegistry.resetForTesting();
@@ -513,12 +612,9 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("inline");
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
-    expect(screen.getByTestId("composer-host-trigger")).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("composer-host-local-chip-host-home")
-        .className.includes("[[data-slot=select-trigger]_&]:hidden"),
-    ).toBe(true);
+    const hostTrigger = screen.getByRole("button", { name: /^Host:/ });
+    expect(hostTrigger.className).toContain("h-7");
+    expect(hostTrigger.className).toContain("hover:bg-foreground/5");
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",
@@ -527,6 +623,240 @@ describe("landing workspace summary empty state", () => {
     fireEvent.click(screen.getByTestId("folder-add"));
     expect(mocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
 
+    queryClient.clear();
+  });
+
+  it("keeps a folder active when moving it to Recent fails", async () => {
+    const workspacePath = "/workspace/app";
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    mockRecentRequests(() => Promise.reject(new Error("host unavailable")));
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    fireEvent.click(await screen.findByTestId("folder-remove"));
+
+    await waitFor(() => {
+      expect(mocks.request).toHaveBeenCalledWith(
+        "workspace.prepareFolders",
+        expect.objectContaining({
+          operation: "recordRecentWorkspace",
+          path: workspacePath,
+        }),
+      );
+    });
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-home",
+      ).folders,
+    ).toEqual([workspacePath]);
+
+    queryClient.clear();
+  });
+
+  it("disables Move to Recent during its record RPC and ignores a second click", async () => {
+    const workspacePath = "/workspace/app";
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    let resolveRecord: (value: unknown) => void = () => undefined;
+    const recordResponse = new Promise<unknown>((resolve) => {
+      resolveRecord = resolve;
+    });
+    mockRecentRequests(() => recordResponse);
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const remove = await screen.findByTestId("folder-remove");
+    fireEvent.click(remove);
+
+    await waitFor(() => {
+      expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(true);
+    });
+    fireEvent.click(remove);
+    expect(
+      mocks.request.mock.calls.filter(
+        ([, payload]) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          "operation" in payload &&
+          payload.operation === "recordRecentWorkspace",
+      ),
+    ).toHaveLength(1);
+
+    resolveRecord(successfulRecentRecordResponse());
+    await waitFor(() => {
+      expect(
+        selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          "host-home",
+        ).folders,
+      ).toEqual([]);
+    });
+    queryClient.clear();
+  });
+
+  it("keeps the active folder when the host changes during Move to Recent", async () => {
+    const workspacePath = "/workspace/app";
+    let hostId = "host-home";
+    mocks.hostClient.current = createMockHostClient(
+      mocks.request,
+      () => hostId,
+    );
+    seedActiveWorkspaceForRecentTest(workspacePath);
+    let resolveRecord: (value: unknown) => void = () => undefined;
+    const recordResponse = new Promise<unknown>((resolve) => {
+      resolveRecord = resolve;
+    });
+    mockRecentRequests(() => recordResponse);
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const remove = await screen.findByTestId("folder-remove");
+    fireEvent.click(remove);
+    await waitFor(() => {
+      expect(
+        mocks.request.mock.calls.some(
+          ([, payload]) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            "operation" in payload &&
+            payload.operation === "recordRecentWorkspace",
+        ),
+      ).toBe(true);
+    });
+
+    act(() => {
+      hostId = "host-other";
+      for (const listener of mocks.effectiveHostListeners) listener();
+    });
+    resolveRecord(successfulRecentRecordResponse());
+    await act(async () => {
+      await recordResponse;
+    });
+    await waitFor(() => {
+      expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(
+        false,
+      );
+    });
+
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-home",
+      ).folders,
+    ).toEqual([workspacePath]);
+    queryClient.clear();
+  });
+
+  it("restores a stale alias when canonical cleanup fails", async () => {
+    const recentPath = "/alias/app";
+    const canonicalPath = "/workspace/app";
+    let rejectForget: (error: Error) => void = () => undefined;
+    const forgetResponse = new Promise<unknown>((_resolve, reject) => {
+      rejectForget = reject;
+    });
+    mocks.negotiatedVersion.current = { major: 1, minor: 2 };
+    mocks.recentsQuery.current = {
+      data: {
+        recentWorkspaces: [
+          {
+            path: recentPath,
+            lastOpenedAt: "2026-08-18T00:00:00.000Z",
+          },
+        ],
+      },
+    };
+    mocks.request.mockImplementation((_method, payload) => {
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        !("operation" in payload)
+      ) {
+        return Promise.resolve({ roomInfo: null });
+      }
+      if (payload.operation === "listRecentWorkspaces") {
+        return Promise.resolve({
+          operation: "listRecentWorkspaces",
+          folders: [],
+          repoIdentifiers: [],
+          homeDir: null,
+          validation: null,
+          recentWorkspaces: [
+            {
+              path: recentPath,
+              lastOpenedAt: "2026-08-18T00:00:00.000Z",
+            },
+          ],
+        });
+      }
+      if (payload.operation === "prepare") {
+        return Promise.resolve({
+          operation: "prepare",
+          folders: [
+            {
+              workspacePath: canonicalPath,
+              workspaceName: "app",
+              repoIdentifier: null,
+            },
+          ],
+          repoIdentifiers: [],
+          homeDir: null,
+          validation: null,
+          recentWorkspaces: null,
+        });
+      }
+      if (payload.operation === "forgetRecentWorkspace") {
+        return forgetResponse;
+      }
+      return Promise.resolve({
+        operation: payload.operation,
+        folders: [],
+        repoIdentifiers: [],
+        homeDir: null,
+        validation: { ok: true },
+        recentWorkspaces: null,
+      });
+    });
+
+    const queryClient = renderControl("inline");
+    fireEvent.click(screen.getByTestId("folder-add"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add app to context" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        mocks.request.mock.calls.some(
+          ([, payload]) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            "operation" in payload &&
+            payload.operation === "forgetRecentWorkspace" &&
+            "path" in payload &&
+            payload.path === recentPath,
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Add app to context" }),
+      ).toBeNull();
+    });
+    await act(async () => {
+      rejectForget(new Error("host unavailable"));
+      await forgetResponse.catch(() => undefined);
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Recent folders, 1" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Add app to context" }),
+    ).toBeTruthy();
+    expect(
+      selectWorkspaceFoldersBucket(
+        useWorkspaceFoldersStore.getState(),
+        "host-home",
+      ).folders,
+    ).toEqual([canonicalPath]);
     queryClient.clear();
   });
 

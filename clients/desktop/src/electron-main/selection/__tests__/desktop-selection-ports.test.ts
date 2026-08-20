@@ -15,7 +15,10 @@ import type {
   IpcHostController,
   IpcHostLifecycle,
 } from "../../ipc/runner-ipc-bridge";
-import type { HostControllerStatus } from "../../host/host-controller-types";
+import type {
+  HostControllerStatus,
+  LifecycleAdmissionBlock,
+} from "../../host/host-controller-types";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
@@ -1540,6 +1543,7 @@ class FakeHostController implements IpcHostController {
     value: { running: true, version: "1.0.0" },
   };
 
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   async getStatus(): Promise<HostControllerStatus> {
     return buildControllerStatus(null);
   }
@@ -1630,12 +1634,41 @@ describe("createDesktopLocalHostEnsurePort", () => {
     await expect(port.ensureReady()).resolves.toEqual({ ok: true });
   });
 
-  it("maps busy/failed/deferred outcomes to {ok: false, reason: <kind>}, with only failed non-deferred", async () => {
+  it("refuses to call a REMOVED host alive, even though its converge answers ok", async () => {
     const controller = new FakeHostController();
     const port = createDesktopLocalHostEnsurePort(controller);
+    // The exact short-circuit `HostController.convergeReady` returns while the
+    // removal sentinel stands: `ok`, because nothing failed - and `running:
+    // false`, because by consent nothing ran either. The engine reads a bare
+    // `ok` as FIRSTHAND proof of life (`onHostProvedAlive` clears the refusal
+    // streak and makes the lease usable), so mapping this one to `{ok: true}`
+    // handed failover a host that is not installed, and re-cleared that streak
+    // every pacing hold. Now it is a plain failure - and NOT deferred, because
+    // nothing here changes on its own until the user reinstalls.
+    controller.outcome = {
+      kind: "ok",
+      value: { running: false, version: null },
+    };
+    await expect(port.ensureReady()).resolves.toEqual({
+      ok: false,
+      reason: "removed-by-user",
+      deferred: false,
+    });
+  });
 
-    // `busy` is a host UP with active work - the converge declined to
-    // disrupt it. Proof of life must not become a dead lease, so it defers.
+  it("does NOT treat a busy refusal as proof of life - E_HOST_BUSY is a fail-safe", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
+    // The tempting reading is "a host that is up with active work", and an
+    // earlier revision of this port resolved `{ok: true}` on it to spare a
+    // non-target local host one CLI spawn per pacing hold. `assertHostNotBusy`
+    // says otherwise in its own words: it raises `E_HOST_BUSY` when a live
+    // PID's idle state CANNOT BE DETERMINED - `/activity` timed out, refused,
+    // answered malformed, or 404'd - exactly as it does when the host reports
+    // real work. A WEDGED host is the first case, so `{ok: true}` handed
+    // `onHostProvedAlive` a host that cannot serve: refusal evidence cleared,
+    // lease usable, failover free to choose it, and each later ensure clearing
+    // the refusals its failed dials had just rebuilt.
     controller.outcome = {
       kind: "busy",
       continuation: "retry-with-force",
@@ -1646,6 +1679,11 @@ describe("createDesktopLocalHostEnsurePort", () => {
       reason: "busy",
       deferred: true,
     });
+  });
+
+  it("maps failed/deferred outcomes to {ok: false, reason: <kind>}, with only failed non-deferred", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
 
     // `failed` actually ran and concluded - the one arm allowed to arm the
     // engine's dead-lease cooldown.

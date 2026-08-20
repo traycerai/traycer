@@ -1,5 +1,3 @@
-import { hostSelectRowRefused } from "./host-select-row-refused";
-import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import {
   useCallback,
   useEffect,
@@ -13,13 +11,16 @@ import {
 import { useIsMutating } from "@tanstack/react-query";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
-import { HostSection } from "./host-section";
+import { HostSection, WorkspaceHostSwitcher } from "./host-section";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
   findHostOption,
   unavailableHostOption,
+  type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { activeRunNoticeFor } from "./active-run-notice";
+import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   RepoBranchPrefixState,
   WorktreeBinding,
@@ -31,13 +32,8 @@ import type {
   WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
-import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
-import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
-import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -55,12 +51,14 @@ import {
   usePendingRemoveBindingEntryPaths,
 } from "@/hooks/workspace/use-workspace-binding-remove-entry-mutation";
 import { useWorkspaceBindingAddFolderForClient } from "@/hooks/workspace/use-workspace-binding-add-folder-mutation";
-import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
-import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
+import {
+  preparedWorkspaceFolderToWorkspaceFolderInfo,
+  useWorkspaceFolderActionsForClient,
+} from "@/hooks/workspace/use-workspace-folder-actions";
+import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { locateReplaceBoundFolder } from "./locate-replace-bound-folder";
@@ -109,21 +107,10 @@ import {
   type WorktreeScriptsTarget,
 } from "@/components/home/worktree/worktree-scripts-dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import {
   hostWorkspaceControlsScopeHostId,
   hostWorkspaceControlsScopeRefusals,
   type HostWorkspaceControlsHostScope,
 } from "./host-workspace-controls-scope";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
-import { CloneOnHostSwitchDialog } from "./clone-on-host-switch-dialog";
 import { computeInEpicFolderMode } from "./compute-in-epic-folder-mode";
 import {
   type AddFolderHandler,
@@ -139,12 +126,10 @@ import {
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-result";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
-import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
-import { useChatById } from "@/lib/epic-selectors";
-import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
-import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
+import { useRecentWorkspaces } from "./use-recent-workspaces";
+import { RecentWorkspacesSection } from "./recent-workspaces-section";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
@@ -155,7 +140,9 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
  *
  *
  *
- * `home` swaps the bound directory; `chat` clones the chat on switch;
+ * `home` swaps the bound directory; `chat` forks the chat on switch (chats
+ * are host-bound for life, so "switching" means forking onto the picked
+ * machine — the owning tile opens the fork dialog via `onForkOnHost`);
  * `terminal-agent` locks the host section because a PTY can't migrate, but
  * its folder binding can be edited; the owning tile restarts the PTY after a
  * committed binding write.
@@ -193,6 +180,15 @@ type BoundOwnerSurface = {
   readonly bindingResolved: boolean;
   readonly onBindingCommitted:
     ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
+  /**
+   * Chat-only: the owning tile's handler for the host picker's "switch host"
+   * gesture. Chats are host-bound for life (clone-not-migrate), so switching
+   * means forking — the tile opens its fork dialog anchored at the chat's
+   * latest completed turn, preselected on `targetHostId`, or explains why it
+   * can't yet (turn still running / no reply to fork). `null` for surfaces
+   * that cannot fork at all (terminal agents), whose host section is locked.
+   */
+  readonly onForkOnHost: ((targetHostId: string) => void) | null;
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
@@ -288,7 +284,6 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
       hostLabel={inEpicHostLabel}
       activeHostId={props.surface.hostId}
       hostClient={ownerHostClient}
-      directoryEntries={directoryEntries}
     />
   );
 }
@@ -416,13 +411,17 @@ export function ActiveHostWorkspaceControls(
   // is that host alone. It resolves out of the same merged list, and only falls
   // back to a stand-in row when the list has never heard of it.
   const hostOptions = useHostOptions();
-  const fixedHostOption =
-    props.hostScope.kind === "fixed"
-      ? (findHostOption(hostOptions.hosts, props.hostScope.hostId) ??
-        unavailableHostOption(props.hostScope.hostId, hostLabel))
-      : null;
-  const visibleHostOptions =
-    fixedHostOption === null ? hostOptions.hosts : [fixedHostOption];
+  const listedHostOption = findHostOption(hostOptions.hosts, activeHostId);
+  const selectedHostOption =
+    activeHostId === null
+      ? null
+      : (listedHostOption ?? unavailableHostOption(activeHostId, hostLabel));
+  const visibleHostOptions = hostPickerOptionsForScope(
+    props.hostScope,
+    selectedHostOption,
+    listedHostOption,
+    hostOptions.hosts,
+  );
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
@@ -535,14 +534,18 @@ export function ActiveHostWorkspaceControls(
   // Landing rests as host picker + compact summary chip, matching the in-epic
   // composer. Detailed folder rows still live in the popover/modal stack.
   const deviceSelect = (
-    <HostOnlySelect
-      hostLabel={hostLabel}
-      entries={directoryEntries}
+    <WorkspaceHostSwitcher
+      hosts={visibleHostOptions}
       activeHostId={activeHostId}
-      mode="editable"
       onSelect={handleSelectHost}
-      loading={false}
-      disabled={disabled}
+      intent="pin"
+      refusalByHostId={refusalByHostId}
+      inertExceptHostId={unselectableExceptHostId}
+      disabled={disabled || props.hostScope.kind === "fixed"}
+      isLoading={hostOptions.isLoading}
+      listsFailed={hostOptions.listsFailed}
+      onRetryLists={hostOptions.retryLists}
+      surface="inline"
     />
   );
   return (
@@ -560,6 +563,22 @@ export function ActiveHostWorkspaceControls(
       disabled={disabled}
     />
   );
+}
+
+function hostPickerOptionsForScope(
+  scope: HostWorkspaceControlsHostScope,
+  selectedHostOption: HostScopeOption | null,
+  listedHostOption: HostScopeOption | null,
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  if (scope.kind === "fixed") {
+    if (selectedHostOption === null) return [];
+    return [selectedHostOption];
+  }
+  if (selectedHostOption !== null && listedHostOption === null) {
+    return [selectedHostOption, ...hosts];
+  }
+  return hosts;
 }
 
 function HomeWorkspaceRows(props: {
@@ -655,6 +674,28 @@ function HomeWorkspaceRows(props: {
     activeHostClient,
     workspaceSource,
   );
+  const activatePreparedRecentFolders = useCallback(
+    (
+      folders: ReadonlyArray<PreparedWorkspaceFolder>,
+      hostId: string,
+    ): Promise<ReadonlyArray<string>> => {
+      workspaceSource.addResolvedFolders(
+        folders.map((folder) =>
+          preparedWorkspaceFolderToWorkspaceFolderInfo(folder, hostId),
+        ),
+      );
+      return Promise.resolve(folders.map((folder) => folder.workspacePath));
+    },
+    [workspaceSource],
+  );
+  const recentWorkspaces = useRecentWorkspaces({
+    client: activeHostClient,
+    hostId: props.activeHostId,
+    activePaths: workspaceSource.folders,
+    activatePreparedFolders: activatePreparedRecentFolders,
+    disabled: props.disabled,
+    surface: stagingKey.surface,
+  });
   const queryableFolderPaths = useMemo<ReadonlyArray<string>>(
     () => [...new Set(resolvedFolders.map((entry) => entry.path))],
     [resolvedFolders],
@@ -958,7 +999,7 @@ function HomeWorkspaceRows(props: {
     seedIntentOverride,
   ]);
 
-  const items = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+  const baseItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
       resolvedFolders.map((entry) =>
         workspaceRunItemForResolvedFolder({
@@ -995,6 +1036,46 @@ function HomeWorkspaceRows(props: {
       summariesQuery.isError,
     ],
   );
+  const {
+    moveToRecent: moveWorkspaceToRecent,
+    movingPath: recentWorkspacesMovingPath,
+    supported: recentWorkspacesSupported,
+  } = recentWorkspaces;
+  const items = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+    () =>
+      baseItems.map((item) => {
+        if (!recentWorkspacesSupported || item.onRemove === null) return item;
+        const removeFromActive = item.onRemove;
+        return {
+          ...item,
+          removePending:
+            item.removePending ||
+            recentWorkspacesMovingPath === item.displayPath,
+          onRemove: () => {
+            void moveWorkspaceToRecent(item.displayPath).then((moved) => {
+              if (moved) removeFromActive();
+            });
+          },
+        };
+      }),
+    [
+      baseItems,
+      moveWorkspaceToRecent,
+      recentWorkspacesMovingPath,
+      recentWorkspacesSupported,
+    ],
+  );
+  const recentWorkspacesSection = recentWorkspaces.supported ? (
+    <RecentWorkspacesSection
+      entries={recentWorkspaces.entries}
+      activeCount={workspaceSource.folders.length}
+      pendingPath={recentWorkspaces.pendingPath}
+      failedPaths={recentWorkspaces.failedPaths}
+      onAdd={recentWorkspaces.add}
+      onLocate={recentWorkspaces.locate}
+      onForget={recentWorkspaces.forget}
+    />
+  ) : null;
 
   // Setup/teardown editor is hosted here (not inside the popover) so it outlives
   // the popover closing. Landing is pre-epic: no owner/binding, `epicId: ""`
@@ -1064,6 +1145,9 @@ function HomeWorkspaceRows(props: {
           onEditEnvironment={handleEditEnvironment}
           refresh={summariesRefresh}
           disabled={props.disabled}
+          recentWorkspaces={recentWorkspacesSection}
+          recentWorkspaceCount={recentWorkspaces.entries.length}
+          moveToRecent={recentWorkspaces.supported}
         />
       ) : (
         <WorkspaceFolderRows
@@ -1086,6 +1170,8 @@ function HomeWorkspaceRows(props: {
           // snapshot — an empty list is a genuine "no folders linked yet", so the
           // row shows the add affordance rather than an indefinite spinner.
           bindingResolved
+          recentWorkspaces={recentWorkspacesSection}
+          moveToRecent={recentWorkspaces.supported}
         />
       )}
       <WorktreeScriptsDialog
@@ -1108,14 +1194,17 @@ function HomeWorkspaceSummaryControl(props: {
   readonly onEditEnvironment: (workspacePath: string) => void;
   readonly refresh: WorktreeWorkspacesRefresh;
   readonly disabled: boolean;
+  readonly recentWorkspaces: ReactNode;
+  readonly recentWorkspaceCount: number;
+  readonly moveToRecent: boolean;
 }) {
   return (
     <div
-      className="inline-flex max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
+      className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
       data-testid="home-workspace-summary-control"
     >
       {props.hostSlot === null ? null : (
-        <div className="min-w-0 flex-[0_1_10rem] max-w-[min(34%,10rem)] overflow-hidden">
+        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
           {props.hostSlot}
         </div>
       )}
@@ -1136,184 +1225,13 @@ function HomeWorkspaceSummaryControl(props: {
           refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
           popoverSide="top"
+          recentWorkspaces={props.recentWorkspaces}
+          recentWorkspaceCount={props.recentWorkspaceCount}
+          moveToRecent={props.moveToRecent}
         />
       </div>
     </div>
   );
-}
-
-function HostOnlySelect(props: {
-  readonly hostLabel: string;
-  readonly entries: ReadonlyArray<HostDirectoryEntry>;
-  readonly activeHostId: string | null;
-  readonly mode: "editable" | "clone-on-switch" | "locked";
-  readonly onSelect: (hostId: string) => void;
-  readonly loading: boolean;
-  readonly disabled: boolean;
-}) {
-  const binding = useHostBinding();
-  const directory = binding === null ? null : binding.directory;
-  const [open, setOpen] = useState<boolean>(false);
-  const remoteRestricted = useRemoteHostsPlanRestricted();
-  useRefreshHostDirectoryOnOpen(open, directory);
-  const options = hostSelectOptions(
-    props.entries,
-    props.activeHostId,
-    props.hostLabel,
-  );
-  // Two reasons to go inert, but only one of them explains itself: `locked`
-  // means this surface can never switch host, while `props.disabled` is a
-  // transient draft-create settle. Labelling the second "Terminal host is
-  // fixed" would tell an editable composer's user their host is permanent.
-  const lockedToFixedHost = props.mode === "locked";
-  const disabled = lockedToFixedHost || props.disabled;
-  return (
-    <Select
-      open={open}
-      onOpenChange={setOpen}
-      value={props.activeHostId ?? undefined}
-      onValueChange={props.onSelect}
-      disabled={disabled}
-    >
-      <TooltipWrapper
-        label={lockedToFixedHost ? "Terminal host is fixed" : undefined}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        {/* `flex w-full min-w-0`, NOT `inline-flex`: the trigger below is
-            `w-full`, and a shrink-to-fit guard would make that resolve against
-            the guard rather than the selector's cell, collapsing the control. */}
-        <span className="flex w-full min-w-0">
-          <SelectTrigger
-            size="sm"
-            aria-label="Host"
-            data-testid="composer-host-trigger"
-            className="h-7 w-full min-w-0 max-w-full justify-start gap-1.5 overflow-hidden border-transparent bg-transparent px-1.5 text-ui-sm text-muted-foreground opacity-70 transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-70 data-[state=open]:rounded-b-none dark:bg-transparent dark:hover:bg-accent/50 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:overflow-hidden *:data-[slot=select-value]:truncate"
-          >
-            <SelectValue placeholder={props.hostLabel} />
-            {props.loading ? (
-              <AgentSpinningDots
-                className="text-current/70"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-          </SelectTrigger>
-        </span>
-      </TooltipWrapper>
-      <SelectContent
-        data-testid="composer-host-popover"
-        sideOffset={0}
-        className="data-[side=bottom]:translate-y-0 data-[side=bottom]:rounded-t-none data-[side=top]:translate-y-0 data-[side=top]:rounded-b-none"
-      >
-        {options.map((host) => (
-          <HostSelectRow
-            key={host.hostId}
-            host={host}
-            remoteRestricted={remoteRestricted}
-            locked={props.mode === "locked"}
-          />
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function HostSelectRow(props: {
-  readonly host: HostDirectoryEntry;
-  readonly remoteRestricted: boolean;
-  readonly locked: boolean;
-}) {
-  // Subscribed, not read: the refusal predicate is ready-session-aware, and
-  // the session cache is pull-only - a readiness flip changes no directory
-  // value, so a row that read `hasReadyRemoteSession` at render time would
-  // keep its refusal answer until some unrelated directory emit. The poll
-  // subscription is what lets a row grey out when its backing session dies
-  // (and re-enable on the converse) while the popover is open.
-  const hasReadySession = useRemoteSessionPollReadiness(props.host.hostId);
-  return (
-    <SelectItem
-      value={props.host.hostId}
-      disabled={
-        props.locked ||
-        // Not `status === "unavailable"`, and not the raw
-        // `hostUnavailability` verdict either: the refusal is asked
-        // through the SAME ready-session-aware predicate the activation
-        // path dials through, so a fuse-window `offline` (recovery dial
-        // permitted) or an offline verdict this client holds a ready
-        // live session against stays selectable - see
-        // `hostSelectRowRefused` for the full derivation.
-        hostSelectRowRefused(
-          props.host,
-          props.remoteRestricted,
-          hasReadySession,
-        )
-      }
-    >
-      <HostSelectOptionContent
-        host={props.host}
-        remoteRestricted={props.remoteRestricted}
-      />
-    </SelectItem>
-  );
-}
-
-function HostSelectOptionContent(props: {
-  readonly host: HostDirectoryEntry;
-  readonly remoteRestricted: boolean;
-}) {
-  return (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="min-w-0 truncate">
-        {settingsHostOptionLabel(props.host)}
-      </span>
-      {props.host.kind === "local" ? (
-        <Badge
-          variant="outline"
-          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground [[data-slot=select-trigger]_&]:hidden"
-          data-testid={`composer-host-local-chip-${props.host.hostId}`}
-        >
-          Local
-        </Badge>
-      ) : null}
-      {props.remoteRestricted && props.host.kind === "remote" ? (
-        <Badge
-          variant="outline"
-          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground [[data-slot=select-trigger]_&]:hidden"
-          data-testid={`composer-host-paid-plan-chip-${props.host.hostId}`}
-        >
-          Paid plan
-        </Badge>
-      ) : null}
-    </span>
-  );
-}
-
-function hostSelectOptions(
-  entries: ReadonlyArray<HostDirectoryEntry>,
-  activeHostId: string | null,
-  hostLabel: string,
-): ReadonlyArray<HostDirectoryEntry> {
-  if (
-    activeHostId === null ||
-    entries.some((entry) => entry.hostId === activeHostId)
-  ) {
-    return entries;
-  }
-  // Same fabricated-row rule as `fixedUnavailableHostEntry`: no route exists to
-  // ask about, so the coarse bit is written directly rather than derived.
-  return [
-    {
-      hostId: activeHostId,
-      label: hostLabel,
-      kind: "local",
-      websocketUrl: null,
-      version: null,
-      transportDialability: "not-dialable",
-    },
-    ...entries,
-  ];
 }
 
 type UnresolvedWorkspaceFolder = Extract<
@@ -1824,7 +1742,6 @@ interface InEpicSurfaceProps {
   readonly hostLabel: string;
   readonly activeHostId: string | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
 }
 
 // Coordinates host-bound folder metadata, staged worktree edits, add/remove
@@ -1832,30 +1749,15 @@ interface InEpicSurfaceProps {
 // eslint-disable-next-line complexity
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
-  // Held for the clone handler below, which needs the DIRECTORY and the spine,
-  // not a host-resolved client.
-  const binding = useHostBinding();
-  const sourceChatRecord = useChatById(
-    surface.kind === "chat" ? surface.ownerId : null,
-  );
-  // Ticket 37: the owner this surface is showing for the chat it would clone,
-  // resolved through the same hook the dead-tile banner uses. APP-WIDE BY
-  // INTENT, and this is the strongest case of it in the app: the surface
-  // already HOLDS a host client (`props.hostClient`) and deliberately declines
-  // it, because sharing the cloud list already fetched elsewhere is the whole
-  // point. Not the spine either, which stopped naming a host when P4.2 deleted
-  // the active slot.
-  const appEffectiveHostId = useEffectiveHostId();
-  const appHostClient = useMemo(
-    () => resolveAppWideHostClient(binding, appEffectiveHostId),
-    [binding, appEffectiveHostId],
-  );
-  const sourceOwnerUserId = useCloneSourceOwnerUserId({
-    client: appHostClient,
-    epicId: surface.epicId,
-    chatId: surface.kind === "chat" ? surface.ownerId : null,
-  });
-  const navigateNestedFocus = useEpicNestedFocusNavigation();
+  const hostOptions = useHostOptions();
+  const pickerHosts =
+    props.activeHostId === null ||
+    findHostOption(hostOptions.hosts, props.activeHostId) !== null
+      ? hostOptions.hosts
+      : [
+          unavailableHostOption(props.activeHostId, props.hostLabel),
+          ...hostOptions.hosts,
+        ];
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
   });
@@ -1874,6 +1776,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const addFolderMutation = useWorkspaceBindingAddFolderForClient(
     props.hostClient,
   );
+  const addBindingFolder = addFolderMutation.mutateAsync;
+  const recordRecentWorkspace = useWorkspaceRecordRecentWorkspace({
+    client: props.hostClient,
+  }).mutate;
   const pendingRemovePaths = usePendingRemoveBindingEntryPaths({
     epicId: surface.epicId,
     ownerId: surface.ownerId,
@@ -1941,15 +1847,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     [bindingEntries, summariesByPath],
   );
 
-  const [pendingCloneHostId, setPendingCloneHostId] = useState<string | null>(
-    null,
-  );
-  // The clone lands on the TARGET host and no longer moves the app-wide
-  // selection (redesign P1.2, D6), so the create runs on that host's own
-  // client - the app-wide variant would reject it as a host mismatch, which
-  // is exactly the check that used to be satisfied by rebinding the window.
-  const cloneTargetClient = useHostClientForHostId(pendingCloneHostId);
-  const createChat = useEpicCreateChatForHostClient(cloneTargetClient);
   // In-epic surfaces address their bound owner host (`props.activeHostId` is
   // `surface.hostId` there), which is also the host whose remembered defaults
   // this picker may read and write.
@@ -2059,8 +1956,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // off the working tree (or the user's remembered choice, unless that is Local)
   // once its disk metadata resolves, then dropped - so a later adjustment is
   // never re-clobbered. Established binding folders are untouched (binding wins).
-  const pendingDefaultPathsRef = useRef<Set<string> | null>(null);
-  const pendingDefaultPaths = (pendingDefaultPathsRef.current ??= new Set());
+  const pendingDefaultPathsRef = useRef(new Set<string>());
 
   // Terminal-agent "Update": apply every staged folder edit to the binding in a
   // single worktree.create (resolveIntent merges per-folder), then resume the
@@ -2093,7 +1989,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     // A just-added git folder may still be waiting for metadata so the default
     // new-worktree seed can be staged. Keep Update enabled, but don't resume
     // until those pending defaults either stage or resolve as no-op.
-    if ((pendingDefaultPathsRef.current?.size ?? 0) > 0) return;
+    if (pendingDefaultPathsRef.current.size > 0) return;
     // Defensive: the button is already gated on the same condition, but guard
     // against an empty apply (nothing staged AND no committed add/remove).
     if (stagedEntries.length === 0 && editor.dirtyPathsSinceResume.size === 0) {
@@ -2190,7 +2086,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
 
   useEffect(() => {
     const pending = pendingDefaultPathsRef.current;
-    if (pending === null || pending.size === 0) return;
+    if (pending.size === 0) return;
     for (const path of [...pending]) {
       const summary = resolvedSummariesByPath.get(path) ?? null;
       if (summary === null) continue; // unresolved or not loaded yet - wait
@@ -2229,82 +2125,17 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     stagedKey,
   ]);
 
+  // `fork-on-switch` mode (and therefore this handler) is only offered for a
+  // chat surface - see the `HostWorkspaceSelector` render below. Chats are
+  // host-bound for life (clone-not-migrate), so picking another host here
+  // means forking onto it: the owning tile opens its fork dialog anchored at
+  // the chat's latest completed turn, preselected on the picked host, or says
+  // why it can't yet (turn still running / nothing to fork).
   const handleSelectHostForChat = (hostId: string): void => {
     if (hostId === props.activeHostId) return;
-    setPendingCloneHostId(hostId);
+    if (surface.onForkOnHost === null) return;
+    surface.onForkOnHost(hostId);
   };
-
-  // Cancel the in-flight clone (its post-success projection subscription
-  // + 30s timeout) on unmount so a host swap mid-wait doesn't leak.
-  // Each new clone supersedes the previous in-flight one.
-  const cloneCancelRef = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    const cloneCancel = cloneCancelRef;
-    return () => {
-      if (cloneCancel.current !== null) {
-        cloneCancel.current();
-        cloneCancel.current = null;
-      }
-    };
-  }, []);
-
-  const handleConfirmClone = (): void => {
-    // `clone-on-switch` mode (and therefore this handler) is only offered
-    // for a chat surface - see the `HostWorkspaceSelector` render below - so
-    // `surface.ownerId` is the source chat's id whenever this actually runs.
-    if (
-      pendingCloneHostId === null ||
-      binding === null ||
-      surface.kind !== "chat"
-    ) {
-      return;
-    }
-    if (cloneCancelRef.current !== null) cloneCancelRef.current();
-    cloneCancelRef.current = cloneChatOnHostSwitch({
-      epicId: surface.epicId,
-      tabId: surface.tabId,
-      sourceChatId: surface.ownerId,
-      sourceOwnerUserId,
-      sourceHostId: surface.hostId,
-      sourceTitle: sourceChatRecord?.title ?? "",
-      targetHostId: pendingCloneHostId,
-      directory: binding.directory,
-      sourceSettings: sourceChatRecord?.settings ?? null,
-      globalClient: binding.hostClient,
-      onProfileFallbackToAmbient: () => {
-        toast(
-          "Continuing on the Terminal account - your profile isn't available on this host.",
-        );
-      },
-      onHistoryUnavailable: (reason) => {
-        toast(
-          reason === "no-checkpoint"
-            ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
-            : "This device can't send this agent's history to that host version - continuing with settings only.",
-        );
-      },
-      // No local "in flight" state to clear here - the confirm dialog
-      // already closes unconditionally below, before the async result is
-      // known. `useEpicCreateChatForHostClient`'s own `onError` still toasts
-      // a terminal failure.
-      onCloneFailed: () => undefined,
-      navigateNestedFocus,
-      createChat: (request, callbacks) => {
-        createChat.mutate(request, {
-          onSuccess: callbacks.onSuccess,
-          onError: callbacks.onError,
-        });
-      },
-    });
-    setPendingCloneHostId(null);
-  };
-
-  const cloneTargetEntry =
-    pendingCloneHostId === null
-      ? null
-      : (props.directoryEntries.find(
-          (entry) => entry.hostId === pendingCloneHostId,
-        ) ?? null);
 
   const activeRunNotice = activeRunNoticeFor(
     surface.kind,
@@ -2312,44 +2143,77 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const activeRunLocksBinding =
     surface.kind === "chat" && surface.isOwnerActive;
+  const activeRunLocksBindingRef = useRef(activeRunLocksBinding);
+  useLayoutEffect(() => {
+    activeRunLocksBindingRef.current = activeRunLocksBinding;
+  }, [activeRunLocksBinding]);
 
-  // Free functions (not useCallback) matching HEAD: they close over render
-  // locals and are only invoked from event handlers / item onLocate, never
-  // listed as memo deps that would thrash the items array.
-  const addFoldersToOwnerBinding = async (): Promise<boolean> => {
-    const result = await folderActions.pickAndPrepareFolders();
-    if (result === null) return false;
-    const addedWorkspacePaths: string[] = [];
-    // Add each picked folder independently and sequentially: the binding is a
-    // single read-modify-write row, so parallel writes would clobber one
-    // another - but one folder failing must not abort the rest (the add
-    // mutation's onError already surfaces a per-folder toast).
-    for (const folder of result.folders) {
-      // oxlint-disable-next-line react-doctor/async-await-in-loop -- sequential is required: concurrent setEntryMode writes race on the single owner-binding row and lose folders.
-      const ok = await addFolderMutation
-        .mutateAsync({
+  const activatePreparedFoldersForOwner = useCallback(
+    async (
+      folders: ReadonlyArray<PreparedWorkspaceFolder>,
+    ): Promise<ReadonlyArray<string>> => {
+      const activePaths = new Set(bindingWorkspacePaths);
+      const activatedPaths: string[] = [];
+      const addedPaths: string[] = [];
+      for (const folder of folders) {
+        if (surface.kind === "chat" && activeRunLocksBindingRef.current) break;
+        if (activePaths.has(folder.workspacePath)) {
+          activatedPaths.push(folder.workspacePath);
+          continue;
+        }
+        // oxlint-disable-next-line react-doctor/async-await-in-loop -- sequential is required: concurrent setEntryMode writes race on the single owner-binding row and lose folders.
+        const added = await addBindingFolder({
           epicId: surface.epicId,
           ownerId: surface.ownerId,
           ownerKind,
           workspacePath: folder.workspacePath,
         })
-        .then(() => true)
-        .catch(() => false);
-      if (ok) {
-        pendingDefaultPaths.add(folder.workspacePath);
-        addedWorkspacePaths.push(folder.workspacePath);
+          .then(() => true)
+          .catch(() => false);
+        if (!added) continue;
+        pendingDefaultPathsRef.current.add(folder.workspacePath);
+        activatedPaths.push(folder.workspacePath);
+        addedPaths.push(folder.workspacePath);
+      }
+      if (addedPaths.length === 0) return activatedPaths;
+      if (surface.kind === "terminal-agent") {
+        markBindingDirtyWithoutResume(addedPaths);
+      } else {
+        handleBindingCommitted(addedPaths);
+      }
+      return activatedPaths;
+    },
+    [
+      addBindingFolder,
+      bindingWorkspacePaths,
+      handleBindingCommitted,
+      markBindingDirtyWithoutResume,
+      ownerKind,
+      surface.epicId,
+      surface.kind,
+      surface.ownerId,
+    ],
+  );
+
+  // Free functions (not useCallback) matching HEAD: they close over render
+  // locals and are only invoked from event handlers / item onLocate, never
+  // listed as memo deps that would thrash the items array.
+  const addFoldersToOwnerBinding = async (): Promise<boolean> => {
+    const result = await folderActions.pickAndPrepareFolders(false);
+    if (result === null) return false;
+    const activatedPaths = await activatePreparedFoldersForOwner(
+      result.folders,
+    );
+    if (surface.kind === "chat") {
+      for (const path of activatedPaths) {
+        recordRecentWorkspace({
+          path,
+          bumpRecency: true,
+          failureFeedback: "silent",
+        });
       }
     }
-    if (addedWorkspacePaths.length === 0) return false;
-    // The folders are in the binding now, but adding never resumes the PTY —
-    // the explicit "Update" does. Mark dirty so "Update" is enabled (a non-git
-    // add stages nothing). Chat has no PTY to resume (no-op callback).
-    if (surface.kind === "terminal-agent") {
-      markBindingDirtyWithoutResume(addedWorkspacePaths);
-    } else {
-      handleBindingCommitted(addedWorkspacePaths);
-    }
-    return true;
+    return activatedPaths.length > 0;
   };
 
   // One folder intent from the unified picker maps to the existing in-Epic
@@ -2567,7 +2431,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   // delete-first (empty pick / all-adds-fail would drop the entry).
                   // Cancel and zero-success leave the binding untouched.
                   void (async (): Promise<void> => {
-                    const result = await folderActions.pickAndPrepareFolders();
+                    const result =
+                      await folderActions.pickAndPrepareFolders(false);
                     const outcome = await locateReplaceBoundFolder({
                       absentPath: ws.workspacePath,
                       pick: result,
@@ -2579,7 +2444,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                             ownerKind,
                             workspacePath,
                           });
-                          pendingDefaultPathsRef.current?.add(workspacePath);
+                          pendingDefaultPathsRef.current.add(workspacePath);
                           return true;
                         } catch {
                           return false;
@@ -2593,7 +2458,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                             ownerKind,
                             workspacePath,
                           });
-                          pendingDefaultPathsRef.current?.delete(workspacePath);
+                          pendingDefaultPathsRef.current.delete(workspacePath);
                           unstageWorktreeEntry(stagedKey, workspacePath);
                           return true;
                         } catch {
@@ -2632,7 +2497,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 },
                 {
                   onSuccess: () => {
-                    pendingDefaultPathsRef.current?.delete(ws.workspacePath);
+                    pendingDefaultPathsRef.current.delete(ws.workspacePath);
                     unstageWorktreeEntry(stagedKey, ws.workspacePath);
                     if (surface.kind === "terminal-agent") {
                       markBindingDirtyWithoutResume([ws.workspacePath]);
@@ -2723,7 +2588,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   // to seed - its summary never arrives, so left in place the
                   // path would pin the pending-defaults guard and block
                   // Update's resume forever.
-                  pendingDefaultPathsRef.current?.delete(ws.workspacePath);
+                  pendingDefaultPathsRef.current.delete(ws.workspacePath);
                   // And if metadata DID resolve first, the seeding effect may
                   // already have staged a default worktree intent for this
                   // path - unstage it, or the next Update would call
@@ -2761,6 +2626,61 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       workspaces,
     ],
   );
+
+  const recentWorkspaces = useRecentWorkspaces({
+    client: props.hostClient,
+    hostId: props.activeHostId,
+    activePaths: bindingWorkspacePaths,
+    activatePreparedFolders: activatePreparedFoldersForOwner,
+    disabled:
+      surface.kind !== "chat" ||
+      activeRunLocksBinding ||
+      !surface.bindingResolved,
+    surface: stagedKey.surface,
+  });
+  const {
+    moveToRecent: moveBoundWorkspaceToRecent,
+    movingPath: recentWorkspacesMovingPath,
+    supported: recentWorkspacesSupported,
+  } = recentWorkspaces;
+  const recentAwareWorkspaceRunItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+    () =>
+      workspaceRunItems.map((item) => {
+        if (!recentWorkspacesSupported || item.onRemove === null) return item;
+        const removeFromBinding = item.onRemove;
+        return {
+          ...item,
+          removePending:
+            item.removePending ||
+            recentWorkspacesMovingPath === item.displayPath,
+          onRemove: () => {
+            if (activeRunLocksBindingRef.current) return;
+            void moveBoundWorkspaceToRecent(item.displayPath).then((moved) => {
+              if (moved && !activeRunLocksBindingRef.current) {
+                removeFromBinding();
+              }
+            });
+          },
+        };
+      }),
+    [
+      moveBoundWorkspaceToRecent,
+      recentWorkspacesMovingPath,
+      recentWorkspacesSupported,
+      workspaceRunItems,
+    ],
+  );
+  const recentWorkspacesSection = recentWorkspacesSupported ? (
+    <RecentWorkspacesSection
+      entries={recentWorkspaces.entries}
+      activeCount={bindingWorkspacePaths.length}
+      pendingPath={recentWorkspaces.pendingPath}
+      failedPaths={recentWorkspaces.failedPaths}
+      onAdd={recentWorkspaces.add}
+      onLocate={recentWorkspaces.locate}
+      onForget={recentWorkspaces.forget}
+    />
+  ) : null;
 
   // Setup/teardown editor, hosted here so it outlives the popover. In-epic
   // surfaces carry the real owner + live binding, so an edit can target a bound
@@ -2822,24 +2742,46 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // branch edits stage); the explicit "Update" applies the staged set and tells
   // the owning tile to restart the PTY once against the updated binding.
   const readOnly = false;
+  const hostSwitcher = (
+    <WorkspaceHostSwitcher
+      hosts={pickerHosts}
+      activeHostId={props.activeHostId}
+      onSelect={handleSelectHostForChat}
+      intent="pin"
+      refusalByHostId={NO_HOST_OPTION_REFUSALS}
+      inertExceptHostId={null}
+      disabled={surface.kind === "terminal-agent"}
+      isLoading={hostOptions.isLoading}
+      listsFailed={hostOptions.listsFailed}
+      onRetryLists={hostOptions.retryLists}
+      surface="inline"
+      keepFocusableWhenDisabled={surface.kind === "terminal-agent"}
+    />
+  );
+  const hostSwitcherSlot = (
+    <span className="flex w-full min-w-0">{hostSwitcher}</span>
+  );
 
   return (
     <>
-      <div className="inline-flex max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden">
-        <div className="min-w-0 flex-[0_1_10rem] max-w-[min(34%,10rem)] overflow-hidden">
-          <HostOnlySelect
-            hostLabel={props.hostLabel}
-            entries={props.directoryEntries}
-            activeHostId={props.activeHostId}
-            mode={surface.kind === "chat" ? "clone-on-switch" : "locked"}
-            onSelect={handleSelectHostForChat}
-            loading={metadataPending}
-            disabled={false}
-          />
+      <div className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden">
+        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
+          <TooltipWrapper
+            label={
+              surface.kind === "terminal-agent"
+                ? "Terminal host is fixed"
+                : undefined
+            }
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            {hostSwitcherSlot}
+          </TooltipWrapper>
         </div>
         <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
           <WorkspaceFolderSummaryControl
-            items={workspaceRunItems}
+            items={recentAwareWorkspaceRunItems}
             readOnly={readOnly}
             bindingResolved={surface.bindingResolved}
             addFolderPending={
@@ -2869,6 +2811,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             onEditEnvironment={handleEditEnvironment}
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
+            recentWorkspaces={recentWorkspacesSection}
+            recentWorkspaceCount={recentWorkspaces.entries.length}
+            moveToRecent={recentWorkspacesSupported}
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).
             // Opening upward (chat's default, where the composer is bottom-anchored)
@@ -2878,14 +2823,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           />
         </div>
       </div>
-      <CloneOnHostSwitchDialog
-        open={pendingCloneHostId !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingCloneHostId(null);
-        }}
-        targetHostLabel={cloneTargetEntry?.label ?? "this host"}
-        onConfirm={handleConfirmClone}
-      />
       <WorktreeScriptsDialog
         open={scriptsTarget !== null}
         target={scriptsTarget}

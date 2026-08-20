@@ -54,12 +54,12 @@ export interface ProviderPackPreparing {
  * costs at worst one bounced turn on a host that has nothing, and the host's
  * typed `preparing` error is the backstop for exactly that.
  *
- * Known narrow over-openness: the D6 closure-coupled carve can make the host
- * refuse a version-mismatched PATH candidate as a NEW holder's binary even
- * though it reports `available` here. That mismatch is not on the wire yet
- * (the `advisory: row-incompatibility` field is the ticket for it), so this
- * function cannot see it. Failing open on it is the deliberate choice: the
- * alternative today is gating every provider on every host.
+ * (An earlier note here described the D6 closure-coupled carve as a narrow
+ * over-openness - a PATH candidate the host would refuse while this reports
+ * `available`. The carve was removed host-side on 2026-08-19: auto-PATH now
+ * serves closure packs like every other provider, so an `available` PATH
+ * candidate is one the host will actually spawn and the over-openness no
+ * longer exists.)
  */
 function providerHasRunnableFallback(provider: ProviderCliState): boolean {
   if (provider.availabilityPending) return true;

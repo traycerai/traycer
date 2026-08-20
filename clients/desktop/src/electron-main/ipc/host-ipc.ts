@@ -3,28 +3,31 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
-import type {
-  HostRestartRequestResult,
-  MutationOutcome,
-} from "../../ipc-contracts/host-management-types";
+import type { HostRestartRequestResult } from "../../ipc-contracts/host-management-types";
+import type { GuardedMutationOutcome } from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
-// Collapses a restart-intent outcome to the wire result both restart
-// surfaces resolve (this handler and `traycerHostRestart`). `busy` and
-// `deferred` become a resolved `declined` - the host was deliberately NOT
-// restarted (in-progress work denied the shutdown claim, removed-by-user,
-// lock contention), a state that clears on its own or on a later retry -
-// so the renderer can present it as information. Every other non-"ok"
-// kind still rejects the invoke, keeping genuine failures on the existing
-// catch-based reportable-error path (field RCA 2026-07-28: throwing the
-// busy denial produced a "Report issue" error toast for a self-recovering
-// condition).
+// Collapses a restart-intent outcome to the wire result every restart
+// surface resolves (this handler, `traycerHostRestart` and the Doctor
+// repairs). `busy`, `deferred` and `abandoned` become a resolved `declined`
+// - the host was deliberately NOT restarted (in-progress work denied the
+// shutdown claim, removed-by-user, lock contention, or the lane-head guard
+// found the local host is no longer the one the restart named), a state
+// that clears on its own or on a later retry - so the renderer can present
+// it as information. Every other non-"ok" kind still rejects the invoke,
+// keeping genuine failures on the existing catch-based reportable-error
+// path (field RCA 2026-07-28: throwing the busy denial produced a "Report
+// issue" error toast for a self-recovering condition).
 export function restartRequestResultFromOutcome<TOk>(
-  outcome: MutationOutcome<TOk>,
+  outcome: GuardedMutationOutcome<TOk>,
 ): HostRestartRequestResult {
   if (outcome.kind === "ok") return { kind: "restarted" };
-  if (outcome.kind === "busy" || outcome.kind === "deferred") {
+  if (
+    outcome.kind === "busy" ||
+    outcome.kind === "deferred" ||
+    outcome.kind === "abandoned"
+  ) {
     return { kind: "declined", message: outcome.message };
   }
   throw new Error(outcome.message);
@@ -46,7 +49,13 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.requestHostRespawn,
     async (): Promise<HostRestartRequestResult> => {
-      const outcome = await bridge.options.hostController.respawn();
+      // `background` = no identity guard, not "not user-initiated": this
+      // channel restarts THE local host as a role, whatever currently fills
+      // it, so there is no expected host id for a lane-head guard to hold
+      // the job to. Only the Doctor repairs name a specific host.
+      const outcome = await bridge.options.hostController.respawn({
+        kind: "background",
+      });
       return restartRequestResultFromOutcome(outcome);
     },
   );
