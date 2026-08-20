@@ -337,7 +337,14 @@ export function HostOverviewPanel(props: {
       // busy work — never the desktop's own serialization. The refusal comes
       // back as `declined`, which this mutation already renders as
       // information rather than an error.
-      return management.restartHostIfIdle();
+      // The host this page is scoped to, not whatever is local by the time
+      // main handles it: `forceRestartLocalHostId` is this machine's host as
+      // this render saw it, and main refuses if that is no longer true.
+      const expectedHostId = forceRestartLocalHostId;
+      if (expectedHostId === null) {
+        return Promise.reject(new Error("No local host bridge is available."));
+      }
+      return management.restartHostIfIdle({ expectedHostId });
     },
     onSuccess: (result) => {
       // The offer is answered either way — a `declined` respawn performed

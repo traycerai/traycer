@@ -21,6 +21,8 @@ import type {
   InstallVersionOk,
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  DoctorRepairIntent,
   MutationOutcome,
   NotificationFeedSource,
   NotificationForegroundAppLocal,
@@ -308,15 +310,26 @@ export interface DesktopHostManagementBridge {
   ): Promise<FreePortAndRestartInput>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
   maintenanceUpdateCheck(
-    input: HostAvailableVersionsInput,
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
   ): Promise<HostUpdateCheckResponse>;
-  maintenanceDoctor(): Promise<MaintenanceDoctorProjection>;
-  maintenanceInstallationInfo(): Promise<HostGetInstallationInfoResponse>;
+  maintenanceDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostGetInstallationInfoResponse>;
   maintenanceInstallVersion(input: {
     readonly version: string;
     readonly force: boolean;
+    readonly expectedHostId: string;
   }): Promise<MaintenanceInstallDispatch>;
-  restartHostIfIdle(): Promise<HostRestartRequestResult>;
+  restartHostIfIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostRestartRequestResult>;
+  runDoctorRepairIfIdle(input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }): Promise<DoctorRepairDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -791,12 +804,14 @@ export class DesktopRunnerHost implements IRunnerHost {
       cliManifest: () => managementBridge.cliManifest(),
       maintenanceUpdateCheck: (input) =>
         managementBridge.maintenanceUpdateCheck(input),
-      maintenanceDoctor: () => managementBridge.maintenanceDoctor(),
-      maintenanceInstallationInfo: () =>
-        managementBridge.maintenanceInstallationInfo(),
+      maintenanceDoctor: (input) => managementBridge.maintenanceDoctor(input),
+      maintenanceInstallationInfo: (input) =>
+        managementBridge.maintenanceInstallationInfo(input),
       maintenanceInstallVersion: (input) =>
         managementBridge.maintenanceInstallVersion(input),
-      restartHostIfIdle: () => managementBridge.restartHostIfIdle(),
+      restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
+      runDoctorRepairIfIdle: (input) =>
+        managementBridge.runDoctorRepairIfIdle(input),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };

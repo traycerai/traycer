@@ -187,11 +187,23 @@ export interface MaintenanceFallbackServeMap {
 
 export function buildMaintenanceFallbackServeMap(
   management: IHostManagement,
+  /**
+   * The host this map was built for, sent with every call.
+   *
+   * The bridge acts on "this machine's host" implicitly, and the client that
+   * decides whether to serve can hold a FROZEN id — an explicitly-scoped
+   * requester keeps answering with the row it was created for, so a local
+   * identity change leaves a window where the fence still passes. Main
+   * compares this against the live local identity and refuses a mismatch,
+   * which is the only place the comparison is not racing the change.
+   */
+  expectedHostId: string,
 ): MaintenanceFallbackServeMap {
   return {
     "host.update.check": (params) =>
       management.maintenanceUpdateCheck({
         includePreReleases: params.includePreReleases,
+        expectedHostId,
       }),
     "host.update.install": async (params) => {
       // The RPC resolver refuses a second install while its own update claim
@@ -216,6 +228,7 @@ export function buildMaintenanceFallbackServeMap(
       const dispatch = await management.maintenanceInstallVersion({
         version: params.version,
         force: params.force,
+        expectedHostId,
       });
       if (dispatch.kind === "lane-busy") {
         return { outcome: "already-updating" };
@@ -223,8 +236,11 @@ export function buildMaintenanceFallbackServeMap(
       return mapInstallVersionOutcome(dispatch.outcome);
     },
     "host.doctor": async () =>
-      localWsDoctorResponse(await management.maintenanceDoctor()),
-    "host.getInstallationInfo": () => management.maintenanceInstallationInfo(),
+      localWsDoctorResponse(
+        await management.maintenanceDoctor({ expectedHostId }),
+      ),
+    "host.getInstallationInfo": () =>
+      management.maintenanceInstallationInfo({ expectedHostId }),
   };
 }
 
@@ -288,7 +304,7 @@ export function createLocalMaintenanceFallbackClient(input: {
   readonly management: IHostManagement;
 }): HostClient<HostRpcRegistry> {
   const { client, localHostId, management } = input;
-  const serve = buildMaintenanceFallbackServeMap(management);
+  const serve = buildMaintenanceFallbackServeMap(management, localHostId);
 
   const shouldServe = (
     method: string,

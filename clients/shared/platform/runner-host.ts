@@ -1488,6 +1488,19 @@ export interface CliInstallManifestSnapshot {
  * lane maps it to the protocol's `already-updating`. Every other arm is the
  * controller's own per-intent outcome, unchanged and mapped as before.
  */
+/** Which Doctor repair to run; both are controller lifecycle intents. */
+export type DoctorRepairIntent = "converge-ready" | "register-service";
+
+/**
+ * A Doctor repair's answer. `lane-busy` and `host-changed` mean NOTHING was
+ * enqueued — the caller renders the message as information, the same way a
+ * host's own refusal is rendered.
+ */
+export type DoctorRepairDispatch =
+  | { readonly kind: "lane-busy"; readonly message: string }
+  | { readonly kind: "host-changed"; readonly message: string }
+  | { readonly kind: "dispatched"; readonly outcome: MutationOutcome<null> };
+
 export type MaintenanceInstallDispatch =
   | { readonly kind: "lane-busy" }
   | {
@@ -1607,14 +1620,25 @@ export interface IHostManagement {
   // classifies CLI failures into the wire taxonomy there because an Electron
   // invoke rejection loses its error shape crossing the boundary — the
   // renderer could no longer tell "no CLI" from "CLI crashed".
+  //
+  // EVERY member below carries `expectedHostId`: the host the caller believes
+  // is local. These operate on "this machine's host" implicitly, so without it
+  // a request aimed at host A silently lands on its replacement B — the local
+  // identity can change under a scope that froze A's id, and an id nothing
+  // checks is worse than no id at all. Main compares against the live local
+  // identity and refuses a mismatch.
   /** `host.update.check`'s answer from this machine's bundled CLI. */
   readonly maintenanceUpdateCheck: (
-    input: HostAvailableVersionsInput,
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
   ) => Promise<HostUpdateCheckResponse>;
   /** `host.doctor`'s answer, minus the caller-owned transport vantage. */
-  readonly maintenanceDoctor: () => Promise<MaintenanceDoctorProjection>;
+  readonly maintenanceDoctor: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<MaintenanceDoctorProjection>;
   /** `host.getInstallationInfo`'s answer from the shared on-disk records. */
-  readonly maintenanceInstallationInfo: () => Promise<HostGetInstallationInfoResponse>;
+  readonly maintenanceInstallationInfo: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostGetInstallationInfoResponse>;
   /**
    * `host.update.install`'s dispatch, refused when the mutation lane is
    * already occupied.
@@ -1635,6 +1659,7 @@ export interface IHostManagement {
   readonly maintenanceInstallVersion: (input: {
     readonly version: string;
     readonly force: boolean;
+    readonly expectedHostId: string;
   }) => Promise<MaintenanceInstallDispatch>;
   /**
    * Respawn the local host, REFUSED (not queued) when the desktop's exclusive
@@ -1651,7 +1676,24 @@ export interface IHostManagement {
    * A lane refusal arrives as `declined` with a message, the same arm a host's
    * own refusal uses — informational, self-clearing, retryable.
    */
-  readonly restartHostIfIdle: () => Promise<HostRestartRequestResult>;
+  readonly restartHostIfIdle: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostRestartRequestResult>;
+  /**
+   * The Doctor sheet's two lifecycle repairs, refused when the exclusive lane
+   * is occupied or this machine's host is no longer the expected one.
+   *
+   * `convergeReady` converges to LATEST and `registerService` adds a service
+   * cycle; both QUEUE behind a running intent rather than being refused, so a
+   * repair clicked during a pinned install lands after it and overrides the
+   * version the person actually chose. The other repairs keep the queueing
+   * path: they run against a host that is already down, where waiting is the
+   * point.
+   */
+  readonly runDoctorRepairIfIdle: (input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }) => Promise<DoctorRepairDispatch>;
   readonly getHostName: () => Promise<HostNameSettings>;
   readonly setHostName: (input: {
     readonly customName: string | null;

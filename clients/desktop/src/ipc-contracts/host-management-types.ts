@@ -41,6 +41,8 @@ export type {
   InstallVersionOk,
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  DoctorRepairIntent,
   MutationKind,
   MutationLaneStatus,
   MutationOutcome,

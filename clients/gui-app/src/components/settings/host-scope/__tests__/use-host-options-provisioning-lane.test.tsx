@@ -124,6 +124,7 @@ function makeHostManagement(kind: MutationKind | null): IHostManagement {
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
     restartHostIfIdle: notImplemented("restartHostIfIdle"),
+    runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
     getHostName: notImplemented("getHostName"),
     setHostName: notImplemented("setHostName"),
   };

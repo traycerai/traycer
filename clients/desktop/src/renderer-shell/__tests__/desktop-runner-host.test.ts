@@ -567,6 +567,9 @@ function buildFakeBridge(
       restartHostIfIdle: async () => {
         throw new Error("restartHostIfIdle not used in test");
       },
+      runDoctorRepairIfIdle: async () => {
+        throw new Error("runDoctorRepairIfIdle not used in test");
+      },
       getHostName: async () => ({
         systemName: "desktop-1",
         customName: null,

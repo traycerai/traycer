@@ -505,15 +505,13 @@ function DoctorFixControl(props: {
   // one RPC route that is not a restart, so it is asked first.
   const isLogs = issue.fixAction === "host-logs";
   const isRpcRestart = !isLogs && route === "rpc";
-  // A restart that routed to the bridge dispatches the PAGE's restart write,
-  // so its pending state is that write's, not the local-fix mutation's — the
-  // local-fix key is `hostRunDoctor`, which no lifecycle gate reads. Without
-  // this the button renders live while the gate is armed and the click is
-  // silently refused, which is a worse answer than a disabled control.
-  const isBridgeRestart =
-    !isLogs &&
-    route === "local-bridge" &&
-    (issue.fixAction === "host-restart" || issue.fixAction === "host-start");
+  // EVERY bridge-routed repair is a controller LIFECYCLE write, not just the
+  // restart pair: `host-install-latest` converges to latest and
+  // `service-install` adds a service cycle. None of them belongs to a mutation
+  // any lifecycle gate reads — the local-fix key is `hostRunDoctor` — so
+  // without this they render live while the page is armed and their click is
+  // then refused, which is a worse answer than a disabled control.
+  const isBridgeLifecycle = !isLogs && route === "local-bridge";
   let pending = props.localFixPending;
   let onClick = props.onLocalFix;
   if (isLogs) {
@@ -522,8 +520,8 @@ function DoctorFixControl(props: {
   } else if (isRpcRestart) {
     pending = props.restartPending;
     onClick = props.onRestart;
-  } else if (isBridgeRestart) {
-    pending = props.bridgeRestartPending;
+  } else if (isBridgeLifecycle) {
+    pending = props.localFixPending || props.bridgeRestartPending;
   }
   return (
     <Button

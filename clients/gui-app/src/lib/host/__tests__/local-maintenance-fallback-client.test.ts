@@ -183,7 +183,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
     const management = buildOverviewManagement({
       maintenanceInstallVersion,
     });
-    const serve = buildMaintenanceFallbackServeMap(management);
+    const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
 
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: false }),
@@ -207,7 +207,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
     const management = buildOverviewManagement({
       maintenanceInstallVersion,
     });
-    const serve = buildMaintenanceFallbackServeMap(management);
+    const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
 
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: true }),
@@ -240,7 +240,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
             outcome,
           }),
       });
-      const serve = buildMaintenanceFallbackServeMap(management);
+      const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
       await expect(
         serve["host.update.install"]({ version: "1.2.0", force: false }),
       ).rejects.toSatisfy((error: unknown) => {
@@ -266,7 +266,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
           },
         }),
     });
-    const serve = buildMaintenanceFallbackServeMap(management);
+    const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: false }),
     ).resolves.toEqual({ outcome: "cli-failed" });
@@ -283,7 +283,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
         }),
     );
     const management = buildOverviewManagement({ maintenanceUpdateCheck });
-    const serve = buildMaintenanceFallbackServeMap(management);
+    const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
 
     await serve["host.update.check"]({ includePreReleases: true });
     await serve["host.update.check"]({ includePreReleases: false });
@@ -324,7 +324,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
     const management = buildOverviewManagement({
       maintenanceInstallationInfo,
     });
-    const serve = buildMaintenanceFallbackServeMap(management);
+    const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
 
     await expect(serve["host.getInstallationInfo"]()).resolves.toBe(info);
   });

@@ -293,6 +293,7 @@ export const RunnerHostInvoke = {
   // semantics for the tray/menu; a Settings restart refuses instead of
   // firing a kill against state the person never saw.
   traycerHostRestartIfIdle: "runnerHost:traycer:host:restartIfIdle",
+  traycerDoctorRepairIfIdle: "runnerHost:traycer:doctor:repairIfIdle",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
   // Selection authority (host-lifecycle redesign, D16 / P1.1). The engine

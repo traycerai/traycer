@@ -31,6 +31,7 @@ import type {
   HostDoctorIssue as BridgeDoctorIssue,
   HostInstalledRecord,
   IHostManagement,
+  DoctorRepairIntent,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { ReactNode } from "react";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -93,7 +94,10 @@ function HostSettingsPanelInner() {
   // sheet because `IHostManagement` is a property of the SHELL, not of the
   // scoped host, and the sheet must not be able to reach for it by accident for
   // a host on another machine.
-  const localDoctorFix = useLocalDoctorFixMutation(management);
+  const localDoctorFix = useLocalDoctorFixMutation(
+    management,
+    scopedIsLocalMachine ? (scope.hostId ?? null) : null,
+  );
 
   // Keeps a `false` capability answer refutable. See the hook below.
   useOverviewCapabilityProbe(scope);
@@ -310,7 +314,29 @@ function useEmptyAccountLocalRecoveryZone(
   return <LocalRecoveryDangerZone />;
 }
 
-function useLocalDoctorFixMutation(management: IHostManagement | null) {
+/**
+ * Which Doctor fix actions are controller LIFECYCLE intents, and therefore
+ * take the refusing dispatch rather than the queueing one. `null` means the
+ * action is a repair for a host that is already down, where waiting behind
+ * whatever is running is the point.
+ */
+function doctorRepairIntentFor(
+  fixAction: string | null,
+): DoctorRepairIntent | null {
+  if (fixAction === "host-install-latest") return "converge-ready";
+  if (fixAction === "service-install") return "register-service";
+  return null;
+}
+
+function useLocalDoctorFixMutation(
+  management: IHostManagement | null,
+  /**
+   * The local host these repairs are for, or `null` when the scoped host is
+   * not this machine. Sent with the two LIFECYCLE repairs so main can refuse
+   * one aimed at a host that has since been replaced.
+   */
+  localHostId: string | null,
+) {
   const queryClient = useQueryClient();
   // `mutationFn` REPORTS the outcome; it does not announce it. Raising the
   // toasts inside it also collapsed "declined" into a resolved promise, so
@@ -327,6 +353,28 @@ function useLocalDoctorFixMutation(management: IHostManagement | null) {
       // same CLI diagnostic — one arrived over the wire and one over the
       // bridge. `runFixAction` reads only `fixAction` and `details`.
       const issueForBridge: BridgeDoctorIssue = issue;
+      // The two LIFECYCLE repairs take the refusing path. `convergeReady`
+      // converges to LATEST and `registerService` adds a service cycle, and
+      // both QUEUE behind a running controller intent rather than being
+      // refused — so one clicked during a pinned install lands after it and
+      // overrides the version the person chose. This page cannot gate that on
+      // its own: its lifecycle state cannot see a lane the tray or the
+      // background reconciler armed. The remaining repairs keep the queueing
+      // path, which is right for a host that is already down.
+      const repair = doctorRepairIntentFor(issue.fixAction);
+      if (repair !== null && localHostId !== null) {
+        const dispatch = await management.runDoctorRepairIfIdle({
+          repair,
+          expectedHostId: localHostId,
+        });
+        if (dispatch.kind !== "dispatched") {
+          return { applied: false, declinedMessage: dispatch.message };
+        }
+        if (dispatch.outcome.kind !== "ok") {
+          throw new Error(dispatch.outcome.message);
+        }
+        return { applied: true, declinedMessage: null };
+      }
       const result = await runFixAction(management, issueForBridge);
       return result.kind === "declined"
         ? { applied: false, declinedMessage: result.message }
