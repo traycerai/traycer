@@ -13,10 +13,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { HostPresenceDot } from "@/components/settings/host-scope/host-glyph";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostRowSurfaceState,
+  hostOptionStatusWord,
   isHostOptionSelectable,
   type HostPickIntent,
 } from "@/components/settings/host-scope/host-option-model";
@@ -44,19 +45,19 @@ const SEARCH_THRESHOLD = 6;
 function hostSwitcherLabel(
   intent: HostPickIntent,
   selected: HostScopeOption | null,
+  status: string | null,
 ): string {
   const subject = intent === "view" ? "Settings host" : "Host";
   return selected === null
     ? `${subject}: none selected`
-    : `${subject}: ${selected.name}`;
+    : `${subject}: ${selected.name}${status === null ? "" : `, ${status}`}`;
 }
 
 export type HostSwitcherActionKind = "add-host" | "manage-hosts";
 
 /**
- * The picker's trailing action — the one thing that differs between the two
- * surfaces mounting this component, and a prop rather than a constant because
- * they cannot honestly offer the same verb.
+ * The picker's trailing action — a prop rather than a constant because only
+ * Settings owns the add-host flow; every other surface points back to it.
  *
  * Settings owns ADD: the dialog, the known-hosts snapshot it takes and every
  * failure state it can land in all live there, and this footer is its only
@@ -94,6 +95,9 @@ interface HostSwitcherActionPresentation {
  *   so the row read as a heading with a stray chevron rather than something you
  *   could open. It borrows the search field's own border and fill, which is
  *   what makes the two read as siblings instead of as a label above a control.
+ * - `inline`: a compact peer of other ghost controls below a composer. It
+ *   shares their muted resting text and foreground-alpha hover, while its
+ *   list still uses the same full host-row vocabulary as every other surface.
  * - `panel-header`: the picker IS the top strip of the card it heads (the
  *   header's usage popover). Here a floating list is actively wrong: a rounded
  *   panel inset inside a rounded panel puts two borders a few pixels apart on
@@ -102,7 +106,7 @@ interface HostSwitcherActionPresentation {
  *   square, and the list drops flush from its bottom edge at exactly its width
  *   — one shared edge, one continuous surface.
  */
-export type HostSwitcherSurface = "rail" | "panel-header" | "field";
+export type HostSwitcherSurface = "rail" | "panel-header" | "field" | "inline";
 
 interface HostSwitcherSurfacePresentation {
   /**
@@ -153,6 +157,12 @@ const HOST_SWITCHER_SURFACES: Record<
     list: "",
     sideOffsetPx: 4,
   },
+  inline: {
+    trigger:
+      "h-7 gap-1.5 rounded-lg px-1.5 py-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+    list: "",
+    sideOffsetPx: 4,
+  },
 };
 
 const HOST_SWITCHER_ACTIONS: Record<
@@ -178,31 +188,17 @@ const HOST_SWITCHER_ACTIONS: Record<
 };
 
 /**
- * THE host selector. There is exactly one of these in Settings, and it heads
- * the sidebar group whose sections it scopes. The header's usage popover
- * mounts the same component to head ITS panes (`rate-limit-popover.tsx`) —
- * reuse, not a second picker: two controls over one concept is precisely the
- * fragmentation the next paragraph describes, and it does not stop being that
- * because the second one lives outside Settings. What differs between the two
- * is only the SELECTION each writes to (`HostScopeSelection`), never the row
- * vocabulary or the scoping mechanism.
+ * THE host selector. Settings, monitoring surfaces, worktree pickers, and the
+ * composer all mount this component. They may write different selections, but
+ * host rows, states, keyboard behavior, and menu layout stay identical.
  *
  * It replaced four separate `Select`s (Providers' header, Worktrees' toolbar,
  * the snapshots row, the agent-instructions strip) that differed in width,
  * placement and scoping mechanism while doing one job — and, in an earlier
  * pass, a whole second "Hosts" page that duplicated every host verb.
  *
- * Its row anatomy is deliberately the composer's host picker
- * (`components/home/host-workspace-selector/host-section.tsx`): kind glyph,
- * name, status dot, check. Two pickers over the same concept must not each
- * invent their own vocabulary, so this one inherits the shape people already
- * know from choosing a host below the composer.
- *
- * It is NOT the active-host control. Choosing here swaps a transient client
- * and nothing else — no notification rebinding, no change to where new work
- * lands. That verb lives on the Overview page and states its consequence in
- * words. Hence the two independent marks: the CHECK is what Settings is
- * scoped to, the ACTIVE chip is what this window runs on.
+ * The caller's `intent` owns the consequence of choosing; it never changes the
+ * picker anatomy or invents a second status vocabulary.
  */
 export function HostSwitcher(props: {
   readonly hosts: readonly HostScopeOption[];
@@ -215,9 +211,9 @@ export function HostSwitcher(props: {
   readonly surface: HostSwitcherSurface;
   /**
    * What choosing a host here DOES. `bind` surfaces (the composer, the worktree
-   * pickers) point the whole window at the host, so a host this client cannot
-   * dial is not a legal answer and its row goes inert; `view` surfaces may
-   * point at one regardless. See `HostPickIntent`.
+   * pickers) and `pin` surfaces (the composer and scoped tools) require a host
+   * this client can dial; `view` surfaces may point at one regardless. See
+   * `HostPickIntent`.
    */
   readonly intent: HostPickIntent;
   /**
@@ -250,6 +246,10 @@ export function HostSwitcher(props: {
   const action = HOST_SWITCHER_ACTIONS[props.action.kind];
   const ActionIcon = action.icon;
   const surface = HOST_SWITCHER_SURFACES[props.surface];
+  const triggerStatus =
+    selected === null
+      ? null
+      : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
 
   // The empty state keys on the LIST, not on the selection.
   //
@@ -323,39 +323,36 @@ export function HostSwitcher(props: {
         // scope; a `bind` surface is choosing the host the window runs on, and
         // a screen reader that hears "Settings host" in the composer is being
         // told about a different control than the one it is on.
-        aria-label={hostSwitcherLabel(props.intent, selected)}
+        aria-label={hostSwitcherLabel(props.intent, selected, triggerStatus)}
         disabled={props.disabled}
         data-testid="settings-host-switcher"
         className={cn(
-          "flex w-full items-center gap-3 px-3 py-2 text-left transition-colors",
+          "group/host-switcher flex w-full items-center gap-3 px-3 py-2 text-start transition-colors",
           "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
           "disabled:pointer-events-none disabled:opacity-60",
           surface.trigger,
         )}
       >
-        {/* `selected` is null while the scoped host is gone but others remain.
-            The row stays a live control in that state — it is the way out. */}
-        <span className="flex size-4 shrink-0 items-center justify-center">
-          <HostPresenceDot
-            tone={selected === null ? "idle" : selected.health.tone}
-            animate={selected !== null && selected.health.live}
-            className={undefined}
-          />
-        </span>
-        {/* No ACTIVE chip here. Host names are long and this row is narrow, so
-            a chip that is present in the common case bought one word and cost
-            the name — and it was never the row's job: the rail says what you
-            are VIEWING. Which host is active is stated where it has room and
-            where it matters, on the dropdown rows and on Overview, and its
-            absence is called out by the "Viewing —" note below. */}
+        {/* Healthy is the default and stays silent. Only an exception status
+            earns space in this compact trigger. */}
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-ui-sm font-medium",
-            selected === null ? "text-muted-foreground" : "text-foreground",
+            selected === null || props.surface === "inline"
+              ? "text-muted-foreground group-hover/host-switcher:text-foreground"
+              : "text-foreground",
           )}
         >
           {selected === null ? "Select a host" : selected.name}
         </span>
+        {triggerStatus === null ? null : (
+          <span
+            className="shrink-0 text-ui-xs text-muted-foreground"
+            data-testid="settings-host-switcher-status"
+          >
+            {triggerStatus}
+          </span>
+        )}
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent
@@ -488,6 +485,7 @@ function HostSwitcherRow(props: {
       onSelect={props.onSelect}
       data-testid={`settings-host-switcher-option-${host.hostId}`}
       data-scoped={props.scoped ? "true" : "false"}
+      data-checked={props.scoped ? "true" : undefined}
       // The check mark inside the row is aria-hidden and `data-scoped` reaches
       // no assistive tech, so without this a screen reader heard the scoped row
       // and every other row as the same text.

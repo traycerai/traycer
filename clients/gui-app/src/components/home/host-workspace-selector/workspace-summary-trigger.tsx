@@ -151,6 +151,8 @@ export function WorkspaceSummaryTrigger(
             readOnly
             nestedInPopover={false}
             bindingResolved={bindingResolved}
+            recentWorkspaces={null}
+            moveToRecent={false}
           />
         </PopoverContent>
       </Popover>
@@ -162,7 +164,7 @@ export function WorkspaceSummaryTrigger(
 
 function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
   if (props.bindingResolved) {
-    return <span className="text-current/70">No workspace linked</span>;
+    return <span className="text-current/70">No folder attached</span>;
   }
   return (
     <>
@@ -171,7 +173,7 @@ function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
         testId={undefined}
         variant="dots"
       />
-      <span className="text-current/70">Linking workspace…</span>
+      <span className="text-current/70">Linking folder…</span>
     </>
   );
 }

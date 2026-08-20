@@ -301,6 +301,9 @@ export enum AnalyticsEvent {
   WorkspaceFolderAdded = "workspace_folder_added",
   WorkspaceFolderRemoved = "workspace_folder_removed",
   WorkspacePrimaryChanged = "workspace_primary_changed",
+  WorkspaceContextAdded = "workspace_context_added",
+  WorkspaceMovedToRecent = "workspace_moved_to_recent",
+  WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
   WorktreeCreated = "worktree_created",
@@ -580,6 +583,17 @@ export interface AnalyticsEventProperties {
     readonly workspace_kind: WorkspaceKind;
   };
   readonly [AnalyticsEvent.WorkspacePrimaryChanged]: SourceProperties;
+  readonly [AnalyticsEvent.WorkspaceContextAdded]: {
+    readonly source: "browse" | "recent";
+    readonly outcome: "succeeded" | "failed";
+    readonly surface: "landing" | "new-conversation" | "owner";
+  };
+  readonly [AnalyticsEvent.WorkspaceMovedToRecent]: {
+    readonly surface: "landing" | "new-conversation" | "owner";
+  };
+  readonly [AnalyticsEvent.WorkspaceRecentForgotten]: {
+    readonly surface: "landing" | "new-conversation" | "owner";
+  };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {
     readonly editor: AnalyticsEditor;
@@ -1278,6 +1292,17 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
   ...eventKeyEntries(
     [AnalyticsEvent.WorkspaceOpenedInEditor],
     ["source", "editor"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
+    ["source", "outcome", "surface"],
+  ),
+  ...eventKeyEntries(
+    [
+      AnalyticsEvent.WorkspaceMovedToRecent,
+      AnalyticsEvent.WorkspaceRecentForgotten,
+    ],
+    ["surface"],
   ),
   ...eventKeyEntries([AnalyticsEvent.WorktreeDeleted], ["outcome", "blocker"]),
   ...eventKeyEntries(
