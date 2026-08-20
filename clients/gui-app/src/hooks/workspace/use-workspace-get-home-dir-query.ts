@@ -1,13 +1,14 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { WorkspacePrepareFoldersRequestV11 } from "@traycer/protocol/host/workspace/unary-schemas";
+import type { WorkspacePrepareFoldersRequestV12 } from "@traycer/protocol/host/workspace/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /** Constant params, so the object is hoisted rather than memoized. */
-const GET_HOME_DIR_PARAMS: WorkspacePrepareFoldersRequestV11 = {
+const GET_HOME_DIR_PARAMS: WorkspacePrepareFoldersRequestV12 = {
   operation: "getHomeDir",
   folderPaths: null,
   path: null,
+  bumpRecency: null,
 };
 
 /**
