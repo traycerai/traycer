@@ -119,6 +119,9 @@ function makeHostManagement(kind: MutationKind | null): IHostManagement {
     registryCheck: notImplemented("registryCheck"),
     freePortAndRestart: (input) => Promise.resolve(input),
     cliManifest: () => Promise.resolve(null),
+    maintenanceUpdateCheck: notImplemented("maintenanceUpdateCheck"),
+    maintenanceDoctor: notImplemented("maintenanceDoctor"),
+    maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     getHostName: notImplemented("getHostName"),
     setHostName: notImplemented("setHostName"),
   };

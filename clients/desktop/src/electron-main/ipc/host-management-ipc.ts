@@ -9,12 +9,24 @@ import type {
   HostAvailableSnapshot,
   HostAvailableVersionEntry,
   HostDoctorReport,
+  HostGetInstallationInfoResponse,
   HostInstalledRecord,
   HostLogsTailResult,
   HostRegistryUpdateState,
   HostRemovalState,
+  HostUpdateCheckResponse,
+  MaintenanceDoctorProjection,
   FreePortAndRestartInput,
 } from "../../ipc-contracts/host-management-types";
+import {
+  hostAvailableManifestSchema,
+  hostDoctorIssueSchema,
+} from "@traycer/protocol/host/maintenance/index";
+import {
+  readHostInstallRecordAtPath,
+  readHostStagedRecordAt,
+  readStoredCliInstallManifestAtPath,
+} from "@traycer/protocol/config/installation";
 import type { MutationOutcome } from "../host/host-controller-types";
 import {
   clearHostRemovedByUser,
@@ -464,6 +476,29 @@ function isVerifyDisabledForBuild(err: unknown): boolean {
   return true;
 }
 
+/**
+ * Classify a `runTraycerCliJson` rejection into the wire taxonomy the host's
+ * own maintenance resolvers produce from the same CLI, so the GUI's local
+ * fallback renders the same words for the same fault on either lane.
+ *
+ * The mapping leans on `cli/traycer-cli.ts`'s throw shapes:
+ *  - a PLAIN `Error` is thrown in exactly one place — `resolveTraycerCliInvocation`
+ *    found no CLI via manifest, PATH, or bundled resources — which is the
+ *    host taxonomy's `cli-unavailable` (no CLI on this machine to shell);
+ *  - `exitCode === 0 && code === null` is the "ran to a clean exit but emitted
+ *    no terminal result line" arm: a CLI speaking a shape this build cannot
+ *    read, the taxonomy's `invalid-output`;
+ *  - every other `TraycerCliError` (error envelope, crash, timeout) is the CLI
+ *    running and not completing — `cli-failed`.
+ */
+export function classifyCliShellError(
+  err: unknown,
+): "cli-unavailable" | "cli-failed" | "invalid-output" {
+  if (!(err instanceof TraycerCliError)) return "cli-unavailable";
+  if (err.exitCode === 0 && err.code === null) return "invalid-output";
+  return "cli-failed";
+}
+
 async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
   const checkedAt = new Date().toISOString();
   try {
@@ -822,6 +857,118 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         }
         throw err;
       }
+    },
+  );
+
+  // ── The maintenance-RPC projections ────────────────────────────────────
+  // These three answer the v1.2.0 `host.*` maintenance RPCs for the GUI's
+  // local fallback (a local host ≤ 1.1.11 negotiated the family away), so
+  // each resolves the PROTOCOL response shape rather than a renderer mirror.
+  // Failure classification lives here in main — an invoke rejection loses
+  // its error shape at the context-bridge boundary, so the renderer could
+  // never rebuild the taxonomy from a rethrow. The projections mirror the
+  // host's own resolvers over the same producers: the bundled CLI's JSON and
+  // the shared on-disk install records (read with the protocol's own
+  // schema-strict readers, so a field the wire contract requires can never
+  // be silently dropped or fabricated in between).
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    async (_event, raw: unknown): Promise<HostUpdateCheckResponse> => {
+      const includePreReleases = optionalBoolean(raw, "includePreReleases");
+      const args = [
+        "host",
+        "available",
+        "--json",
+        ...(includePreReleases ? ["--include-pre-releases"] : []),
+      ];
+      let payload: unknown;
+      try {
+        payload = await runTraycerCliJson<unknown>(args);
+      } catch (err) {
+        // Same normalisation as `traycerHostAvailable` above: a build without
+        // trusted registry keys answers "nothing to install" rather than an
+        // error nobody can act on from Settings. The empty manifest is the
+        // protocol-shaped twin of `emptyAvailableSnapshot()`.
+        if (isVerifyDisabledForBuild(err)) {
+          return {
+            outcome: "ok",
+            manifest: {
+              schemaVersion: 1,
+              generatedAt: "",
+              latest: "",
+              versions: [],
+            },
+          };
+        }
+        return { outcome: classifyCliShellError(err) };
+      }
+      const manifest = hostAvailableManifestSchema.safeParse(
+        isPlainObject(payload) ? payload.manifest : undefined,
+      );
+      if (!manifest.success) {
+        log.warn("[host-management] maintenance update-check payload invalid", {
+          issues: manifest.error.issues.slice(0, 3),
+        });
+        return { outcome: "invalid-output" };
+      }
+      return { outcome: "ok", manifest: manifest.data };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceDoctor,
+    async (): Promise<MaintenanceDoctorProjection> => {
+      let payload: unknown;
+      try {
+        payload = await runTraycerCliJson<unknown>([
+          "host",
+          "doctor",
+          "--json",
+        ]);
+      } catch (err) {
+        return { status: classifyCliShellError(err) };
+      }
+      // Schema-strict, unlike `projectDoctorReport` above, whose tolerant
+      // coercions make a malformed payload indistinguishable from a clean
+      // bill of health. On this lane a report the protocol cannot parse IS
+      // the `invalid-output` arm — the same answer the host's resolver gives
+      // for the same bytes.
+      const issues = hostDoctorIssueSchema
+        .array()
+        .safeParse(isPlainObject(payload) ? payload.issues : undefined);
+      if (!issues.success) {
+        log.warn("[host-management] maintenance doctor payload invalid", {
+          issues: issues.error.issues.slice(0, 3),
+        });
+        return { status: "invalid-output" };
+      }
+      return { status: "ok", issues: issues.data };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+    async (): Promise<HostGetInstallationInfoResponse> => {
+      // Byte-for-byte the host resolver's `readInstallationInfo`, pointed at
+      // the desktop's own path authority for the same files: a missing
+      // install record IS the unmanaged/tree-run state, a corrupt one throws
+      // (never mistaken for "not installed"), and the staged sidecar stays
+      // best-effort tolerant. `readInstalledHostRecord` above is deliberately
+      // NOT reused: its lossy defaults (`archiveSha256: ""`,
+      // `installedAt` from mtime) would fabricate wire fields.
+      const layout = activeLayout();
+      const installRecord = await readHostInstallRecordAtPath(
+        layout.installRecordFile,
+      );
+      if (installRecord === null) return { status: "unmanaged" };
+      const [stagedRecord, cliManifest] = await Promise.all([
+        readHostStagedRecordAt(layout.stagedDir),
+        readStoredCliInstallManifestAtPath(
+          join(cliSlotRootForEnvironment(activeEnvironment), "manifest.json"),
+        ),
+      ]);
+      return { status: "managed", installRecord, stagedRecord, cliManifest };
     },
   );
 

@@ -19,6 +19,7 @@ import type {
   HostUninstallResult,
   HostRestartRequestResult,
   InstallVersionOk,
+  MaintenanceDoctorProjection,
   MutationOutcome,
   NotificationFeedSource,
   NotificationForegroundAppLocal,
@@ -52,6 +53,10 @@ import type {
   TraycerShellConfigSetInput,
   TraycerShellProbeResult,
 } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponse,
+} from "../ipc-contracts/host-management-types";
 import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
@@ -301,6 +306,11 @@ export interface DesktopHostManagementBridge {
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  maintenanceUpdateCheck(
+    input: HostAvailableVersionsInput,
+  ): Promise<HostUpdateCheckResponse>;
+  maintenanceDoctor(): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(): Promise<HostGetInstallationInfoResponse>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -773,6 +783,11 @@ export class DesktopRunnerHost implements IRunnerHost {
       registryCheck: (input) => managementBridge.registryCheck(input),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
       cliManifest: () => managementBridge.cliManifest(),
+      maintenanceUpdateCheck: (input) =>
+        managementBridge.maintenanceUpdateCheck(input),
+      maintenanceDoctor: () => managementBridge.maintenanceDoctor(),
+      maintenanceInstallationInfo: () =>
+        managementBridge.maintenanceInstallationInfo(),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };

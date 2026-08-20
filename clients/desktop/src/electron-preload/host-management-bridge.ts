@@ -13,6 +13,7 @@ import type {
   HostAvailableVersionsInput,
   HostControllerStatus,
   HostDoctorReport,
+  HostGetInstallationInfoResponse,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
@@ -21,7 +22,9 @@ import type {
   HostRestartRequestResult,
   HostTrayCommand,
   HostUninstallResult,
+  HostUpdateCheckResponse,
   InstallVersionOk,
+  MaintenanceDoctorProjection,
   MutationOutcome,
   ServiceRegistrationOk,
   TraycerUninstallResult,
@@ -75,6 +78,13 @@ export interface HostManagementBridgeSurface {
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  // Maintenance-RPC projections for the GUI's local fallback — protocol
+  // response shapes, classified in main (see `host-management-ipc.ts`).
+  maintenanceUpdateCheck(
+    input: HostAvailableVersionsInput,
+  ): Promise<HostUpdateCheckResponse>;
+  maintenanceDoctor(): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(): Promise<HostGetInstallationInfoResponse>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -162,6 +172,18 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerCliManifestRead,
       ) as Promise<CliInstallManifestSnapshot | null>,
+    maintenanceUpdateCheck: ({ includePreReleases }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceUpdateCheck, {
+        includePreReleases,
+      }) as Promise<HostUpdateCheckResponse>,
+    maintenanceDoctor: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerMaintenanceDoctor,
+      ) as Promise<MaintenanceDoctorProjection>,
+    maintenanceInstallationInfo: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+      ) as Promise<HostGetInstallationInfoResponse>,
     getHostName: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostNameGet,

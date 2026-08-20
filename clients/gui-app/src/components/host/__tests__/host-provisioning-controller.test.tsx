@@ -83,6 +83,9 @@ function makeHostManagement(
     registryCheck: notImplemented("registryCheck"),
     freePortAndRestart: (input) => Promise.resolve(input),
     cliManifest: () => Promise.resolve(null),
+    maintenanceUpdateCheck: notImplemented("maintenanceUpdateCheck"),
+    maintenanceDoctor: notImplemented("maintenanceDoctor"),
+    maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     getHostName: () =>
       Promise.resolve({
         systemName: validSnapshot.systemHostName,

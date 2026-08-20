@@ -19,6 +19,11 @@ import type {
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import type {
+  HostDoctorIssue as MaintenanceDoctorIssue,
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponse,
+} from "@traycer/protocol/host/maintenance/index";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
@@ -1476,6 +1481,23 @@ export interface CliInstallManifestSnapshot {
 }
 
 /**
+ * `host.doctor` as the desktop lane can honestly answer it: the CLI's issue
+ * list (validated against the protocol issue schema) or the shared CLI-shell
+ * failure taxonomy — but WITHOUT `triviallyGreenIssueCodes`. That field is a
+ * statement about the transport the report travelled over, which the desktop
+ * main process cannot see; the consumer that knows its vantage supplies the
+ * set (see `doctorTriviallyGreenIssueCodesForVantage` in the protocol).
+ */
+export type MaintenanceDoctorProjection =
+  | {
+      readonly status: "ok";
+      readonly issues: readonly MaintenanceDoctorIssue[];
+    }
+  | { readonly status: "cli-unavailable" }
+  | { readonly status: "cli-failed" }
+  | { readonly status: "invalid-output" };
+
+/**
  * Renderer-facing host management surface. Each method either resolves
  * with the CLI's final NDJSON `result.data` payload (query commands), or -
  * for long-running operations - accepts an `onProgress` callback that fires
@@ -1560,6 +1582,24 @@ export interface IHostManagement {
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;
   readonly cliManifest: () => Promise<CliInstallManifestSnapshot | null>;
+  // The three `maintenance*` members below serve ONE consumer: the GUI's
+  // local-maintenance fallback, which answers the v1.2.0 `host.*` maintenance
+  // RPCs over this bridge for a LOCAL host too old to have them (≤ 1.1.11 —
+  // a frozen population; delete these when the supported fleet floor reaches
+  // the maintenance-RPC host version). Unlike the query members above, they
+  // return PROTOCOL response shapes: the desktop main process projects the
+  // same CLI JSON / on-disk records the host's own resolvers project, and it
+  // classifies CLI failures into the wire taxonomy there because an Electron
+  // invoke rejection loses its error shape crossing the boundary — the
+  // renderer could no longer tell "no CLI" from "CLI crashed".
+  /** `host.update.check`'s answer from this machine's bundled CLI. */
+  readonly maintenanceUpdateCheck: (
+    input: HostAvailableVersionsInput,
+  ) => Promise<HostUpdateCheckResponse>;
+  /** `host.doctor`'s answer, minus the caller-owned transport vantage. */
+  readonly maintenanceDoctor: () => Promise<MaintenanceDoctorProjection>;
+  /** `host.getInstallationInfo`'s answer from the shared on-disk records. */
+  readonly maintenanceInstallationInfo: () => Promise<HostGetInstallationInfoResponse>;
   readonly getHostName: () => Promise<HostNameSettings>;
   readonly setHostName: (input: {
     readonly customName: string | null;

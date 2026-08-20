@@ -273,6 +273,16 @@ export const RunnerHostInvoke = {
   traycerRegistryCheck: "runnerHost:traycer:registry:check",
   traycerFreePortAndRestart: "runnerHost:traycer:freePortAndRestart",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
+  // The `maintenance:*` trio answers the v1.2.0 host maintenance RPCs for the
+  // GUI's local fallback (a local host ≤ 1.1.11 negotiated the family away).
+  // Each handler projects the same CLI JSON / on-disk records the host's own
+  // resolvers project, and resolves PROTOCOL response shapes — CLI failures
+  // are classified into the wire taxonomy in main, because an invoke
+  // rejection loses its error shape at the context-bridge boundary.
+  traycerMaintenanceUpdateCheck: "runnerHost:traycer:maintenance:updateCheck",
+  traycerMaintenanceDoctor: "runnerHost:traycer:maintenance:doctor",
+  traycerMaintenanceInstallationInfo:
+    "runnerHost:traycer:maintenance:installationInfo",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
   // Selection authority (host-lifecycle redesign, D16 / P1.1). The engine

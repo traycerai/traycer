@@ -552,6 +552,15 @@ function buildFakeBridge(
       }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,
+      maintenanceUpdateCheck: async () => {
+        throw new Error("maintenanceUpdateCheck not used in test");
+      },
+      maintenanceDoctor: async () => {
+        throw new Error("maintenanceDoctor not used in test");
+      },
+      maintenanceInstallationInfo: async () => {
+        throw new Error("maintenanceInstallationInfo not used in test");
+      },
       getHostName: async () => ({
         systemName: "desktop-1",
         customName: null,

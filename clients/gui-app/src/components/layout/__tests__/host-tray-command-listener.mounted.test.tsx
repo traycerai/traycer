@@ -178,6 +178,15 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
+    maintenanceUpdateCheck: vi.fn(() =>
+      Promise.reject(new Error("maintenanceUpdateCheck not implemented")),
+    ),
+    maintenanceDoctor: vi.fn(() =>
+      Promise.reject(new Error("maintenanceDoctor not implemented")),
+    ),
+    maintenanceInstallationInfo: vi.fn(() =>
+      Promise.reject(new Error("maintenanceInstallationInfo not implemented")),
+    ),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "test-host",
