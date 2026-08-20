@@ -114,16 +114,32 @@ function endSandbox(): void {
   vi.doUnmock("../../cli/traycer-cli");
 }
 
-function installFakeCli(runResult: unknown): void {
+const bundledCliCalls: string[][] = [];
+
+type CliErrorCtor = typeof TraycerCliError;
+
+function installFakeCli(
+  run: (args: readonly string[], CliError: CliErrorCtor) => Promise<unknown>,
+): void {
+  bundledCliCalls.length = 0;
   vi.doMock("../../cli/traycer-cli", async () => {
     const actual = await vi.importActual<
       typeof import("../../cli/traycer-cli")
     >("../../cli/traycer-cli");
     return {
       ...actual,
-      runBundledTraycerCliJson: vi.fn(() => Promise.resolve(runResult)),
+      runBundledTraycerCliJson: vi.fn((args: readonly string[]) => {
+        bundledCliCalls.push([...args]);
+        return run(args, actual.TraycerCliError);
+      }),
     };
   });
+}
+
+function resolveWith(
+  result: unknown,
+): (args: readonly string[], _cliError: CliErrorCtor) => Promise<unknown> {
+  return () => Promise.resolve(result);
 }
 
 interface HandlerBridge {
@@ -207,7 +223,7 @@ describe("maintenanceUpdateCheck IPC", () => {
   afterEach(endSandbox);
 
   it("parses a real-shaped CLI manifest on the ok arm", async () => {
-    installFakeCli(realShapedAvailablePayload());
+    installFakeCli(resolveWith(realShapedAvailablePayload()));
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
     const { RunnerHostInvoke } =
@@ -256,7 +272,7 @@ describe("maintenanceUpdateCheck IPC", () => {
   });
 
   it("returns invalid-output for a malformed manifest", async () => {
-    installFakeCli({ manifest: { schemaVersion: 1 } });
+    installFakeCli(resolveWith({ manifest: { schemaVersion: 1 } }));
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
     const { RunnerHostInvoke } =
@@ -277,6 +293,176 @@ describe("maintenanceUpdateCheck IPC", () => {
       },
     );
   });
+
+  it("shells host available --json without --include-pre-releases when the flag is false", async () => {
+    installFakeCli(resolveWith(realShapedAvailablePayload()));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceUpdateCheck handler");
+    }
+    await handler(null, { includePreReleases: false });
+    expect(bundledCliCalls).toEqual([["host", "available", "--json"]]);
+  });
+
+  it("passes --include-pre-releases when the flag is true", async () => {
+    installFakeCli(resolveWith(realShapedAvailablePayload()));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceUpdateCheck handler");
+    }
+    await handler(null, { includePreReleases: true });
+    expect(bundledCliCalls).toEqual([
+      ["host", "available", "--json", "--include-pre-releases"],
+    ]);
+  });
+
+  it("maps a bundled-resolver plain Error to cli-unavailable", async () => {
+    installFakeCli(() => Promise.reject(new Error("no bundled CLI")));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceUpdateCheck handler");
+    }
+    await expect(handler(null, { includePreReleases: false })).resolves.toEqual(
+      {
+        outcome: "cli-unavailable",
+      },
+    );
+  });
+
+  it("normalizes E_HOST_VERIFY_FAILED to an empty ok manifest, not cli-failed", async () => {
+    installFakeCli((_args, CliError) =>
+      Promise.reject(
+        new CliError(
+          {
+            message: "no trusted registry keys",
+            code: "E_HOST_VERIFY_FAILED",
+            details: null,
+            exitCode: 1,
+            stderrTail: "E_HOST_VERIFY_FAILED",
+          },
+          null,
+        ),
+      ),
+    );
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceUpdateCheck handler");
+    }
+    await expect(handler(null, { includePreReleases: false })).resolves.toEqual(
+      {
+        outcome: "ok",
+        manifest: {
+          schemaVersion: 1,
+          generatedAt: "",
+          latest: "",
+          versions: [],
+        },
+      },
+    );
+  });
+});
+
+function realShapedDoctorPayload(): unknown {
+  return {
+    issues: [
+      {
+        code: "SERVICE_STOPPED",
+        severity: "warning",
+        title: "Host service is stopped",
+        message: "The launch agent is not loaded.",
+        fixAction: "host-service-register",
+        terminalCommand: "traycer host service install",
+        details: null,
+      },
+    ],
+  };
+}
+
+describe("maintenanceDoctor IPC", () => {
+  beforeEach(beginSandbox);
+  afterEach(endSandbox);
+
+  it("parses a real-shaped doctor report on the ok arm", async () => {
+    installFakeCli(resolveWith(realShapedDoctorPayload()));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceDoctor,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceDoctor handler");
+    }
+    await expect(handler(null, null)).resolves.toEqual({
+      status: "ok",
+      issues: [
+        {
+          code: "SERVICE_STOPPED",
+          severity: "warning",
+          title: "Host service is stopped",
+          message: "The launch agent is not loaded.",
+          fixAction: "host-service-register",
+          terminalCommand: "traycer host service install",
+          details: null,
+        },
+      ],
+    });
+    expect(bundledCliCalls).toEqual([["host", "doctor", "--json"]]);
+  });
+
+  it("returns invalid-output for a malformed doctor payload", async () => {
+    installFakeCli(resolveWith({ issues: "not-an-array" }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceDoctor,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceDoctor handler");
+    }
+    await expect(handler(null, null)).resolves.toEqual({
+      status: "invalid-output",
+    });
+  });
 });
 
 describe("maintenanceInstallationInfo IPC", () => {
@@ -284,7 +470,7 @@ describe("maintenanceInstallationInfo IPC", () => {
   afterEach(endSandbox);
 
   it("answers unmanaged when install.json is missing", async () => {
-    installFakeCli({});
+    installFakeCli(resolveWith({}));
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
     const { RunnerHostInvoke } =
@@ -305,7 +491,7 @@ describe("maintenanceInstallationInfo IPC", () => {
   });
 
   it("answers managed from protocol-shaped install, staged, and CLI records", async () => {
-    installFakeCli({});
+    installFakeCli(resolveWith({}));
     const installDir = join(workHome, ".traycer", "host", "install");
     const stagedDir = join(workHome, ".traycer", "host", "staged");
     const cliDir = join(workHome, ".traycer", "cli");

@@ -21,6 +21,7 @@ const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
 const localHostIdMock = vi.hoisted((): { current: string | null } => ({
   current: null,
 }));
+
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -35,6 +36,12 @@ vi.mock("sonner", () => ({
   },
 }));
 
+import { useEffect, type ReactNode } from "react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -43,7 +50,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -52,12 +58,16 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  HostRestartRequestResult,
   IHostManagement,
   IRunnerHost,
   MutationOutcome,
   InstallVersionOk,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostDoctorIssue,
+  HostGetInstallationInfoResponse,
+} from "@traycer/protocol/host/maintenance/index";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -66,6 +76,8 @@ import {
   LOCAL_MAINTENANCE_FALLBACK_METHODS,
   createLocalMaintenanceFallbackClient,
 } from "@/lib/host/local-maintenance-fallback-client";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
   buildOverviewHostFixture,
   buildOverviewManagement,
@@ -91,6 +103,10 @@ afterEach(() => {
 const HOST_ID = "host-local";
 const HOST_NAME = "Local Host";
 const RELEASED_FLOOR_METHODS = ["host.status"] as const;
+const RPC_INSTALL_VERSION = "rpc-1.0.0";
+const BRIDGE_INSTALL_VERSION = "bridge-9.9.9";
+const BRIDGE_CHECK_VERSION = "1.2.0";
+const RPC_CHECK_VERSION = "1.3.0";
 
 const SERVICE_STOPPED: HostDoctorIssue = {
   code: "SERVICE_STOPPED",
@@ -117,6 +133,30 @@ function healedHandshake(): void {
     "host.service.register",
     "host.service.deregister",
   ]);
+}
+
+function managedInstallationInfo(
+  version: string,
+): HostGetInstallationInfoResponse {
+  return {
+    status: "managed",
+    installRecord: {
+      installId: `id-${version}`,
+      version,
+      runtimeVersion: version,
+      platform: "darwin",
+      arch: "arm64",
+      installedAt: "2026-08-10T00:00:00Z",
+      source: { kind: "registry", value: version },
+      archiveSha256: "b".repeat(64),
+      signatureVerifiedAt: "2026-08-10T00:00:00Z",
+      signatureKeyId: "key-1",
+      sizeBytes: 2048,
+      executablePath: `/tmp/traycer/${version}/host`,
+    },
+    stagedRecord: null,
+    cliManifest: null,
+  };
 }
 
 function bindingWith(hostClient: unknown): HostBindingMock {
@@ -172,16 +212,34 @@ function fallbackScope(
   };
 }
 
-function renderOverview(management: IHostManagement): void {
+function ExternalHostRestartTrigger(props: {
+  readonly mutationFn: () => Promise<HostRestartRequestResult>;
+  readonly onReady: (mutate: () => void) => void;
+}): null {
+  const { mutate } = useMutation({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: props.mutationFn,
+  });
+  const { onReady } = props;
+  useEffect(() => {
+    onReady(() => {
+      mutate();
+    });
+  }, [mutate, onReady]);
+  return null;
+}
+
+function renderOverview(input: {
+  readonly management: IHostManagement;
+  readonly queryClient: QueryClient;
+  readonly extra: ReactNode | undefined;
+}): void {
   render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: { queries: { retry: false, gcTime: 0 } },
-        })
-      }
-    >
-      <RunnerHostProvider runnerHost={makeRunnerHostWithManagement(management)}>
+    <QueryClientProvider client={input.queryClient}>
+      <RunnerHostProvider
+        runnerHost={makeRunnerHostWithManagement(input.management)}
+      >
+        {input.extra ?? null}
         <HostSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
@@ -191,31 +249,40 @@ function renderOverview(management: IHostManagement): void {
 function mountFallbackOverview(options: {
   readonly installOutcome: MutationOutcome<InstallVersionOk>;
   readonly rpcCheckCalls: { count: number };
+  readonly restartHost: (() => Promise<HostRestartRequestResult>) | undefined;
+  readonly extra: ReactNode | undefined;
 }): {
   readonly management: IHostManagement;
   readonly fixture: OverviewHostFixture;
+  readonly queryClient: QueryClient;
 } {
   const rpcCheckCalls = options.rpcCheckCalls;
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
   const fixture = buildOverviewHostFixture({
     hostId: HOST_ID,
     isLocalMachine: true,
     hostVersion: "1.1.11",
     effectiveName: HOST_NAME,
+    invalidator: createHostQueryInvalidator(queryClient),
     overrideHandlers: {
       "host.update.check": () => {
         rpcCheckCalls.count += 1;
         return {
           outcome: "ok" as const,
-          manifest: updateCheckManifest("1.2.0"),
+          manifest: updateCheckManifest(RPC_CHECK_VERSION),
         };
       },
+      "host.getInstallationInfo": () =>
+        managedInstallationInfo(RPC_INSTALL_VERSION),
     },
   });
   const management = buildOverviewManagement({
     maintenanceUpdateCheck: vi.fn(() =>
       Promise.resolve({
         outcome: "ok" as const,
-        manifest: updateCheckManifest("1.2.0"),
+        manifest: updateCheckManifest(BRIDGE_CHECK_VERSION),
       }),
     ),
     installVersion: vi.fn((_version: string, _force: boolean) =>
@@ -228,25 +295,41 @@ function mountFallbackOverview(options: {
       }),
     ),
     maintenanceInstallationInfo: vi.fn(() =>
-      Promise.resolve({ status: "unmanaged" as const }),
+      Promise.resolve(managedInstallationInfo(BRIDGE_INSTALL_VERSION)),
     ),
+    ...(options.restartHost === undefined
+      ? {}
+      : { restartHost: vi.fn(options.restartHost) }),
   });
   releasedFloorHandshake();
   localHostIdMock.current = HOST_ID;
   hostBindingMock.current = bindingWith(fixture.client);
   scopeOverrides.current = fallbackScope(fixture, management);
-  renderOverview(management);
-  return { management, fixture };
+  renderOverview({
+    management,
+    queryClient,
+    extra: options.extra,
+  });
+  return { management, fixture, queryClient };
+}
+
+function expectButtonEnabled(button: HTMLElement): void {
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("expected an HTMLButtonElement");
+  }
+  expect(button.disabled).toBe(false);
 }
 
 describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   it("renders the intercepted four without degrade notices, and keeps service/rename degraded", async () => {
-    mountFallbackOverview({
+    const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
+      restartHost: undefined,
+      extra: undefined,
     });
 
     expect(await screen.findByTestId("host-overview-updates")).toBeTruthy();
@@ -255,6 +338,15 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(
       screen.queryByTestId("host-overview-installation-degraded"),
     ).toBeNull();
+    await waitFor(() => {
+      expect(management.maintenanceInstallationInfo).toHaveBeenCalled();
+    });
+    fireEvent.click(await screen.findByText("Installation details"));
+    const installVersion = await screen.findByTestId(
+      "settings-host-install-version",
+    );
+    expect(installVersion.textContent).toContain(`v${BRIDGE_INSTALL_VERSION}`);
+    expect(installVersion.textContent).not.toContain(RPC_INSTALL_VERSION);
 
     const pencil = await screen.findByTestId("host-overview-edit-name");
     expect(pencil.getAttribute("data-degraded")).toBe("unsupported");
@@ -281,22 +373,27 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
+      restartHost: undefined,
+      extra: undefined,
     });
 
-    await screen.findByText("v1.2.0 is available.");
+    await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
 
     await waitFor(() => {
-      expect(management.installVersion).toHaveBeenCalledWith("1.2.0", false);
+      expect(management.installVersion).toHaveBeenCalledWith(
+        BRIDGE_CHECK_VERSION,
+        false,
+      );
     });
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(
-        "Updating Local Host to v1.2.0",
+        `Updating Local Host to v${BRIDGE_CHECK_VERSION}`,
       );
     });
   });
 
-  it("a busy install outcome surfaces as the mutation error toast and does not retire the updates region", async () => {
+  it("a busy install outcome surfaces as the mutation error toast, does not retire the region, and re-enables Update now", async () => {
     const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "busy",
@@ -304,20 +401,27 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         message: "Host is busy installing another version.",
       },
       rpcCheckCalls: { count: 0 },
+      restartHost: undefined,
+      extra: undefined,
     });
 
-    await screen.findByText("v1.2.0 is available.");
-    fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
+    await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
+    const updateNow = await screen.findByRole("button", { name: "Update now" });
+    fireEvent.click(updateNow);
 
     await waitFor(() => {
-      expect(management.installVersion).toHaveBeenCalledWith("1.2.0", false);
+      expect(management.installVersion).toHaveBeenCalledWith(
+        BRIDGE_CHECK_VERSION,
+        false,
+      );
     });
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalled();
     });
     expect(screen.queryByTestId("host-overview-updates-degraded")).toBeNull();
     expect(screen.getByTestId("host-overview-updates")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Update now" })).toBeTruthy();
+    const updateNowAfter = screen.getByRole("button", { name: "Update now" });
+    expectButtonEnabled(updateNowAfter);
   });
 
   it("Run doctor puts SERVICE_STOPPED in the disproven-by-transport bucket", async () => {
@@ -327,6 +431,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
+      restartHost: undefined,
+      extra: undefined,
     });
 
     await openHostOverviewMenu();
@@ -345,36 +451,26 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     ).toBeTruthy();
   });
 
-  it("Restart confirm dispatches management.restartHost, not host.restart, and declined is informational", async () => {
-    const fixture = buildOverviewHostFixture({
-      hostId: HOST_ID,
-      isLocalMachine: true,
-      hostVersion: "1.1.11",
-      effectiveName: HOST_NAME,
+  it("own Restart confirm stays open and pending until the deferred respawn settles, then closes", async () => {
+    let releaseRestart: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseRestart = resolve;
     });
-    const restartHost = vi.fn(() =>
-      Promise.resolve({
-        kind: "declined" as const,
-        message: "Another process holds the host lock.",
-      }),
-    );
-    const management = buildOverviewManagement({
-      restartHost,
-      maintenanceUpdateCheck: () =>
-        Promise.resolve({
-          outcome: "ok" as const,
-          manifest: updateCheckManifest("1.2.0"),
-        }),
-      maintenanceDoctor: () =>
-        Promise.resolve({ status: "ok" as const, issues: [] }),
-      maintenanceInstallationInfo: () =>
-        Promise.resolve({ status: "unmanaged" as const }),
+    const { management, fixture } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHost: async () => {
+        await gate;
+        return {
+          kind: "declined" as const,
+          message: "Another process holds the host lock.",
+        };
+      },
+      extra: undefined,
     });
-    releasedFloorHandshake();
-    localHostIdMock.current = HOST_ID;
-    hostBindingMock.current = bindingWith(fixture.client);
-    scopeOverrides.current = fallbackScope(fixture, management);
-    renderOverview(management);
 
     await openHostOverviewMenu();
     fireEvent.click(await screen.findByTestId("host-overview-restart"));
@@ -382,29 +478,99 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       await screen.findByRole("button", { name: "Restart host" }),
     );
 
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog).toBeTruthy();
     await waitFor(() => {
-      expect(restartHost).toHaveBeenCalledTimes(1);
+      expect(management.restartHost).toHaveBeenCalledTimes(1);
     });
+    const confirm = screen.getByTestId("confirm-action");
+    if (!(confirm instanceof HTMLButtonElement)) {
+      throw new Error("expected confirm button");
+    }
+    expect(confirm.disabled).toBe(true);
     expect(fixture.restartCalls()).toBe(0);
+
+    await act(async () => {
+      releaseRestart?.();
+      await gate;
+    });
+
     await waitFor(() => {
-      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
-        description: "Another process holds the host lock.",
-      });
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+      description: "Another process holds the host lock.",
     });
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("self-heals onto the RPC client after the negotiated manifest grows the maintenance family", async () => {
+  it("an external same-key hostRestart closes an open idle confirm without treating it as this dialog's dispatch", async () => {
+    let releaseExternal: (() => void) | null = null;
+    const externalGate = new Promise<void>((resolve) => {
+      releaseExternal = resolve;
+    });
+    const mutateRef: { current: (() => void) | null } = { current: null };
+    const { fixture } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHost: undefined,
+      extra: (
+        <ExternalHostRestartTrigger
+          onReady={(mutate) => {
+            mutateRef.current = mutate;
+          }}
+          mutationFn={async () => {
+            await externalGate;
+            return { kind: "restarted" as const };
+          }}
+        />
+      ),
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    await screen.findByTestId("confirm-destructive-dialog");
+    const confirm = screen.getByTestId("confirm-action");
+    if (!(confirm instanceof HTMLButtonElement)) {
+      throw new Error("expected confirm button");
+    }
+    expect(confirm.disabled).toBe(false);
+    expect(fixture.restartCalls()).toBe(0);
+
+    act(() => {
+      if (mutateRef.current === null) {
+        throw new Error("external restart trigger was not armed");
+      }
+      mutateRef.current();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(fixture.restartCalls()).toBe(0);
+
+    await act(async () => {
+      releaseExternal?.();
+      await externalGate;
+    });
+  });
+
+  it("self-heals onto the RPC client after the negotiated manifest flips and availability recovers, without a click", async () => {
     const rpcCheckCalls = { count: 0 };
-    const { management } = mountFallbackOverview({
+    const { management, fixture } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls,
+      restartHost: undefined,
+      extra: undefined,
     });
 
-    await screen.findByText("v1.2.0 is available.");
+    await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     expect(management.maintenanceUpdateCheck).toHaveBeenCalled();
     const fallbackChecks = vi.mocked(management.maintenanceUpdateCheck).mock
       .calls.length;
@@ -412,13 +578,15 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
 
     act(() => {
       healedHandshake();
+      fixture.client.notifyHostAvailabilityRecovered(HOST_ID);
     });
-
-    fireEvent.click(screen.getByRole("button", { name: "Check now" }));
 
     await waitFor(() => {
       expect(rpcCheckCalls.count).toBe(1);
     });
+    expect(
+      await screen.findByText(`v${RPC_CHECK_VERSION} is available.`),
+    ).toBeTruthy();
     expect(vi.mocked(management.maintenanceUpdateCheck).mock.calls.length).toBe(
       fallbackChecks,
     );

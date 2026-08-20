@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostClient,
+  type IHostQueryInvalidator,
+} from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   MockHostMessenger,
@@ -112,6 +115,12 @@ export function buildOverviewHostFixture(options: {
    * update.
    */
   readonly overrideHandlers?: MockHandlerMap<HostRpcRegistry>;
+  /**
+   * Wired into the fixture's `HostClient` so a test can fire
+   * `notifyHostAvailabilityRecovered` against the real query-invalidation
+   * port. Omitted, the invalidator is a no-op (every other Overview suite).
+   */
+  readonly invalidator?: IHostQueryInvalidator;
 }): OverviewHostFixture {
   let identity: HostIdentity = {
     systemName: options.systemName ?? options.hostId,
@@ -200,7 +209,9 @@ export function buildOverviewHostFixture(options: {
   };
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
+    invalidator: options.invalidator ?? {
+      invalidateHostScope: () => undefined,
+    },
     // REQUIRED for the requester below: `captureAuthority` re-resolves a
     // requester's entry against the live directory and refuses one it cannot
     // find. `bind()` used to satisfy that lookup through the client's own
