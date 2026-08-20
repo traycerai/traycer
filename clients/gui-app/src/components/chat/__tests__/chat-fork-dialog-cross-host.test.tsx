@@ -474,6 +474,7 @@ function forkTarget(
     seedIntentOverride: null,
     carriedInterviews: "settled",
     forkMode: "plain",
+    initialHostId: null,
     ...overrides,
   };
 }
@@ -570,6 +571,11 @@ function selectedRefusalWord(hostId: string): string | undefined {
   return scope?.kind === "selected"
     ? scope.refusalByHostId.get(hostId)
     : undefined;
+}
+
+function selectedHostScopeHostId(): string | null {
+  const scope = dialogMocks.lastWorkspace?.hostScope;
+  return scope?.kind === "selected" ? scope.hostId : null;
 }
 
 function advertiseSourcePublication(): void {
@@ -1462,5 +1468,55 @@ describe("ChatForkDialog cross-host routing", () => {
 
     fireEvent.change(input, { target: { value: "" } });
     expect(forkButton().disabled).toBe(true);
+  });
+
+  it("a target with initialHostId set to the remote host opens the picker on that host", () => {
+    // The default title is only computed on an open TRANSITION, same as the
+    // prefill test above - mount closed, then flip to open, so the seeding
+    // branch (`target?.initialHostId ?? tabHostId`) actually runs.
+    const remoteTarget = forkTarget({ initialHostId: OTHER_HOST_ID });
+    const view = render(
+      <ChatForkDialog
+        {...dialogProps(remoteTarget, ignoreOpenChange, false)}
+      />,
+    );
+    view.rerender(
+      <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
+    );
+
+    expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
+    // Cross-host, since the seeded host differs from the tab host - the
+    // notices block only renders bare (no publication/boundary notice primed
+    // here) when `isCrossHost` is true.
+    expect(screen.getByTestId("chat-fork-target-notices")).not.toBeNull();
+  });
+
+  it("reopening with a target whose initialHostId is null lands back on the tab host", () => {
+    const remoteTarget = forkTarget({ initialHostId: OTHER_HOST_ID });
+    const view = render(
+      <ChatForkDialog
+        {...dialogProps(remoteTarget, ignoreOpenChange, false)}
+      />,
+    );
+    view.rerender(
+      <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
+    );
+    expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
+
+    // Close, then reopen on a DIFFERENT target with no preselection - the
+    // ordinary per-message fork entry point, which must not inherit the
+    // host-switch gesture's remote host.
+    view.rerender(
+      <ChatForkDialog
+        {...dialogProps(remoteTarget, ignoreOpenChange, false)}
+      />,
+    );
+    const plainTarget = forkTarget({ initialHostId: null });
+    view.rerender(
+      <ChatForkDialog {...dialogProps(plainTarget, ignoreOpenChange, true)} />,
+    );
+
+    expect(selectedHostScopeHostId()).toBe(TAB_HOST_ID);
+    expect(screen.queryByTestId("chat-fork-target-notices")).toBeNull();
   });
 });

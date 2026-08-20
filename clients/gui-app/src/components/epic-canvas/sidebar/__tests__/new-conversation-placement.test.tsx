@@ -86,7 +86,11 @@ function placementHolder(): { current: PlacementTargetShape } {
 }
 
 const testState = vi.hoisted(() => ({
-  createChat: vi.fn<(request: { readonly hostId: string }) => void>(),
+  createChat: vi.fn<
+    (request: { readonly hostId: string }) => Promise<{
+      readonly initialTurnStarted: boolean;
+    }>
+  >(() => Promise.resolve({ initialTurnStarted: false })),
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
   bodySubmit: null as (() => void) | null,
@@ -196,7 +200,10 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
     isPending: false,
-    mutate: testState.createChat,
+    // `mutateAsync`, matching the modal: it closes itself on submit, so its
+    // completion handling rides a promise chain rather than the per-call
+    // callbacks TanStack drops with the observer.
+    mutateAsync: testState.createChat,
   }),
 }));
 
@@ -333,7 +340,7 @@ vi.mock("@/stores/epics/initial-chat-handoff-store", () => ({
     getState: () => ({
       register: vi.fn(),
       markInitialTurnStarted: vi.fn(),
-      markFailed: vi.fn(),
+      markFailedByAction: vi.fn(),
     }),
   },
 }));
@@ -414,6 +421,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   testState.createChat.mockClear();
+  testState.createChat.mockResolvedValue({ initialTurnStarted: false });
   testState.createTerminalAgent.mockClear();
   testState.onSubmitted.mockClear();
   testState.bodySubmit = null;
@@ -431,7 +439,6 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(testState.createChat).toHaveBeenCalledTimes(1);
     expect(testState.createChat).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "host-a" }),
-      expect.anything(),
     );
   });
 
@@ -456,7 +463,6 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(testState.createChat).toHaveBeenCalledTimes(1);
     expect(testState.createChat).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "host-effective" }),
-      expect.anything(),
     );
   });
 
