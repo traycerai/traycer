@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -122,6 +122,7 @@ const mocks = vi.hoisted(() => {
       };
     };
   } = { current: { data: { recentWorkspaces: [] } } };
+  const effectiveHostListeners = new Set<() => void>();
   return {
     pickAndPrepareFolders: vi.fn(() => Promise.resolve(null)),
     selectHost: vi.fn(),
@@ -134,6 +135,7 @@ const mocks = vi.hoisted(() => {
     summariesQuery,
     negotiatedVersion,
     recentsQuery,
+    effectiveHostListeners,
   };
 });
 
@@ -263,7 +265,15 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 // suite is about workspace/folder handling, not selection derivation, so the
 // effective host is mocked at the same boundary as the host list above.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-home",
+  useEffectiveHostId: () => {
+    const getSnapshot = () =>
+      mocks.hostClient.current?.getActiveHostId() ?? "host-home";
+    const subscribe = (listener: () => void) => {
+      mocks.effectiveHostListeners.add(listener);
+      return () => mocks.effectiveHostListeners.delete(listener);
+    };
+    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
@@ -602,9 +612,9 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("inline");
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
-    const hostTrigger = screen.getByTestId("settings-host-switcher");
+    const hostTrigger = screen.getByTestId("composer-host-trigger");
     expect(hostTrigger.className).toContain("h-7");
-    expect(hostTrigger.className).toContain("hover:bg-foreground/5");
+    expect(hostTrigger.className).toContain("hover:bg-accent/50");
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",
@@ -714,7 +724,10 @@ describe("landing workspace summary empty state", () => {
       ).toBe(true);
     });
 
-    hostId = "host-other";
+    act(() => {
+      hostId = "host-other";
+      for (const listener of mocks.effectiveHostListeners) listener();
+    });
     resolveRecord(successfulRecentRecordResponse());
     await act(async () => {
       await recordResponse;

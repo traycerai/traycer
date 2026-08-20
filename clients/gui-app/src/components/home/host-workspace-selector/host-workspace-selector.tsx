@@ -538,12 +538,16 @@ export function ActiveHostWorkspaceControls(
 
   // Landing rests as host picker + compact summary chip, matching the in-epic
   // composer. Detailed folder rows still live in the popover/modal stack.
+  const hostSelectConfig = hostOnlySelectConfig(
+    props.hostScope,
+    directoryEntries,
+  );
   const deviceSelect = (
     <HostOnlySelect
       hostLabel={hostLabel}
-      entries={directoryEntries}
+      entries={hostSelectConfig.entries}
       activeHostId={activeHostId}
-      mode="editable"
+      mode={hostSelectConfig.mode}
       onSelect={handleSelectHost}
       loading={false}
       disabled={disabled}
@@ -564,6 +568,22 @@ export function ActiveHostWorkspaceControls(
       disabled={disabled}
     />
   );
+}
+
+function hostOnlySelectConfig(
+  scope: HostWorkspaceControlsHostScope,
+  directoryEntries: ReadonlyArray<HostDirectoryEntry>,
+): {
+  readonly entries: ReadonlyArray<HostDirectoryEntry>;
+  readonly mode: "editable" | "locked";
+} {
+  if (scope.kind !== "fixed") {
+    return { entries: directoryEntries, mode: "editable" };
+  }
+  return {
+    entries: directoryEntries.filter((entry) => entry.hostId === scope.hostId),
+    mode: "locked",
+  };
 }
 
 function HomeWorkspaceRows(props: {

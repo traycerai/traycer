@@ -183,17 +183,15 @@ function pinnedHostId(): string | undefined {
 
 function chipLabel(): string {
   const label = screen
-    .getByTestId("settings-host-switcher")
-    .querySelector("span");
+    .getByTestId("composer-host-trigger")
+    .querySelector(".truncate");
   if (label === null) throw new Error("host switcher label is missing");
   return label.textContent;
 }
 
 function pickBuildHost(): void {
-  fireEvent.click(screen.getByTestId("settings-host-switcher"));
-  fireEvent.click(
-    screen.getByTestId("settings-host-switcher-option-host-build"),
-  );
+  fireEvent.click(screen.getByTestId("composer-host-trigger"));
+  fireEvent.click(screen.getByRole("option", { name: "Build Box" }));
 }
 
 beforeEach(() => {
@@ -265,7 +263,7 @@ describe("composer host picker writes a surface pin", () => {
     // "Local" is the pre-directory default for a FOLLOWING surface. Showing it
     // for a pin to a machine the directory no longer carries would report a
     // dead pin as the local host.
-    expect(chipLabel()).toBe("Unavailable");
+    expect(chipLabel()).toBe("Unavailable (offline)");
   });
 
   it("writes nothing from the FIXED arm (§55: fork dialogs are inert)", () => {
@@ -275,13 +273,9 @@ describe("composer host picker writes a surface pin", () => {
       hostClient: null,
     });
 
-    fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    expect(
-      screen.queryByTestId("settings-host-switcher-option-host-build"),
-    ).toBeNull();
-    fireEvent.click(
-      screen.getByTestId("settings-host-switcher-option-host-home"),
-    );
+    const trigger = screen.getByTestId("composer-host-trigger");
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("option", { name: "Build Box" })).toBeNull();
 
     expect(pinnedHostId()).toBeUndefined();
     expect(mocks.selectById).not.toHaveBeenCalled();

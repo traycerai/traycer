@@ -249,11 +249,11 @@ describe.each(["chat", "terminal-agent"] as const)(
 it("explains why a terminal agent's host selector is locked", async () => {
   renderBoundSurface("terminal-agent");
 
-  const switcher = screen.getByTestId("settings-host-switcher");
+  const switcher = screen.getByTestId("composer-host-trigger");
   expect(switcher instanceof HTMLButtonElement && switcher.disabled).toBe(true);
-  fireEvent.focus(screen.getByTestId("terminal-host-lock"));
+  fireEvent.focus(switcher);
   expect((await screen.findByRole("tooltip")).textContent).toContain(
-    "This terminal's host is fixed.",
+    "Terminal host is fixed",
   );
 });
 

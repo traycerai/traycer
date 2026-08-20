@@ -1712,6 +1712,25 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["failed", "succeeded"]),
   ),
   ...eventValueEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
+    "source",
+    new Set(["browse", "recent"]),
+  ),
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.WorkspaceContextAdded,
+      AnalyticsEvent.WorkspaceMovedToRecent,
+      AnalyticsEvent.WorkspaceRecentForgotten,
+    ],
+    "surface",
+    new Set(["landing", "new-conversation", "owner"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
+    "outcome",
+    new Set(["failed", "succeeded"]),
+  ),
+  ...eventValueEntries(
     [AnalyticsEvent.ReportIssuePrivateSubmit],
     "outcome",
     new Set(["confirmed", "unconfirmed", "failed", "unavailable"]),
