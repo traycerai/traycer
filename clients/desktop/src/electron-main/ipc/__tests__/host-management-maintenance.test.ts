@@ -819,6 +819,40 @@ describe("maintenanceInstallVersion IPC", () => {
     expect(installVersion).not.toHaveBeenCalled();
   });
 
+  it("classifies every version-moving lane as update work, and only those", async () => {
+    // `install`/`apply` move the version by definition; `activate` is the
+    // activation tail of an install; `ensure` shells `host ensure`, which
+    // installs or updates whenever the record is missing or stale. Reporting
+    // any of these as generic contention presents real update work as a
+    // retryable failure - the fallback releases its accepted-update latch
+    // and re-offers Install mid-update. Everything else holds the same
+    // exclusive lane without touching the version and MUST stay `false`: an
+    // `already-updating` answer arms that latch to wait on progress those
+    // operations never publish. Iterates the fenced kind list so a NEW
+    // MutationKind fails here and forces this classification decision.
+    const updateWorkKinds: readonly MutationKind[] = [
+      "install",
+      "apply",
+      "activate",
+      "ensure",
+    ];
+    const bridge = makeBridge();
+    const handler = await registerInstallHandler(bridge);
+    for (const kind of ALL_MUTATION_KINDS) {
+      bridge.options.hostController.lifecycleAdmissionBlock = {
+        kind: "mutation",
+        lane: { kind, progress: null, startedAt: "2026-08-12T00:00:00Z" },
+      };
+      await expect(
+        handler(null, { version: "1.2.0", force: false }),
+      ).resolves.toEqual({
+        kind: "lane-busy",
+        updateInFlight: updateWorkKinds.includes(kind),
+        message: laneBusyRestartMessage(kind),
+      });
+    }
+  });
+
   it("dispatches installVersion when nothing blocks admission", async () => {
     const installVersion = vi.fn((version: string, force: boolean) =>
       Promise.resolve({

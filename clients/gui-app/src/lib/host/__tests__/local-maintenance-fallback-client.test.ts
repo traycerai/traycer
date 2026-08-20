@@ -95,7 +95,7 @@ describe("mapInstallVersionOutcome", () => {
     expect(mapInstallVersionOutcome(outcome)).toEqual({ outcome: "accepted" });
   });
 
-  it("throws HostRpcError for busy, carrying the lane message", () => {
+  it("throws HostRpcError for the PRE-commit busy (retry-with-force), carrying the lane message", () => {
     expectHostRpcError(
       () =>
         mapInstallVersionOutcome({
@@ -105,6 +105,22 @@ describe("mapInstallVersionOutcome", () => {
         }),
       "Host is busy installing another version.",
     );
+  });
+
+  it("maps the POST-commit busy (continuation: activate) to accepted, not an error", () => {
+    // Packaged macOS commits the selected bytes BEFORE activation, so a busy
+    // outcome carrying `continuation: "activate"` describes an install that
+    // already happened. The error channel would release the accepted-update
+    // latch and re-offer Install for a version that is on disk - a second
+    // submission is the competing-install harm the lane-busy refusal exists
+    // to prevent. `accepted` keeps the latch armed, same as a completed ok.
+    expect(
+      mapInstallVersionOutcome({
+        kind: "busy",
+        continuation: "activate",
+        message: "Installed; restart Traycer to finish activating it.",
+      }),
+    ).toEqual({ outcome: "accepted" });
   });
 
   it("throws HostRpcError for deferred, carrying the lane message", () => {
@@ -292,6 +308,26 @@ describe("buildMaintenanceFallbackServeMap", () => {
       expect(management.installVersion).not.toHaveBeenCalled();
     },
   );
+
+  it("resolves a dispatched POST-commit busy (continuation: activate) as accepted", async () => {
+    // The resolution path, not the error path: the accepted-update latch
+    // must stay armed for an install whose bytes are already committed.
+    const management = buildOverviewManagement({
+      maintenanceInstallVersion: () =>
+        Promise.resolve({
+          kind: "dispatched" as const,
+          outcome: {
+            kind: "busy" as const,
+            continuation: "activate" as const,
+            message: "Installed; restart Traycer to finish activating it.",
+          },
+        }),
+    });
+    const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
+    await expect(
+      serve["host.update.install"]({ version: "1.2.0", force: false }),
+    ).resolves.toEqual({ outcome: "accepted" });
+  });
 
   it("maps a dispatched failed through mapInstallVersionOutcome to cli-failed", async () => {
     const management = buildOverviewManagement({

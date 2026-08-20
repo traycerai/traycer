@@ -136,17 +136,35 @@ function nullableString(raw: unknown, key: string): string | null {
 /**
  * Whether an admission block represents UPDATE work.
  *
- * `install` and `apply` are the two lane intents that move the host's
- * version; every other kind (register, deregister, respawn, recoverIfDown,
- * freePortAndRestart, uninstallHost, removeTraycer, ensure, activate) and the
- * login-item refresh take the same exclusive lane without being an update.
- * Listed positively so a NEW `MutationKind` defaults to "not an update" -
- * the safe direction, since the alternative is telling someone an update is
- * running when none is.
+ * Four lane intents can be moving the host's version while they hold the
+ * lane - the same four `laneBusyRestartMessage` already groups under
+ * "installing an update", so the two taxonomies answer with one voice:
+ *
+ *  - `install` / `apply` move it by definition;
+ *  - `activate` is the activation tail of an install (packaged-macOS
+ *    post-commit, or clearing pendingActivation debt) - an update mid-swap;
+ *  - `ensure` shells `host ensure`, which installs or updates whenever the
+ *    record is missing or stale, and from outside the lane that is
+ *    indistinguishable from a plain start.
+ *
+ * The asymmetry decides the ambiguous `ensure` case: overclaiming costs a
+ * transient "already updating" notice on a self-clearing lane, while
+ * underclaiming presents REAL update work as a retryable failure - the
+ * fallback releases its accepted-update latch and invites a competing
+ * install submission. Every other kind (register, deregister, respawn,
+ * recoverIfDown, freePortAndRestart, uninstallHost, removeTraycer) and the
+ * login-item refresh take the same exclusive lane without ever touching the
+ * version. Listed positively so a NEW `MutationKind` defaults to "not an
+ * update".
  */
 function admissionBlockIsUpdateWork(block: LifecycleAdmissionBlock): boolean {
   if (block.kind === "login-item-refresh") return false;
-  return block.lane.kind === "install" || block.lane.kind === "apply";
+  return (
+    block.lane.kind === "install" ||
+    block.lane.kind === "apply" ||
+    block.lane.kind === "activate" ||
+    block.lane.kind === "ensure"
+  );
 }
 
 /**
