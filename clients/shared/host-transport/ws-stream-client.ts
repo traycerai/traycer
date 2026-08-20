@@ -1144,6 +1144,15 @@ class StreamSession<
       this.forceReconnect(reason);
       return;
     }
+    // Rebase the heartbeat deadline onto the probe we just sent. After a sleep
+    // longer than `pongTimeoutMs`, `lastPongAt` still holds a PRE-sleep
+    // timestamp, so the already-armed interval's very next tick takes the
+    // `missed-pongs` branch and tears down an intact socket before this probe
+    // can be answered - the stale deadline pre-empting the detector that was
+    // meant to decide. Nothing is weakened by moving it: an unanswered probe
+    // still fails, just through the timeout below, which is deliberately set
+    // far under `pongTimeoutMs`.
+    this.lastPongAt = Date.now();
     this.clearWakeProbe();
     this.wakeProbeTimer = setTimeout(() => {
       this.wakeProbeTimer = null;

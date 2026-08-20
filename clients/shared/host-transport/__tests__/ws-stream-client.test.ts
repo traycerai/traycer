@@ -4077,3 +4077,98 @@ describe("WsStreamClient host credential provisioning", () => {
     });
   });
 });
+
+describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
+  // Fake timers are installed BEFORE the client exists: the heartbeat interval
+  // is armed at subscribe time, and an interval created under real timers is
+  // never advanced by `advanceTimersByTime` - a test that installs them later
+  // passes whether or not the bug is present.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function settleHandshake(
+    sockets: ReadonlyArray<{ socket: StubStreamWebSocket }>,
+  ) {
+    await vi.advanceTimersByTimeAsync(0);
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    return stub;
+  }
+
+  // The wake probe exists to KEEP a socket that survived a lid-open. But the
+  // heartbeat interval is still armed across the sleep holding a PRE-sleep
+  // `lastPongAt`, so its next tick took the `missed-pongs` branch and tore the
+  // socket down before the probe could be answered - the stale deadline
+  // pre-empting the detector meant to decide, and re-running every stream's
+  // open on a machine whose Wi-Fi is still re-associating.
+  it("does not let the pre-sleep pong deadline tear down a socket the probe is still testing", async () => {
+    const { factory, sockets } = makeFactory();
+    // The heartbeat must be able to TICK inside the 5s wake-probe window, or
+    // the race this pins cannot occur at all.
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 1_000,
+      pongTimeoutMs: 2_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+
+    // Sleep: the wall clock jumps far past `pongTimeoutMs` while no timer got
+    // to run, which is exactly what a suspended machine does.
+    vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
+
+    const sentBeforeProbe = stub.textSent.length;
+    client.reconnectAll("wake-resume", { probeFirst: true });
+    // The probe really went out on the SAME socket.
+    expect(stub.textSent.length).toBe(sentBeforeProbe + 1);
+    expect(parseText(stub.textSent[sentBeforeProbe]).kind).toBe("ping");
+    expect(stub.closed).toBeNull();
+
+    // The heartbeat's next tick lands while the probe is still outstanding. It
+    // must not fire `missed-pongs` on the strength of the pre-sleep timestamp.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(stub.closed).toBeNull();
+    expect(sockets).toHaveLength(1);
+
+    session.close();
+  });
+
+  // The other direction: rebasing the deadline must not make a genuinely dead
+  // socket immortal - the probe timeout still has to condemn it, and for its
+  // own reason rather than the heartbeat's.
+  it("still force-reconnects when the probe goes unanswered", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+
+    vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
+    client.reconnectAll("wake-resume", { probeFirst: true });
+    expect(stub.closed).toBeNull();
+
+    // No pong arrives; the 5s wake-probe timeout is the detector.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stub.closed?.reason).toBe("wake-resume-probe-timeout");
+
+    session.close();
+  });
+});
