@@ -4,6 +4,25 @@ import {
   resolveMinimapTrackHeightStyle,
   resolveMinimapTrackTopStyle,
 } from "@/components/minimap/minimap-track-geometry";
+import type { MinimapPlacement } from "@/stores/settings/settings-store";
+
+/**
+ * Whether the turn minimap mounts at all.
+ *
+ * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
+ * bar existed - the rail is the only consumer there, so nothing is left to
+ * publish an outline for. On a phone viewport it stays mounted and suppresses
+ * only its own rail, because the tile bar's button reads the outline it
+ * registers and that button deliberately does not obey `hide`.
+ */
+export function shouldMountChatTurnMinimap(input: {
+  readonly hasContent: boolean;
+  readonly side: MinimapPlacement;
+  readonly mobileViewport: boolean;
+}): boolean {
+  if (!input.hasContent) return false;
+  return input.side !== "hide" || input.mobileViewport;
+}
 
 export const CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE =
   "data-chat-turn-minimap-keyboard-owner";

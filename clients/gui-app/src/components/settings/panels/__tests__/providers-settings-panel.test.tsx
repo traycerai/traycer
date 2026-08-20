@@ -6970,18 +6970,25 @@ describe("<ProvidersSettingsPanel />", () => {
 });
 
 // -----------------------------------------------------------------------------
-// Mobile section hub: below `md`, `ProviderDetail` swaps the desktop tab rail
-// for `ProviderSectionHub` (see `provider-section-hub.tsx`). A separate,
-// top-level `describe` rather than nesting inside the suite above - it needs
-// its own narrow-viewport `beforeEach`/`afterEach` (the outer suite's tests
-// assume the default 1024px width), and keeping the override scoped to these
-// tests is what stops it leaking into every test above or below.
+// Mobile section picker: below `md`, `ProviderDetail` swaps the desktop tab rail
+// for a dropdown (see `provider-section-select.tsx`). A separate, top-level
+// `describe` rather than nesting inside the suite above - it needs its own
+// narrow-viewport `beforeEach`/`afterEach` (the outer suite's tests assume the
+// default 1024px width), and keeping the override scoped to these tests is what
+// stops it leaking into every test above or below.
 // -----------------------------------------------------------------------------
 
+// Radix Select opens from a click on the trigger, and the trigger is named by
+// its `aria-label` - which is what tells it apart from the PROVIDER select one
+// row above it, the only other combobox on this screen.
+function openSectionPicker(): void {
+  fireEvent.click(screen.getByRole("combobox", { name: "Section" }));
+}
+
 // `FULL_TABS` (general/env/usage/mcp/plugins/skills) has no `account` or
-// `modelProviders` entry, so it cannot exercise every hub tile. This adds
+// `modelProviders` entry, so it cannot exercise every section row. This adds
 // both, on top of the same `mcp`/`plugins`/`skills` capability blocks.
-const HUB_EIGHT_TABS: ProviderNativeCapabilities = {
+const PICKER_EIGHT_TABS: ProviderNativeCapabilities = {
   ...FULL_TABS,
   supportedTabs: [
     "general",
@@ -6997,7 +7004,7 @@ const HUB_EIGHT_TABS: ProviderNativeCapabilities = {
 // Advertises only `general` and `mcp`; combined with `apiKey.supported` below
 // this yields exactly three tabs (account, general, mcp) via
 // `supportedTabsFor` - see `provider-settings-tabs.ts`.
-const HUB_THREE_TABS: ProviderNativeCapabilities = {
+const PICKER_THREE_TABS: ProviderNativeCapabilities = {
   supportedTabs: ["general", "mcp"],
   mcp: SAMPLE_MCP,
   plugins: null,
@@ -7005,7 +7012,7 @@ const HUB_THREE_TABS: ProviderNativeCapabilities = {
   modelProviders: null,
 };
 
-function hubProviderState(input: {
+function pickerProviderState(input: {
   readonly providerId: ProviderCliState["providerId"];
   readonly nativeCapabilities: ProviderNativeCapabilities;
 }): ProviderCliState {
@@ -7015,15 +7022,13 @@ function hubProviderState(input: {
     candidates: [],
     envOverrides: [],
     nativeCapabilities: input.nativeCapabilities,
-    // Every hub tile in these fixtures has to include `account`, so the key
-    // has to be supported - `configured: false` keeps the tile's "No key"
-    // caption (see `providerSectionMeta`) rather than adding a second
-    // configured-vs-not axis these tests don't need.
+    // These fixtures need `account` among the sections, and `supportedTabsFor`
+    // derives that one from the API key rather than from the advertisement.
     apiKey: { supported: true, configured: false, source: null },
   });
 }
 
-describe("<ProvidersSettingsPanel /> mobile section hub", () => {
+describe("<ProvidersSettingsPanel /> mobile section picker", () => {
   beforeEach(() => {
     // `useIsMobileViewport` reads `window.innerWidth` directly (not
     // `matchMedia().matches`, which the global test shim always reports as
@@ -7050,9 +7055,9 @@ describe("<ProvidersSettingsPanel /> mobile section hub", () => {
     // provider advertising every hub section.
     providerMocks.listResult.data = {
       providers: [
-        hubProviderState({
+        pickerProviderState({
           providerId: "claude-code",
-          nativeCapabilities: HUB_EIGHT_TABS,
+          nativeCapabilities: PICKER_EIGHT_TABS,
         }),
       ],
     };
@@ -7078,88 +7083,76 @@ describe("<ProvidersSettingsPanel /> mobile section hub", () => {
     });
   });
 
-  it("expands the grid with every supported section on entering a provider", () => {
+  it("offers every supported section as a dropdown row, in the desktop order", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    const grid = screen.getByRole("tablist");
-    expect(within(grid).getAllByRole("tab")).toHaveLength(8);
-    // `account`'s tile always carries a "No key"/"Key set" caption (see
-    // `providerSectionMeta`), so its accessible name is never the bare label -
-    // matched by prefix here, exactly like every other tile below.
-    expect(within(grid).getByRole("tab", { name: /^Account/ })).toBeDefined();
-    expect(
-      within(grid).getByRole("tab", { name: "Profiles & Limits" }),
-    ).toBeDefined();
-    expect(within(grid).getByRole("tab", { name: "CLI & Args" })).toBeDefined();
-    expect(within(grid).getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(
-      within(grid).getByRole("tab", { name: "Model Providers" }),
-    ).toBeDefined();
-    expect(within(grid).getByRole("tab", { name: "MCP" })).toBeDefined();
-    expect(within(grid).getByRole("tab", { name: "Plugins" })).toBeDefined();
-    expect(within(grid).getByRole("tab", { name: "Skills" })).toBeDefined();
-
-    // Expanded on arrival (no deep-linked tab), so the bar reads "Collapse".
-    expect(screen.getByRole("button", { name: /Collapse/ })).toBeDefined();
-
-    // While the grid owns the screen, no tabpanel is VISIBLE - but nothing is
-    // unmounted either. Radix mounts every pane's div regardless of selection
-    // (its Presence force-mounts function children) and gates only the BODY
-    // inside, so all eight divs are findable by asking for hidden elements,
-    // and exactly the active one still holds its mounted body. Testing
-    // Library's role queries exclude `hidden` elements by default and only
-    // see them when `{ hidden: true }` is passed, which every assertion below
-    // that distinguishes "hidden" from "unmounted" relies on.
-    expect(screen.queryByRole("tabpanel")).toBeNull();
-    const panes = screen.getAllByRole("tabpanel", { hidden: true });
-    expect(panes).toHaveLength(8);
-    expect(panes.filter((pane) => pane.childElementCount > 0)).toHaveLength(1);
-  });
-
-  it("collapses the grid to a bar and shows the picked section's body", () => {
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    // Hub tiles are real Radix triggers, so the shared mouseDown helper works
-    // on them exactly as it does on the desktop tab bar.
-    selectTab("Env");
-
-    // The grid is gone entirely, not merely empty - `ProviderSectionHub`
-    // renders no `TabsPrimitive.List` at all while collapsed.
+    // The card grid this replaced was a `TabsPrimitive.List` of tab triggers,
+    // and it was the whole of the phone rail. Nothing renders one now.
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
 
-    const bar = screen.getByRole("button", { name: /All sections/ });
-    expect(bar.textContent).toContain("Env");
-    expect(screen.getByText("Environment variables")).toBeDefined();
-    // Collapsing brings the section body back into view - the visible-role
-    // query only succeeds once the `hidden` attribute from the expanded state
-    // is gone.
-    expect(screen.getByRole("tabpanel")).toBeDefined();
+    openSectionPicker();
+
+    // Same list and same labels the desktop rail draws, in `PROVIDER_TAB_ORDER`
+    // - the point of the swap is that only the CONTAINER differs. Compared as
+    // one ordered array rather than eight presence checks, since the order is
+    // half of what is being asserted.
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
+      "Account",
+      "Profiles & Limits",
+      "CLI & Args",
+      "Env",
+      "Model Providers",
+      "MCP",
+      "Plugins",
+      "Skills",
+    ]);
   });
 
-  it("keeps every inactive section pane hidden while the grid is collapsed", () => {
+  it("shows the picked section's body without a second gesture", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    selectTab("Env");
+    openSectionPicker();
+    fireEvent.click(screen.getByRole("option", { name: "Env" }));
 
-    // The dead-space regression this pins. Radix mounts EVERY pane's div -
-    // active or not - and hides the inactive ones only through a computed
-    // `hidden` that caller props spread over. Passing the prop with `false`
-    // or `undefined` (rather than omitting the key) therefore un-hid all
-    // seven empty inactive panes, and their stacked vertical paddings
-    // rendered as a blank band above or below the active body on phones.
+    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByRole("tabpanel")).toBeDefined();
+
+    // The dropdown holds the selection it was given: reopening it marks Env as
+    // the checked row. Asserted through `data-state` rather than
+    // `aria-selected`, which Radix only sets on the FOCUSED item.
+    openSectionPicker();
+    expect(
+      screen.getByRole("option", { name: "Env" }).getAttribute("data-state"),
+    ).toBe("checked");
+  });
+
+  it("keeps every inactive section pane hidden", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openSectionPicker();
+    fireEvent.click(screen.getByRole("option", { name: "Env" }));
+
+    // The dead-space regression this pins, now owned entirely by Radix. It
+    // mounts EVERY pane's div - active or not - and hides the inactive ones
+    // through a computed `hidden` that caller props spread over, so a phone arm
+    // that passes `hidden` with `false` or `undefined` (rather than omitting
+    // the key) un-hides all seven empty panes and their stacked vertical
+    // paddings render as a blank band above or below the active body.
     expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
     const mounted = screen.getAllByRole("tabpanel", { hidden: true });
     expect(mounted).toHaveLength(8);
@@ -7168,36 +7161,23 @@ describe("<ProvidersSettingsPanel /> mobile section hub", () => {
     );
   });
 
-  it("re-expands the grid from the All sections control", () => {
+  it("names each section pane, since a phone renders no tab to name it after", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    selectTab("Env");
-    // Not a tab - a plain button that only opens/closes the grid.
-    fireEvent.click(screen.getByRole("button", { name: /All sections/ }));
-
-    const grid = screen.getByRole("tablist");
-    expect(within(grid).getAllByRole("tab")).toHaveLength(8);
-    expect(screen.getByRole("button", { name: /Collapse/ })).toBeDefined();
-    // The selection itself survived the expand/collapse round trip.
-    expect(
-      within(grid).getByRole("tab", { name: "Env" }).getAttribute("data-state"),
-    ).toBe("active");
-    // Re-expanding hides the section body again rather than unmounting it:
-    // no visible tabpanel, but exactly one of the (always-mounted) pane divs
-    // still holds its body.
-    expect(screen.queryByRole("tabpanel")).toBeNull();
-    expect(
-      screen
-        .getAllByRole("tabpanel", { hidden: true })
-        .filter((pane) => pane.childElementCount > 0),
-    ).toHaveLength(1);
+    // Radix points a pane's `aria-labelledby` at the trigger that selects it.
+    // The dropdown replaces the whole `TabsList`, so that id names an element
+    // that is not rendered - the phone arm labels the pane by its section
+    // instead, and clears the dangling reference.
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.getAttribute("aria-labelledby")).toBeNull();
+    expect(panel.getAttribute("aria-label")).toBe("Account");
   });
 
-  it("opens a deep link collapsed, straight on the requested tab", () => {
+  it("opens a deep link straight on the requested tab", () => {
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -7234,26 +7214,21 @@ describe("<ProvidersSettingsPanel /> mobile section hub", () => {
       </TooltipProvider>,
     );
 
-    // Collapsed on arrival: the deep link already named the section, so
-    // opening a chooser over it would ask a question that was answered.
+    // The deep link's section is the one on screen, and it is READABLE on
+    // arrival rather than merely present in the DOM - a phone spends no gesture
+    // on a chooser for a question the caller already answered.
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    const bar = screen.getByRole("button", { name: /All sections/ });
-    expect(bar.textContent).toContain("Env");
     expect(screen.getByText("Environment variables")).toBeDefined();
-    // The regression this guards against: a deep link that lands collapsed
-    // must not also land on a body still carrying `hidden` from the mount -
-    // collapsed-on-arrival means the requested section is immediately
-    // readable, not merely present in the DOM.
-    expect(screen.getByRole("tabpanel")).toBeDefined();
+    expect(screen.getByRole("tabpanel").getAttribute("aria-label")).toBe("Env");
   });
 
   it("renders exactly a 3-section provider's sections, no others", () => {
     providerMocks.listResult.data = {
       providers: [
-        hubProviderState({
+        pickerProviderState({
           providerId: "amp",
-          nativeCapabilities: HUB_THREE_TABS,
+          nativeCapabilities: PICKER_THREE_TABS,
         }),
       ],
     };
@@ -7264,51 +7239,30 @@ describe("<ProvidersSettingsPanel /> mobile section hub", () => {
       </TooltipProvider>,
     );
 
-    const grid = screen.getByRole("tablist");
-    expect(within(grid).getAllByRole("tab")).toHaveLength(3);
-    expect(within(grid).getByRole("tab", { name: /^Account/ })).toBeDefined();
-    expect(within(grid).getByRole("tab", { name: "CLI & Args" })).toBeDefined();
-    expect(within(grid).getByRole("tab", { name: "MCP" })).toBeDefined();
-    expect(within(grid).queryByRole("tab", { name: "Env" })).toBeNull();
+    openSectionPicker();
+
     expect(
-      within(grid).queryByRole("tab", { name: "Profiles & Limits" }),
-    ).toBeNull();
-    expect(
-      within(grid).queryByRole("tab", { name: "Usage limits" }),
-    ).toBeNull();
-    expect(
-      within(grid).queryByRole("tab", { name: "Model Providers" }),
-    ).toBeNull();
-    expect(within(grid).queryByRole("tab", { name: "Plugins" })).toBeNull();
-    expect(within(grid).queryByRole("tab", { name: "Skills" })).toBeNull();
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Account", "CLI & Args", "MCP"]);
   });
 
-  it("keeps the same tabpanel element mounted across an expand/collapse round trip", () => {
+  it("keeps the same tabpanel element mounted when the active section is re-picked", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    // Expanded on arrival; the active section's body is mounted but hidden.
-    // Every pane's div is mounted whether active or not, so the active one is
-    // the single pane still holding a body.
-    const hiddenPanel = screen
-      .getAllByRole("tabpanel", { hidden: true })
-      .find((pane) => pane.childElementCount > 0);
-    if (hiddenPanel === undefined) {
-      throw new Error("expected the active section's body to stay mounted");
-    }
+    const panel = screen.getByRole("tabpanel");
 
-    // Re-clicking the already-active tile collapses the grid through the
-    // tile's own click handler rather than a Radix value change, so the
-    // active section never switches - this isolates the expand/collapse
-    // toggle from a tab change and proves the body is the SAME element,
-    // just no longer hidden, rather than a fresh mount.
-    const grid = screen.getByRole("tablist");
-    fireEvent.click(within(grid).getByRole("tab", { name: /^Account/ }));
+    // Re-picking the section that is already active is a no-op selection, not
+    // a remount: Radix only calls `onValueChange` when the value actually
+    // changes, so the body keeps its queries, scroll position and half-typed
+    // fields.
+    openSectionPicker();
+    fireEvent.click(screen.getByRole("option", { name: "Account" }));
 
-    expect(screen.getByRole("tabpanel")).toBe(hiddenPanel);
+    expect(screen.getByRole("tabpanel")).toBe(panel);
   });
 
   it("does not make the section pane a scroll box on a phone", () => {
@@ -7317,10 +7271,6 @@ describe("<ProvidersSettingsPanel /> mobile section hub", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
-
-    // Collapse the grid so the section body is the visible tabpanel, matching
-    // how the earlier tests above reach it.
-    selectTab("Env");
 
     // Checked as exact class-LIST membership rather than a substring: the
     // `md:`-prefixed class contains the unprefixed one as a substring

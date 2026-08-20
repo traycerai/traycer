@@ -36,11 +36,14 @@ import {
 } from "../in-process-selection-authority";
 import {
   createFakeAuthorityClock,
+  createRecordingAuthorityLog,
   createTestAuthority,
   fleetHost,
   findLease,
   recordEngineEvents,
+  type RecordedAuthorityLog,
   type RecordedEngineEvent,
+  type RecordingAuthorityLog,
 } from "./selection-authority-harness";
 
 // ---------------------------------------------------------------- builders
@@ -4839,6 +4842,410 @@ describe("SelectionAuthorityEngineImpl - compat anchor must displace, not merely
       compatIncompatible("H", "s1", INCOMPAT_DETAIL),
     );
     expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
+
+    authority.dispose();
+  });
+});
+
+/**
+ * The dial-evidence path's instrumentation.
+ *
+ * These exist because "a pinned host stopped answering and its lease never
+ * reached `dead`" was not diagnosable from a production log. Six of
+ * `ingestDial`'s seven exits were indistinguishable from outside - two logged
+ * at `debug` (which the renderer drops in production, where the level defaults
+ * to `info`) and four logged nothing - so a refusal that was dropped,
+ * deduplicated or classified inert left exactly the same trace as a dial that
+ * never happened. Those two have opposite fixes, so the instrument's whole job
+ * is telling them apart.
+ *
+ * Every disposition gets its own arm deliberately: an instrument asserted only
+ * on its happy path is the one that reports "nothing found" when the truth is
+ * "nothing ran".
+ */
+describe("selection authority dial-evidence instrumentation", () => {
+  function dialLogs(records: ReadonlyArray<RecordedAuthorityLog>) {
+    return records.filter(
+      (record) => record.message === "[selection-authority] dial evidence",
+    );
+  }
+
+  function stallWarnings(records: ReadonlyArray<RecordedAuthorityLog>) {
+    return records.filter((record) => record.level === "warn");
+  }
+
+  function attachedAuthority(log: RecordingAuthorityLog) {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      log,
+    });
+    const seq = authority.engine.allocateAttachSeq("A");
+    const attach = authority.engine.attach("A", attachRequest(seq, []));
+    if (!attach.ok) throw new Error("expected attach to succeed");
+    return { authority, incarnationId: attach.incarnationId };
+  }
+
+  it("reports a disposition for EVERY dial exit, including the silent ones", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // 1. counted
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", null, 0));
+    // 2. dropped-duplicate-attempt (same attempt id)
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", null, 1));
+    // 3. inert-indeterminate
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a2", "indeterminate", 2),
+    );
+    // 4. cleared-by-success
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a3", "success", 3),
+    );
+    // 5. suppressed-live-session
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 4),
+    );
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a4", null, 5));
+    // 6. dropped-outside-fleet
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialRefusal("GONE", "a5", null, 6),
+    );
+
+    expect(
+      dialLogs(log.records).map((record) => record.detail.disposition),
+    ).toEqual([
+      "counted",
+      "dropped-duplicate-attempt",
+      "inert-indeterminate",
+      "cleared-by-success",
+      "suppressed-live-session",
+      "dropped-outside-fleet",
+    ]);
+
+    authority.dispose();
+  });
+
+  it("names the death crossing distinctly from an ordinary counted refusal", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      authority.engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    const dispositions = dialLogs(log.records).map(
+      (record) => record.detail.disposition,
+    );
+    // Only the crossing is distinguished; everything before it is progress.
+    expect(dispositions[dispositions.length - 1]).toBe("counted-reached-death");
+    expect(dispositions.slice(0, -1).every((d) => d === "counted")).toBe(true);
+    // The streak is reported as it stands AFTER the decision, so a reader can
+    // see it advance rather than having to count the lines.
+    expect(
+      dialLogs(log.records).map((record) => record.detail.refusalStreak),
+    ).toEqual(
+      Array.from({ length: CONFIRMED_DEATH_REFUSAL_STREAK }, (_, i) => i + 1),
+    );
+    expect(findLease(authority.engine.snapshot().leases, "H")?.status).toBe(
+      "dead",
+    );
+
+    authority.dispose();
+  });
+
+  it("warns once dial failures stop advancing the streak - the reported pathology", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // A live session suppresses every refusal (invariant 5), so the host fails
+    // repeatedly while its lease can never move. This is the shape that
+    // strands a pinned surface, and it is silent in production today.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    const warnings = stallWarnings(log.records);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].detail).toMatchObject({
+      hostId: "H",
+      disposition: "suppressed-live-session",
+      consecutiveNonCounting: CONFIRMED_DEATH_REFUSAL_STREAK,
+      refusalStreak: 0,
+    });
+
+    authority.dispose();
+  });
+
+  it("warns ONCE per stall episode, not once per dial past the threshold", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // The test above stops exactly AT the threshold, so it cannot tell "fire
+    // at the crossing" from "fire at or above it". This one runs well past it:
+    // a prolonged outage is when this warn fires and also when dials are most
+    // frequent, so warning on every subsequent report would bury the
+    // transition under its own repetitions, in the logs of the very incident
+    // it exists to mark.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    const dials = CONFIRMED_DEATH_REFUSAL_STREAK * 4;
+    for (let i = 0; i < dials; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(1);
+    // Every report is still individually recorded - the `debug` channel keeps
+    // the full history, so quieting the warn costs no evidence.
+    expect(dialLogs(log.records)).toHaveLength(dials);
+
+    authority.dispose();
+  });
+
+  it("names the crossing ONCE - later refusals stay ordinary `counted`", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    const dials = CONFIRMED_DEATH_REFUSAL_STREAK + 3;
+    for (let i = 0; i < dials; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    // The lease DECISION stays `>=` - the host is dead and stays dead - but
+    // the label marks the single report that crossed. `>=` here would report a
+    // long outage as an unbroken run of deaths.
+    const dispositions = dialLogs(log.records).map(
+      (record) => record.detail.disposition,
+    );
+    expect(
+      dispositions.filter((d) => d === "counted-reached-death"),
+    ).toHaveLength(1);
+    expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK - 1]).toBe(
+      "counted-reached-death",
+    );
+    expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK]).toBe("counted");
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
+
+    authority.dispose();
+  });
+
+  it("keeps NO stall state for a host outside the fleet", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Evidence for an unknown host is dropped, so there is no lease to strand
+    // a surface on and nothing to warn about. Accumulating here would grow one
+    // entry per distinct id between fleet snapshots, and an entry recreated
+    // after a prune would be inherited by a durable id that later re-registers.
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal(`GONE-${i}`, `attempt-${i}`, null, i),
+      );
+    }
+    // Same id repeatedly, which is the case a per-host counter would catch.
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("GONE", `gone-${i}`, null, 100 + i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("does not count a REPLAYED success as a stalled failure", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // A duplicate is classified before its outcome is ever read, so a success
+    // arriving twice looks exactly like a refusal that went nowhere. Warning
+    // "dial failures are not advancing" on a run of successes would point the
+    // reader at the opposite of what happened.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "same", "success", 0),
+    );
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 2; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", "same", "success", 1 + i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("clears the stall on proof of life that is not a dial - a session", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // `onHostProvedAlive` is the funnel for every kind of proof, not just a
+    // dial success. Without clearing there, inert reports from BEFORE a
+    // recovery combine with one after it and warn about an episode that ended.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a1", "indeterminate", 0),
+    );
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a2", "indeterminate", 1),
+    );
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 2),
+    );
+    // With the session live every later refusal is suppressed, so this is the
+    // first report after the recovery and must not complete the old episode.
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a3", null, 3));
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("warns again after a host recovers and stalls a SECOND time", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Latching on the host forever would be the wrong cure for the flood: a
+    // machine that recovers and then strands a surface again is a new
+    // incident, and the second one is exactly as worth reporting as the first.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    let seq = 0;
+    for (let episode = 0; episode < 2; episode += 1) {
+      for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+        seq += 1;
+        engine.ingestEvidence(
+          "A",
+          incarnationId,
+          dialRefusal("H", `attempt-${seq}`, null, seq),
+        );
+      }
+      seq += 1;
+      // Proof of life clears the stall.
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `attempt-${seq}`, "success", seq),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(2);
+
+    authority.dispose();
+  });
+
+  it("stays silent on a healthy host - the stall resets on any real evidence", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Two non-counting reports, then proof of life, repeatedly. A warn here
+    // would fire on every ordinary reconnect and the signal would be worthless.
+    for (let round = 0; round < 4; round += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `ind-${round}-a`, "indeterminate", round),
+      );
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `ind-${round}-b`, "indeterminate", round),
+      );
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `ok-${round}`, "success", round),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("does not materialise an evidence record for a host whose dial was dropped", () => {
+    // The instrument reads the streak WITHOUT `hostEvidence()`, because the
+    // evidence map's emptiness is load-bearing ("never dialed" gates the
+    // launch-time ensure). A diagnostic that created records here would change
+    // which hosts get provisioned - observable as a lease that stops being
+    // `connecting` for a host nothing legitimately dialed.
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+
+    authority.engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a1", "indeterminate", 0),
+    );
+
+    expect(findLease(authority.engine.snapshot().leases, "H")?.status).toBe(
+      "connecting",
+    );
+    expect(dialLogs(log.records)[0].detail.refusalStreak).toBe(0);
 
     authority.dispose();
   });

@@ -276,4 +276,63 @@ describe("toastFromHostError", () => {
       "Couldn't start terminal agent session. No connected OpenCode providers.",
     );
   });
+
+  // Review #1297 finding 2: host detail is unbounded by construction. The
+  // producer that motivated forwarding it - `worktreeCreateFailed` - joins one
+  // line per failed workspace, each an absolute path plus raw git stderr, so
+  // appended verbatim it is an arbitrarily tall toast.
+  describe("bounds free-form host detail", () => {
+    it("keeps a realistic single-line worktree reason intact", () => {
+      // The failure this whole change set exists for. Cutting it would drop
+      // the clause that says WHY, which is the entire value of forwarding it.
+      const reason =
+        "git worktree add failed for traycer/tidy-badger at " +
+        "/Users/tgill/.traycer/worktrees/traycerai__traycer-internal/" +
+        "repo-tidy-badger: fatal: a branch named 'traycer/tidy-badger' " +
+        "already exists";
+      toastFromHostErrorWithDetail(
+        makeError("RPC_ERROR", reason),
+        "Couldn't create agent.",
+      );
+      expect(toast.error).toHaveBeenCalledWith(
+        `Couldn't create agent. ${reason}`,
+      );
+    });
+
+    it("shows the first failure and COUNTS the rest for a multi-entry failure", () => {
+      toastFromHostErrorWithDetail(
+        makeError(
+          "RPC_ERROR",
+          ["first failed: fatal: a", "second failed: fatal: b", ""].join("\n"),
+        ),
+        "Couldn't create agent.",
+      );
+      // The count, not a silent first-line take: dropping the other folders
+      // without saying so is the quiet omission this change set removes. The
+      // trailing blank line must not be counted as a third entry.
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't create agent. first failed: fatal: a (+1 more)",
+      );
+    });
+
+    it("truncates a single line that is a diagnostic dump rather than a sentence", () => {
+      toastFromHostErrorWithDetail(
+        makeError("RPC_ERROR", "x".repeat(400)),
+        "Couldn't create agent.",
+      );
+      // Pinned exactly rather than "is shorter than the input": the cut has to
+      // be at the documented cap and it has to SAY it was cut.
+      expect(toast.error).toHaveBeenCalledWith(
+        `Couldn't create agent. ${"x".repeat(240)}…`,
+      );
+    });
+
+    it("falls back to the plain copy when the detail is only whitespace", () => {
+      toastFromHostErrorWithDetail(
+        makeError("RPC_ERROR", "\n  \n"),
+        "Couldn't create agent.",
+      );
+      expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
+    });
+  });
 });

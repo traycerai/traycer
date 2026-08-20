@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { TabIcon } from "@/components/epic-canvas/canvas/tab-strip";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
+import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
 import {
   tileRenameKind,
   useSwitcherRename,
@@ -21,9 +22,11 @@ interface MobileCurrentTileBarProps {
 }
 
 /**
- * Slim bar under the mobile header naming the tile on screen: live icon plus
- * the display title, and nothing else - switching tabs is the header's
- * switcher trigger, so this bar carries no navigation affordance.
+ * Slim bar under the mobile header naming the tile on screen: live icon, the
+ * display title, and - for a tile whose content has an outline - the minimap
+ * button at the trailing edge. Switching tabs is the header's switcher
+ * trigger, so this bar carries no BETWEEN-tile navigation; the minimap moves
+ * within the tile already on screen.
  *
  * The title renames in place for every kind that has a name of its own
  * (agents, artifacts, raw terminals) and an editor's permission; anything else
@@ -90,6 +93,7 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
           testId="mobile-current-tile-title"
           className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground"
         />
+        <ContentMinimapButton tileInstanceId={tile.instanceId} />
       </div>
     </div>
   );

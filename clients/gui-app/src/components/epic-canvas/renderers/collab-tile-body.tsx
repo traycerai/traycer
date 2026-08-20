@@ -14,6 +14,7 @@ import {
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { collabTileNotice } from "./collab-tile-availability-copy";
 import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
@@ -636,6 +637,11 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
  * conditions do not count against that component's complexity ceiling. Only
  * artifact kinds get an outline - a workspace file tile shares this body but
  * is not a document with a heading skeleton.
+ *
+ * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
+ * bar existed - the rail is the only consumer there. On a phone viewport it
+ * stays mounted and suppresses only its own rail, because the tile bar's
+ * button reads the outline it registers and does not obey `hide`.
  */
 function ArtifactHeadingMinimapMount(props: {
   readonly editor: Editor | null;
@@ -644,10 +650,11 @@ function ArtifactHeadingMinimapMount(props: {
   readonly scroller: HTMLElement | null;
 }) {
   const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  const isMobileViewport = useIsMobileViewport();
   if (
     props.editor === null ||
     !isEpicArtifactKind(props.node.type) ||
-    side === "hide"
+    (side === "hide" && !isMobileViewport)
   ) {
     return null;
   }

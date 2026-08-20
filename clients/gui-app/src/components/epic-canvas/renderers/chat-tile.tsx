@@ -206,7 +206,9 @@ import {
   chatTileCanAct,
   findPendingInterview,
   findUnanswerableInterviews,
+  latestForkableAssistantMessageId,
 } from "./chat-tile-session-state";
+import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -1771,6 +1773,41 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       queuedCount: state.queue.items.length,
     });
 
+  // A primitive on purpose: `renderedMessages` takes a fresh identity every
+  // stream flush, so a callback closing over it would churn the memoized
+  // composer selector below once per flush. The latest completed boundary ID
+  // is stable across flushes (a streaming row is never forkable), so the
+  // gesture handler hanging off this stays quiet while a turn streams.
+  const latestForkBoundaryId = useMemo(
+    () => latestForkableAssistantMessageId(renderedMessages),
+    [renderedMessages],
+  );
+  // The composer host picker's "switch host" gesture. Chats are host-bound for
+  // life (clone-not-migrate), so switching means FORKING onto the picked
+  // machine — through the same dialog the per-message fork buttons open,
+  // anchored at the chat's latest completed turn and preselected on the picked
+  // host. A chat mid-turn has no boundary that includes the turn the user is
+  // watching, and one that has never replied has no boundary at all; both say
+  // so instead of opening a dialog pointed at something else.
+  const forkChatOnHost = useCallback(
+    (targetHostId: string): void => {
+      if (composerActiveTurnStatus !== null) {
+        toast(
+          "This agent is still working — it can be forked to another host once the turn ends.",
+        );
+        return;
+      }
+      if (latestForkBoundaryId === null) {
+        toast(
+          "This agent hasn't replied yet — it can be forked to another host after its first reply.",
+        );
+        return;
+      }
+      forkAtAssistantMessage(latestForkBoundaryId, "plain", null, targetHostId);
+    },
+    [composerActiveTurnStatus, forkAtAssistantMessage, latestForkBoundaryId],
+  );
+
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
       if (!canAct) return false;
@@ -2063,6 +2100,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
+          onForkOnHost: forkChatOnHost,
         }}
       />
     ),
@@ -2076,6 +2114,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       activeTurnStatus,
       composerActiveTurnStatus,
       clearMissingPathsAfterBindingCommit,
+      forkChatOnHost,
       viewTabId,
     ],
   );
@@ -2176,6 +2215,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
               forkPendingInterviewAssistantMessageId,
               mode,
               pendingInterview?.blockId ?? null,
+              null,
             ),
     [
       forkPendingInterviewAssistantMessageId,

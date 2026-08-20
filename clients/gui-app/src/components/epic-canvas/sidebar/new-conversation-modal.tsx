@@ -892,8 +892,26 @@ export function NewConversationModalBody(props: {
     if (initialMessage !== null) {
       useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
     }
-    createChat.mutate(
-      {
+    // `mutateAsync` + a promise chain, NOT `mutate`'s per-call callbacks, for
+    // the reason `use-epic-route-synchronization.ts` records for the sidebar's
+    // delete: TanStack Query v5 gates `mutateOptions` on the observer still
+    // having listeners, and `cleanupAfterSubmit()` below closes this modal
+    // SYNCHRONOUSLY - the dialog renders its body behind `props.open`, so the
+    // component holding this mutation is gone before any answer arrives. Both
+    // callbacks were therefore dead code, and the failure one is what took the
+    // eager-opened tab back down: without `markFailed` the handoff stayed
+    // non-terminal, `pendingCreateArtifactIds` kept the tile exempt from the
+    // record sweep, and a create the host had DEFINITIVELY rejected left an
+    // "Untitled agent" tab that spun for 15s and then told the user "that host
+    // hasn't answered" - about a host that had answered, with a refusal. Only
+    // `useInitialChatHandoff`'s 60s orphan deadline eventually cleared it, a
+    // backstop written for a host that says NOTHING.
+    //
+    // The landing composer already submits this way (`use-landing-composer-
+    // actions.ts`), and for the same reason: a surface that closes itself on
+    // submit cannot own its own completion through the observer.
+    void createChat
+      .mutateAsync({
         epicId,
         // The host the modal resolved its own client for, checked non-null
         // just above - the machine the user picked, not the app-wide active
@@ -906,29 +924,36 @@ export function NewConversationModalBody(props: {
         workspaceMode,
         worktreeIntent,
         initialMessage,
-      },
-      {
-        onSuccess: (response) => {
-          if (response.initialTurnStarted === true) {
-            useInitialChatHandoffStore
-              .getState()
-              .markInitialTurnStarted(
-                { hostId: activeHostId, userId, epicId },
-                chatId,
-              );
-          }
-        },
-        onError: () => {
-          useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+      })
+      .then((response) => {
+        if (response.initialTurnStarted === true) {
           useInitialChatHandoffStore
             .getState()
-            .markFailed(
+            .markInitialTurnStarted(
               { hostId: activeHostId, userId, epicId },
-              "Couldn't create the agent.",
+              chatId,
             );
-        },
-      },
-    );
+        }
+      })
+      .catch(() => {
+        useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+        // `markFailedByAction`, not `markFailed`: the handoff key is
+        // {user, epic} only, so a SECOND create in this epic replaces the
+        // entry while the first is still in flight - and now that this arm
+        // actually runs, an unguarded `markFailed` would close the second
+        // agent's tab when the first one's rejection landed. The by-action
+        // variant fails only the handoff still carrying these exact ids.
+        useInitialChatHandoffStore
+          .getState()
+          .markFailedByAction(
+            { hostId: activeHostId, userId, epicId },
+            chatId,
+            clientActionId,
+            "Couldn't create the agent.",
+          );
+      });
+    // The toast (with the host's reason) is the shared create hook's, which
+    // is mutation-level and so survives this close.
     cleanupAfterSubmit();
   }, [
     canSubmit,

@@ -636,6 +636,10 @@ function registerHostCommands(program: Command): void {
         "--no-service-register",
         "Install the host without registering it as an OS service (the caller registers the service).",
       )
+      .option(
+        "--force",
+        "Install even if the host has work in progress: skip the cooperative shutdown claim and kill the host process before the swap. Running terminal sessions and in-flight agent work are killed.",
+      )
       // Hidden: the CLI-owned pin gate (Doctor's controller-driven install
       // path), not a user-facing switch - see commands/host-install.ts.
       .addOption(
@@ -679,6 +683,7 @@ function registerHostCommands(program: Command): void {
           // `serviceRegister: false`.
           noServiceRegister: opts.serviceRegister === false,
           ifIdle: opts.ifIdle === true,
+          force: opts.force === true,
         })(ctx);
       };
     },
@@ -716,7 +721,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--force",
-        "Restart the host even if it has work in progress (skips the busy check).",
+        "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       ),
     (opts) => {
       const explicitVersion =
@@ -756,7 +761,7 @@ function registerHostCommands(program: Command): void {
       .description("Apply the staged host update over the current install")
       .option(
         "--force",
-        "Apply even if the host has work in progress (skips the busy check).",
+        "Apply even if the host has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
       .addOption(
         new Option(
@@ -871,7 +876,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--force",
-        "Update the host even if it has work in progress (skips the busy check).",
+        "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
       // The option users actually type is `--version <version>`, rewritten to
       // the hidden spelling above before Commander parses (root `--version`

@@ -160,6 +160,7 @@ function baseArgs(overrides: Partial<HostInstallArgs>): HostInstallArgs {
     allowSelfInvocation: false,
     noServiceRegister: false,
     ifIdle: false,
+    force: false,
     ...overrides,
   };
 }
@@ -301,6 +302,19 @@ describe("buildHostInstallCommand", () => {
     expect(mocks.createBytesOnlyInstallLifecycleMock).not.toHaveBeenCalled();
   });
 
+  it("rejects --force combined with --if-idle before staging anything (mutually exclusive: one refuses on busy work, the other kills it)", async () => {
+    await expect(
+      buildHostInstallCommand(baseArgs({ force: true, ifIdle: true }))(
+        fakeCtx(),
+      ),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+    expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+    expect(mocks.createBytesOnlyInstallLifecycleMock).not.toHaveBeenCalled();
+  });
+
   it("passes the enableLinger/allowSelfInvocation bootstrap payload when --no-service-register is NOT set", async () => {
     mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
     mocks.createServiceInstallLifecycleMock.mockReturnValue(
@@ -324,7 +338,27 @@ describe("buildHostInstallCommand", () => {
     expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledWith({
       environment: "production",
       bootstrap: { enableLinger: false, allowSelfInvocation: true },
+      force: false,
     });
+  });
+
+  it("forwards --force into the service install lifecycle so the pre-swap stop can skip the cooperative claim", async () => {
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+
+    const command = buildHostInstallCommand(baseArgs({ force: true }));
+    await command(fakeCtx());
+
+    expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledWith(
+      expect.objectContaining({ force: true }),
+    );
   });
 
   it("plain install (no --if-idle) never probes busy", async () => {
