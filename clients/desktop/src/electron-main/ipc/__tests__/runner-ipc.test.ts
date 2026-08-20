@@ -774,6 +774,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerMaintenanceUpdateCheck,
         RunnerHostInvoke.traycerMaintenanceDoctor,
         RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+        RunnerHostInvoke.traycerMaintenanceInstallVersion,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
         // which is now invoked from `RunnerIpcBridge.install()` rather than
         // wired by the host. They cover recent docs, window effects, GPU,
