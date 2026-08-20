@@ -258,23 +258,23 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
             to land here is a momentary identity refusal, whose own message
             says "try again in a moment" — an arm that says that while
             offering no way to try again forces the sheet closed and reopened
-            to do what the text just asked for. Mirrors the RPC card's
-            failed-run arm. */}
+            to do what the text just asked for.
+
+            It carries no pending state, and that is not an oversight. This
+            report is a QUERY, and v5 clears the error when a refetch starts;
+            with no data to fall back on the status returns to `pending`, so
+            the click unmounts this whole arm and the spinner above becomes
+            the in-flight surface. A `disabled={reportFetching}` here could
+            never render — the button is gone by the time it would be true.
+            The RPC card's rerun row DOES take a pending flag because its run
+            is a mutation, whose pending state no arm swap can hide. */}
         <div className="flex justify-end">
           <Button
             variant="secondary"
             size="sm"
-            disabled={reportFetching}
             onClick={handleRerun}
             data-testid="host-doctor-rerun"
           >
-            {reportFetching ? (
-              <AgentSpinningDots
-                className="mr-2 size-3"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
             Re-run Doctor
           </Button>
         </div>

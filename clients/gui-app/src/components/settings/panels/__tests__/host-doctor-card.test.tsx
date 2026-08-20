@@ -440,4 +440,56 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       JSON.stringify(runnerQueryKeys.hostDoctor(management, "host-b")),
     );
   });
+
+  it("Re-run Doctor on the error arm refetches, swapping the arm for the spinner", async () => {
+    // Held in an object rather than a `let`: TS narrows a captured `let` to
+    // `null` at the call site because it cannot prove the executor ran, and
+    // the `?.()` that placates it then types as `never`.
+    const second: { release: () => void } = { release: () => undefined };
+    const secondGate = new Promise<void>((resolve) => {
+      second.release = resolve;
+    });
+    let calls = 0;
+    const runDoctor = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error(HOST_CHANGED_MESSAGE);
+      }
+      await secondGate;
+      return {
+        issues: [] as const,
+        ranAt: "2026-08-12T00:00:00Z",
+      };
+    });
+    const management = makeManagement({ runDoctor });
+    renderCard(makeHostWithManagement(management));
+
+    expect(
+      await screen.findByText(`Doctor could not run: ${HOST_CHANGED_MESSAGE}`),
+    ).toBeTruthy();
+    const idleRerun = screen.getByTestId("host-doctor-rerun");
+    if (!(idleRerun instanceof HTMLButtonElement)) {
+      throw new Error("expected rerun button");
+    }
+
+    fireEvent.click(idleRerun);
+    await waitFor(() => {
+      expect(runDoctor).toHaveBeenCalledTimes(2);
+    });
+    expect(runDoctor).toHaveBeenLastCalledWith({
+      expectedHostId: "local-host",
+    });
+    // The refetch clears the error, and with no data behind it the query
+    // returns to `pending` — so the error arm and its button are GONE and the
+    // shared spinner owns the in-flight state. Pinned as an equality, not a
+    // tolerance: it is the reason the button carries no `disabled` prop, and
+    // if a later change keeps the arm mounted that prop has to come back.
+    expect(screen.queryByTestId("host-doctor-rerun")).toBeNull();
+    expect(screen.queryByText(/Doctor could not run:/)).toBeNull();
+    expect(screen.getByText("Running Doctor…")).toBeTruthy();
+
+    second.release();
+    expect(await screen.findByText("Doctor: no issues detected.")).toBeTruthy();
+    expect(screen.queryByText(/Doctor could not run:/)).toBeNull();
+  });
 });

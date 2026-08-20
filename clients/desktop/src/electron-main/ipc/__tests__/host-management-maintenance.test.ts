@@ -18,9 +18,11 @@ import {
   laneBusyRestartMessage,
 } from "../host-management-ipc";
 
+const testUserData = vi.hoisted(() => ({ current: "/tmp" }));
+
 vi.mock("electron", () => ({
   app: {
-    getPath: vi.fn(() => "/tmp"),
+    getPath: vi.fn(() => testUserData.current),
     isPackaged: false,
     getAppPath: vi.fn(() => "/tmp"),
   },
@@ -153,6 +155,8 @@ let workHome: string;
 function beginSandbox(): void {
   workHome = mkdtempSync(join(tmpdir(), "traycer-maintenance-ipc-"));
   sandboxHome(workHome);
+  testUserData.current = join(workHome, "userData");
+  mkdirSync(testUserData.current, { recursive: true });
   vi.resetModules();
 }
 
@@ -1844,5 +1848,277 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       }),
     });
     expect(freePortAndRestart).not.toHaveBeenCalled();
+  });
+
+  it("queued converge-ready on a removed host clears the sentinel before the controller runs", async () => {
+    // Discriminator: without `clearHostRemovalIfSet()`, convergeReady is
+    // still invoked and the handler still returns `applied` — the real
+    // controller then short-circuits to ok/{running:false}. The pin is
+    // that the sentinel is already false WHEN the controller is called.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const removal = await import("../../host/host-removal-state");
+    await removal.markHostRemovedByUser();
+    expect(await removal.isHostRemovedByUser()).toBe(true);
+
+    const convergeReady = vi.fn(async () => {
+      expect(await removal.isHostRemovedByUser()).toBe(false);
+      return { kind: "ok" as const, value: null };
+    });
+    const registerService = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    bridge.options.hostController.convergeReady = convergeReady;
+    bridge.options.hostController.registerService = registerService;
+    bridge.options.hostController.respawn = respawn;
+
+    await expect(
+      handler(null, {
+        repair: "converge-ready",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({ kind: "applied" });
+    expect(convergeReady).toHaveBeenCalledTimes(1);
+    expect(registerService).not.toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+    expect(await removal.isHostRemovedByUser()).toBe(false);
+  });
+
+  it("queued register-service on a removed host clears the sentinel before the controller runs", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const removal = await import("../../host/host-removal-state");
+    await removal.markHostRemovedByUser();
+    expect(await removal.isHostRemovedByUser()).toBe(true);
+
+    const registerService = vi.fn(async () => {
+      expect(await removal.isHostRemovedByUser()).toBe(false);
+      return { kind: "ok" as const, value: null };
+    });
+    const convergeReady = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    bridge.options.hostController.registerService = registerService;
+    bridge.options.hostController.convergeReady = convergeReady;
+
+    await expect(
+      handler(null, {
+        repair: "register-service",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({ kind: "applied" });
+    expect(registerService).toHaveBeenCalledTimes(1);
+    expect(convergeReady).not.toHaveBeenCalled();
+    expect(await removal.isHostRemovedByUser()).toBe(false);
+  });
+
+  it("queued restart does not clear the removal sentinel", async () => {
+    // A restart is not a reprovision; its own removed-by-user deferral
+    // must stay. Fails if someone later clears for all three repairs.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const removal = await import("../../host/host-removal-state");
+    await removal.markHostRemovedByUser();
+    expect(await removal.isHostRemovedByUser()).toBe(true);
+
+    const respawn = vi.fn(async () => {
+      expect(await removal.isHostRemovedByUser()).toBe(true);
+      return {
+        kind: "ok" as const,
+        value: { activated: true },
+      };
+    });
+    const convergeReady = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const registerService = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    bridge.options.hostController.respawn = respawn;
+    bridge.options.hostController.convergeReady = convergeReady;
+    bridge.options.hostController.registerService = registerService;
+
+    await expect(
+      handler(null, { repair: "restart", expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({ kind: "applied" });
+    expect(respawn).toHaveBeenCalledTimes(1);
+    expect(convergeReady).not.toHaveBeenCalled();
+    expect(registerService).not.toHaveBeenCalled();
+    expect(await removal.isHostRemovedByUser()).toBe(true);
+  });
+
+  it("queued repair identity mismatch declines without dispatching any controller", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const convergeReady = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const registerService = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.convergeReady = convergeReady;
+    bridge.options.hostController.registerService = registerService;
+    bridge.options.hostController.respawn = respawn;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const mismatched = { expectedHostId: OTHER_HOST_ID };
+
+    await expect(
+      handler(null, { repair: "converge-ready", ...mismatched }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_CHANGED_MESSAGE,
+    });
+    await expect(
+      handler(null, { repair: "register-service", ...mismatched }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_CHANGED_MESSAGE,
+    });
+    await expect(
+      handler(null, { repair: "restart", ...mismatched }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_CHANGED_MESSAGE,
+    });
+    expect(convergeReady).not.toHaveBeenCalled();
+    expect(registerService).not.toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+  });
+
+  it("queued repair unverifiable enrollment declines without dispatching any controller", async () => {
+    writeMalformedEnrollment();
+    const invoke = RunnerHostInvoke;
+    const convergeReady = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const registerService = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.convergeReady = convergeReady;
+    bridge.options.hostController.registerService = registerService;
+    bridge.options.hostController.respawn = respawn;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const payload = { expectedHostId: LIVE_HOST_ID };
+
+    await expect(
+      handler(null, { repair: "converge-ready", ...payload }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_UNVERIFIED_MESSAGE,
+    });
+    await expect(
+      handler(null, { repair: "register-service", ...payload }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_UNVERIFIED_MESSAGE,
+    });
+    await expect(
+      handler(null, { repair: "restart", ...payload }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_UNVERIFIED_MESSAGE,
+    });
+    expect(convergeReady).not.toHaveBeenCalled();
+    expect(registerService).not.toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+  });
+
+  it("queued converge-ready and register-service reject a non-ok controller outcome", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    bridge.options.hostController.convergeReady = vi.fn(() =>
+      Promise.resolve({
+        kind: "failed" as const,
+        message: "converge failed",
+      }),
+    );
+    bridge.options.hostController.registerService = vi.fn(() =>
+      Promise.resolve({
+        kind: "failed" as const,
+        message: "register failed",
+      }),
+    );
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+
+    await expect(
+      handler(null, {
+        repair: "converge-ready",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).rejects.toThrow("converge failed");
+    await expect(
+      handler(null, {
+        repair: "register-service",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).rejects.toThrow("register failed");
+  });
+
+  it("queued restart that the host declines resolves declined with the host's message", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    bridge.options.hostController.respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "deferred" as const,
+        message: "Another process holds the host lock.",
+      }),
+    );
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+
+    await expect(
+      handler(null, { repair: "restart", expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: "Another process holds the host lock.",
+    });
   });
 });
