@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
+import { resolve } from "node:path";
 import {
   type CliInstallManifest,
   type CliInstallSource,
@@ -9,7 +10,7 @@ import {
   writeCliManifest,
 } from "../manifest/cli-manifest";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
 import { withCliLock } from "../store/cli-lock";
 import {
   isInterpreterDistribution,
@@ -132,9 +133,18 @@ export async function writeMarkSource(opts: {
       exitCode: 1,
     });
   }
+  // Resolved against THIS process's cwd, exactly once, before anything is
+  // checked or persisted. Package-manager hooks routinely invoke this with a
+  // relative --binary-path from their install prefix; persisting that string
+  // verbatim would hand every LATER consumer a path it re-resolves against
+  // its own cwd - the manifest would name a different file (or none) per
+  // process, and the slot machinery would silently repoint on whatever it
+  // found there. The path validated below and the path written to the
+  // manifest must be one absolute spelling.
+  const binaryPath = resolve(opts.binaryPath);
   let binaryStat: Stats;
   try {
-    binaryStat = await stat(opts.binaryPath);
+    binaryStat = await stat(binaryPath);
   } catch (err) {
     const error = errorFromUnknown(err);
     opts.ctx.runtime.logger.warn(
@@ -148,8 +158,8 @@ export async function writeMarkSource(opts: {
     );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: `${opts.reason}: binary path does not exist: ${opts.binaryPath}`,
-      details: { binaryPath: opts.binaryPath },
+      message: `${opts.reason}: binary path does not exist: ${binaryPath}`,
+      details: { binaryPath },
       exitCode: 1,
     });
   }
@@ -163,8 +173,8 @@ export async function writeMarkSource(opts: {
     );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: `${opts.reason}: binary path is not a regular file: ${opts.binaryPath}`,
-      details: { binaryPath: opts.binaryPath },
+      message: `${opts.reason}: binary path is not a regular file: ${binaryPath}`,
+      details: { binaryPath },
       exitCode: 1,
     });
   }
@@ -204,7 +214,7 @@ export async function writeMarkSource(opts: {
       const next: CliInstallManifest = {
         version: opts.version,
         installedAt: new Date().toISOString(),
-        binaryPath: opts.binaryPath,
+        binaryPath,
         source: opts.source,
         // Mark-source / re-anchor is the moment the new binary IS the
         // live binary - no pending swap. Clear any prior pendingUpgrade
@@ -255,7 +265,7 @@ export async function writeMarkSource(opts: {
           }
         : await stageWellKnownCliBinary({
             environment: opts.ctx.runtime.environment,
-            binaryPath: opts.binaryPath,
+            binaryPath,
           });
       if (wellKnown.staged === "failed") {
         opts.ctx.runtime.logger.warn(
@@ -277,7 +287,7 @@ export async function writeMarkSource(opts: {
           },
         );
       }
-      const anchoredLine = `marked CLI as ${opts.source}-owned at ${opts.binaryPath} (version ${opts.version})`;
+      const anchoredLine = `marked CLI as ${opts.source}-owned at ${binaryPath} (version ${opts.version})`;
       return {
         data: {
           previous,
@@ -319,11 +329,18 @@ function interpreterSlotNote(
   return `warning: this distribution ships a script rather than an executable, so ${wellKnownPath} still holds the previously anchored executable; the host daemon and any already-registered service keep launching THAT binary, not this one. Re-register the service ('traycer host service install') to point it at this install, or remove ${wellKnownPath} once nothing depends on it`;
 }
 
+// Only a CONFIRMED absence may answer "no prior slot". The two messages this
+// feeds differ in what they warn about: the absent-slot note says the service
+// runs through the interpreter, the present-slot warning says a foreign
+// executable is still what gets launched. An EACCES or EIO here is not
+// evidence of absence, and picking the softer note on a fault would tell the
+// user the safe thing precisely when nothing is known - so anything except
+// ENOENT reads as "assume it exists" and selects the cautious warning.
 async function slotHasBinary(wellKnownPath: string): Promise<boolean> {
   try {
     await stat(wellKnownPath);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return !(isErrnoException(err) && err.code === "ENOENT");
   }
 }

@@ -14,8 +14,6 @@ import {
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
-import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
 import { config } from "./config";
 import { resolveCliVersion } from "./cli-version";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
@@ -98,6 +96,7 @@ import {
   isRunningFromWellKnownSlot,
   refreshWellKnownSlotForSupervisedStart,
   refreshWellKnownSlotIfStale,
+  wellKnownSlotRefreshHasConverged,
 } from "./store/well-known-cli";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
 import { finishAndExit, markProcessFatal } from "./runner/exit";
@@ -286,8 +285,32 @@ async function refreshCliSlotBeforeCommand(
       staged: refreshed.staged,
     });
     // Only `staged` publishes a replacement; `already-well-known` and
-    // `not-applicable` leave the running binary exactly where it was.
-    return refreshed.staged === "staged" && launchedFromSlot;
+    // `not-applicable` leave the running binary exactly where it was. The
+    // supervision gate is already inside `launchedFromSlot` - hard-wired
+    // false for non-supervised runs above - so this return is the ONLY
+    // encoding of "only host start restarts"; do not re-add a supervised
+    // check at the call site.
+    if (refreshed.staged !== "staged" || !launchedFromSlot) return false;
+    // `staged` alone is not licence to exit for a relaunch. Staging is
+    // allowed to lose two best-effort writes (the mtime mirror and the
+    // `.source.json` record), and on a volume that persistently loses both
+    // the relaunched process would find the slot unprovably fresh, stage
+    // again, and exit again - a supervisor restart loop copying ~100 MB per
+    // lap with the host never up. Asking the planner "would you copy again
+    // right now?" is the terminating condition: only a NO makes the restart
+    // safe, and a YES means the durable state cannot express freshness, so
+    // this process must keep running its stale-but-working bytes instead.
+    const converged = await wellKnownSlotRefreshHasConverged(
+      config.environment,
+    );
+    if (!converged) {
+      logger.warn(
+        "CLI slot was staged but freshness did not persist - continuing on the running binary instead of restarting",
+        { environment: config.environment, supervised },
+      );
+      return false;
+    }
+    return true;
   } catch (cause) {
     logger.warn("CLI well-known slot refresh threw", {
       environment: config.environment,
@@ -2420,12 +2443,25 @@ if (isTraycerCliEntrypoint(entryArgv)) {
       // the service manager and the host for the life of the service, and
       // signal delivery for graceful shutdown is not worth re-implementing to
       // save one restart.
-      if (replacedRunningBinary && supervisedStart) {
+      // No `&& supervisedStart` here on purpose: `refreshCliSlotBeforeCommand`
+      // can only return true for a supervised start (its launched-from-slot
+      // answer is hard-wired false otherwise), and a second copy of that gate
+      // would be a second place for the rule to drift.
+      if (replacedRunningBinary) {
         entryLogger.warn("CLI restarting into the refreshed well-known slot", {
           environment: config.environment,
           execPath: process.execPath,
           exitCode: EXIT_RESTART_INTO_REFRESHED_SLOT,
         });
+        // One line to stderr, because a human can be on this path too: a
+        // hand-typed `traycer host start` from the slot is indistinguishable
+        // from a supervised launch by argv, and without this the command
+        // exits 75 with an empty terminal - the only trace a log file the
+        // operator has no reason to open. A supervisor's log captures the
+        // line harmlessly.
+        writeStderr(
+          "traycer: the CLI was refreshed to a newer build; restarting host start from the updated binary. If you ran this by hand, run 'traycer host start' again.\n",
+        );
         process.exit(EXIT_RESTART_INTO_REFRESHED_SLOT);
       }
       await program.parseAsync(process.argv);

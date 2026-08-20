@@ -5,7 +5,7 @@ import { delimiter, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
 import { readCliManifest } from "../manifest/cli-manifest";
 import {
   isInterpreterDistribution,
@@ -142,19 +142,40 @@ export async function resolveServiceCliInvocation(
     if (isInterpreterDistribution(manifest.source)) {
       const interpreted = await npmInterpreterInvocation(manifest);
       if (interpreted !== null) return interpreted;
-      // Refusing beats registering the bare script. With no interpreter
-      // found anywhere, `<bundle> host start` is not a command that might
-      // work - it is one we know cannot: POSIX would re-run the same failed
-      // lookup through the shebang's `/usr/bin/env node`, against the
-      // SERVICE manager's PATH rather than this richer one, and Windows
-      // cannot execute a .js at all. A unit that reports "installed" and
-      // then never launches is strictly worse than an error naming the
-      // reason, because nothing downstream ever rewrites it.
+      // No conforming interpreter on THIS process's PATH. What that proves
+      // differs by platform, and the response must too.
+      //
+      // POSIX: register the script directly, with a warning. The resolver's
+      // PATH is not authoritative for the unit - a host-driven
+      // re-registration or a stripped shell resolves here with a minimal
+      // PATH while the systemd user manager's own environment may hold a
+      // perfectly good node (`import-environment PATH` is a documented
+      // setup) - so refusing would convert installs that launched fine
+      // yesterday, and would keep launching, into hard errors on the next
+      // re-registration. The shebang gives the unit a second lookup this
+      // process cannot perform; stale-but-working beats never-registering,
+      // the same recovery rule the slot staging follows.
+      //
+      // Windows: refuse. A `.js` is not executable there under any PATH, so
+      // the registration is not a command that might work - it is one we
+      // know cannot, and a unit that reports "installed" and never launches
+      // is strictly worse than an error naming the reason.
+      if (process.platform !== "win32") {
+        createCliLogger(opts.environment).warn(
+          "npm CLI registration falling back to the bare script - no conforming node on this process's PATH; the service will resolve its interpreter via the shebang at launch",
+          {
+            binaryPath: manifest.binaryPath,
+            minNodeVersion: MIN_NODE_VERSION.join("."),
+            environment: opts.environment,
+          },
+        );
+        return { command: manifest.binaryPath, args: [] };
+      }
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
         message:
           `service install: this CLI is recorded as an npm install, which ships a Node script rather than an executable, and no 'node' was found on PATH meeting the required version (>= ${MIN_NODE_VERSION.join(".")}) to pin into the service definition. ` +
-          `Registering ${manifest.binaryPath} directly would leave the service resolving 'node' off the service manager's PATH, which is the failure this refuses to create. ` +
+          `Windows cannot execute ${manifest.binaryPath} directly, so registering it without an interpreter would create a service that can never launch. ` +
           `Put 'node' on PATH, or re-run this from the npm-installed CLI itself so its own interpreter can be recorded.`,
         details: {
           binaryPath: manifest.binaryPath,
@@ -272,13 +293,11 @@ async function canExecute(path: string): Promise<boolean> {
 }
 
 function isSpawnRefusal(error: unknown): boolean {
-  if (error === null || typeof error !== "object" || !("code" in error)) {
-    return false;
-  }
   return (
-    error.code === "EACCES" ||
-    error.code === "ENOEXEC" ||
-    error.code === "EPERM"
+    isErrnoException(error) &&
+    (error.code === "EACCES" ||
+      error.code === "ENOEXEC" ||
+      error.code === "EPERM")
   );
 }
 
@@ -300,8 +319,13 @@ async function stagedSlotInvocation(
     // Affordable exactly here and nowhere else: this is service REGISTRATION,
     // once per install, not the per-command refresh path.
     //
-    // Skipped when the running process IS the slot, where the answer is
-    // already settled - this code is executing those very bytes.
+    // Skipped when the SOURCE is the slot itself - `already-well-known`
+    // means exactly that path equality, nothing about which binary this
+    // process is running. The skip is still sound, but for a different
+    // reason than "we are executing those bytes": with source === slot the
+    // demotion arm below has nothing distinct to demote to, so probing
+    // could only burn up to two 10s spawns to arrive at the identical
+    // registration the skip returns immediately.
     if (
       staged.staged === "already-well-known" ||
       (await canExecute(staged.wellKnownPath))

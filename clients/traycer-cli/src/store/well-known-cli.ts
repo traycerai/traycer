@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import type { Stats } from "node:fs";
 import {
   chmod,
@@ -20,7 +22,10 @@ import {
   type CliInstallSource,
 } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
-import { CLI_ERROR_CODES, CliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError, isErrnoException } from "../runner/errors";
+import { renameWithRetry } from "../installer/rename-retry";
+import { resolveCliVersion } from "../cli-version";
+import { isStrictlyNewerHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { errorFromUnknown } from "../logger";
 import { withCliLock } from "./cli-lock";
 import {
@@ -217,6 +222,14 @@ async function refreshSlot(
         // for seconds over a slot that needs nothing done to it. And whoever
         // holds the lock is either staging - which writes a record of its own,
         // making this adoption moot - or adopting the very same one.
+        //
+        // Chosen from the UNLOCKED plan, necessarily - the wait is an input
+        // to taking the lock, so no locked answer exists yet. The race that
+        // implies is narrow and bounded: a plan that was `adopt` at pre-check
+        // but becomes `stage` while a holder works forfeits the supervised
+        // wait once, loses the lock, and lands in the busy handler below -
+        // which re-plans and reports `deferred-busy` honestly, so the skipped
+        // wait costs one logged deferral, never a silent one.
         waitMs: planned.kind === "adopt" ? 0 : lockWaitMs,
         pollIntervalMs: 100,
       },
@@ -270,7 +283,19 @@ async function refreshSlot(
       // "the supervisor may be on old bytes" warning in the supervised entry's
       // log for a slot that is current, and would do it on every startup until
       // some run wins the lock.
-      if (planned.kind === "adopt") return null;
+      //
+      // Decided from a FRESH plan, not from `planned` - that one is from
+      // before the lock attempt, and the plan changing while a holder works
+      // is the very reason the locked callback re-plans. A precheck that saw
+      // "adopt" while an install was landing can be looking at a slot that
+      // now needs a stage, and answering null there would hide the one log
+      // line that explains a supervisor still on old bytes.
+      const current = await slotRefreshPlan(
+        environment,
+        wellKnownPath,
+        running,
+      );
+      if (current.kind !== "stage") return null;
       return { staged: "deferred-busy", wellKnownPath };
     }
     const failure = errorFromUnknown(error);
@@ -339,6 +364,31 @@ function isCliLockBusyError(error: unknown): boolean {
   );
 }
 
+// Whether a refresh run right now would find nothing to copy - the
+// convergence probe behind the supervised entry's restart decision.
+//
+// A `staged` outcome alone is NOT sufficient grounds to exit-and-relaunch,
+// and the gap is exactly the two best-effort writes staging is allowed to
+// lose: on a volume that cannot reproduce mtimes AND cannot land the
+// `.source.json` sidecar, every start would stage "successfully", exit for
+// a restart, and the restarted process would find the slot unprovably
+// fresh and do it all again - an unbounded supervisor loop re-copying
+// ~100 MB per lap, which is the terminating-recovery rule this module is
+// under orders to never violate. Re-asking the planner after the stage is
+// what makes the exit safe: `current` and `adopt` both mean the next run
+// will not copy, so the restart terminates; `stage` means it will, so the
+// caller must run stale-but-working instead.
+export async function wellKnownSlotRefreshHasConverged(
+  environment: Environment,
+): Promise<boolean> {
+  const plan = await slotRefreshPlan(
+    environment,
+    wellKnownCliBinaryPath(environment),
+    resolve(process.execPath),
+  );
+  return plan.kind !== "stage";
+}
+
 // What a refresh has to do about the slot.
 //
 // A decision, never an action: this is evaluated once unlocked and again
@@ -364,9 +414,29 @@ async function slotRefreshPlan(
   wellKnownPath: string,
   running: string,
 ): Promise<SlotRefreshPlan> {
-  const source = await authoritativeSlotSource(environment, running);
-  if (source === null) return { kind: "current" };
+  const nominated = await authoritativeSlotSource(environment, running);
+  if (nominated === null) return { kind: "current" };
+  const { path: source, anchored } = nominated;
   if (resolve(wellKnownPath) === source) return { kind: "current" };
+  // An UNANCHORED nomination - the running binary self-nominated because no
+  // manifest vouches for anything - may repair a slot, but must not DEMOTE
+  // one. "Whichever binary was invoked last wins" is safe when the slot is
+  // absent or older; it is a silent downgrade of the registered service when
+  // a stray older SEA (a leftover in ~/Downloads, a superseded winget root)
+  // runs one command on a machine whose slot holds a newer CLI. The manifest
+  // normally arbitrates exactly this; with none, the only remaining witness
+  // is the slot binary itself, so before an unanchored stage over an
+  // existing regular file the slot is asked its version once and left alone
+  // when it reports itself STRICTLY newer than this process. An unreadable
+  // or unparseable answer stages: the hookless-upgrade cohort this fallback
+  // exists for must keep converging, and a slot that cannot say what it is
+  // has no seniority to assert.
+  const guardedStage = async (): Promise<SlotRefreshPlan> => {
+    if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
+      return { kind: "current" };
+    }
+    return { kind: "stage", source };
+  };
   // `lstat`, not `stat`, and the difference is load-bearing. A slot left as
   // a SYMLINK by an older Desktop is the failure mode copy-not-symlink was
   // adopted to end: `stat` would follow it to the authoritative source and
@@ -390,7 +460,7 @@ async function slotRefreshPlan(
     if (sourceStat === null) return { kind: "current" };
     return sourceIsUnchanged(record, sourceStat)
       ? { kind: "current" }
-      : { kind: "stage", source };
+      : guardedStage();
   }
   // No usable record - a slot staged by a CLI older than this format, one a
   // sibling writer published, or one whose best-effort record write failed.
@@ -417,8 +487,44 @@ async function slotRefreshPlan(
   // every already-installed machine a redundant ~100 MB copy to reach a
   // record this can write with one stat and one small JSON write.
   const mirroredSource = await mirroredSourceStat(slotStat, source);
-  if (mirroredSource === null) return { kind: "stage", source };
+  if (mirroredSource === null) return guardedStage();
   return { kind: "adopt", source, sourceStat: mirroredSource };
+}
+
+// Ask the slot binary its version and answer whether it outranks the running
+// process. `true` is the ONLY answer that suppresses an unanchored stage, so
+// every failure - a slot that will not execute, prints garbage, or hangs
+// past the timeout - is `false`: refusing to converge on an unprovable
+// seniority claim would strand the hookless cohort the fallback serves.
+//
+// The spawned slot runs its own startup refresh first, which cannot recurse:
+// launched FROM the slot it self-nominates, the slot IS the source, and its
+// plan is `current` before any spawn.
+async function slotOutranksRunning(wellKnownPath: string): Promise<boolean> {
+  let reported: string;
+  try {
+    const { stdout } = await execFileAsync(wellKnownPath, ["--version"], {
+      timeout: SLOT_VERSION_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    reported = stdout.trim();
+  } catch {
+    return false;
+  }
+  return isStrictlyNewerHostVersion(reported, resolveCliVersion(process.env));
+}
+
+const SLOT_VERSION_PROBE_TIMEOUT_MS = 10_000;
+const execFileAsync = promisify(execFile);
+
+// A nominated slot source, and whether an install AUTHORITY vouches for it.
+// `anchored: false` marks the two self-nominations - no manifest at all, and
+// a manifest whose binary is confirmed gone - where "the running binary" won
+// by default rather than by anyone's decision. The planner treats those with
+// less trust: they may fill or refresh a slot, never demote one.
+interface NominatedSlotSource {
+  readonly path: string;
+  readonly anchored: boolean;
 }
 
 // Which binary the slot SHOULD hold. The manifest wins when it names an
@@ -427,7 +533,7 @@ async function slotRefreshPlan(
 async function authoritativeSlotSource(
   environment: Environment,
   running: string,
-): Promise<string | null> {
+): Promise<NominatedSlotSource | null> {
   let manifest: CliInstallManifest | null;
   try {
     manifest = await readCliManifest(environment);
@@ -444,7 +550,7 @@ async function authoritativeSlotSource(
     // The commands that own the manifest already diagnose it.
     return null;
   }
-  if (manifest === null) return running;
+  if (manifest === null) return { path: running, anchored: false };
   if (isInterpreterDistribution(manifest.source)) return null;
   const manifestBinary = resolve(manifest.binaryPath);
   // Only a CONFIRMED absence may demote the manifest's binary. `statOrNull`
@@ -456,9 +562,12 @@ async function authoritativeSlotSource(
   // the manifest read above: unreadable is not absent.
   switch (await probePresence(manifestBinary)) {
     case "present":
-      return manifestBinary;
+      return { path: manifestBinary, anchored: true };
     case "absent":
-      return running;
+      // The manifested binary is confirmed GONE, so the manifest vouches for
+      // nothing this fallback can use - the self-nomination is exactly as
+      // unanchored as the no-manifest case and gets the same reduced trust.
+      return { path: running, anchored: false };
     case "unknown":
       return null;
   }
@@ -475,13 +584,12 @@ async function probePresence(path: string): Promise<PathPresence> {
   }
 }
 
+// One spelling of the errno narrow for this module, built on the shared
+// `isErrnoException` rather than a third hand-rolled null/typeof dance -
+// `renameSlotBinaryAside` consults it too, so "is this an ENOENT" cannot
+// drift between the two places the answer matters.
 function isEnoentError(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === "object" &&
-    "code" in error &&
-    error.code === "ENOENT"
-  );
+  return isErrnoException(error) && error.code === "ENOENT";
 }
 
 // Whether the slot is a faithful copy of `source`, by the identity staging
@@ -865,7 +973,12 @@ export async function stageWellKnownCliBinary(opts: {
         () => undefined,
       );
     }
-    await rename(staging, wellKnownPath);
+    // `renameWithRetry`, not a bare rename: Windows releases a dead
+    // process's handles asynchronously, and staging often runs right after
+    // a service stop with antivirus scanning the fresh copy - the exact
+    // transient EBUSY/EPERM window installer/rename-retry.ts exists for. A
+    // single-attempt publish would report that hiccup as a failed staging.
+    await renameWithRetry(staging, wellKnownPath);
     // Deliberately no record when the copy raced a replacement. The next run
     // finds none and falls back to the timestamp test - which the skipped
     // `utimes` above makes FAIL - and restages. That costs one redundant copy;
@@ -893,7 +1006,14 @@ export async function stageWellKnownCliBinary(opts: {
     // binary back so an already-registered service and the host daemon keep
     // launching the CLI they were launching before this attempt.
     if (asidePath !== null) {
-      await rename(asidePath, wellKnownPath).catch(() => undefined);
+      // Retried hardest of the three renames, because this is the one whose
+      // single-attempt failure is not a degraded outcome but the forbidden
+      // one: the publish already failed, so a transient EBUSY here - the
+      // old image's handles still being released - would leave the slot
+      // ABSENT. The outer catch stays: after the retries are exhausted
+      // there is genuinely nothing more this path can do, and the failure
+      // report below already carries the original error.
+      await renameWithRetry(asidePath, wellKnownPath).catch(() => undefined);
     }
     const named = error instanceof Error ? error : new Error(String(error));
     return {
@@ -920,15 +1040,13 @@ async function renameSlotBinaryAside(
 ): Promise<string | null> {
   const asidePath = `${wellKnownPath}.old-${Date.now()}-${process.pid}`;
   try {
-    await rename(wellKnownPath, asidePath);
+    // Retried for the same Windows transient-handle window as the publish
+    // rename. ENOENT is not in the retry set, so the first-staging case
+    // still reaches the handler below on the first attempt.
+    await renameWithRetry(wellKnownPath, asidePath);
     return asidePath;
   } catch (error) {
-    if (
-      error !== null &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
+    if (isEnoentError(error)) {
       return null;
     }
     throw error;
@@ -964,8 +1082,10 @@ async function renameSlotBinaryAside(
 // absent. A concurrent staging that swept it on sight would delete that
 // rollback copy mid-window, and if both attempts then failed the slot would
 // be gone - the one outcome the copy-not-symlink design exists to rule out.
-// Concurrency here stopped being hypothetical when the startup refresh
-// began staging outside the CLI lock on every packaged command.
+// Every writer of this slot does hold the CLI lock today, which makes the
+// window unreachable in-process - the age gate is defence in depth for the
+// callers the lock cannot see: a crashed holder whose lock was reclaimed
+// mid-publish, and any future writer that forgets the lock contract.
 //
 // Age is read from the NAME, not from `stat`. A rename does not change
 // mtime, and staging deliberately mirrors the source's mtime onto the slot,

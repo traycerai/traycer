@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { cliLockPath } from "../../host/host-paths";
+import type { CliInstallManifest } from "../cli-discovery";
 
 // The slot used to be a POSIX symlink into the .app bundle - field report
 // 5's "file exists but won't run": remove or replace the bundle and the
@@ -356,4 +357,137 @@ describe("installBundledCli proceeds past lock contention", () => {
     expect(existsSync(lockPath)).toBe(false);
     expect(electronLogMock.warn).not.toHaveBeenCalled();
   });
+});
+
+// Change 2 (`writeCliManifestPendingUpgrade`): this now takes the desktop
+// CLI lock, RE-READS the on-disk manifest under it rather than trusting the
+// caller's snapshot, writes via tmp+rename, and returns null (writing
+// nothing) when the lock is held past the wait.
+describe("writeCliManifestPendingUpgrade", () => {
+  it("re-reads the manifest under the lock instead of trusting the caller's snapshot", async () => {
+    const { writeCliManifestPendingUpgrade, cliManifestPath } =
+      await import("../cli-discovery");
+    const manifestPath = cliManifestPath();
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    // The on-disk manifest (M1) - what another writer committed most
+    // recently.
+    const onDiskManifest: CliInstallManifest = {
+      version: "2.0.0",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: join(homeDir, "on-disk-binary"),
+      source: "homebrew",
+      pendingUpgrade: null,
+    };
+    writeFileSync(
+      manifestPath,
+      JSON.stringify(onDiskManifest, null, 2),
+      "utf8",
+    );
+    // The caller's STALE snapshot (M0) - taken at reconcile start, seconds
+    // and one failed publish ago, and deliberately different from M1 on
+    // every field so the assertions below cannot pass by accident.
+    const staleSnapshot: CliInstallManifest = {
+      version: "1.0.0",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: join(homeDir, "stale-caller-snapshot-binary"),
+      source: "manual",
+      pendingUpgrade: null,
+    };
+    const pending: NonNullable<CliInstallManifest["pendingUpgrade"]> = {
+      version: "3.0.0",
+      stagedBinaryPath: join(homeDir, "staged-binary"),
+      stagedAt: new Date().toISOString(),
+      reason: "binary-locked",
+    };
+
+    const result = await writeCliManifestPendingUpgrade(pending, staleSnapshot);
+
+    expect(result).not.toBeNull();
+    if (result !== null) {
+      // Every field but `pendingUpgrade` carries M1's values, not M0's -
+      // proof the re-read under the lock won, not the caller's snapshot.
+      expect(result.version).toBe(onDiskManifest.version);
+      expect(result.binaryPath).toBe(onDiskManifest.binaryPath);
+      expect(result.source).toBe(onDiskManifest.source);
+      expect(result.pendingUpgrade).toEqual(pending);
+    }
+    const persisted: CliInstallManifest = JSON.parse(
+      readFileSync(manifestPath, "utf8"),
+    );
+    expect(persisted.version).toBe(onDiskManifest.version);
+    expect(persisted.binaryPath).toBe(onDiskManifest.binaryPath);
+    expect(persisted.pendingUpgrade).toEqual(pending);
+  });
+
+  // The lock-held branch. `CLI_SLOT_LOCK_WAIT_MS` (15s, 100ms polls) is a
+  // module-private constant this call site has no override for - unlike the
+  // sibling `installBundledCli` contention test above, which survives
+  // contention by releasing the holder before the wait ends, this test needs
+  // the PAST-THE-WAIT outcome itself (a `null` return with nothing written),
+  // which only happens once the full wait has elapsed. That sibling test's
+  // own comment records the same trade-off ("NOT covered here: the
+  // past-the-wait branch... needs 15s of real wall clock") and declines to
+  // pay it; this test pays it once, deliberately, as the direct pin for this
+  // exact branch, with an explicit per-test timeout so vitest's 5s default
+  // does not kill it first.
+  it("returns null and writes nothing while the CLI lock is held", async () => {
+    const { writeCliManifestPendingUpgrade, cliManifestPath } =
+      await import("../cli-discovery");
+    const manifestPath = cliManifestPath();
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    const onDiskManifest: CliInstallManifest = {
+      version: "1.5.0",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: join(homeDir, "locked-test-binary"),
+      source: "desktop",
+      pendingUpgrade: null,
+    };
+    writeFileSync(
+      manifestPath,
+      JSON.stringify(onDiskManifest, null, 2),
+      "utf8",
+    );
+    const lockPath = cliLockPath("production");
+    // An unbreakable holder record, the identical technique the sibling
+    // contention test above uses: this process's own pid with no
+    // `processStartIdentity` hits `cross-process-lock.ts`'s "indeterminate"
+    // branch deterministically, which waits out the full budget rather than
+    // breaking early on a dead-pid or stale-empty-file check.
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(
+      lockPath,
+      JSON.stringify(
+        {
+          pid: process.pid,
+          reason: "external-test-holder",
+          startedAt: new Date().toISOString(),
+          hostname: null,
+          token: "external-test-token",
+          processStartedAtMs: null,
+          processStartIdentity: null,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const pending: NonNullable<CliInstallManifest["pendingUpgrade"]> = {
+      version: "2.0.0",
+      stagedBinaryPath: join(homeDir, "staged-binary"),
+      stagedAt: new Date().toISOString(),
+      reason: "binary-locked",
+    };
+
+    const result = await writeCliManifestPendingUpgrade(
+      pending,
+      onDiskManifest,
+    );
+
+    expect(result).toBeNull();
+    const persisted: CliInstallManifest = JSON.parse(
+      readFileSync(manifestPath, "utf8"),
+    );
+    expect(persisted.pendingUpgrade).toBeNull();
+    expect(persisted.version).toBe("1.5.0");
+  }, 20_000);
 });

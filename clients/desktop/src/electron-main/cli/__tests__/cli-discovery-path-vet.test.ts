@@ -107,4 +107,45 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     const vetted = await vetPathCliCandidate(candidate);
     expect(vetted).toEqual({ version: "1.2.3", source: "npm" });
   });
+
+  // `probeCliVersion` now returns a discriminated union, and the path-probe
+  // cache deliberately drops "timeout" verdicts - a `timeout` describes the
+  // probe's PATIENCE, not the binary, and the very slot-refresh that made a
+  // real packaged CLI's first `--version` slow is what repairs it for the
+  // next one. Caching it would pin a real CLI as unusable for the rest of
+  // the desktop session. Driven with a real `sleep`-based fixture past the
+  // probe's 2s timeout rather than a mocked `execFile`, so this exercises
+  // the actual kill/verdict plumbing - which costs a bit over 2 seconds per
+  // spawn. Accepted once, here, as the direct pin for this exact branch.
+  it("a timed-out probe is not cached - the next vet re-probes", async () => {
+    const dir = await makeTempDir();
+    const candidate = join(dir, "traycer");
+    const countFile = join(dir, "exec-count");
+    await writeScript(
+      candidate,
+      `echo x >> '${countFile}'\nsleep 3\nprintf '1.2.3\\n'`,
+    );
+
+    const first = await vetPathCliCandidate(candidate);
+    expect(first).toBeNull();
+
+    // A cached `timeout` verdict would answer this SECOND call from the
+    // cache without spawning again. Asserting on the exec count - not
+    // just the (identical, null) verdict - is what actually pins the
+    // non-caching: a same-verdict-twice check alone cannot distinguish
+    // "re-probed and timed out again" from "returned the cached one".
+    const second = await vetPathCliCandidate(candidate);
+    expect(second).toBeNull();
+    const count = (await readFile(countFile, "utf8"))
+      .split("\n")
+      .filter((line) => line.length > 0).length;
+    expect(count).toBe(2);
+  }, 10_000);
+
+  // "a not-a-cli verdict IS cached" is already pinned above by "caches a
+  // NEGATIVE verdict too (an unresponsive imposter is probed once, not per
+  // status poll)" - that test's fixture exits non-zero (the `not-a-cli`
+  // verdict) and asserts exactly one exec across two `vetPathCliCandidate`
+  // calls, which is this same property under a different name. Not
+  // duplicated here.
 });

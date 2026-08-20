@@ -646,50 +646,54 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // No `node` reachable anywhere on PATH: the scan comes back empty,
-  // `npmInterpreterInvocation` returns null, and the caller REFUSES rather
-  // than registering the bare bundle. Registering it would not be a
-  // best-effort guess - the service would re-run this very lookup through
-  // the shebang's `/usr/bin/env node`, against the service manager's PATH
-  // rather than this one, and Windows cannot execute a .js at all. A unit
-  // that installs cleanly and then never launches is worse than an error,
-  // because nothing downstream rewrites it.
-  it("refuses to register when source is npm and no node executable exists anywhere on PATH", async () => {
-    const binaryPath = join(workHome, "npm-bundle.js");
-    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
-    const { writeCliManifest } = await import("../../manifest/cli-manifest");
-    await writeCliManifest(ENVIRONMENT, {
-      version: "1.0.0",
-      installedAt: new Date().toISOString(),
-      binaryPath,
-      source: "npm",
-      pendingUpgrade: null,
-    });
-    const emptyPathDir = mkdtempSync(join(tmpdir(), "traycer-cli-empty-path-"));
-    try {
-      const { resolveServiceCliInvocation } = await import("../cli-binary");
-      const { CLI_ERROR_CODES } = await import("../../runner/errors");
+  // No `node` reachable anywhere on PATH: the scan comes back empty and
+  // `npmInterpreterInvocation` returns null. POSIX no longer refuses here -
+  // it registers the bare script directly, with a warning, because this
+  // process's PATH is not authoritative for the unit: a re-registration
+  // driven by the host, or a stripped shell, can resolve here with a
+  // minimal PATH while the systemd user manager's own environment holds a
+  // perfectly good node. Refusing would convert installs that launched
+  // fine yesterday into hard errors on the next re-registration. Only
+  // win32 still throws - a `.js` cannot execute there under any PATH - so
+  // this is skipped there rather than faked, per the module's own
+  // platform-at-import contract.
+  it.skipIf(process.platform === "win32")(
+    "registers the bare script with a warning when no node executable exists anywhere on PATH (POSIX fallback)",
+    async () => {
+      const binaryPath = join(workHome, "npm-bundle.js");
+      writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+      const { writeCliManifest } = await import("../../manifest/cli-manifest");
+      await writeCliManifest(ENVIRONMENT, {
+        version: "1.0.0",
+        installedAt: new Date().toISOString(),
+        binaryPath,
+        source: "npm",
+        pendingUpgrade: null,
+      });
+      const emptyPathDir = mkdtempSync(
+        join(tmpdir(), "traycer-cli-empty-path-"),
+      );
+      try {
+        const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-      // The CODE, not only the message. Callers branch on
-      // SERVICE_CLI_PATH_UNRESOLVED; a message-only assertion passes for any
-      // rejection that happens to contain the phrase - including one thrown
-      // from somewhere else entirely - so it cannot show the contract held.
-      await expect(
-        withPath(emptyPathDir, () =>
+        const result = await withPath(emptyPathDir, () =>
           resolveServiceCliInvocation({
             environment: ENVIRONMENT,
             override: null,
             allowSelfInvocation: false,
           }),
-        ),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
-        message: expect.stringContaining("no 'node' was found on PATH"),
-      });
-    } finally {
-      rmSync(emptyPathDir, { recursive: true, force: true });
-    }
-  });
+        );
+
+        expect(result).toEqual({ command: binaryPath, args: [] });
+        expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
+          expect.stringMatching(/falling back to the bare script/),
+          expect.objectContaining({ binaryPath }),
+        );
+      } finally {
+        rmSync(emptyPathDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   // Fix: `resolveNodeOnPath` used to accept any PATH candidate that passed
   // `access(candidate, X_OK)` alone. Execute permission on a DIRECTORY means
@@ -782,43 +786,48 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // The floor is a floor, not a preference: with nothing supported anywhere,
-  // refusing beats baking an interpreter we know cannot run this CLI into a
-  // unit file that nothing will revisit.
-  it("refuses to register when every node on PATH is below the required version", async () => {
-    const binaryPath = join(workHome, "npm-bundle.js");
-    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
-    const { writeCliManifest } = await import("../../manifest/cli-manifest");
-    await writeCliManifest(ENVIRONMENT, {
-      version: "1.0.0",
-      installedAt: new Date().toISOString(),
-      binaryPath,
-      source: "npm",
-      pendingUpgrade: null,
-    });
-    const oldDir = mkdtempSync(join(tmpdir(), "traycer-cli-node-all-old-"));
-    const oldNode = writeFakeExecutableNode(oldDir);
-    execControl.versionForPath.set(oldNode, "v18.20.4\n");
-    try {
-      const { resolveServiceCliInvocation } = await import("../cli-binary");
-      const { CLI_ERROR_CODES } = await import("../../runner/errors");
+  // The floor used to be enforced by refusing outright. It no longer is:
+  // POSIX registers the bare script with a warning even when every `node` on
+  // PATH is too old, for the same reason as the empty-PATH case above - this
+  // process's PATH is not authoritative for the unit the service manager
+  // will actually launch from.
+  it.skipIf(process.platform === "win32")(
+    "registers the bare script with a warning when every node on PATH is below the required version (POSIX fallback)",
+    async () => {
+      const binaryPath = join(workHome, "npm-bundle.js");
+      writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+      const { writeCliManifest } = await import("../../manifest/cli-manifest");
+      await writeCliManifest(ENVIRONMENT, {
+        version: "1.0.0",
+        installedAt: new Date().toISOString(),
+        binaryPath,
+        source: "npm",
+        pendingUpgrade: null,
+      });
+      const oldDir = mkdtempSync(join(tmpdir(), "traycer-cli-node-all-old-"));
+      const oldNode = writeFakeExecutableNode(oldDir);
+      execControl.versionForPath.set(oldNode, "v18.20.4\n");
+      try {
+        const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-      await expect(
-        withPath(oldDir, () =>
+        const result = await withPath(oldDir, () =>
           resolveServiceCliInvocation({
             environment: ENVIRONMENT,
             override: null,
             allowSelfInvocation: false,
           }),
-        ),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
-        message: expect.stringContaining("20.18.1"),
-      });
-    } finally {
-      rmSync(oldDir, { recursive: true, force: true });
-    }
-  });
+        );
+
+        expect(result).toEqual({ command: binaryPath, args: [] });
+        expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
+          expect.stringMatching(/falling back to the bare script/),
+          expect.objectContaining({ binaryPath }),
+        );
+      } finally {
+        rmSync(oldDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   // The boundary itself. `20.18.1` is the declared floor, so it must be
   // ACCEPTED - a `>` where `>=` belongs would reject the exact version the
@@ -855,76 +864,89 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // One patch below the floor, which no major-only comparison can see.
-  it("rejects a node one patch below the declared minimum version", async () => {
-    const binaryPath = join(workHome, "npm-bundle.js");
-    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
-    const { writeCliManifest } = await import("../../manifest/cli-manifest");
-    await writeCliManifest(ENVIRONMENT, {
-      version: "1.0.0",
-      installedAt: new Date().toISOString(),
-      binaryPath,
-      source: "npm",
-      pendingUpgrade: null,
-    });
-    const dir = mkdtempSync(join(tmpdir(), "traycer-cli-node-just-below-"));
-    const justBelow = writeFakeExecutableNode(dir);
-    execControl.versionForPath.set(justBelow, "v20.18.0\n");
-    try {
-      const { resolveServiceCliInvocation } = await import("../cli-binary");
-      const { CLI_ERROR_CODES } = await import("../../runner/errors");
+  // One patch below the floor, which no major-only comparison can see - and,
+  // like the other two node-version tests above, no longer a refusal on
+  // POSIX: the bare script is registered with a warning instead.
+  it.skipIf(process.platform === "win32")(
+    "registers the bare script with a warning for a node one patch below the declared minimum version (POSIX fallback)",
+    async () => {
+      const binaryPath = join(workHome, "npm-bundle.js");
+      writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+      const { writeCliManifest } = await import("../../manifest/cli-manifest");
+      await writeCliManifest(ENVIRONMENT, {
+        version: "1.0.0",
+        installedAt: new Date().toISOString(),
+        binaryPath,
+        source: "npm",
+        pendingUpgrade: null,
+      });
+      const dir = mkdtempSync(join(tmpdir(), "traycer-cli-node-just-below-"));
+      const justBelow = writeFakeExecutableNode(dir);
+      execControl.versionForPath.set(justBelow, "v20.18.0\n");
+      try {
+        const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-      await expect(
-        withPath(dir, () =>
+        const result = await withPath(dir, () =>
           resolveServiceCliInvocation({
             environment: ENVIRONMENT,
             override: null,
             allowSelfInvocation: false,
           }),
-        ),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+        );
+
+        expect(result).toEqual({ command: binaryPath, args: [] });
+        expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
+          expect.stringMatching(/falling back to the bare script/),
+          expect.objectContaining({ binaryPath }),
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // A directory named `node` is not a usable interpreter, so the scan still
+  // comes back empty here too - and, like every other "no usable node" shape
+  // above, POSIX now registers the bare script with a warning rather than
+  // refusing.
+  it.skipIf(process.platform === "win32")(
+    "registers the bare script with a warning when PATH contains only a directory named node (POSIX fallback)",
+    async () => {
+      const binaryPath = join(workHome, "npm-bundle.js");
+      writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+      const { writeCliManifest } = await import("../../manifest/cli-manifest");
+      await writeCliManifest(ENVIRONMENT, {
+        version: "1.0.0",
+        installedAt: new Date().toISOString(),
+        binaryPath,
+        source: "npm",
+        pendingUpgrade: null,
       });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+      const dirOnlyPathDir = mkdtempSync(
+        join(tmpdir(), "traycer-cli-node-dir-only-"),
+      );
+      writeNodeLookingDirectory(dirOnlyPathDir);
+      try {
+        const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-  it("refuses to register when PATH contains only a directory named node", async () => {
-    const binaryPath = join(workHome, "npm-bundle.js");
-    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
-    const { writeCliManifest } = await import("../../manifest/cli-manifest");
-    await writeCliManifest(ENVIRONMENT, {
-      version: "1.0.0",
-      installedAt: new Date().toISOString(),
-      binaryPath,
-      source: "npm",
-      pendingUpgrade: null,
-    });
-    const dirOnlyPathDir = mkdtempSync(
-      join(tmpdir(), "traycer-cli-node-dir-only-"),
-    );
-    writeNodeLookingDirectory(dirOnlyPathDir);
-    try {
-      const { resolveServiceCliInvocation } = await import("../cli-binary");
-      const { CLI_ERROR_CODES } = await import("../../runner/errors");
-
-      await expect(
-        withPath(dirOnlyPathDir, () =>
+        const result = await withPath(dirOnlyPathDir, () =>
           resolveServiceCliInvocation({
             environment: ENVIRONMENT,
             override: null,
             allowSelfInvocation: false,
           }),
-        ),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
-        message: expect.stringContaining("no 'node' was found on PATH"),
-      });
-    } finally {
-      rmSync(dirOnlyPathDir, { recursive: true, force: true });
-    }
-  });
+        );
+
+        expect(result).toEqual({ command: binaryPath, args: [] });
+        expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
+          expect.stringMatching(/falling back to the bare script/),
+          expect.objectContaining({ binaryPath }),
+        );
+      } finally {
+        rmSync(dirOnlyPathDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("synthesizes an npm manifest end-to-end from the distribution shim (no manifest file, no well-known slot) and pins the interpreter", async () => {
     const argv1Path = join(workHome, "npm-bundle-argv1.js");

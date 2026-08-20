@@ -190,7 +190,15 @@ export function defaultReconcileCliDeps(): ReconcileCliDeps {
     resolveBundledCliPath,
     readBundledCliVersion,
     discoverCli,
-    probeCliVersion,
+    // The reconcile's contract is version-or-null; the probe's third state
+    // (timeout) collapses to null here on purpose. Both reconcile call
+    // sites treat null as "could not determine", never as "not a CLI" -
+    // the adopt/condemn distinction that made the timeout worth a state of
+    // its own lives in `vetPathCliCandidate`.
+    probeCliVersion: async (binaryPath: string): Promise<string | null> => {
+      const probed = await probeCliVersion(binaryPath);
+      return probed.kind === "version" ? probed.version : null;
+    },
     installBundledCli,
     stableCliBinaryPath,
     stageBundledCliForUpgrade,
@@ -502,10 +510,15 @@ export async function reconcileCli(
     });
     if (!installed.published) {
       // The upgrade was deferred behind the CLI lock - most likely a
-      // `traycer cli upgrade` holding it across its download. Routed to the
-      // SAME retryable outcome a Windows running-image lock produces, so the
-      // renderer offers "restart to finalize" instead of reporting an upgrade
-      // that never happened. The user keeps the CLI they already had.
+      // `traycer cli upgrade` holding it across its download. Deliberately
+      // NOT staged and NOT persisted as `pendingUpgrade`: the lock holder is
+      // mid-mutation of the very manifest a persist would write, and no
+      // renderer affordance consumes this outcome anyway - nothing beyond a
+      // debug log reads `CliReconcileOutcome`, and the one real "restart to
+      // finalize" surface keys on `manifest.pendingUpgrade`, which correctly
+      // stays null here. The retry is the next launch's reconcile, which
+      // recomputes the version gap and re-enters the install. The user keeps
+      // the CLI they already had.
       deps.logger.warn(
         "[cli-reconcile] upgrade deferred - the CLI lock is held by another writer",
         { from: installedVersion, to: bundledVersion, path: installed.path },
@@ -639,8 +652,12 @@ async function persistPendingUpgrade(
       existing,
     );
     if (written === null) {
+      // Two causes share this null - no manifest to attach to, or the CLI
+      // lock was held past the wait - and cli-discovery already logged
+      // which. Kept deliberately cause-neutral here so this line cannot
+      // assert the wrong one.
       deps.logger.warn(
-        "[cli-reconcile] cannot record pendingUpgrade - manifest unreadable",
+        "[cli-reconcile] pendingUpgrade not recorded - see the cli log line above for the cause",
         { pending },
       );
     } else {
