@@ -34,9 +34,20 @@ import {
 const KEEPALIVE_PING = "relay-ping";
 const KEEPALIVE_PONG = "relay-pong";
 
-/** Relay session-kill / peer-death reasons (mirror relay-do `KillReason`). */
+/**
+ * Relay session-kill / peer-death reasons (mirror relay-do `KillReason`).
+ *
+ * The relay can add a reason before this client updates. Preserve that reason
+ * rather than rejecting its control frame: unknown kills are transport losses
+ * and therefore retryable by default. The known literals remain here for the
+ * one reason with stronger semantics (`revoked`) and for call-site discovery.
+ */
 export type RelayKillReason =
-  "reauth_timeout" | "revoked" | "host_gone" | "policy_violation";
+  | "reauth_timeout"
+  | "revoked"
+  | "host_gone"
+  | "policy_violation"
+  | (string & {});
 
 export interface RelaySocketHandlers {
   /** The relay assigned this client session its `sid`; bridging is live. */
@@ -303,13 +314,6 @@ type RelayControlInbound =
   | { type: "killed"; reason: RelayKillReason }
   | { type: "error"; code: string; message: string };
 
-const KILL_REASONS: ReadonlySet<string> = new Set([
-  "reauth_timeout",
-  "revoked",
-  "host_gone",
-  "policy_violation",
-]);
-
 function parseRelayControl(raw: string): RelayControlInbound | null {
   let parsed: unknown;
   try {
@@ -338,10 +342,9 @@ function parseRelayControl(raw: string): RelayControlInbound | null {
   }
   if (
     (type === "peer_gone" || type === "killed") &&
-    typeof record.reason === "string" &&
-    KILL_REASONS.has(record.reason)
+    typeof record.reason === "string"
   ) {
-    const reason = record.reason as RelayKillReason;
+    const reason: RelayKillReason = record.reason;
     return type === "peer_gone"
       ? { type: "peer_gone", reason }
       : { type: "killed", reason };

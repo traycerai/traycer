@@ -1946,17 +1946,24 @@ export class RemoteSession<
     if (!this.isCurrent(generation)) {
       return;
     }
-    if (reason === "revoked" || reason === "policy_violation") {
+    if (reason === "revoked") {
       this.goTerminalFatal({
         code: "UNAUTHORIZED",
-        reason:
-          reason === "revoked"
-            ? "Host access was revoked"
-            : "Session closed by relay policy",
+        reason: "Host access was revoked",
         incompatibleMethods: null,
         upgradeGuidance: null,
       });
       return;
+    }
+    if (reason !== "reauth_timeout" && reason !== "host_gone") {
+      // A relay policy kill can be congestion (for example, the relay's
+      // client-leg buffer limit), not an authorization verdict. Future relay
+      // kill reasons are conservatively treated the same way: retry them, but
+      // never redial an unknown overloaded session at the ordinary 1s rung.
+      // The two known non-congestion losses retain their regular schedule.
+      // Keep this in the existing reconnect state machine; only its entry rung
+      // differs.
+      this.raiseReconnectBackoffToMax();
     }
     this.handleConnectionLost(
       generation,
@@ -2311,6 +2318,20 @@ export class RemoteSession<
       this.beginConnectGuarded();
     }, delay);
     return delay;
+  }
+
+  /**
+   * Starts a congestion-triggered reconnect at the capped backoff rung while
+   * preserving the ordinary scheduler and its ready-boundary reset.
+   */
+  private raiseReconnectBackoffToMax(): void {
+    const attemptAtMaxBackoff = Math.ceil(
+      Math.log2(RECONNECT_MAX_BACKOFF_MS / RECONNECT_INITIAL_BACKOFF_MS),
+    );
+    this.reconnectAttempt = Math.max(
+      this.reconnectAttempt,
+      attemptAtMaxBackoff,
+    );
   }
 
   /**
