@@ -344,6 +344,8 @@ it("uses the shared host switcher for a live chat", () => {
   const switcherSlot = switcher.parentElement?.parentElement;
   expect(switcherSlot?.className).toContain("flex-[0_1_auto]");
   expect(switcherSlot?.className).toContain("max-w-[min(50%,20rem)]");
+  expect(switcher.className).toContain("w-fit");
+  expect(switcher.className).toContain("max-w-full");
 
   fireEvent.click(switcher);
   expect(screen.getByRole("option", { name: /Test host/ })).toBeTruthy();
