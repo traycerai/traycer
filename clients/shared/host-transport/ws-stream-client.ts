@@ -57,6 +57,7 @@ import type {
 } from "./ws-stream-factory";
 import type { WebSocketCloseEvent, WebSocketErrorEvent } from "./ws-factory";
 import type { IntervalHandle, TimerHandle } from "./timer-handle";
+import type { ReconnectAllOptions } from "./host-stream-client";
 import { backoffFor } from "./backoff";
 
 /**
@@ -488,17 +489,21 @@ export class WsStreamClient<
     }
   }
 
-  reconnectAll(reason: string): void {
+  reconnectAll(reason: string, options: ReconnectAllOptions): void {
     if (this.closed) {
       return;
     }
     // Wake-recovery trace (piped to the desktop log via the renderer-console
     // bridge): proves the wake signal arrived and how many sessions re-dialed.
     console.debug(
-      `[stream] reconnectAll reason=${reason} sessions=${this.ownedSessions.size}`,
+      `[stream] reconnectAll reason=${reason} sessions=${this.ownedSessions.size} probeFirst=${options.probeFirst}`,
     );
     for (const session of Array.from(this.ownedSessions)) {
-      session.forceReconnect(reason);
+      if (options.probeFirst) {
+        session.reconnectIfUnresponsive(reason);
+      } else {
+        session.forceReconnect(reason);
+      }
     }
   }
 
@@ -890,6 +895,20 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
 const PONG_GAP_RECOVERY_SLACK_MS = 5_000;
 
 /**
+ * How long a wake liveness probe waits for a pong before declaring the socket
+ * dead and re-dialing (see `WsStreamSession.reconnectIfUnresponsive`).
+ *
+ * This value IS the wake mechanism: a half-open socket fails only by timeout,
+ * so nothing else distinguishes "survived the sleep" from "gone". Too short and
+ * a slow-but-alive session is dropped, re-creating the wake-vs-Wi-Fi race the
+ * probe exists to end; too long and a genuinely dead remote session recovers
+ * later than the old unconditional re-dial. 5s clears any plausible
+ * localhost/LAN round trip with room to spare while staying far under the
+ * heartbeat's own pong timeout.
+ */
+const WAKE_PROBE_TIMEOUT_MS = 5_000;
+
+/**
  * One open stream. Owns the per-connect socket plus every timer wired to
  * it (dial, open-ack, heartbeat, reconnect backoff). The class is
  * state-machine-flavored - every inbound event runs through a `handleXxx`
@@ -973,6 +992,10 @@ class StreamSession<
   private dialTimer: TimerHandle | null = null;
   private openAckTimer: TimerHandle | null = null;
   private pingIntervalTimer: IntervalHandle | null = null;
+  /** In-flight wake liveness probe; see {@link reconnectIfUnresponsive}. */
+  private wakeProbeTimer: TimerHandle | null = null;
+  /** Monotonic count of pongs received; the wake probe's liveness signal. */
+  private pongSeq = 0;
   private backoffTimer: TimerHandle | null = null;
   /**
    * Armed when the subscribe completes; fires after
@@ -1078,6 +1101,74 @@ class StreamSession<
     this.reconnectAttempt = 0;
     this.slowClientReconnectStreak = 0;
     this.onTransportDrop();
+  }
+
+  /**
+   * Wake recovery that keeps a socket which is still ALIVE.
+   *
+   * `forceReconnect` on every session was the wake path's original shape, and
+   * it is wrong for the case that dominates: a lid-open on the same network,
+   * where the localhost/LAN socket to a local host survived the sleep intact.
+   * Dropping it re-runs `initialize()` for every stream on a machine whose
+   * Wi-Fi has not finished re-associating - so the cloud calls in those opens
+   * fail, and (before this layer) each failure became a fatal close. That is
+   * the overnight "all epics red by morning" report: the RECOVERY signal was
+   * causing the damage, once per dark wake, all night.
+   *
+   * A half-open socket has no positive "dead" signal - the only way to learn
+   * is to ask and wait - so the probe timeout IS the detector. It is set well
+   * above any plausible localhost/LAN round trip and far below the heartbeat's
+   * own pong timeout, so a live session is never dropped and a genuinely dead
+   * one recovers only marginally slower than the unconditional re-dial did.
+   * Timeout falls through to exactly the old behaviour.
+   */
+  reconnectIfUnresponsive(reason: string): void {
+    if (this.disposed) {
+      return;
+    }
+    const socket = this.activeSocket;
+    // Nothing live to keep: an idle or mid-reconnect session has no socket
+    // whose survival could be in question, so re-dial as before.
+    if (socket === null || this.phase !== "subscribed") {
+      this.forceReconnect(reason);
+      return;
+    }
+    const pongSeqAtProbe = this.pongSeq;
+    const sent = this.writeEnvelope(
+      socket,
+      { kind: "ping", hasBinaryPayload: false },
+      null,
+    );
+    if (!sent) {
+      // The socket refused the write - it is already gone in all but name.
+      this.forceReconnect(reason);
+      return;
+    }
+    this.clearWakeProbe();
+    this.wakeProbeTimer = setTimeout(() => {
+      this.wakeProbeTimer = null;
+      if (this.disposed) {
+        return;
+      }
+      // A pong landed after the probe went out: the socket survived the sleep
+      // and re-subscribing would only cost the user their warm streams.
+      if (this.pongSeq !== pongSeqAtProbe) {
+        return;
+      }
+      // Something else already replaced the socket while we waited; that path
+      // owns the recovery.
+      if (this.activeSocket !== socket) {
+        return;
+      }
+      this.forceReconnect(`${reason}-probe-timeout`);
+    }, WAKE_PROBE_TIMEOUT_MS);
+  }
+
+  private clearWakeProbe(): void {
+    if (this.wakeProbeTimer !== null) {
+      clearTimeout(this.wakeProbeTimer);
+      this.wakeProbeTimer = null;
+    }
   }
 
   /**
@@ -1380,6 +1471,10 @@ class StreamSession<
       const now = Date.now();
       const pongGapMs = now - this.lastPongAt;
       this.lastPongAt = now;
+      // Counted, not timestamped: a wake probe has to know whether a pong
+      // ARRIVED, and two pongs inside the same millisecond are
+      // indistinguishable by `lastPongAt` alone.
+      this.pongSeq += 1;
       if (
         pongGapMs >=
         this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS
@@ -2049,6 +2144,9 @@ class StreamSession<
 
   private teardownTimers(): void {
     this.clearHeartbeat();
+    // A pending wake probe must never outlive the session it was measuring:
+    // its callback would otherwise force a reconnect on a disposed session.
+    this.clearWakeProbe();
     if (this.dialTimer !== null) {
       clearTimeout(this.dialTimer);
       this.dialTimer = null;

@@ -1236,7 +1236,7 @@ describe("WsStreamClient", () => {
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unsupported");
 
-    client.reconnectAll("host-endpoint-change");
+    client.reconnectAll("host-endpoint-change", { probeFirst: false });
     expect(
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unknown");
@@ -3122,6 +3122,91 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     session.close();
   });
 
+  it("wake probe KEEPS a session whose socket still answers a ping", async () => {
+    // The overnight-sleep incident in miniature: a lid-open fires a wake while
+    // the localhost socket to a local host is perfectly alive. Dropping it
+    // re-runs every stream's open against a machine whose network has not
+    // finished coming back - which is what turned the RECOVERY signal into the
+    // damage. A session that answers must be left alone.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      // Far outside the 5s probe window, so the heartbeat cannot re-dial and
+      // confuse what this test is measuring.
+      pingIntervalMs: 120_000,
+      pongTimeoutMs: 600_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    await flush();
+    completeHandshake(sockets[0].socket);
+    await flush();
+    expect(sockets).toHaveLength(1);
+
+    // Fake timers only for the probe window; the handshake above needs real
+    // ones (this describe block runs on real timers).
+    vi.useFakeTimers();
+    try {
+      client.reconnectAll("wake-resume", { probeFirst: true });
+      // The probe is a real ping on the wire...
+      const pinged = sockets[0].socket.textSent.some((raw) =>
+        raw.includes('"kind":"ping"'),
+      );
+      expect(pinged).toBe(true);
+      // ...answered before the probe deadline.
+      sockets[0].socket.fireText({ kind: "pong", hasBinaryPayload: false });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      // No re-dial, and the original socket was never closed.
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0].socket.closed).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    session.close();
+  });
+
+  it("wake probe RE-DIALS a session whose socket has gone silent", async () => {
+    // The other half, and the reason the timeout IS the mechanism: a half-open
+    // socket after sleep fails only by not answering. Without this arm the
+    // probe would be a way to never reconnect anything.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 120_000,
+      pongTimeoutMs: 600_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    await flush();
+    completeHandshake(sockets[0].socket);
+    await flush();
+    expect(sockets).toHaveLength(1);
+
+    vi.useFakeTimers();
+    try {
+      client.reconnectAll("wake-resume", { probeFirst: true });
+      // A probe really went out, so the re-dial below is the TIMEOUT path and
+      // not the "nothing live to probe" shortcut.
+      expect(
+        sockets[0].socket.textSent.some((raw) => raw.includes('"kind":"ping"')),
+      ).toBe(true);
+      // No pong: the socket is half-open. Cross the probe deadline.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(sockets.length).toBeGreaterThanOrEqual(2);
+      expect(sockets[0].socket.closed).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    session.close();
+  });
+
   it("does not orphan a healthy socket when a stale revalidation resolves after a concurrent wake reconnect", async () => {
     const { factory, sockets } = makeFactory();
     const deferred = makeDeferredRevalidator();
@@ -3141,7 +3226,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
     // A concurrent wake re-dials and FULLY reconnects socket 1 while the
     // revalidation is still pending.
-    client.reconnectAll("wake-resume");
+    client.reconnectAll("wake-resume", { probeFirst: false });
     await wait(30);
     expect(sockets.length).toBeGreaterThanOrEqual(2);
     const socket1 = sockets[1].socket;
