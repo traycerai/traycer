@@ -5020,6 +5020,125 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     expect(controller.lifecycleAdmissionBlock).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
+
+  it("an outside-lane tick defers when the mutation lane owns an intent, without raising login-item-refresh", async () => {
+    // Discriminator: without reverse admission the monitor would commit a
+    // bootout behind an already-accepted install. The check and the
+    // commitment flag share one synchronous stretch, so the block stays
+    // `{kind:"mutation"}` rather than flipping to login-item-refresh.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    const installGate = deferred<{ data: unknown }>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("install")) return installGate.promise;
+      return { data: {} };
+    });
+
+    const installPromise = controller.installVersion("1.8.0", false);
+    await vi.waitFor(() => {
+      const block = controller.lifecycleAdmissionBlock;
+      if (block === null || block.kind !== "mutation") {
+        throw new Error("expected the mutation lane to be occupied");
+      }
+    });
+
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    expect(outcome).toBeNull();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+    expect(controller.lifecycleAdmissionBlock).toMatchObject({
+      kind: "mutation",
+    });
+
+    installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await installPromise;
+  });
+
+  it("a within-lane-job caller still runs the cycle while the mutation lane is occupied", async () => {
+    // convergeReady reaches the cycle from inside its own lane job; a
+    // blanket lane check would refuse the caller of the job itself.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const installGate = deferred<{ data: unknown }>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("install")) return installGate.promise;
+      return { data: {} };
+    });
+
+    const installPromise = controller.installVersion("1.8.0", false);
+    await vi.waitFor(() => {
+      const block = controller.lifecycleAdmissionBlock;
+      if (block === null || block.kind !== "mutation") {
+        throw new Error("expected the mutation lane to be occupied");
+      }
+    });
+
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("within-lane-job");
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    });
+
+    installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await installPromise;
+  });
+
+  it("convergeReady's noop path still applies a pending revision via within-lane-job", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "noop",
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      },
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.convergeReady(false);
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    });
+  });
 });
 
 describe("Class B no-op liveness", () => {

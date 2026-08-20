@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   recordNegotiatedHostMethods,
@@ -869,5 +870,119 @@ describe("createLocalMaintenanceFallbackClient", () => {
     expect(served.checkCalls).toEqual([
       { includePreReleases: true, expectedHostId: LOCAL_HOST_ID },
     ]);
+  });
+
+  it("an already-aborted signal on the direct-serve path never starts the CLI", async () => {
+    // Discriminator: round 8's serveRespectingSignal must reject with the
+    // transport cancellation shape before calling management. Red against
+    // 45e3cb7a^ which ignored the signal on the served branch.
+    handshakeAbsent(LOCAL_HOST_ID);
+    const served = servingManagement();
+    const { client, rpcCalls } = decorate(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+    );
+    const signal = AbortSignal.abort();
+
+    await expect(
+      client.requestWithSignal(
+        "host.update.check",
+        { includePreReleases: false },
+        signal,
+      ),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(HostRequestControlFlowError);
+      if (!(error instanceof HostRequestControlFlowError)) return false;
+      expect(error.reason).toBe("waiter-cancelled");
+      return true;
+    });
+    expect(rpcCalls).toEqual([]);
+    expect(served.checkCalls).toEqual([]);
+  });
+
+  it("aborting a served request mid-flight rejects the waiter even if the CLI never settles", async () => {
+    handshakeAbsent(LOCAL_HOST_ID);
+    const started: { current: (() => void) | null } = { current: null };
+    const startedPromise = new Promise<void>((resolve) => {
+      started.current = resolve;
+    });
+    const never = new Promise<never>(() => undefined);
+    const management = buildOverviewManagement({
+      maintenanceUpdateCheck: () => {
+        if (started.current === null) {
+          throw new Error("started latch was not armed");
+        }
+        started.current();
+        return never;
+      },
+    });
+    const { client } = decorate(LOCAL_HOST_ID, management, LOCAL_HOST_ID);
+    const controller = new AbortController();
+
+    const pending = client.requestWithSignal(
+      "host.update.check",
+      { includePreReleases: false },
+      controller.signal,
+    );
+    await startedPromise;
+    controller.abort();
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(HostRequestControlFlowError);
+      if (!(error instanceof HostRequestControlFlowError)) return false;
+      expect(error.reason).toBe("waiter-cancelled");
+      return true;
+    });
+  });
+
+  it("a served request that resolves before abort still resolves, and a later abort is ignored", async () => {
+    handshakeAbsent(LOCAL_HOST_ID);
+    const served = servingManagement();
+    const { client } = decorate(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+    );
+    const controller = new AbortController();
+
+    const answer = await client.requestWithSignal(
+      "host.update.check",
+      { includePreReleases: false },
+      controller.signal,
+    );
+    expect(answer).toEqual({
+      outcome: "ok",
+      manifest: updateCheckManifest("1.2.0"),
+    });
+    controller.abort();
+    expect(served.checkCalls).toEqual([
+      { includePreReleases: false, expectedHostId: LOCAL_HOST_ID },
+    ]);
+  });
+
+  it("request and requestWithResponseTimeout still serve without a signal", async () => {
+    handshakeAbsent(LOCAL_HOST_ID);
+    const served = servingManagement();
+    const { client, rpcCalls } = decorate(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+    );
+
+    await expect(
+      client.request("host.update.check", { includePreReleases: false }),
+    ).resolves.toEqual({
+      outcome: "ok",
+      manifest: updateCheckManifest("1.2.0"),
+    });
+    await expect(
+      client.requestWithResponseTimeout("host.doctor", {}, 1_000),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(rpcCalls).toEqual([]);
+    expect(served.checkCalls).toEqual([
+      { includePreReleases: false, expectedHostId: LOCAL_HOST_ID },
+    ]);
+    expect(served.doctorCalls).toEqual([{ expectedHostId: LOCAL_HOST_ID }]);
   });
 });
