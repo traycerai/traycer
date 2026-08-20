@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { log } from "../app/logger";
 import {
+  CLI_INVOCATION_PROBE_TIMEOUT_MS,
   cliBinaryName,
   discoverCli,
   resolveBundledCliPath,
@@ -130,7 +131,10 @@ export interface TraycerCliInvocation {
 }
 
 export async function resolveTraycerCliInvocation(): Promise<TraycerCliInvocation> {
-  const discovered = await discoverCli();
+  // The impatient deadline: this runs on every CLI invocation, status polls
+  // included, and nothing it decides can change who owns the slot - an
+  // unvetted candidate here only means this call uses the bundled binary.
+  const discovered = await discoverCli(CLI_INVOCATION_PROBE_TIMEOUT_MS);
   if (discovered.kind !== "none") {
     return { command: discovered.binaryPath, args: [] };
   }

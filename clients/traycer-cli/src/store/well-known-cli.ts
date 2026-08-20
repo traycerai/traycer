@@ -426,11 +426,14 @@ async function slotRefreshPlan(
   // runs one command on a machine whose slot holds a newer CLI. The manifest
   // normally arbitrates exactly this; with none, the only remaining witness
   // is the slot binary itself, so before an unanchored stage over an
-  // existing regular file the slot is asked its version once and left alone
+  // existing slot binary the slot is asked its version once and left alone
   // when it reports itself STRICTLY newer than this process. An unreadable
   // or unparseable answer stages: the hookless-upgrade cohort this fallback
   // exists for must keep converging, and a slot that cannot say what it is
   // has no seniority to assert.
+  //
+  // The legacy-symlink arm below owes the same rule and asks the same
+  // question, but answers it with a different remedy - see there.
   const guardedStage = async (): Promise<SlotRefreshPlan> => {
     if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
       return { kind: "current" };
@@ -447,7 +450,32 @@ async function slotRefreshPlan(
   // therefore never "already fresh"; it is always restaged into a real
   // file.
   const slotStat = await lstatOrNull(wellKnownPath);
-  if (slotStat === null || slotStat.isSymbolicLink()) {
+  if (slotStat === null) return { kind: "stage", source };
+  if (slotStat.isSymbolicLink()) {
+    // De-symlinking must not double as a downgrade. This arm decides what
+    // `guardedStage` decides for a regular-file slot - which bytes replace
+    // the slot - so it owes the same rule: an unanchored nomination may
+    // fill or refresh a slot, never demote one. Left unguarded, an older
+    // stray SEA run once on a machine whose legacy link points at a NEWER
+    // CLI replaced the link with a copy of itself and demoted the
+    // registered service, which is the exact downgrade the guard was added
+    // to prevent, reached through a different door.
+    //
+    // The resolution keeps both invariants instead of trading one for the
+    // other: when the link outranks this process, stage from the link's own
+    // TARGET. The slot stops being a symlink (nothing left to dangle) and
+    // still holds the newer binary's bytes. Copying the running binary
+    // would satisfy only the first.
+    //
+    // A DANGLING link cannot answer the version probe, so it falls straight
+    // through to the ordinary stage below and self-heals - the case that
+    // made copy-not-symlink the rule stays fixed. `realpath` failing after
+    // a successful probe (a target unlinked in between) falls through the
+    // same way.
+    if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
+      const target = await realpath(wellKnownPath).catch(() => null);
+      if (target !== null) return { kind: "stage", source: target };
+    }
     return { kind: "stage", source };
   }
   // The staging record is the authority whenever it applies, because it is

@@ -2022,6 +2022,87 @@ it("packaged, a MANIFEST-anchored stage ignores the slot's claimed version", asy
   expect(readFileSync(wellKnownPath, "utf8")).toBe(anchoredBytes);
 });
 
+// The same guard on the LEGACY-SYMLINK arm, which decides the same thing
+// (which bytes replace the slot) and so owes the same rule. Unguarded, an
+// older stray SEA run once on a machine whose link points at a NEWER CLI
+// replaced the link with a copy of itself and demoted the registered
+// service - the downgrade the guard exists to prevent, through a different
+// door. The remedy differs from the regular-file arm's: leaving a symlink
+// in place is not an option (a moved target leaves it dangling, which is
+// why copy-not-symlink is the rule), so the slot is staged from the LINK'S
+// OWN TARGET. De-symlinked AND not downgraded, rather than one or the
+// other.
+//
+// Windows symlink creation needs Developer Mode, which CI runners do not
+// grant - `symlinkSync` throws before the behavior under test runs.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to a NEWER binary: de-symlinks from the link's target, not the running binary",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "newer-cli-the-link-points-at");
+    const targetBytes = "binary B - the newer CLI the legacy link points at";
+    writeFileSync(linkTarget, targetBytes);
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - an older stray SEA run once";
+    writeFileSync(running, runningBytes);
+    // The probe spawns the SLOT path; through a live link that is the
+    // target's answer.
+    slotProbeControl.versionForPath.set(wellKnownPath, "9.9.9\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    const stat = lstatSync(wellKnownPath);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    // Both halves matter: the target's bytes (no downgrade) in a real file
+    // (no dangling link). Asserting only the first would pass on an
+    // untouched symlink.
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(targetBytes);
+    expect(readFileSync(wellKnownPath, "utf8")).not.toBe(runningBytes);
+  },
+);
+
+// The other direction: a link whose target reports itself OLDER has no
+// seniority to assert, so the ordinary de-symlink-from-the-running-binary
+// stage proceeds exactly as it did before the guard existed. ("0.0.0-alpha.1"
+// vs the vitest-resolved "0.0.0-local" - alphabetical pre-release compare,
+// 'a' < 'l'.) The third case, a DANGLING link, is pinned by "upgrades a
+// legacy symlink at the well-known path to a regular-file copy" above: its
+// link target does not exist, so the probe cannot answer and the stage runs.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to an OLDER binary: stages the running binary over the link",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "older-cli-the-link-points-at");
+    writeFileSync(linkTarget, "binary B - an older CLI");
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - the running, newer CLI";
+    writeFileSync(running, runningBytes);
+    slotProbeControl.versionForPath.set(wellKnownPath, "0.0.0-alpha.1\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    expect(lstatSync(wellKnownPath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+  },
+);
+
 // `wellKnownSlotRefreshHasConverged` answers whether a refresh right now
 // would find nothing to copy - the convergence probe behind the supervised
 // entry's restart decision. A `staged` outcome alone is not sufficient
