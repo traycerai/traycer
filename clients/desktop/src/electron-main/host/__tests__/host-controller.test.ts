@@ -3284,6 +3284,73 @@ describe("platform matrix", () => {
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
   });
 
+  it("a respawn admitted after another respawn already restarted answers restarted without a second cycle", async () => {
+    // The coalesce key is intent-discriminated, so a watched user repair and
+    // a menu/tray background restart for the same slot are DIFFERENT lane
+    // jobs — the seam `respawnGeneration` closes. Without it the second
+    // forced cycle fires immediately after the first and kills the sessions
+    // that just reconnected to the fresh host.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const restartGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await restartGate.promise;
+      return { data: { activated: true } };
+    });
+    const watched = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+    const background = controller.respawn({ kind: "background" });
+
+    restartGate.resolve();
+    await expect(watched).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    await expect(background).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    // ONE actual restart: the second job reported the first's completed
+    // cycle as its own fulfilment instead of running another.
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("a FAILED respawn does not satisfy its queued twin — the twin still runs as the retry", async () => {
+    // Only a COMPLETED restart bumps the generation. A busy/failed cycle
+    // never touched the host, so the queued twin must run rather than
+    // report a restart that never happened.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({ data: { activated: true } });
+    const first = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+    const second = controller.respawn({ kind: "background" });
+
+    await expect(first).resolves.toEqual({
+      kind: "failed",
+      message: expect.stringContaining("boom"),
+    });
+    await expect(second).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(2);
+  });
+
   it("F8b: CLI registerService treats a readiness timeout as non-converged and never reports registration success", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {

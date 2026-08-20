@@ -3236,15 +3236,31 @@ export class HostController {
   // `host restart` runs the cooperative shutdown claim, and the busy host
   // that made the user reach for Force restart denies it - the forced
   // restart would report the very declined outcome it exists to override.
+  // Bumped when a respawn lane job completes an actual restart. Coalescing
+  // dedupes identical submissions (same key, still in flight), but the key is
+  // intent- and target-discriminated, so a watched user repair and a
+  // menu/tray background restart for the same slot are DIFFERENT jobs - the
+  // renderer's mutation keys cannot dedupe across BrowserWindows either. The
+  // generation closes that seam at the head of the lane: a respawn admitted
+  // after another respawn already completed a restart that the caller's own
+  // submission predates has its ask already satisfied, and running a second
+  // forced cycle would kill the sessions that just reconnected to the fresh
+  // host.
+  private respawnGeneration = 0;
+
   async respawn(
     intent: LocalHostMutationIntent,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+    // Sampled at SUBMISSION, synchronously: a restart completed after this
+    // point satisfies this request; one completed before it does not.
+    const generationAtSubmit = this.respawnGeneration;
     return this.enqueueMutation<GuardedMutationOutcome<ActivateInstalledOk>>(
       "respawn",
       // Intent- and target-discriminated like the reprovision keys. Two
       // background respawns still collapse to one restart; a user repair is
       // its own job so it cannot join a background restart and skip the
-      // guard question below.
+      // guard question below. The cross-key dedupe that this key split gave
+      // up is `respawnGeneration`'s job above.
       `respawn:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
         // Guard only - NOT `admitReprovision`. A restart is not a
@@ -3258,6 +3274,13 @@ export class HostController {
         // abandoned job must leave no trace it was ever admitted.
         const abandoned = await this.runLaneHeadGuard(intent);
         if (abandoned !== null) return abandoned;
+        // After the guard, before any effect: identity decides whether this
+        // job may act at all; the generation only decides whether there is
+        // anything left to do. A restart that completed since submission is
+        // this request fulfilled - report it, run nothing.
+        if (this.respawnGeneration !== generationAtSubmit) {
+          return { kind: "ok", value: { activated: true } };
+        }
         // Fixup B14: Remove Traycer may have persisted the removed-by-user
         // sentinel but failed/been interrupted mid-uninstall, leaving
         // remaining bytes on disk - without this check, Restart/Retry would
@@ -3280,6 +3303,11 @@ export class HostController {
           // explicitly rather than leaving a healthy host surfaced as gone.
           if (activation.kind !== "ok") {
             await this.hostLifecycle.reloadSnapshotFromDisk();
+          } else {
+            // Only a COMPLETED restart satisfies later-submitted respawns;
+            // a busy/failed cycle never touched the host, so a queued twin
+            // must still run as the retry it is.
+            this.respawnGeneration += 1;
           }
           return activation;
         }
@@ -3310,6 +3338,7 @@ export class HostController {
         } catch (err) {
           return this.failedAfterServiceCycle(err);
         }
+        this.respawnGeneration += 1;
         return { kind: "ok", value: { activated: true } };
       },
     );
