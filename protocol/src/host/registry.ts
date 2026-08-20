@@ -255,6 +255,8 @@ import {
   draftsClaimV10,
   draftsDeleteV10,
   draftsListV10,
+  draftsPutBlobV10,
+  draftsReadBlobV10,
   draftsSubscribeV10,
   draftsUpsertV10,
 } from "@traycer/protocol/host/drafts/contracts";
@@ -7435,7 +7437,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
 /**
  * Drafts unary family, split out of the base/tail literals for the same
  * TS7056 declaration-emit reason as `HOST_RPC_PROVIDERS_REGISTRY_DEFINITION`
- * and `HOST_RPC_EDITING_REGISTRY_DEFINITION`. Four brand-new optional
+ * and `HOST_RPC_EDITING_REGISTRY_DEFINITION`. Six brand-new optional
  * methods, none on the released floor.
  */
 const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
@@ -7485,6 +7487,32 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: draftsClaimV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.putBlob": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsPutBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.readBlob": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsReadBlobV10,
           upgradeFromPreviousVersion: null,
         },
       },

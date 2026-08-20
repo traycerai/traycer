@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { DraftDocument } from "@traycer/protocol/host";
+import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
@@ -43,6 +43,10 @@ export interface DraftState {
   readonly lastTouchedAt: number;
   readonly generation: number;
   readonly syncedGeneration: number;
+  /** Host that currently owns the row; null until a host document applies. */
+  readonly ownerHostId: string | null;
+  readonly origin: "own" | "replica" | null;
+  readonly publication: DraftPublication | null;
 }
 
 interface ComposerDraftStore {
@@ -103,6 +107,9 @@ export const EMPTY_COMPOSER_DRAFT: DraftState = {
   lastTouchedAt: 0,
   generation: 0,
   syncedGeneration: 0,
+  ownerHostId: null,
+  origin: null,
+  publication: null,
 };
 
 function ensureDraft(
@@ -224,6 +231,9 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
             generation: 1,
             syncedGeneration: 0,
+            ownerHostId: normalizedNullableId(value.ownerHostId),
+            origin: normalizedOrigin(value.origin),
+            publication: null,
           };
         }
         return { ...currentState, drafts };
@@ -349,6 +359,9 @@ export function applyComposerHostDocument(document: DraftDocument): void {
             draftId: document.draftId,
             hostRevision: document.revision,
             targetEpicId: document.target.epicId ?? current.targetEpicId,
+            ownerHostId: document.ownerHostId,
+            origin: document.origin,
+            publication: document.publication,
           },
         },
       };
@@ -368,6 +381,9 @@ export function applyComposerHostDocument(document: DraftDocument): void {
           revision: current.revision + 1,
           generation: current.generation,
           syncedGeneration: current.generation,
+          ownerHostId: document.ownerHostId,
+          origin: document.origin,
+          publication: document.publication,
         },
       },
     };
@@ -476,6 +492,10 @@ function normalizedDraftId(raw: Record<string, unknown>): string | null {
 
 function normalizedNullableId(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function normalizedOrigin(value: unknown): "own" | "replica" | null {
+  return value === "own" || value === "replica" ? value : null;
 }
 
 function normalizedNonNegative(value: unknown): number {

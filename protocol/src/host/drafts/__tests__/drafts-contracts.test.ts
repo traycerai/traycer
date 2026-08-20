@@ -18,6 +18,12 @@ import {
   draftsListRequestSchema,
   draftsListResponseSchema,
   draftsListV10,
+  draftsPutBlobRequestSchema,
+  draftsPutBlobResponseSchema,
+  draftsPutBlobV10,
+  draftsReadBlobRequestSchema,
+  draftsReadBlobResponseSchema,
+  draftsReadBlobV10,
   draftsSubscribeClientFrameSchemaV10,
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
@@ -34,6 +40,8 @@ const UNARY_METHODS = [
   "drafts.delete",
   "drafts.list",
   "drafts.claim",
+  "drafts.putBlob",
+  "drafts.readBlob",
 ] as const;
 
 const STREAM_METHOD = "drafts.subscribe";
@@ -149,6 +157,8 @@ describe("drafts unary contracts", () => {
     expect(draftsDeleteV10.method).toBe("drafts.delete");
     expect(draftsListV10.method).toBe("drafts.list");
     expect(draftsClaimV10.method).toBe("drafts.claim");
+    expect(draftsPutBlobV10.method).toBe("drafts.putBlob");
+    expect(draftsReadBlobV10.method).toBe("drafts.readBlob");
     expect(hostRpcRegistry["drafts.upsert"][1].versions[0].contract).toBe(
       draftsUpsertV10,
     );
@@ -160,6 +170,12 @@ describe("drafts unary contracts", () => {
     );
     expect(hostRpcRegistry["drafts.claim"][1].versions[0].contract).toBe(
       draftsClaimV10,
+    );
+    expect(hostRpcRegistry["drafts.putBlob"][1].versions[0].contract).toBe(
+      draftsPutBlobV10,
+    );
+    expect(hostRpcRegistry["drafts.readBlob"][1].versions[0].contract).toBe(
+      draftsReadBlobV10,
     );
     for (const method of UNARY_METHODS) {
       expect(hostRpcRegistry[method][1].versions[0].contract.schemaVersion).toEqual(
@@ -218,6 +234,43 @@ describe("drafts wire documents", () => {
       draftsListResponseSchema.safeParse({
         drafts: [LANDING_DOCUMENT],
         snapshotSeq: 10,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts putBlob and readBlob round-trip shapes and refuses a digest mismatch / missing", () => {
+    const sha = "ab".repeat(32);
+    expect(
+      draftsPutBlobRequestSchema.parse({
+        sha256: sha,
+        bytesBase64: "AQID",
+      }),
+    ).toEqual({ sha256: sha, bytesBase64: "AQID" });
+    expect(draftsPutBlobResponseSchema.parse({ ok: true })).toEqual({
+      ok: true,
+    });
+    expect(
+      draftsPutBlobResponseSchema.parse({
+        ok: false,
+        reason: "digest-mismatch",
+      }),
+    ).toEqual({ ok: false, reason: "digest-mismatch" });
+    expect(draftsReadBlobRequestSchema.parse({ sha256: sha })).toEqual({
+      sha256: sha,
+    });
+    expect(
+      draftsReadBlobResponseSchema.parse({
+        ok: true,
+        bytesBase64: "AQID",
+      }),
+    ).toEqual({ ok: true, bytesBase64: "AQID" });
+    expect(
+      draftsReadBlobResponseSchema.parse({ ok: false, reason: "missing" }),
+    ).toEqual({ ok: false, reason: "missing" });
+    expect(
+      draftsPutBlobRequestSchema.safeParse({
+        sha256: "not-a-hash",
+        bytesBase64: "AQID",
       }).success,
     ).toBe(false);
   });
@@ -326,6 +379,21 @@ describe("drafts.subscribe@1.0 contract", () => {
 });
 
 describe("drafts.subscribe@1.0 frames", () => {
+  it("parses an advisory scope frame without storeSeq", () => {
+    const frame = {
+      kind: "scope" as const,
+      hasBinaryPayload: false as const,
+      scopeId: "scp_testdraftsscopeid000001",
+    };
+    expect(draftsSubscribeServerFrameSchemaV10.parse(frame)).toEqual(frame);
+    expect(
+      draftsSubscribeServerFrameSchemaV10.safeParse({
+        kind: "scope",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+  });
+
   it("parses an upsert whose envelope revision matches its row", () => {
     const frame = {
       kind: "upsert" as const,

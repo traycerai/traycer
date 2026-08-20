@@ -214,6 +214,15 @@ export const draftListTombstoneSchema = z.object({
 export type DraftListTombstone = z.infer<typeof draftListTombstoneSchema>;
 
 export const draftsListResponseSchema = z.object({
+  /**
+   * Personal `drafts` scope id (`scp_…`) this host resolved for the
+   * caller, or `null` when cloud publication is gated or not yet
+   * ready. The client lists published drafts through the byte-pipe
+   * (`epic.listCloudChats` + `epic.resolveCloudChatHead`) against this
+   * task id. Optional on the wire so fixtures that predate T8 still
+   * parse; a live host that implements T6 always sends it.
+   */
+  scopeId: z.string().min(1).nullable().optional(),
   drafts: z.array(draftDocumentSchema),
   /**
    * Every retained tombstone at this snapshot. Always present (empty
@@ -243,6 +252,62 @@ export const draftsClaimRequestSchema = z.object({
   draftId: z.string().min(1),
 });
 export type DraftsClaimRequest = z.infer<typeof draftsClaimRequestSchema>;
+
+/** Lowercase hex sha256 — the only form a draft blob address is written in. */
+export const draftBlobSha256Schema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase hex sha256 digest");
+export type DraftBlobSha256 = z.infer<typeof draftBlobSha256Schema>;
+
+/**
+ * Write one content-addressed image blob into the host-wide draft store.
+ * Idempotent: a second put of the same digest is a success, not an error.
+ * The host hashes the decoded bytes and refuses a digest mismatch before
+ * storing. Unary base64, same posture as `epic.readChatAttachment`.
+ */
+export const draftsPutBlobRequestSchema = z.object({
+  sha256: draftBlobSha256Schema,
+  /** Base64 of the RAW bytes — what `sha256` is over. */
+  bytesBase64: z.string(),
+});
+export type DraftsPutBlobRequest = z.infer<typeof draftsPutBlobRequestSchema>;
+
+export const draftsPutBlobResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal("digest-mismatch"),
+  }),
+]);
+export type DraftsPutBlobResponse = z.infer<typeof draftsPutBlobResponseSchema>;
+
+/**
+ * Read one blob a draft's `blobHashes` names. The second-device path:
+ * a client that did not author the draft asks the host, not a local
+ * partition. Missing and corrupt both collapse to `missing` (fail
+ * closed per-image). Transient IO rides the RPC error channel.
+ *
+ * Named `readBlob` to match `epic.readChatAttachment` (unary base64
+ * byte fetch).
+ */
+export const draftsReadBlobRequestSchema = z.object({
+  sha256: draftBlobSha256Schema,
+});
+export type DraftsReadBlobRequest = z.infer<typeof draftsReadBlobRequestSchema>;
+
+export const draftsReadBlobResponseSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    bytesBase64: z.string(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal("missing"),
+  }),
+]);
+export type DraftsReadBlobResponse = z.infer<
+  typeof draftsReadBlobResponseSchema
+>;
 
 /**
  * Client-facing face of cross-host claim. `publication-not-ready` is the
@@ -354,6 +419,17 @@ export const draftsSubscribeServerFrameSchemaV10 = z
     z.object({
       kind: z.literal("pong"),
       ...textFrameFields,
+    }),
+    /**
+     * Advisory: the host's personal drafts-scope id resolved after
+     * `drafts.list` returned `scopeId: null`. No `storeSeq` — this is
+     * not a store mutation. A client that never sees it keeps the
+     * cloud-drafts section absent (hide-not-fail), never errors.
+     */
+    z.object({
+      kind: z.literal("scope"),
+      ...textFrameFields,
+      scopeId: z.string().min(1),
     }),
   ])
   .superRefine((frame, ctx) => {

@@ -744,6 +744,7 @@ export function NewConversationModalBody(props: {
     readHashImage: readPromptStashImage,
     source: promptStashSource,
     destination: promptStashDestination,
+    hostId: resolvedHostId,
   });
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
@@ -1054,6 +1055,7 @@ export function NewConversationModalBody(props: {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
       header={header}

@@ -4,6 +4,8 @@ import { useHostBinding } from "@/lib/host";
 import { appLogger } from "@/lib/logger";
 import { useDraftMirrorForHost } from "./use-draft-mirror-for-host";
 import { useDraftMirrorFlush } from "./use-draft-mirror-flush";
+import { useCloudDraftsIngest } from "./use-cloud-drafts-ingest";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 
 let warnedMissingHostRuntime = false;
 
@@ -28,7 +30,9 @@ export function TabDraftMirrorMount(): ReactNode {
 }
 
 function TabDraftMirrorSession(): ReactNode {
-  useDraftMirrorForHost(useTabHostId());
+  const hostId = useTabHostId();
+  useDraftMirrorForHost(hostId);
+  useCloudDraftsIngest(useTabHostClient(), hostId);
   useDraftMirrorFlush();
   return null;
 }

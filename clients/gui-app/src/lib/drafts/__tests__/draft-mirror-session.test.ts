@@ -39,8 +39,10 @@ import {
   landingDraftRememberSynced,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
+import { cloudDraftsDirectoryIsVisible } from "@/lib/drafts/cloud-drafts-visibility";
 
 const HOST_ID = "host-1";
+const SCOPE_ID = "scp_testdraftsscopeid000001";
 
 const EMPTY_DOC = { type: "doc", content: [{ type: "paragraph" }] };
 
@@ -120,8 +122,10 @@ function createStreamHarness(): {
   readonly client: DraftsStreamSubscribe;
   readonly emit: (frame: DraftsSubscribeServerFrameV10) => void;
   readonly sent: Array<{ readonly kind: string; readonly draftIds?: unknown }>;
+  readonly subscribeCalls: { count: number };
 } {
   let onFrame: ServerFrameHandler | null = null;
+  const subscribeCalls = { count: 0 };
   const sent: Array<{ readonly kind: string; readonly draftIds?: unknown }> =
     [];
   const session: IStreamSession = {
@@ -145,8 +149,12 @@ function createStreamHarness(): {
       onFrame?.(frame, null);
     },
     sent,
+    subscribeCalls,
     client: {
-      subscribe: () => session,
+      subscribe: () => {
+        subscribeCalls.count += 1;
+        return session;
+      },
     },
   };
 }
@@ -172,6 +180,7 @@ function createSink(options: {
 }): DraftMirrorSink & {
   readonly upserts: DraftDocument[];
   readonly deletes: string[];
+  readonly scopes: string[];
   readonly synced: ReadonlyArray<{
     readonly draftId: string;
     readonly hostRevision: number;
@@ -179,6 +188,7 @@ function createSink(options: {
 } {
   const upserts: DraftDocument[] = [];
   const deletes: string[] = [];
+  const scopes: string[] = [];
   const synced: Array<{
     readonly draftId: string;
     readonly hostRevision: number;
@@ -186,10 +196,12 @@ function createSink(options: {
   return {
     upserts,
     deletes,
+    scopes,
     synced,
     isDirty: (draftId) => options.dirty.has(draftId),
     applyUpsert: (document) => {
       upserts.push(document);
+      return Promise.resolve();
     },
     applyDelete: (draftId) => {
       deletes.push(draftId);
@@ -198,7 +210,7 @@ function createSink(options: {
     rememberSynced: (draftId, hostRevision) => {
       synced.push({ draftId, hostRevision });
     },
-    prepareWrite: (write) => Promise.resolve(write),
+    prepareWrite: (_hostId, write) => Promise.resolve(write),
     dropAbsentFromList:
       options.dropAbsentFromList ??
       ((_hostId, _listedIds) => {
@@ -208,6 +220,10 @@ function createSink(options: {
     adoptUnadoptedLandingDrafts: (_hostId, _wanted) => {
       void _hostId;
       void _wanted;
+      return Promise.resolve();
+    },
+    applyCloudScope: (_hostId, scopeId) => {
+      scopes.push(scopeId);
     },
   };
 }
@@ -218,6 +234,125 @@ afterEach(() => {
 });
 
 describe("DraftMirrorSession", () => {
+  it("opens subscribe when drafts.list returns with a null scopeId", async () => {
+    const stream = createStreamHarness();
+    const sink = createSink({ dirty: new Set(), writes: [] });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve({
+            drafts: [],
+            tombstones: EMPTY_LIST_TOMBSTONES,
+            snapshotSeq: 1,
+            scopeId: null,
+          }),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(stream.subscribeCalls.count).toBe(1);
+    });
+    expect(session.cloudScopeId()).toBeNull();
+    expect(
+      cloudDraftsDirectoryIsVisible({
+        scopeId: session.cloudScopeId(),
+        error: null,
+        isPending: false,
+        isSuccess: true,
+      }),
+    ).toBe(false);
+    stream.emit({
+      kind: "scope",
+      hasBinaryPayload: false,
+      scopeId: SCOPE_ID,
+    });
+    await vi.waitFor(() => {
+      expect(sink.scopes).toEqual([SCOPE_ID]);
+    });
+    expect(session.cloudScopeId()).toBe(SCOPE_ID);
+    expect(
+      cloudDraftsDirectoryIsVisible({
+        scopeId: session.cloudScopeId(),
+        error: null,
+        isPending: false,
+        isSuccess: true,
+      }),
+    ).toBe(true);
+    stream.emit({
+      kind: "scope",
+      hasBinaryPayload: false,
+      scopeId: SCOPE_ID,
+    });
+    await Promise.resolve();
+    expect(sink.scopes).toEqual([SCOPE_ID, SCOPE_ID]);
+    session.close();
+  });
+
+  it("applies a late-joiner scope frame as the first subscribe message", async () => {
+    const stream = createStreamHarness();
+    const sink = createSink({ dirty: new Set(), writes: [] });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve({
+            drafts: [],
+            tombstones: EMPTY_LIST_TOMBSTONES,
+            snapshotSeq: 1,
+            scopeId: null,
+          }),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(stream.subscribeCalls.count).toBe(1);
+    });
+    stream.emit({
+      kind: "scope",
+      hasBinaryPayload: false,
+      scopeId: SCOPE_ID,
+    });
+    await vi.waitFor(() => {
+      expect(session.cloudScopeId()).toBe(SCOPE_ID);
+    });
+    expect(sink.upserts).toEqual([]);
+    expect(sink.deletes).toEqual([]);
+    expect(
+      cloudDraftsDirectoryIsVisible({
+        scopeId: session.cloudScopeId(),
+        error: null,
+        isPending: true,
+        isSuccess: false,
+      }),
+    ).toBe(true);
+    session.close();
+  });
+
   it("applies list rows that are not dirty and keeps dirty locals", async () => {
     const listed = landingDocument({ draftId: "d1", revision: 2 });
     const dirty = landingDocument({ draftId: "d2", revision: 1 });
@@ -454,6 +589,9 @@ describe("DraftMirrorSession", () => {
           lastTouchedAt: 1,
           generation: 1,
           syncedGeneration: 1,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
         },
       },
     });
@@ -463,13 +601,14 @@ describe("DraftMirrorSession", () => {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
       applyUpsert: (document) => {
         applyComposerHostDocument(document);
+        return Promise.resolve();
       },
       applyDelete: (draftId) => {
         applyComposerHostDelete(draftId);
       },
       collectDirtyWrites: () => Promise.resolve([]),
       rememberSynced: () => undefined,
-      prepareWrite: (write) => Promise.resolve(write),
+      prepareWrite: (_hostId, write) => Promise.resolve(write),
       dropAbsentFromList: (hostId, listedIds) => {
         if (hostId === "host-b") hostBDropped = true;
         dropComposerAbsentFromList(hostId, listedIds, boundHostByChatId);
@@ -477,7 +616,9 @@ describe("DraftMirrorSession", () => {
       adoptUnadoptedLandingDrafts: (_hostId, _wanted) => {
         void _hostId;
         void _wanted;
+        return Promise.resolve();
       },
+      applyCloudScope: () => undefined,
     };
     const listed: DraftDocument = {
       draftId: "draft-x",
@@ -584,6 +725,9 @@ describe("DraftMirrorSession", () => {
           lastTouchedAt: 1,
           generation: 1,
           syncedGeneration: 1,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
         },
       },
     });
@@ -592,20 +736,23 @@ describe("DraftMirrorSession", () => {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
       applyUpsert: (document) => {
         applyComposerHostDocument(document);
+        return Promise.resolve();
       },
       applyDelete: (draftId) => {
         applyComposerHostDelete(draftId);
       },
       collectDirtyWrites: () => Promise.resolve([]),
       rememberSynced: () => undefined,
-      prepareWrite: (write) => Promise.resolve(write),
+      prepareWrite: (_hostId, write) => Promise.resolve(write),
       dropAbsentFromList: (hostId, listedIds) => {
         dropComposerAbsentFromList(hostId, listedIds, boundHostByChatId);
       },
       adoptUnadoptedLandingDrafts: (_hostId, _wanted) => {
         void _hostId;
         void _wanted;
+        return Promise.resolve();
       },
+      applyCloudScope: () => undefined,
     };
     const stream = createStreamHarness();
     const session = new DraftMirrorSession({
@@ -686,7 +833,7 @@ describe("DraftMirrorSession", () => {
     const upserted: string[] = [];
     const sink: DraftMirrorSink = {
       isDirty: (draftId) => landingDraftIsDirty(draftId),
-      applyUpsert: () => undefined,
+      applyUpsert: () => Promise.resolve(),
       applyDelete: () => undefined,
       collectDirtyWrites: (hostId) =>
         Promise.resolve(
@@ -707,11 +854,11 @@ describe("DraftMirrorSession", () => {
           })),
         ),
       rememberSynced: landingDraftRememberSynced,
-      prepareWrite: (write) => Promise.resolve(write),
+      prepareWrite: (_hostId, write) => Promise.resolve(write),
       dropAbsentFromList: () => undefined,
-      adoptUnadoptedLandingDrafts: (hostId, wanted) => {
-        adoptUnadoptedLandingDraftsForHost(hostId, wanted);
-      },
+      adoptUnadoptedLandingDrafts: (hostId, wanted) =>
+        adoptUnadoptedLandingDraftsForHost(hostId, wanted),
+      applyCloudScope: () => undefined,
     };
     let listed = false;
     const session = new DraftMirrorSession({

@@ -7,7 +7,7 @@ import {
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { DraftDocument } from "@traycer/protocol/host";
+import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
@@ -51,6 +51,8 @@ import {
 } from "@/lib/drafts/draft-local-edits";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 /**
  * In-flight "new epic" draft shown in the global tab strip. Multiple drafts
  * may coexist. `activeDraftId` tracks which one the landing-page composer
@@ -75,6 +77,16 @@ export interface LandingDraftTab {
   readonly hostRevision: number;
   readonly generation: number;
   readonly syncedGeneration: number;
+  readonly ownerHostId: string | null;
+  readonly origin: "own" | "replica" | null;
+  readonly publication: DraftPublication | null;
+  /**
+   * Image hashes confirmed on the adopting host via `drafts.putBlob` /
+   * `drafts.readBlob`. LRU may drop the local mirror once every live
+   * hash is in this set; unconfirmed hashes pin the row so eviction
+   * cannot GC bytes that have no host home yet.
+   */
+  readonly confirmedHostBlobHashes: ReadonlyArray<string>;
 }
 
 export type LandingDraftAdoption =
@@ -1227,13 +1239,24 @@ function sameDraftSelection(
 
 export function freshLandingMirrorState(): Pick<
   LandingDraftTab,
-  "adoption" | "hostRevision" | "generation" | "syncedGeneration"
+  | "adoption"
+  | "hostRevision"
+  | "generation"
+  | "syncedGeneration"
+  | "ownerHostId"
+  | "origin"
+  | "publication"
+  | "confirmedHostBlobHashes"
 > {
   return {
     adoption: UNADOPTED_LANDING_DRAFT,
     hostRevision: 0,
     generation: 0,
     syncedGeneration: 0,
+    ownerHostId: null,
+    origin: null,
+    publication: null,
+    confirmedHostBlobHashes: [],
   };
 }
 
@@ -1241,13 +1264,24 @@ function parseLandingMirrorFields(
   raw: Record<string, unknown>,
 ): Pick<
   LandingDraftTab,
-  "adoption" | "hostRevision" | "generation" | "syncedGeneration"
+  | "adoption"
+  | "hostRevision"
+  | "generation"
+  | "syncedGeneration"
+  | "ownerHostId"
+  | "origin"
+  | "publication"
+  | "confirmedHostBlobHashes"
 > {
   return {
     adoption: parseLandingAdoption(raw.adoption),
     hostRevision: nonNegativeNumber(raw.hostRevision),
     generation: 1,
     syncedGeneration: 0,
+    ownerHostId: parseNullableId(raw.ownerHostId),
+    origin: parseDraftOrigin(raw.origin),
+    publication: parseDraftPublication(raw.publication),
+    confirmedHostBlobHashes: parseConfirmedHashes(raw.confirmedHostBlobHashes),
   };
 }
 
@@ -1265,7 +1299,14 @@ function mirrorFieldsFromExisting(
   id: string,
 ): Pick<
   LandingDraftTab,
-  "adoption" | "hostRevision" | "generation" | "syncedGeneration"
+  | "adoption"
+  | "hostRevision"
+  | "generation"
+  | "syncedGeneration"
+  | "ownerHostId"
+  | "origin"
+  | "publication"
+  | "confirmedHostBlobHashes"
 > {
   const existing = useLandingDraftStore
     .getState()
@@ -1276,7 +1317,61 @@ function mirrorFieldsFromExisting(
     hostRevision: existing.hostRevision,
     generation: existing.generation,
     syncedGeneration: existing.syncedGeneration,
+    ownerHostId: existing.ownerHostId,
+    origin: existing.origin,
+    publication: existing.publication,
+    confirmedHostBlobHashes: existing.confirmedHostBlobHashes,
   };
+}
+
+function parseNullableId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function parseDraftOrigin(value: unknown): "own" | "replica" | null {
+  return value === "own" || value === "replica" ? value : null;
+}
+
+function parseDraftPublication(value: unknown): DraftPublication | null {
+  if (!isRecord(value)) return null;
+  if (
+    value.status !== "unpublished" &&
+    value.status !== "current" &&
+    value.status !== "behind" &&
+    value.status !== "unknown"
+  ) {
+    return null;
+  }
+  const lastPublishedAt =
+    value.lastPublishedAt === null
+      ? null
+      : nonNegativeNumber(value.lastPublishedAt);
+  const publishedRevision =
+    value.publishedRevision === null
+      ? null
+      : nonNegativeNumber(value.publishedRevision);
+  return {
+    status: value.status,
+    lastPublishedAt:
+      value.lastPublishedAt === null ||
+      typeof value.lastPublishedAt === "number"
+        ? lastPublishedAt
+        : null,
+    publishedRevision:
+      value.publishedRevision === null ||
+      typeof value.publishedRevision === "number"
+        ? publishedRevision
+        : null,
+    halted: null,
+  };
+}
+
+function parseConfirmedHashes(value: unknown): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is string =>
+      typeof entry === "string" && SHA256_HEX.test(entry),
+  );
 }
 
 function nonNegativeNumber(value: unknown): number {
@@ -1358,6 +1453,10 @@ export function applyLandingHostDocument(
     hostRevision: document.revision,
     generation: existing?.generation ?? 0,
     syncedGeneration: existing?.generation ?? 0,
+    ownerHostId: document.ownerHostId,
+    origin: document.origin,
+    publication: document.publication,
+    confirmedHostBlobHashes: existing?.confirmedHostBlobHashes ?? [],
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);
@@ -1412,19 +1511,33 @@ export function dropLandingAbsentFromList(
   }
 }
 
-const SHA256_HEX = /^[0-9a-f]{64}$/;
-
 /**
- * T9 is the release condition: once `drafts.putBlob` stores bytes on the
- * host, adopted drafts with images can leave the local LRU again. Until then
- * the host holds the HEAD only (`blobs` is null in production), so evicting
- * a hashed draft would GC its IndexedDB bytes on the authoring device.
+ * Pin the local mirror while any image hash is not yet confirmed on the
+ * host. Once every hash has been `putBlob`/`readBlob`-acked, the row is
+ * evictable again — the host is now the byte home.
  */
 function landingDraftPinsLocalImageBytes(draft: LandingDraftTab): boolean {
+  const confirmed = new Set(draft.confirmedHostBlobHashes);
   for (const atom of collectImageAtoms(draft.content)) {
-    if (atom.hash !== null && SHA256_HEX.test(atom.hash)) return true;
+    if (atom.hash === null || !SHA256_HEX.test(atom.hash)) continue;
+    if (!confirmed.has(atom.hash)) return true;
   }
   return false;
+}
+
+export function rememberLandingBlobsOnHost(
+  draftId: string,
+  hashes: ReadonlyArray<string>,
+): void {
+  if (hashes.length === 0) return;
+  useLandingDraftStore.setState((state) => ({
+    drafts: state.drafts.map((draft) => {
+      if (draft.id !== draftId) return draft;
+      const next = new Set(draft.confirmedHostBlobHashes);
+      for (const hash of hashes) next.add(hash);
+      return { ...draft, confirmedHostBlobHashes: [...next] };
+    }),
+  }));
 }
 
 function evictAdoptedLandingMirrors(

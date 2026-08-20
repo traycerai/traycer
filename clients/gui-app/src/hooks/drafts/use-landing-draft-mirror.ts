@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useDraftMirrorForHost } from "./use-draft-mirror-for-host";
 import { useDraftMirrorFlush } from "./use-draft-mirror-flush";
+import { useCloudDraftsIngest } from "./use-cloud-drafts-ingest";
 import { bindLandingAdoptionHost } from "@/lib/drafts/draft-mirror-coordinator";
 
 export function LandingDraftMirrorMount(): ReactNode {
@@ -22,6 +23,7 @@ export function LandingDraftMirrorMount(): ReactNode {
     };
   }, [adoptionHostId]);
   useDraftMirrorForHost(adoptionHostId);
+  useCloudDraftsIngest(placement.target.client, adoptionHostId);
   useDraftMirrorFlush();
   return null;
 }

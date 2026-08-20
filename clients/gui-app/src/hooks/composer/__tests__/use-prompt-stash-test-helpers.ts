@@ -348,5 +348,6 @@ export function hookArgs(partial: {
     readHashImage: partial.readHashImage ?? (() => Promise.resolve(null)),
     source: partial.source ?? makeSource({ content: emptyDoc() }),
     destination: partial.destination,
+    hostId: null,
   };
 }

@@ -60,6 +60,9 @@ describe("composer draft host-mirror bookkeeping", () => {
           lastTouchedAt: 1,
           generation: 1,
           syncedGeneration: 1,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
         },
       },
     });

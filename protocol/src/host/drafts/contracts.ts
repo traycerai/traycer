@@ -7,6 +7,10 @@ import {
   draftsDeleteResponseSchema,
   draftsListRequestSchema,
   draftsListResponseSchema,
+  draftsPutBlobRequestSchema,
+  draftsPutBlobResponseSchema,
+  draftsReadBlobRequestSchema,
+  draftsReadBlobResponseSchema,
   draftsSubscribeClientFrameSchemaV10,
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
@@ -60,6 +64,29 @@ export const draftsClaimV10 = defineRpcContract({
 });
 
 /**
+ * Host-wide draft image write. Idempotent, digest-verified before store.
+ * Optional (`degrade: unsupported`); a host that predates it leaves
+ * images on the device-local partition.
+ */
+export const draftsPutBlobV10 = defineRpcContract({
+  method: "drafts.putBlob",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: draftsPutBlobRequestSchema,
+  responseSchema: draftsPutBlobResponseSchema,
+});
+
+/**
+ * Host-wide draft image read. The second-device / non-author path.
+ * Missing and corrupt answer `{ ok: false, reason: "missing" }`.
+ */
+export const draftsReadBlobV10 = defineRpcContract({
+  method: "drafts.readBlob",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: draftsReadBlobRequestSchema,
+  responseSchema: draftsReadBlobResponseSchema,
+});
+
+/**
  * Host-scoped draft change stream. Post-v1.0.0 stream method, so it is
  * implicitly optional: a host that predates it never advertises it and
  * the client's subscription degrades to `onMethodSupport(...,
@@ -67,8 +94,10 @@ export const draftsClaimV10 = defineRpcContract({
  * (same as the unary degrade). Never add this name to the unary
  * released floor.
  *
- * Frames carry `storeSeq`. Host MUST persist that sequence and keep it
- * strictly monotonic across restarts; there is no epoch on this wire.
+ * Upsert/delete frames carry `storeSeq`. Host MUST persist that
+ * sequence and keep it strictly monotonic across restarts; there is
+ * no epoch on this wire. `scope` is advisory (resolved personal-scope
+ * id) and does not carry `storeSeq`.
  */
 export const draftsSubscribeV10 = defineStreamRpcContract({
   method: "drafts.subscribe",

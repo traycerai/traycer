@@ -52,7 +52,7 @@ function resolveVitestEntry(): string {
   return path.resolve(path.dirname(manifestPath), manifest.bin.vitest);
 }
 
-function runVitest(configPath: string, filePath: string | undefined): void {
+function runVitest(configPath: string, filePath: string | undefined): number {
   const args = [resolveVitestEntry(), "run", "--config", configPath];
   if (filePath !== undefined) {
     args.push(filePath);
@@ -72,20 +72,19 @@ function runVitest(configPath: string, filePath: string | undefined): void {
   // why every shard death in CI has looked like an ordinary failure: an OOM
   // kill (137) and a segfault (139) were both reported as 1, with no summary
   // because the child never got to print one. Surface the signal explicitly
-  // and exit 128+n, the shell convention, so the next occurrence is
-  // self-identifying instead of ambiguous.
+  // and return 128+n, the shell convention, so the next occurrence is
+  // self-identifying instead of ambiguous. Do not exit here: a red main
+  // suite used to skip the follow-up config and the browser regressions.
   if (result.signal !== null) {
     const signalExit = SIGNAL_EXIT_CODES[result.signal] ?? 1;
     console.error(
       `[run-tests] vitest was killed by ${result.signal} (exiting ${signalExit}). ` +
         `No test failure was reported because the process did not exit normally.`,
     );
-    process.exit(signalExit);
+    return signalExit;
   }
 
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
-  }
+  return result.status ?? 1;
 }
 
 function readShardValue(args: string[]): string | undefined {
@@ -112,21 +111,38 @@ const runsWholeSuite = !testArgs.some(
 const runsBrowserRegressions =
   runsWholeSuite && process.env.RUN_DIFF_EDIT_BROWSER_REGRESSION === "1";
 
-runVitest("vitest.config.ts", undefined);
+function firstFailure(current: number, next: number): number {
+  return current !== 0 ? current : next;
+}
+
+let exitCode = 0;
+exitCode = firstFailure(exitCode, runVitest("vitest.config.ts", undefined));
 if (runsFirstShard) {
-  runVitest(
-    "vitest.react-compiler.config.ts",
-    "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
+  exitCode = firstFailure(
+    exitCode,
+    runVitest(
+      "vitest.react-compiler.config.ts",
+      "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
+    ),
   );
   if (runsBrowserRegressions) {
-    runBrowserRegression("scripts/diff-edit-browser-regression.mjs");
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/diff-edit-browser-regression.mjs"),
+    );
     // Same gate, same reason: the claim is "after Cancel the window is usable
     // again", and jsdom has no hit testing, so only a real layout engine can
     // tell a released modal from a modal that merely stopped being asserted
     // about. Runs behind the same env flag rather than a second one - a browser
     // check nobody enables is a coverage gap wearing a test's name.
-    runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs");
-    runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs");
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs"),
+    );
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs"),
+    );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
@@ -140,14 +156,15 @@ if (runsFirstShard) {
     //   reads - run it by hand.
   }
 }
+process.exit(exitCode);
 
-function runBrowserRegression(scriptPath: string): void {
+function runBrowserRegression(scriptPath: string): number {
   const result = spawnSync(process.execPath, [scriptPath], {
     stdio: "inherit",
   });
   if (result.error !== undefined) throw result.error;
   if (result.signal !== null) {
-    process.exit(SIGNAL_EXIT_CODES[result.signal] ?? 1);
+    return SIGNAL_EXIT_CODES[result.signal] ?? 1;
   }
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  return result.status ?? 1;
 }

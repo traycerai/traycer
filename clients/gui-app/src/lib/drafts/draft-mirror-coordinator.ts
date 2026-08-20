@@ -3,7 +3,21 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
-import { appLogger } from "@/lib/logger";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { appLogger, describeLogError } from "@/lib/logger";
+import { registerExtraImageRootHashSource } from "@/lib/composer/landing-image-budget";
+import {
+  forgetBlobUnsupportedHost,
+  putDraftBlobs,
+  putDraftBlobsForWrite,
+  readDraftBlobsIntoLocalStore,
+  resetDraftBlobTransportForTests,
+} from "./draft-blob-transport";
+import {
+  blobHashesFromContent,
+  blobHashesOfDocument,
+} from "./draft-write-codec";
+
 import { interviewDraftBindingKey } from "./draft-ids";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
 import {
@@ -15,6 +29,7 @@ import {
   dropLandingAbsentFromList,
   landingDraftIsDirty,
   landingDraftRememberSynced,
+  rememberLandingBlobsOnHost,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import {
@@ -42,6 +57,7 @@ import {
   applyNewChatHostDocument,
   collectNewChatDirtyWrites,
   dropNewChatAbsentFromList,
+  useNewConversationModalStore,
   findNewChatByDraftId,
   newChatDraftIsDirty,
   newChatDraftRememberSynced,
@@ -52,7 +68,13 @@ import {
   landingTarget,
   newChatTarget,
   requiredChatTarget,
+  stashDraftWrite,
 } from "./draft-write-codec";
+import type {
+  PromptStashEntry,
+  PromptStashImageBlob,
+} from "@/lib/composer/prompt-stash-codec";
+import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
   setDraftLocalDeleteListener,
   setDraftLocalEditListener,
@@ -70,6 +92,27 @@ type SessionEntry = {
 };
 
 const sessions = new Map<string, SessionEntry>();
+const sessionClients = new Map<string, HostRequester<HostRpcRegistry>>();
+const cloudScopeIdByHost = new Map<string, string | null>();
+const cloudScopeListeners = new Set<() => void>();
+
+function notifyCloudScopeListeners(): void {
+  for (const listener of cloudScopeListeners) listener();
+}
+
+function setCloudScopeId(hostId: string, scopeId: string | null): void {
+  const previous = cloudScopeIdByHost.get(hostId) ?? null;
+  if (previous === scopeId) return;
+  cloudScopeIdByHost.set(hostId, scopeId);
+  notifyCloudScopeListeners();
+}
+
+export function subscribeDraftsCloudScope(listener: () => void): () => void {
+  cloudScopeListeners.add(listener);
+  return () => {
+    cloudScopeListeners.delete(listener);
+  };
+}
 
 const composerHostByChatId = new Map<string, string>();
 const interviewHostByKey = new Map<string, string>();
@@ -78,8 +121,140 @@ const newChatHostByEpicId = new Map<string, string>();
 /** Placement host that may lazily adopt landing drafts (decision #9). */
 let landingAdoptionHostId: string | null = null;
 
+/** Host that last published or ingested each stash id. */
+const stashHostById = new Map<string, string>();
+/** Ids applied from a host list/subscribe, keyed `hostId:entryId`. */
+const stashSeenOnHost = new Set<string>();
+
+function stashSeenKey(hostId: string, entryId: string): string {
+  return `${hostId}:${entryId}`;
+}
+
 export function bindLandingAdoptionHost(hostId: string | null): void {
   landingAdoptionHostId = hostId;
+}
+
+/**
+ * Upsert-once a local stash capture onto `hostId`. No-op when no
+ * session is mounted (offline / old host) — IndexedDB remains the
+ * local tier.
+ */
+export function publishStashEntry(
+  hostId: string,
+  entry: PromptStashEntry,
+): Promise<void> {
+  stashHostById.set(entry.id, hostId);
+  const session = sessions.get(hostId)?.session;
+  if (session === undefined) return Promise.resolve();
+  return session.publishImmutable(
+    stashDraftWrite({
+      draftId: entry.id,
+      content: entry.content,
+      blobHashes: entry.blobHashes,
+      createdAt: entry.createdAt,
+    }),
+  );
+}
+
+/**
+ * Owner-authorized delete after restore-consume. Idempotent: a second
+ * device's consume that lost the race still restored locally; the
+ * host answers `deleted: false`.
+ */
+export async function deleteStashEntryOnHost(
+  hostId: string | null,
+  entryId: string,
+): Promise<void> {
+  const bound = hostId ?? stashHostById.get(entryId) ?? null;
+  if (bound === null) return;
+  const session = sessions.get(bound)?.session;
+  if (session === undefined) return;
+  const dropped = await session.deleteOnHost(entryId);
+  if (dropped) stashHostById.delete(entryId);
+}
+
+export function draftsCloudScopeId(hostId: string): string | null {
+  return (
+    cloudScopeIdByHost.get(hostId) ??
+    sessions.get(hostId)?.session.cloudScopeId() ??
+    null
+  );
+}
+
+export async function consumeStashOnHost(
+  hostId: string | null,
+  entryId: string,
+): Promise<void> {
+  const bound = hostId ?? stashHostById.get(entryId) ?? null;
+  if (bound === null) {
+    await deleteStashEntryOnHost(null, entryId);
+    return;
+  }
+  const knownHost = stashHostById.get(entryId);
+  if (knownHost === undefined || knownHost === bound) {
+    await deleteStashEntryOnHost(bound, entryId);
+    return;
+  }
+  const client = sessionClients.get(bound);
+  if (client !== undefined) {
+    try {
+      const claimed = await client.request("drafts.claim", {
+        draftId: entryId,
+      });
+      if (claimed.status === "ok" || claimed.status === "already-owned") {
+        stashHostById.set(entryId, bound);
+      }
+    } catch {
+      // Delete still runs: same-host consume and a lost claim race
+      // are both idempotent (`deleted: false`).
+    }
+  }
+  await deleteStashEntryOnHost(bound, entryId);
+}
+
+async function ingestStashDocument(
+  document: DraftDocument,
+  images: ReadonlyMap<string, PromptStashImageBlob>,
+): Promise<void> {
+  if (document.kind !== "stash-entry") return;
+  stashHostById.set(document.draftId, document.ownerHostId);
+  stashSeenOnHost.add(stashSeenKey(document.ownerHostId, document.draftId));
+  try {
+    await usePromptStashStore.getState().ingestRemote(
+      {
+        id: document.draftId,
+        createdAt: document.portable.createdAt,
+        content: document.portable.content,
+        blobHashes: document.portable.blobHashes,
+      },
+      images,
+    );
+  } catch (error: unknown) {
+    appLogger.warn("[draft-mirror] stash ingest failed", {
+      error: describeLogError(error),
+    });
+  }
+}
+
+function dropStashEntry(draftId: string): void {
+  const hostId = stashHostById.get(draftId);
+  stashHostById.delete(draftId);
+  if (hostId !== undefined) {
+    stashSeenOnHost.delete(stashSeenKey(hostId, draftId));
+  }
+  void usePromptStashStore.getState().dropRemote(draftId);
+}
+
+function dropStashAbsentFromList(
+  hostId: string,
+  listedIds: ReadonlySet<string>,
+): void {
+  for (const [entryId, boundHost] of [...stashHostById.entries()]) {
+    if (boundHost !== hostId) continue;
+    if (!stashSeenOnHost.has(stashSeenKey(hostId, entryId))) continue;
+    if (listedIds.has(entryId)) continue;
+    dropStashEntry(entryId);
+  }
 }
 
 export function bindComposerDraftHost(chatId: string, hostId: string): void {
@@ -129,13 +304,14 @@ const sink: DraftMirrorSink = {
     );
   },
   applyUpsert(document) {
-    applyHostDocument(document);
+    return applyHostDocument(document);
   },
   applyDelete(draftId) {
     applyLandingHostDelete(draftId);
     applyComposerHostDelete(draftId);
     applyInterviewHostDelete(draftId);
     applyNewChatHostDelete(draftId);
+    dropStashEntry(draftId);
   },
   collectDirtyWrites(hostId) {
     return Promise.resolve(collectAllDirtyWrites(hostId));
@@ -146,35 +322,51 @@ const sink: DraftMirrorSink = {
     interviewDraftRememberSynced(draftId, hostRevision, collectedGeneration);
     newChatDraftRememberSynced(draftId, hostRevision, collectedGeneration);
   },
-  prepareWrite(write) {
-    // T9 slots here: before drafts.upsert, upload blobHashes via
-    // drafts.putBlob (host-wide blob store). Identity until then — the
-    // window-partitioned landing-image-store stays the local byte tier
-    // for every draft, adopted or not. Kept Promise-returning so T9
-    // can await putBlob without changing the sink signature.
-    return Promise.resolve(write);
+  async prepareWrite(hostId, write) {
+    const client = sessionClients.get(hostId);
+    if (client === undefined) return write;
+    const confirmed = await putDraftBlobsForWrite(hostId, client, write);
+    rememberLandingBlobsOnHost(write.draftId, confirmed);
+    return write;
   },
   dropAbsentFromList(hostId, listedIds) {
     dropLandingAbsentFromList(hostId, listedIds);
     dropComposerAbsentFromList(hostId, listedIds, composerHostByChatId);
     dropInterviewAbsentFromList(hostId, listedIds, interviewHostByKey);
     dropNewChatAbsentFromList(hostId, listedIds, newChatHostByEpicId);
+    dropStashAbsentFromList(hostId, listedIds);
   },
   adoptUnadoptedLandingDrafts(hostId, wanted) {
-    adoptUnadoptedLandingDraftsForHost(hostId, wanted);
+    return adoptUnadoptedLandingDraftsForHost(hostId, wanted);
+  },
+  applyCloudScope(hostId, scopeId) {
+    setCloudScopeId(hostId, scopeId);
   },
 };
 
-function applyHostDocument(document: DraftDocument): void {
-  if (document.kind === "stash-entry") return;
+async function applyHostDocument(document: DraftDocument): Promise<void> {
+  const client = sessionClients.get(document.ownerHostId);
+  const hashes = blobHashesOfDocument(document);
+  if (client !== undefined && hashes.length > 0) {
+    const images = await readDraftBlobsIntoLocalStore(
+      document.ownerHostId,
+      client,
+      hashes,
+    );
+    rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
+    if (document.kind === "stash-entry") {
+      await ingestStashDocument(document, images);
+      return;
+    }
+  }
+  if (document.kind === "stash-entry") {
+    await ingestStashDocument(document, new Map());
+    return;
+  }
   if (document.kind === "interview") {
     applyInterviewHostDocument(document);
     return;
   }
-  // T9 slots here: a host-backed draft's blobHashes should resolve
-  // through drafts.readBlob into the window-partitioned landing-image-store
-  // (still the local render/GC tier). Until then, apply hash-only content
-  // as-is — missing local bytes render unavailable, they are not fetched.
   if (document.kind === "landing") {
     applyLandingHostDocument(document, document.portable.content);
     return;
@@ -333,7 +525,7 @@ function hostIdForDraft(draftId: string): string | null {
   if (newChat !== null) {
     return newChatHostByEpicId.get(newChat.epicId) ?? null;
   }
-  return null;
+  return stashHostById.get(draftId) ?? null;
 }
 
 function sessionForDraft(draftId: string): DraftMirrorSession | null {
@@ -378,10 +570,18 @@ export function acquireDraftMirrorSession(
     existing.refCount += 1;
     return existing.session;
   }
+  // New session = new host connection. Re-probe blob methods so a
+  // host that upgraded while this renderer stayed up is not stuck
+  // blob-less until restart.
+  forgetBlobUnsupportedHost(args.hostId);
   const session = new DraftMirrorSession({
     hostId: args.hostId,
     rpc: {
-      list: () => args.client.request("drafts.list", {}),
+      list: async () => {
+        const listed = await args.client.request("drafts.list", {});
+        setCloudScopeId(args.hostId, listed.scopeId ?? null);
+        return listed;
+      },
       upsert: (draft) => args.client.request("drafts.upsert", { draft }),
       delete: (draftId) => args.client.request("drafts.delete", { draftId }),
     },
@@ -391,6 +591,7 @@ export function acquireDraftMirrorSession(
     now: undefined,
   });
   sessions.set(args.hostId, { session, refCount: 1 });
+  sessionClients.set(args.hostId, args.client);
   session.start();
   return session;
 }
@@ -402,6 +603,9 @@ export function releaseDraftMirrorSession(hostId: string): void {
   if (existing.refCount > 0) return;
   existing.session.close();
   sessions.delete(hostId);
+  sessionClients.delete(hostId);
+  cloudScopeIdByHost.delete(hostId);
+  notifyCloudScopeListeners();
 }
 
 export async function flushDraftMirrorSessions(
@@ -437,17 +641,19 @@ export async function flushDraftMirrorSessions(
  * placement host, not on mount. `wanted === null` means every dirty
  * unadopted landing draft (bootstrap / flush-all).
  */
-export function adoptUnadoptedLandingDraftsForHost(
+export async function adoptUnadoptedLandingDraftsForHost(
   hostId: string,
   wanted: ReadonlySet<string> | null,
-): void {
+): Promise<void> {
   if (landingAdoptionHostId !== hostId) return;
+  const client = sessionClients.get(hostId);
   for (const draft of collectUnadoptedLandingDrafts()) {
     if (wanted !== null && !wanted.has(draft.id)) continue;
     adoptLandingDraft(draft.id, hostId);
-    // T9 slots here: after flipping adoption and before the first
-    // upsert, upload this draft's landing-image-store bytes
-    // (blobHashes) via drafts.putBlob. Do not add that call in T7.
+    if (client === undefined) continue;
+    const hashes = blobHashesFromContent(draft.content);
+    const confirmed = await putDraftBlobs(hostId, client, hashes);
+    rememberLandingBlobsOnHost(draft.id, confirmed);
   }
 }
 
@@ -456,12 +662,18 @@ export function resetDraftMirrorCoordinatorForTests(): void {
     entry.session.close();
   }
   sessions.clear();
+  sessionClients.clear();
+  cloudScopeIdByHost.clear();
   composerHostByChatId.clear();
   interviewHostByKey.clear();
   newChatHostByEpicId.clear();
   landingAdoptionHostId = null;
+  stashHostById.clear();
+  stashSeenOnHost.clear();
   warnedUnboundComposer.clear();
   warnedUnboundInterview.clear();
+  resetDraftBlobTransportForTests();
+  notifyCloudScopeListeners();
 }
 
 export function draftMirrorSessionCountForTests(): number {
@@ -483,5 +695,39 @@ export function collectDraftMirrorDirtyWrites(
 ): readonly DraftDirtyWrite[] {
   return collectAllDirtyWrites(hostId);
 }
+
+export async function applyIncomingDraftDocument(
+  document: DraftDocument,
+): Promise<void> {
+  await applyHostDocument(document);
+}
+
+export async function ingestCloudDraftSummary(input: {
+  readonly hostId: string;
+  readonly summary: CloudChatSummary;
+  readonly document: DraftDocument;
+}): Promise<void> {
+  if (input.summary.ownerHostId === input.hostId) return;
+  await applyHostDocument(input.document);
+}
+
+registerExtraImageRootHashSource(() => {
+  const hashes: string[] = [];
+  for (const draft of Object.values(useComposerDraftStore.getState().drafts)) {
+    if (draft === undefined) continue;
+    hashes.push(...blobHashesFromContent(draft.content));
+  }
+  for (const patch of Object.values(
+    useNewConversationModalStore.getState().draftPatchesByEpicId,
+  )) {
+    if (patch === undefined || patch.content === null) continue;
+    hashes.push(...blobHashesFromContent(patch.content));
+  }
+  for (const row of usePromptStashStore.getState().rows) {
+    if (row.kind !== "entry") continue;
+    hashes.push(...row.entry.blobHashes);
+  }
+  return hashes;
+});
 
 export type { DraftWrite };

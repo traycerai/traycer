@@ -112,7 +112,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(ids).not.toContain("adopted-0");
   });
 
-  it("does not LRU-evict an adopted draft that still carries blobHashes (T9 pins bytes)", () => {
+  it("does not LRU-evict an adopted draft whose image hashes are not yet on the host", () => {
     const hash = "ab".repeat(32);
     const imageContent = {
       type: "doc" as const,
@@ -197,14 +197,95 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(pinned?.content).toEqual(imageContent);
   });
 
-  it("adopts a landing draft created after bind on the first dirty sync, not on bind", () => {
+  it("LRU-evicts an adopted image draft once its hashes are confirmed on the host", () => {
+    const hash = "cd".repeat(32);
+    const imageContent = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "imageAttachment",
+          attrs: {
+            id: "img-1",
+            fileName: "shot.png",
+            hash,
+            mimeType: "image/png",
+          },
+        },
+      ],
+    };
+    useLandingDraftStore.setState({
+      drafts: [
+        {
+          id: "with-images",
+          content: imageContent,
+          selection: null,
+          lastTouchedAt: 0,
+          settings: null,
+          composerMode: "chat",
+          workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
+          adoption: { state: "adopted", hostId: "host-a" },
+          confirmedHostBlobHashes: [hash],
+        },
+      ],
+      activeDraftId: null,
+    });
+    for (let index = 0; index < MAX_LOCAL_ADOPTED_LANDING_MIRRORS; index += 1) {
+      useLandingDraftStore.setState((state) => ({
+        drafts: [
+          ...state.drafts,
+          {
+            id: `adopted-${index}`,
+            content: EMPTY_LANDING_DRAFT_CONTENT,
+            selection: null,
+            lastTouchedAt: index + 1,
+            settings: null,
+            composerMode: "chat",
+            workspace: emptyLandingDraftWorkspaceSnapshot(),
+            ...freshLandingMirrorState(),
+            adoption: { state: "adopted", hostId: "host-a" },
+          },
+        ],
+      }));
+    }
+    const incoming: DraftDocument = {
+      draftId: "from-host",
+      kind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      revision: 1,
+      lastTouchedAt: 99,
+      workspace: null,
+      ownerHostId: "host-a",
+      origin: "own",
+      adoption: { state: "adopted", hostId: "host-a" },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: EMPTY_LANDING_DRAFT_CONTENT,
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+      },
+    };
+    applyLandingHostDocument(incoming, EMPTY_LANDING_DRAFT_CONTENT);
+    const ids = useLandingDraftStore.getState().drafts.map((d) => d.id);
+    expect(ids).toContain("from-host");
+    expect(ids).not.toContain("with-images");
+  });
+
+  it("adopts a landing draft created after bind on the first dirty sync, not on bind", async () => {
     bindLandingAdoptionHost("host-a");
     const id = useLandingDraftStore.getState().createDraft(null);
     expect(
       useLandingDraftStore.getState().drafts.find((d) => d.id === id)?.adoption,
     ).toEqual({ state: "unadopted" });
     // A sync for some other draft (empty wanted set) must not adopt this one.
-    adoptUnadoptedLandingDraftsForHost("host-a", new Set());
+    await adoptUnadoptedLandingDraftsForHost("host-a", new Set());
     expect(
       useLandingDraftStore.getState().drafts.find((d) => d.id === id)?.adoption,
     ).toEqual({ state: "unadopted" });
@@ -222,12 +303,12 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(collectUnadoptedLandingDrafts().map((d) => d.id)).toEqual([id]);
     expect(collectLandingDirtyWrites("host-a")).toEqual([]);
 
-    adoptUnadoptedLandingDraftsForHost("host-b", null);
+    await adoptUnadoptedLandingDraftsForHost("host-b", null);
     expect(
       useLandingDraftStore.getState().drafts.find((d) => d.id === id)?.adoption,
     ).toEqual({ state: "unadopted" });
 
-    adoptUnadoptedLandingDraftsForHost("host-a", new Set([id]));
+    await adoptUnadoptedLandingDraftsForHost("host-a", new Set([id]));
     expect(
       useLandingDraftStore.getState().drafts.find((d) => d.id === id)?.adoption,
     ).toEqual({ state: "adopted", hostId: "host-a" });

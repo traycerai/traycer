@@ -1039,6 +1039,9 @@ describe("<ChatTile />", () => {
           lastTouchedAt: 0,
           generation: 0,
           syncedGeneration: 0,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
         },
       },
     });

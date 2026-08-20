@@ -1,5 +1,9 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { DraftKind, DraftWrite } from "@traycer/protocol/host";
+import type {
+  DraftDocument,
+  DraftKind,
+  DraftWrite,
+} from "@traycer/protocol/host";
 import type {
   DraftComposerPortable,
   DraftTarget,
@@ -18,6 +22,18 @@ import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-
 import type { StoredInterviewDraft } from "@/stores/composer/interview-draft-store";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+export function blobHashesOfWrite(write: DraftWrite): ReadonlyArray<string> {
+  if (write.kind === "interview") return [];
+  return write.portable.blobHashes;
+}
+
+export function blobHashesOfDocument(
+  document: DraftDocument,
+): ReadonlyArray<string> {
+  if (document.kind === "interview") return [];
+  return document.portable.blobHashes;
+}
 
 export function blobHashesFromContent(
   content: JsonContent,
@@ -141,4 +157,25 @@ export function landingTarget(): DraftTarget {
 
 export function newChatTarget(epicId: string): DraftTarget {
   return { epicId, chatId: null, blockId: null };
+}
+
+export function stashDraftWrite(input: {
+  readonly draftId: string;
+  readonly content: JsonContent;
+  readonly blobHashes: ReadonlyArray<string>;
+  readonly createdAt: number;
+}): DraftWrite {
+  return {
+    draftId: input.draftId,
+    kind: "stash-entry",
+    target: { epicId: null, chatId: null, blockId: null },
+    revision: 0,
+    lastTouchedAt: input.createdAt,
+    workspace: null,
+    portable: {
+      content: input.content,
+      blobHashes: [...input.blobHashes],
+      createdAt: input.createdAt,
+    },
+  };
 }

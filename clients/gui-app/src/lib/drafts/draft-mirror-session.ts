@@ -25,7 +25,7 @@ export interface DraftDirtyWrite {
 
 export interface DraftMirrorSink {
   isDirty(draftId: string): boolean;
-  applyUpsert(document: DraftDocument): void;
+  applyUpsert(document: DraftDocument): Promise<void>;
   applyDelete(draftId: string): void;
   collectDirtyWrites(hostId: string): Promise<readonly DraftDirtyWrite[]>;
   rememberSynced(
@@ -33,16 +33,22 @@ export interface DraftMirrorSink {
     hostRevision: number,
     collectedGeneration: number,
   ): void;
-  prepareWrite(write: DraftWrite): Promise<DraftWrite>;
+  prepareWrite(hostId: string, write: DraftWrite): Promise<DraftWrite>;
   dropAbsentFromList(hostId: string, listedIds: ReadonlySet<string>): void;
   /**
    * Adopt dirty unadopted landing drafts onto this host before collecting
    * writes. `wanted` is the upsert filter (`null` = every dirty id).
+   * Uploads landing image bytes after flipping adoption.
    */
   adoptUnadoptedLandingDrafts(
     hostId: string,
     wanted: ReadonlySet<string> | null,
-  ): void;
+  ): Promise<void>;
+  /**
+   * Advisory personal-scope id from a `kind: "scope"` subscribe frame.
+   * Not a store mutation — do not merge against snapshotSeq.
+   */
+  applyCloudScope(hostId: string, scopeId: string): void;
 }
 
 export interface DraftsHostRpc {
@@ -88,6 +94,7 @@ export class DraftMirrorSession {
   private readonly now: () => number;
 
   private snapshotSeq = 0;
+  private listedScopeId: string | null = null;
   private readonly held = new Map<string, DraftHeldRevisionState>();
   private readonly pending = new Map<string, PendingFlush>();
   private streamSession: IStreamSession | null = null;
@@ -141,26 +148,76 @@ export class DraftMirrorSession {
     this.sendFlushFrame(ids);
   }
 
-  async deleteOnHost(draftId: string): Promise<void> {
-    if (this.closed || this.capabilityMissing) return;
+  /**
+   * Personal drafts-scope id from the last `drafts.list` or a later
+   * advisory `kind: "scope"` frame. `null` when the host omitted it
+   * (old host / free-tier / publication not ready / never resolved).
+   */
+  cloudScopeId(): string | null {
+    return this.listedScopeId;
+  }
+
+  /**
+   * Stash entries are immutable (decision #12): upsert once, never edit.
+   * A second call for an id already held as a live row is a no-op.
+   */
+  async publishImmutable(write: DraftWrite): Promise<void> {
+    if (this.isAbandoned()) return;
+    const held = this.held.get(write.draftId);
+    if (held !== undefined && held.kind === "row") return;
+    try {
+      const prepared = await this.sink.prepareWrite(this.hostId, write);
+      const response = await this.rpc.upsert(prepared);
+      this.held.set(response.draft.draftId, {
+        kind: "row",
+        revision: response.draft.revision,
+      });
+      await this.sink.applyUpsert(response.draft);
+      this.sink.rememberSynced(
+        response.draft.draftId,
+        response.draft.revision,
+        Number.POSITIVE_INFINITY,
+      );
+    } catch (error: unknown) {
+      if (isDraftsCapabilityMissing(error)) {
+        this.markUnsupported();
+        return;
+      }
+      appLogger.warn("[draft-mirror] immutable drafts.upsert failed", {
+        error: describeLogError(error),
+      });
+    }
+  }
+
+  /**
+   * @returns `true` when the host answered (including `deleted: false`)
+   * or the method is unsupported — the caller may drop its binding.
+   * `false` on closed/transport failure: keep the binding so a retry
+   * can still find the row.
+   */
+  async deleteOnHost(draftId: string): Promise<boolean> {
+    if (this.closed) return false;
+    if (this.capabilityMissing) return true;
     this.clearTimer(draftId);
     try {
       const response = await this.rpc.delete(draftId);
-      if (!response.deleted) return;
+      if (!response.deleted) return true;
       this.held.set(draftId, {
         kind: "tombstone",
         revision: this.revisionOfHeld(draftId) + 1,
         storeSeq: this.snapshotSeq,
       });
       this.sink.rememberSynced(draftId, 0, Number.POSITIVE_INFINITY);
+      return true;
     } catch (error: unknown) {
       if (isDraftsCapabilityMissing(error)) {
         this.markUnsupported();
-        return;
+        return true;
       }
       appLogger.warn("[draft-mirror] drafts.delete failed", {
         error: describeLogError(error),
       });
+      return false;
     }
   }
 
@@ -179,6 +236,7 @@ export class DraftMirrorSession {
       const listed = await this.rpc.list();
       if (this.isClosed() || generation !== this.bootGeneration) return;
       this.snapshotSeq = listed.snapshotSeq;
+      this.listedScopeId = listed.scopeId ?? null;
       this.held.clear();
       const listedIds = new Set<string>();
       for (const document of listed.drafts) {
@@ -188,7 +246,7 @@ export class DraftMirrorSession {
           revision: document.revision,
         });
         if (!this.sink.isDirty(document.draftId)) {
-          this.sink.applyUpsert(document);
+          await this.sink.applyUpsert(document);
           this.sink.rememberSynced(
             document.draftId,
             document.revision,
@@ -234,7 +292,7 @@ export class DraftMirrorSession {
     const session = this.streamClient.subscribe("drafts.subscribe", {});
     this.streamSession = session;
     session.onServerFrame((envelope) => {
-      this.handleServerFrame(envelope);
+      void this.handleServerFrame(envelope);
     });
     session.onStatusChange((status) => {
       if (this.closed) return;
@@ -249,20 +307,27 @@ export class DraftMirrorSession {
     });
   }
 
-  private handleServerFrame(envelope: {
+  private async handleServerFrame(envelope: {
     readonly kind: string;
     readonly hasBinaryPayload: boolean;
     readonly [key: string]: unknown;
-  }): void {
+  }): Promise<void> {
     if (this.closed || this.capabilityMissing) return;
     const parsed = draftsSubscribeServerFrameSchemaV10.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     if (frame.kind === "pong") return;
-    this.applySubscribeFrame(frame);
+    if (frame.kind === "scope") {
+      this.listedScopeId = frame.scopeId;
+      this.sink.applyCloudScope(this.hostId, frame.scopeId);
+      return;
+    }
+    await this.applySubscribeFrame(frame);
   }
 
-  private applySubscribeFrame(frame: DraftsSubscribeServerFrameV10): void {
+  private async applySubscribeFrame(
+    frame: DraftsSubscribeServerFrameV10,
+  ): Promise<void> {
     if (frame.kind !== "upsert" && frame.kind !== "delete") return;
     const localDirty = this.sink.isDirty(frame.draftId);
     const held = this.held.get(frame.draftId) ?? { kind: "absent" };
@@ -278,7 +343,7 @@ export class DraftMirrorSession {
         kind: "row",
         revision: frame.revision,
       });
-      this.sink.applyUpsert(frame.draft);
+      await this.sink.applyUpsert(frame.draft);
       this.sink.rememberSynced(
         frame.draftId,
         frame.revision,
@@ -336,13 +401,13 @@ export class DraftMirrorSession {
     if (this.isAbandoned()) return;
     const wanted = draftIds === null ? null : new Set(draftIds);
     // Decision #9: adopt lazily on the first debounced sync, not on mount.
-    this.sink.adoptUnadoptedLandingDrafts(this.hostId, wanted);
+    await this.sink.adoptUnadoptedLandingDrafts(this.hostId, wanted);
     const writes = await this.sink.collectDirtyWrites(this.hostId);
     for (const entry of writes) {
       if (wanted !== null && !wanted.has(entry.write.draftId)) continue;
       if (this.isAbandoned()) return;
       try {
-        const prepared = await this.sink.prepareWrite(entry.write);
+        const prepared = await this.sink.prepareWrite(this.hostId, entry.write);
         const response = await this.rpc.upsert(prepared);
         this.held.set(response.draft.draftId, {
           kind: "row",

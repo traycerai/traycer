@@ -155,6 +155,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       initialSelection={null}
       canSubmit
       isSubmitting={false}
+      editorReadOnly={false}
       attachmentPending={false}
       workspaceDisabledHint={null}
       header={header}

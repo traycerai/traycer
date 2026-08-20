@@ -43,6 +43,9 @@ const MENTION_DRAFT: DraftState = {
   lastTouchedAt: 0,
   generation: 0,
   syncedGeneration: 0,
+  ownerHostId: null,
+  origin: null,
+  publication: null,
 };
 
 beforeEach(() => {
@@ -125,6 +128,9 @@ describe("composer draft store hydration", () => {
       lastTouchedAt: 0,
       generation: 1,
       syncedGeneration: 0,
+      ownerHostId: null,
+      origin: null,
+      publication: null,
     });
   });
 });

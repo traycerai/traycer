@@ -12,6 +12,8 @@ import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
 import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
+import { CloudDraftsSection } from "@/components/drafts/cloud-drafts-section";
+import { useHostClient } from "@/lib/host";
 
 /**
  * Route-independent landing body. Its exact draft runtime remains the T6
@@ -21,6 +23,8 @@ export function LandingDraftSurface() {
   const draftId = useDraftSurfaceId();
   const { workspaceFolders, settings } = useLandingDraftShell(draftId);
   const activity = useTabSurfaceActivity();
+  const hostClient = useHostClient();
+  const hostId = hostClient.getActiveHostId() ?? null;
 
   // Pre-mint the mount identity for the null-draft landing so the first
   // substantive edit (which creates a draft and flips this surface's id
@@ -84,6 +88,7 @@ export function LandingDraftSurface() {
           </div>
 
           <div className="mt-3 flex min-h-0 flex-1 flex-col pb-6">
+            <CloudDraftsSection client={hostClient} hostId={hostId} />
             {!systemModalOpen && activity.visible ? (
               <EpicsListPanel
                 variant="embedded"

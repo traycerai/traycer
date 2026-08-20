@@ -97,6 +97,8 @@ import {
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
+import { DraftAuthorityBanner } from "@/components/drafts/draft-authority-banner";
+import { useDraftAuthorityControl } from "@/hooks/drafts/use-draft-authority";
 import {
   landingStashIdentity,
   useLandingPromptStashDestination,
@@ -569,6 +571,31 @@ export function LandingComposer(props: LandingComposerProps) {
     readHashImage: readPromptStashImage,
     source: promptStashSource,
     destination: promptStashDestination,
+    hostId: resolvedHostId,
+  });
+  const landingOwnerHostId = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return (
+      state.drafts.find((entry) => entry.id === draftId)?.ownerHostId ?? null
+    );
+  });
+  const landingOrigin = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return state.drafts.find((entry) => entry.id === draftId)?.origin ?? null;
+  });
+  const landingPublication = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return (
+      state.drafts.find((entry) => entry.id === draftId)?.publication ?? null
+    );
+  });
+  const authority = useDraftAuthorityControl({
+    draftId,
+    ownerHostId: landingOwnerHostId,
+    origin: landingOrigin,
+    tabHostId: resolvedHostId,
+    client: hostClient,
+    publication: landingPublication,
   });
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
@@ -587,7 +614,8 @@ export function LandingComposer(props: LandingComposerProps) {
     !attachmentPending &&
     !submitBlocked &&
     workspaceCanStart &&
-    hasSubmittableContent;
+    hasSubmittableContent &&
+    !authority.readOnly;
 
   // Submit-time refusal copy (selection model §54) and the G4 re-point notice
   // share one slot: both say "this composer's device is not what you think",
@@ -777,11 +805,23 @@ export function LandingComposer(props: LandingComposerProps) {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      editorReadOnly={authority.readOnly}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
       topBanner={
         <>
+          {authority.readOnly ? (
+            <DraftAuthorityBanner
+              ownerLabel={authority.ownerLabel}
+              claiming={authority.claiming}
+              claimError={authority.claimError}
+              publicationLabel={authority.publicationLabel}
+              onClaim={() => {
+                void authority.claim();
+              }}
+            />
+          ) : null}
           <ComposerHostNotice
             notice={hostNotice}
             hostLabelFor={hostLabelFromDirectory}
