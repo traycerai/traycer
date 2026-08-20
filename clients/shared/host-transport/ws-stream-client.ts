@@ -332,22 +332,12 @@ export class WsStreamClient<
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
       onHostCredentialAck: (hostId, state) => {
-        // Observer first, and guarded: the tap must see the state even when
-        // the mint machinery below declines to act on it, and a throwing
-        // observer must not break the ack processing it merely watches.
-        const observe = this.options.onHostCredentialState;
-        if (observe !== null) {
-          try {
-            observe(hostId, state);
-          } catch (cause) {
-            console.warn(
-              `[stream] host-credential state observer threw (client=${this.instanceId}, host=${hostId})`,
-              cause,
-            );
-          }
-        }
         this.handleHostCredentialAck(hostId, state);
       },
+      // The passive tap is delivered by the session itself, ahead of the
+      // compatibility abort, so it fires on EVERY state-carrying ack rather
+      // than only the ones whose method version also happened to negotiate.
+      onHostCredentialState: this.options.onHostCredentialState,
       onAvailabilityRecovered: () => {
         this.emitAvailabilityRecovered();
       },
@@ -865,6 +855,15 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     hostId: string,
     state: HostCredentialState,
   ) => void;
+  /**
+   * Passive observation of the same state, delivered EARLIER than
+   * `onHostCredentialAck` - before this session's application method can abort
+   * the handshake on a version mismatch. The credential state is a handshake
+   * fact, not a per-method one, so an observer must see it even from a host
+   * this build cannot subscribe to. `null` when nobody is watching.
+   */
+  readonly onHostCredentialState:
+    ((hostId: string, state: HostCredentialState) => void) | null;
   /**
    * Reports positive host-recovery evidence to the owning client - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
@@ -1471,6 +1470,18 @@ class StreamSession<
       return;
     }
 
+    // Reported HERE, ahead of the compatibility abort below, because the
+    // credential state is a property of the HANDSHAKE and not of this
+    // session's application method: a host whose `hostCredentialState` says
+    // `missing` said so whether or not our build agrees with it about one
+    // method's version. Firing this only on the success path made the
+    // observer's contract ("every state-carrying ack") false, and left an
+    // observer unable to tell a version-skewed host apart from an
+    // unreachable one. The MINT hook stays at the end of this method, where a
+    // live session can actually carry the provision frame - only the passive
+    // observation moves.
+    this.reportHostCredentialState(hostCredentialState);
+
     if (!compat.ok) {
       this.config.onManifest(theirManifest, this.config.method, "unsupported");
       const terminalFrame: ClientStreamFatalErrorFrame = {
@@ -1559,6 +1570,33 @@ class StreamSession<
       hostId !== null
     ) {
       this.config.onHostCredentialAck(hostId, hostCredentialState);
+    }
+  }
+
+  /**
+   * Passive observation of the ack's credential state, split out from the mint
+   * hook so it can fire before a compatibility abort. Guarded the same way the
+   * mint is (capability + state + host id) and never allowed to throw into the
+   * handshake.
+   */
+  private reportHostCredentialState(state: HostCredentialState | null): void {
+    const observe = this.config.onHostCredentialState;
+    const hostId = this.openFrameHostId;
+    if (
+      observe === null ||
+      !this.supportsHostCredentialProvision ||
+      state === null ||
+      hostId === null
+    ) {
+      return;
+    }
+    try {
+      observe(hostId, state);
+    } catch (cause) {
+      console.warn(
+        `[stream] host-credential state observer threw (method=${this.config.method}, host=${hostId})`,
+        cause,
+      );
     }
   }
 

@@ -3851,6 +3851,52 @@ describe("WsStreamClient host credential provisioning", () => {
       session.close();
     });
 
+    it("fires even when the subscribed method's version is INCOMPATIBLE", async () => {
+      // The credential state is a HANDSHAKE fact, not a per-method one. It
+      // used to be reported only after the compatibility gate, so a host that
+      // advertised the capability but disagreed with this build about one
+      // method's version looked indistinguishable from an unreachable host -
+      // and the CLI's install probe reported it as such and could not
+      // provision it.
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => {
+          observed.push({ hostId, state });
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+
+      const socket = sockets[0].socket;
+      socket.fireOpen();
+      const openParsed = JSON.parse(socket.textSent[0]) as {
+        readonly manifest: Record<string, { major: number; minor: number }>;
+      };
+      // Same ack, but the host claims a major this build cannot speak.
+      const theirManifest = {
+        ...openParsed.manifest,
+        "epic.subscribe": {
+          major: openParsed.manifest["epic.subscribe"].major + 1,
+          minor: 0,
+        },
+      };
+      socket.fireText({
+        ...streamOpenAck(theirManifest, [CAP_PROVISION]),
+        hostCredentialState: "missing",
+      });
+      await flush();
+
+      expect(observed).toEqual([{ hostId: HOST_A.hostId, state: "missing" }]);
+      session.close();
+    });
+
     it("fires before the mint flow is invoked for a non-active state", async () => {
       const order: string[] = [];
       const mint = vi.fn(async () => {

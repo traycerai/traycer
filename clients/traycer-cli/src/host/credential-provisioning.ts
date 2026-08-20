@@ -52,8 +52,15 @@ import {
 // The probe subscribes to `host.notifications.subscribe` purely as transport:
 // it is host-scoped (no ids to invent), read-only, and stays quietly open,
 // which keeps the session alive across the mint's HTTP round trip so the push
-// lands on a live socket. The credential machinery itself rides the handshake,
-// not the method.
+// lands on a live socket.
+//
+// The credential STATE rides the handshake and is observed before this
+// method's version is even checked, so a host this build cannot subscribe to
+// still reports whether it holds a credential. The HANDOVER does not: pushing
+// a provision frame needs a live session, and this method's compatibility is
+// what grants one. A mismatch is therefore reported as `unsupported` - we
+// reached the host and learned its state, but this CLI build cannot carry the
+// credential to it - rather than as an unreachable host.
 //
 // Every outcome here is advisory: `host install` already succeeded, and an
 // unprovisioned host self-heals when any minting client connects later - so
@@ -366,7 +373,7 @@ export async function provisionInstalledHostCredential(
           // opening silently until the deadline reports it.
           sawSilentOpen = true;
           break;
-        case "fatal":
+        case "fatal": {
           options.logger.warn(
             "Host credential provisioning stream closed fatally",
             {
@@ -377,7 +384,21 @@ export async function provisionInstalledHostCredential(
                   : null,
             },
           );
+          // A version mismatch on the probe's own transport method is NOT an
+          // unreachable host - we reached it, and it may well advertise the
+          // credential capability. Retrying cannot help (the mismatch is a
+          // property of this CLI build against this host), so report it as
+          // the capability gap it is and let the self-heal cover it.
+          const reason = observation.reason;
+          if (
+            reason !== null &&
+            reason.kind === "fatalError" &&
+            reason.details.code === "INCOMPATIBLE"
+          ) {
+            return { kind: "unsupported" };
+          }
           return settledOutcome();
+        }
         case "timeout":
           return settledOutcome();
       }
@@ -406,10 +427,20 @@ export async function provisionInstalledHostCredential(
       // remainder keeps the whole probe inside its advertised bound while
       // making sure a rotation this probe began has finished before the
       // command returns and the store is disposed under it.
-      await Promise.race([
-        pendingRevalidation.catch(() => undefined),
-        sleep(remaining()),
-      ]);
+      // A CANCELABLE deadline, not `sleep()`: an uncleared `setTimeout` keeps
+      // the Node event loop alive, and the CLI exits by draining it rather
+      // than calling `process.exit`. A plain race would therefore hold
+      // `host install` open for the whole remaining budget every time the
+      // revalidation won - the exact hang this block exists to prevent.
+      const deadline = cancelableDelay(remaining());
+      try {
+        await Promise.race([
+          pendingRevalidation.catch(() => undefined),
+          deadline.promise,
+        ]);
+      } finally {
+        deadline.cancel();
+      }
     }
     if (client !== null) {
       client.close("host-install-credential-provisioning-settled");
@@ -549,4 +580,33 @@ async function settleMint(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * A delay whose timer can be cleared when it loses a race.
+ *
+ * `sleep()` is fine where the wait is always awaited to completion (the push
+ * drain), but a losing arm of a `Promise.race` leaves its `setTimeout`
+ * pending, and a pending timer keeps the Node event loop alive. The CLI sets
+ * `process.exitCode` rather than calling `process.exit` (`runner/exit.ts`), so
+ * that leak becomes a visible hang: the command sits there until the timer
+ * fires.
+ */
+function cancelableDelay(ms: number): {
+  readonly promise: Promise<void>;
+  readonly cancel: () => void;
+} {
+  let handle: NodeJS.Timeout | null = null;
+  const promise = new Promise<void>((resolve) => {
+    handle = setTimeout(resolve, ms);
+  });
+  return {
+    promise,
+    cancel: (): void => {
+      if (handle !== null) {
+        clearTimeout(handle);
+        handle = null;
+      }
+    },
+  };
 }
