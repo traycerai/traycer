@@ -237,6 +237,7 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
     get stageLatestCalls() {
       return stageLatestCalls;
     },
+    mutationLane: null,
     async getStatus(): Promise<HostControllerStatus> {
       return {
         download: null,

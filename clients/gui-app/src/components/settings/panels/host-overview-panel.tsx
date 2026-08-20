@@ -972,6 +972,17 @@ export function HostOverviewPanel(props: {
                 // otherwise the sheet the fallback opened is the one surface
                 // still dispatching the refused RPC.
                 rpcRestartSupported: !restartViaForceFallback,
+                // Dispatch through THIS page's restart write, so a Doctor fix
+                // shares the lifecycle gate and the cross-surface mutation key
+                // with the header's Restart. Routing it through `onLocalFix`
+                // would put it on the `hostRunDoctor` key instead — outside
+                // every gate on this page — and a forced respawn would queue
+                // behind whatever lifecycle intent is already running.
+                onBridgeRestart: () => {
+                  if (anyPending) return;
+                  forceRestart.mutate();
+                },
+                bridgeRestartPending: forceRestartInFlight || anyPending,
                 onLocalFix: props.onLocalDoctorFix,
                 localFixPendingCode: props.localDoctorFixPendingCode,
               }

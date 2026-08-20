@@ -164,6 +164,9 @@ interface RecordedControllerCall {
  */
 class FakeHostController implements IpcHostController {
   readonly calls: RecordedControllerCall[] = [];
+  // Idle by default: the maintenance install handler tests the lane before it
+  // submits, so a non-null value here would refuse every install.
+  mutationLane: MutationLaneStatus | null = null;
   private progressListeners = new Set<(progress: MutationProgress) => void>();
 
   installVersionResult: MutationOutcome<InstallVersionOk> = {

@@ -199,23 +199,28 @@ export function buildMaintenanceFallbackServeMap(
       // brief precheck and promote phases — two runs download in parallel and
       // can swap twice. This lane needs the same refusal from a different
       // fact: the desktop controller's mutation lane is exclusive, so it does
-      // not refuse a competing intent, it QUEUES it. Submitting here would
-      // therefore start a second install the moment the first finished,
-      // retargeting (and possibly downgrading) the host nobody asked to move.
+      // not refuse a competing intent, it QUEUES it. Submitting anyway would
+      // start a second install the moment the first finished, retargeting
+      // (and possibly downgrading) a host nobody asked to move.
       //
       // The page's own gate cannot cover this: `updateInFlight` reads
-      // `host.status.updateProgress`, which is exactly the field these
-      // pre-1.2.0 hosts do not have, and the lane can be occupied by the
-      // banner, the tray, or the background reconciler rather than by this
-      // page. Reading the shared lane is the same rule the update banner
-      // states — one intent system-wide at a time.
-      const controller = await management.getHostControllerStatus();
-      if (controller.mutation !== null) {
+      // `host.status.updateProgress`, exactly the field these pre-1.2.0 hosts
+      // do not have, and the lane is as often occupied by the banner, the
+      // tray or the background reconciler as by this page.
+      //
+      // The test and the submission are ONE call on purpose. Reading status
+      // here and then submitting leaves a window for a competing intent to
+      // take the lane in between, and the outcome of losing that race is the
+      // queued double-install this refusal exists to prevent — so main does
+      // both in one synchronous stretch and answers `lane-busy`.
+      const dispatch = await management.maintenanceInstallVersion({
+        version: params.version,
+        force: params.force,
+      });
+      if (dispatch.kind === "lane-busy") {
         return { outcome: "already-updating" };
       }
-      return mapInstallVersionOutcome(
-        await management.installVersion(params.version, params.force),
-      );
+      return mapInstallVersionOutcome(dispatch.outcome);
     },
     "host.doctor": async () =>
       localWsDoctorResponse(await management.maintenanceDoctor()),

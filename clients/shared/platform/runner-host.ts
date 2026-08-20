@@ -1481,6 +1481,21 @@ export interface CliInstallManifestSnapshot {
 }
 
 /**
+ * What an atomic maintenance install submission answers.
+ *
+ * `lane-busy` is main's verdict that the exclusive mutation lane was already
+ * occupied at submission time, so NOTHING was enqueued — the compatibility
+ * lane maps it to the protocol's `already-updating`. Every other arm is the
+ * controller's own per-intent outcome, unchanged and mapped as before.
+ */
+export type MaintenanceInstallDispatch =
+  | { readonly kind: "lane-busy" }
+  | {
+      readonly kind: "dispatched";
+      readonly outcome: MutationOutcome<InstallVersionOk>;
+    };
+
+/**
  * `host.doctor` as the desktop lane can honestly answer it: the CLI's issue
  * list (validated against the protocol issue schema) or the shared CLI-shell
  * failure taxonomy — but WITHOUT `triviallyGreenIssueCodes`. That field is a
@@ -1582,7 +1597,7 @@ export interface IHostManagement {
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;
   readonly cliManifest: () => Promise<CliInstallManifestSnapshot | null>;
-  // The three `maintenance*` members below serve ONE consumer: the GUI's
+  // The four `maintenance*` members below serve ONE consumer: the GUI's
   // local-maintenance fallback, which answers the v1.2.0 `host.*` maintenance
   // RPCs over this bridge for a LOCAL host too old to have them (≤ 1.1.11 —
   // a frozen population; delete these when the supported fleet floor reaches
@@ -1600,6 +1615,27 @@ export interface IHostManagement {
   readonly maintenanceDoctor: () => Promise<MaintenanceDoctorProjection>;
   /** `host.getInstallationInfo`'s answer from the shared on-disk records. */
   readonly maintenanceInstallationInfo: () => Promise<HostGetInstallationInfoResponse>;
+  /**
+   * `host.update.install`'s dispatch, refused when the mutation lane is
+   * already occupied.
+   *
+   * Distinct from {@link installVersion} because the REFUSAL has to be atomic
+   * with the submission. The lane is exclusive but it does not reject a
+   * distinct intent — it QUEUES it — so a renderer that reads
+   * `getHostControllerStatus` and then submits has a window in which the
+   * banner, the tray or the background reconciler can take the lane, and its
+   * install lands right after that one finishes (retargeting, possibly
+   * downgrading, a host nobody asked to move). Main tests the lane and
+   * submits in one synchronous stretch, which is what closes it.
+   *
+   * `installVersion` keeps its queueing semantics for the surfaces that want
+   * them; only the compatibility lane, whose caller has no other way to see
+   * the refusal, takes this one.
+   */
+  readonly maintenanceInstallVersion: (input: {
+    readonly version: string;
+    readonly force: boolean;
+  }) => Promise<MaintenanceInstallDispatch>;
   readonly getHostName: () => Promise<HostNameSettings>;
   readonly setHostName: (input: {
     readonly customName: string | null;

@@ -124,6 +124,7 @@ function buildManagementSpy(): ManagementSpy {
     maintenanceUpdateCheck: notImplemented("maintenanceUpdateCheck"),
     maintenanceDoctor: notImplemented("maintenanceDoctor"),
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
+    maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
     getHostName: () =>
       Promise.resolve({
         systemName: localSnapshot.systemHostName,

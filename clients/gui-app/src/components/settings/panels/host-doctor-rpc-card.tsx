@@ -75,6 +75,14 @@ export function HostDoctorRpcCard(props: {
    * this host would refuse — see `doctorFixRoute`.
    */
   readonly rpcRestartSupported: boolean;
+  /**
+   * Dispatches the page's OWN bridge respawn for a restart fix that routed to
+   * the local bridge. Shares the page's restart mutation (and therefore its
+   * lifecycle gate and cross-surface dedup), unlike `onLocalFix`.
+   */
+  readonly onBridgeRestart: () => void;
+  /** True while the page's restart write is in flight; disables the fix. */
+  readonly bridgeRestartPending: boolean;
   /** Runs the local-only repair actions on this computer. */
   readonly onLocalFix: (issue: HostDoctorIssue) => void;
   readonly localFixPendingCode: string | null;
@@ -221,7 +229,9 @@ export function HostDoctorRpcCard(props: {
             hasLocalBridge: props.hasLocalBridge,
             rpcRestartSupported: props.rpcRestartSupported,
           })}
-          restartPending={restartMutation.isPending}
+          restartPending={
+            restartMutation.isPending || props.bridgeRestartPending
+          }
           logsPending={logsMutation.isPending}
           localFixPending={props.localFixPendingCode === issue.code}
           logTail={logTail}
@@ -270,6 +280,20 @@ export function HostDoctorRpcCard(props: {
           onLocalFix={() => {
             if (issue.fixAction === "host-free-port-and-restart") {
               setFreePortIssue(issue);
+              return;
+            }
+            // A restart routed here (rather than to the RPC) is the fallback
+            // lane's, and it must dispatch through the page's own restart
+            // write — NOT the generic local-fix mutation, whose key is
+            // `hostRunDoctor` and which therefore sits outside the lifecycle
+            // gate every other restart on this page answers to. Without this
+            // the button stays live beside an active lifecycle intent, and
+            // `restartHost` queues behind it rather than being refused.
+            if (
+              issue.fixAction === "host-restart" ||
+              issue.fixAction === "host-start"
+            ) {
+              props.onBridgeRestart();
               return;
             }
             props.onLocalFix(issue);

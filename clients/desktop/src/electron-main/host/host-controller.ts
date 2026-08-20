@@ -710,6 +710,21 @@ export class HostController {
 
   // ---- Canonical status --------------------------------------------------
 
+  /**
+   * The mutation lane RIGHT NOW, with no await in between.
+   *
+   * `getStatus()` reads the same field, but only after three filesystem reads,
+   * so its answer is already history by the time a caller sees it. A caller
+   * that must not ENQUEUE beside a running intent needs the test and the
+   * submission in one synchronous stretch — the lane is exclusive but it does
+   * not refuse a distinct intent, it queues it, so a stale "idle" verdict
+   * becomes a write that lands after whatever was running. Pair this with the
+   * submission and put no `await` between them.
+   */
+  get mutationLane(): MutationLaneStatus | null {
+    return this.mutationStatus;
+  }
+
   async getStatus(): Promise<HostControllerStatus> {
     const installed = await readDesktopHostInstallRecord(this.layout);
     const staged = await readDesktopHostStagedRecord(this.layout);

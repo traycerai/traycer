@@ -25,6 +25,7 @@ import type {
   HostUpdateCheckResponse,
   InstallVersionOk,
   MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
   MutationOutcome,
   ServiceRegistrationOk,
   TraycerUninstallResult,
@@ -85,6 +86,10 @@ export interface HostManagementBridgeSurface {
   ): Promise<HostUpdateCheckResponse>;
   maintenanceDoctor(): Promise<MaintenanceDoctorProjection>;
   maintenanceInstallationInfo(): Promise<HostGetInstallationInfoResponse>;
+  maintenanceInstallVersion(input: {
+    readonly version: string;
+    readonly force: boolean;
+  }): Promise<MaintenanceInstallDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -184,6 +189,11 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerMaintenanceInstallationInfo,
       ) as Promise<HostGetInstallationInfoResponse>,
+    maintenanceInstallVersion: ({ version, force }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceInstallVersion, {
+        version,
+        force,
+      }) as Promise<MaintenanceInstallDispatch>,
     getHostName: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostNameGet,

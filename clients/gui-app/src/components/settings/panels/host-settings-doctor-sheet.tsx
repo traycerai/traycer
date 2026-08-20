@@ -41,6 +41,10 @@ export type DoctorSheetSource =
        * restart fix actions through the bridge respawn — see `doctorFixRoute`.
        */
       readonly rpcRestartSupported: boolean;
+      /** Dispatches the page's own bridge respawn for a restart fix. */
+      readonly onBridgeRestart: () => void;
+      /** True while that restart write is in flight. */
+      readonly bridgeRestartPending: boolean;
       /** Runs a local-only repair on this computer via the CLI bridge. */
       readonly onLocalFix: (issue: HostDoctorIssue) => void;
       readonly localFixPendingCode: string | null;
@@ -107,6 +111,8 @@ function DoctorSheetBody(props: {
       hasLocalBridge={source.hasLocalBridge}
       degrade={source.degrade}
       rpcRestartSupported={source.rpcRestartSupported}
+      onBridgeRestart={source.onBridgeRestart}
+      bridgeRestartPending={source.bridgeRestartPending}
       onLocalFix={source.onLocalFix}
       localFixPendingCode={source.localFixPendingCode}
     />

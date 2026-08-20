@@ -97,6 +97,7 @@ import type {
   ApplyStagedTrigger,
   ConvergeReadyOk,
   HostControllerStatus,
+  MutationLaneStatus,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
@@ -360,6 +361,13 @@ export interface IpcHostLifecycle {
  * `implements` needed.
  */
 export interface IpcHostController {
+  /**
+   * The mutation lane sampled synchronously, for a handler that must test it
+   * and submit in one stretch. `getStatus()` carries the same field but only
+   * after awaiting disk reads, which is already too late to decide whether
+   * submitting would QUEUE behind a running intent.
+   */
+  readonly mutationLane: MutationLaneStatus | null;
   getStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;

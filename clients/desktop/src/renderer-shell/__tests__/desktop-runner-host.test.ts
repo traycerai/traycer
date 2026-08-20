@@ -561,6 +561,9 @@ function buildFakeBridge(
       maintenanceInstallationInfo: async () => {
         throw new Error("maintenanceInstallationInfo not used in test");
       },
+      maintenanceInstallVersion: async () => {
+        throw new Error("maintenanceInstallVersion not used in test");
+      },
       getHostName: async () => ({
         systemName: "desktop-1",
         customName: null,

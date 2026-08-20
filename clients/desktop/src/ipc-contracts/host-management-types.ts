@@ -40,6 +40,7 @@ export type {
   HostUninstallResult,
   InstallVersionOk,
   MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
   MutationKind,
   MutationLaneStatus,
   MutationOutcome,

@@ -20,6 +20,7 @@ import type {
   HostRestartRequestResult,
   InstallVersionOk,
   MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
   MutationOutcome,
   NotificationFeedSource,
   NotificationForegroundAppLocal,
@@ -311,6 +312,10 @@ export interface DesktopHostManagementBridge {
   ): Promise<HostUpdateCheckResponse>;
   maintenanceDoctor(): Promise<MaintenanceDoctorProjection>;
   maintenanceInstallationInfo(): Promise<HostGetInstallationInfoResponse>;
+  maintenanceInstallVersion(input: {
+    readonly version: string;
+    readonly force: boolean;
+  }): Promise<MaintenanceInstallDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -788,6 +793,8 @@ export class DesktopRunnerHost implements IRunnerHost {
       maintenanceDoctor: () => managementBridge.maintenanceDoctor(),
       maintenanceInstallationInfo: () =>
         managementBridge.maintenanceInstallationInfo(),
+      maintenanceInstallVersion: (input) =>
+        managementBridge.maintenanceInstallVersion(input),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };

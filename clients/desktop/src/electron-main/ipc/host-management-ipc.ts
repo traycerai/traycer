@@ -20,6 +20,7 @@ import type {
   HostRemovalState,
   HostUpdateCheckResponse,
   MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
   FreePortAndRestartInput,
 } from "../../ipc-contracts/host-management-types";
 import {
@@ -974,6 +975,35 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         ),
       ]);
       return { status: "managed", installRecord, stagedRecord, cliManifest };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerMaintenanceInstallVersion,
+    async (_event, raw: unknown): Promise<MaintenanceInstallDispatch> => {
+      const version = optionalString(raw, "version") ?? "";
+      const force = optionalBoolean(raw, "force");
+      // ATOMIC test-and-submit, and the reason this is a separate channel from
+      // `traycerHostInstallVersion`. The lane is exclusive but it does not
+      // refuse a distinct intent — `enqueueMutation` chains it onto
+      // `mutationTail` — so a caller that tests the lane in one IPC round trip
+      // and submits in the next can be overtaken by the banner, the tray or
+      // the background reconciler, and its install lands right after theirs.
+      //
+      // Main is single-threaded and `installVersion` registers on the tail
+      // synchronously, so testing the lane and calling it with NO await in
+      // between admits no interleaving. Do not insert one: an `await
+      // clearHostRemovalIfSet()` here (as the sibling handler does) would
+      // reopen exactly the window this exists to close — `installVersion`
+      // clears the removed-by-user sentinel inside the mutation body anyway.
+      if (bridge.options.hostController.mutationLane !== null) {
+        return { kind: "lane-busy" };
+      }
+      const outcome = await bridge.options.hostController.installVersion(
+        version,
+        force,
+      );
+      return { kind: "dispatched", outcome };
     },
   );
 

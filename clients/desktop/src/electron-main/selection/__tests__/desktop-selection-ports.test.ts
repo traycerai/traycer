@@ -1540,6 +1540,7 @@ class FakeHostController implements IpcHostController {
     value: { running: true, version: "1.0.0" },
   };
 
+  readonly mutationLane: HostControllerStatus["mutation"] = null;
   async getStatus(): Promise<HostControllerStatus> {
     return buildControllerStatus(null);
   }
