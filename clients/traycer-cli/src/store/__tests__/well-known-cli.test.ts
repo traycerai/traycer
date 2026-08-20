@@ -484,6 +484,39 @@ describe("stageWellKnownCliBinary", () => {
     expect(existsSync(staleOrphan)).toBe(false);
     expect(existsSync(freshOrphan)).toBe(true);
   });
+
+  // Regression test: on a FROM-SCRATCH install nothing under the CLI
+  // install home exists yet, so this call is the first writer of the whole
+  // `~/.traycer/cli` chain. A bare `mkdir(dirname(wellKnownPath), {
+  // recursive: true })` (no explicit mode) would create that entire chain
+  // at the process umask - typically 0o755 - and neither this call nor a
+  // later `ensureCliInstallHomeDir` repairs the mode of a directory that
+  // already exists, so the install home would stay world-traversable for
+  // the life of the install. `stageWellKnownCliBinary` now calls
+  // `ensureCliInstallHomeDir` (mode 0o700) BEFORE the recursive mkdir, so
+  // both the install home and its `bin` subdir must land at 0o700 even
+  // though this single invocation created every directory in the chain.
+  it.skipIf(process.platform === "win32")(
+    "creates the CLI install home directory (and its bin subdir) at mode 0o700 when nothing under it exists yet",
+    async () => {
+      const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+        await import("../well-known-cli");
+      const { cliInstallHomeDir } = await import("../paths");
+      const target = join(workHome, "real-binary");
+      writeFileSync(target, "binary bytes");
+
+      const result = await stageWellKnownCliBinary({
+        environment: ENVIRONMENT,
+        binaryPath: target,
+      });
+
+      expect(result.staged).toBe("staged");
+      const installHomeDir = cliInstallHomeDir(ENVIRONMENT);
+      expect(statSync(installHomeDir).mode & 0o777).toBe(0o700);
+      const binDir = dirname(wellKnownCliBinaryPath(ENVIRONMENT));
+      expect(statSync(binDir).mode & 0o777).toBe(0o700);
+    },
+  );
 });
 
 // `refreshWellKnownSlotIfStale` takes only the environment: it decides for
