@@ -136,16 +136,57 @@ function nullableString(raw: unknown, key: string): string | null {
 /**
  * Whether an admission block represents UPDATE work.
  *
- * `install` and `apply` are the two lane intents that move the host's
- * version; every other kind (register, deregister, respawn, recoverIfDown,
- * freePortAndRestart, uninstallHost, removeTraycer, ensure, activate) and the
- * login-item refresh take the same exclusive lane without being an update.
- * Listed positively so a NEW `MutationKind` defaults to "not an update" -
- * the safe direction, since the alternative is telling someone an update is
- * running when none is.
+ * Scope first: the lane is exclusive and the caller has ALREADY refused the
+ * competing install by the time it asks - this bit never admits anything.
+ * It picks between two presentations of that refusal: `true` becomes the
+ * protocol's `already-updating` (an informational toast that ARMS the
+ * Overview's accepted-update latch), `false` a retryable refusal carrying
+ * the lane's message. On a pre-1.2.0 host the latch releases only on a
+ * scope flip or its full 60s timer - the `host.status.updateProgress`
+ * frame that normally frees it is a field these hosts never publish - so a
+ * wrong `true` is a minute-long lock of the page's update and lifecycle
+ * controls, while a wrong `false` is an error-styled toast whose text
+ * (`laneBusyRestartMessage`) still names the update. That asymmetry sets
+ * the rule: answer `true` only when the lane work can OUTLAST the latch it
+ * arms, so the lock is protecting a swap that is genuinely still running.
+ *
+ *  - `install` / `apply` qualify by definition: version-moving, and
+ *    minutes-long against the 60s window.
+ *  - `ensure` qualifies only with NUMERIC progress evidence. Its service
+ *    branches (`runServiceRegister`, `runStart`, the repair retry) narrate
+ *    through the same null-metric `host-provision` events without touching
+ *    the version, and its no-op fast path returns before any progress at
+ *    all; only the version-moving path reports numbers - the staging
+ *    download's `bytes`/`totalBytes`/`percent`, the extract's `workUnits` -
+ *    and those are its long windows. Null-metric moments inside a real
+ *    install (source resolution, the locked promote) fall to the retryable
+ *    side, the cheap direction.
+ *  - `activate` does NOT qualify, deliberately. The lane cannot say which
+ *    arm triggered it: the genuine update tail (pendingActivation) and the
+ *    legacy stamp-repair (`activationUnknown` - a record with
+ *    `runtimeVersion: null`, which launch converge activates with NO update
+ *    staged, on exactly this pre-1.2.0 population) are one kind at
+ *    admission. Both are a seconds-long service cycle either way - work the
+ *    60s latch would outlive many times over, guarding a swap that already
+ *    finished while the page sits locked.
+ *
+ * Every other kind (register, deregister, respawn, recoverIfDown,
+ * freePortAndRestart, uninstallHost, removeTraycer) and the login-item
+ * refresh take the same exclusive lane without ever touching the version.
+ * Listed positively so a NEW `MutationKind` defaults to "not an update".
  */
 function admissionBlockIsUpdateWork(block: LifecycleAdmissionBlock): boolean {
   if (block.kind === "login-item-refresh") return false;
+  if (block.lane.kind === "ensure") {
+    const progress = block.lane.progress;
+    return (
+      progress !== null &&
+      (progress.percent !== null ||
+        progress.bytes !== null ||
+        progress.totalBytes !== null ||
+        progress.workUnits !== null)
+    );
+  }
   return block.lane.kind === "install" || block.lane.kind === "apply";
 }
 
