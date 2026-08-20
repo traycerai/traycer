@@ -31,33 +31,62 @@ vi.mock("node:sea", () => ({ isSea: () => seaState.current }));
 // `promisify(execFile)`, and without `util.promisify.custom` on this mock
 // promisify wraps it by the ordinary callback convention. A promise-returning
 // mock would never resolve.
+// `versionForPath` also drives `resolveNodeOnPath`, which now checks that the
+// `node` it is about to pin into a unit file actually reports a supported
+// version. The default is a supported one, so every test that only cares
+// about WHICH candidate is chosen keeps expressing exactly that.
 const execControl = vi.hoisted(() => ({
   refuseWithEaccesForPaths: [] as string[],
+  versionForPath: new Map<string, string>(),
+  defaultVersion: "v22.11.0\n",
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    execFile: (
-      file: string,
-      _args: readonly string[],
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ): unknown => {
-      if (execControl.refuseWithEaccesForPaths.includes(file)) {
-        callback(
-          Object.assign(new Error(`simulated EACCES executing ${file}`), {
-            code: "EACCES",
-          }),
-          "",
-          "",
-        );
-        return {};
-      }
-      callback(null, "1.0.0\n", "");
-      return {};
-    },
+  const { promisify } = await import("node:util");
+  const run = (
+    file: string,
+  ): { readonly error: Error | null; readonly stdout: string } => {
+    if (execControl.refuseWithEaccesForPaths.includes(file)) {
+      return {
+        error: Object.assign(new Error(`simulated EACCES executing ${file}`), {
+          code: "EACCES",
+        }),
+        stdout: "",
+      };
+    }
+    return {
+      error: null,
+      stdout:
+        execControl.versionForPath.get(file) ?? execControl.defaultVersion,
+    };
   };
+  const mockExecFile = (
+    file: string,
+    _args: readonly string[],
+    _options: unknown,
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ): unknown => {
+    const { error, stdout } = run(file);
+    callback(error, stdout, "");
+    return {};
+  };
+  // The real `child_process.execFile` carries `util.promisify.custom`, which
+  // is why `promisify(execFile)` resolves `{ stdout, stderr }` rather than a
+  // bare string. Without it here, promisify would fall back to the plain
+  // callback convention and hand production's `const { stdout } = ...`
+  // destructure an undefined - i.e. the mock would be testing a DIFFERENT
+  // contract than the one that ships, and would fail code that is correct.
+  Object.defineProperty(mockExecFile, promisify.custom, {
+    value: (file: string) =>
+      new Promise<{ stdout: string; stderr: string }>(
+        (resolvePromise, reject) => {
+          const { error, stdout } = run(file);
+          if (error !== null) reject(error);
+          else resolvePromise({ stdout, stderr: "" });
+        },
+      ),
+  });
+  return { ...actual, execFile: mockExecFile };
 });
 
 // `store/paths` binds its home root from `os.homedir()` at module load -
@@ -136,6 +165,7 @@ beforeEach(() => {
   renameControl.callCount = 0;
   renameControl.failOnCallNumber = null;
   execControl.refuseWithEaccesForPaths = [];
+  execControl.versionForPath = new Map();
   mocks.cliLoggerWarnMock.mockClear();
   vi.resetModules();
 });
@@ -688,6 +718,159 @@ describe("resolveServiceCliInvocation", () => {
     } finally {
       rmSync(firstDir, { recursive: true, force: true });
       rmSync(secondDir, { recursive: true, force: true });
+    }
+  });
+
+  // Being executable is not being USABLE. The npm package declares
+  // `engines.node >= 20.18.1`, and npm enforces that at INSTALL time only -
+  // which says nothing about the interpreter a service definition written
+  // later will name. The configuration this protects is ordinary rather than
+  // exotic: an nvm or asdf user installs under a current Node while
+  // `/usr/bin/node` 18 sits earlier on the SERVICE manager's PATH. Pinning
+  // the 18 rewrites a working registration into a unit that dies at every
+  // start, on a definition nothing rewrites afterwards.
+  it("skips a too-old node on an earlier PATH entry and pins a supported one later", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    const oldDir = mkdtempSync(join(tmpdir(), "traycer-cli-node-old-"));
+    const newDir = mkdtempSync(join(tmpdir(), "traycer-cli-node-new-"));
+    const oldNode = writeFakeExecutableNode(oldDir);
+    const newNode = writeFakeExecutableNode(newDir);
+    // Both are perfectly executable regular files - the ONLY difference is
+    // what they report, which is the whole point of the check.
+    execControl.versionForPath.set(oldNode, "v18.20.4\n");
+    execControl.versionForPath.set(newNode, "v22.11.0\n");
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+      const result = await withPath(`${oldDir}${delimiter}${newDir}`, () =>
+        resolveServiceCliInvocation({
+          environment: ENVIRONMENT,
+          override: null,
+          allowSelfInvocation: false,
+        }),
+      );
+
+      expect(result).toEqual({ command: newNode, args: [binaryPath] });
+    } finally {
+      rmSync(oldDir, { recursive: true, force: true });
+      rmSync(newDir, { recursive: true, force: true });
+    }
+  });
+
+  // The floor is a floor, not a preference: with nothing supported anywhere,
+  // refusing beats baking an interpreter we know cannot run this CLI into a
+  // unit file that nothing will revisit.
+  it("refuses to register when every node on PATH is below the required version", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    const oldDir = mkdtempSync(join(tmpdir(), "traycer-cli-node-all-old-"));
+    const oldNode = writeFakeExecutableNode(oldDir);
+    execControl.versionForPath.set(oldNode, "v18.20.4\n");
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+      const { CLI_ERROR_CODES } = await import("../../runner/errors");
+
+      await expect(
+        withPath(oldDir, () =>
+          resolveServiceCliInvocation({
+            environment: ENVIRONMENT,
+            override: null,
+            allowSelfInvocation: false,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+        message: expect.stringContaining("20.18.1"),
+      });
+    } finally {
+      rmSync(oldDir, { recursive: true, force: true });
+    }
+  });
+
+  // The boundary itself. `20.18.1` is the declared floor, so it must be
+  // ACCEPTED - a `>` where `>=` belongs would reject the exact version the
+  // package says it supports, and a test that only ever checked 18 vs 22
+  // could not tell the two comparisons apart.
+  it("accepts a node at exactly the declared minimum version", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    const dir = mkdtempSync(join(tmpdir(), "traycer-cli-node-exact-"));
+    const exactNode = writeFakeExecutableNode(dir);
+    execControl.versionForPath.set(exactNode, "v20.18.1\n");
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+      const result = await withPath(dir, () =>
+        resolveServiceCliInvocation({
+          environment: ENVIRONMENT,
+          override: null,
+          allowSelfInvocation: false,
+        }),
+      );
+
+      expect(result).toEqual({ command: exactNode, args: [binaryPath] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // One patch below the floor, which no major-only comparison can see.
+  it("rejects a node one patch below the declared minimum version", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    const dir = mkdtempSync(join(tmpdir(), "traycer-cli-node-just-below-"));
+    const justBelow = writeFakeExecutableNode(dir);
+    execControl.versionForPath.set(justBelow, "v20.18.0\n");
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+      const { CLI_ERROR_CODES } = await import("../../runner/errors");
+
+      await expect(
+        withPath(dir, () =>
+          resolveServiceCliInvocation({
+            environment: ENVIRONMENT,
+            override: null,
+            allowSelfInvocation: false,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

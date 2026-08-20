@@ -153,7 +153,7 @@ export async function resolveServiceCliInvocation(
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
         message:
-          `service install: this CLI is recorded as an npm install, which ships a Node script rather than an executable, and no 'node' was found on PATH to pin into the service definition. ` +
+          `service install: this CLI is recorded as an npm install, which ships a Node script rather than an executable, and no 'node' was found on PATH meeting the required version (>= ${MIN_NODE_VERSION.join(".")}) to pin into the service definition. ` +
           `Registering ${manifest.binaryPath} directly would leave the service resolving 'node' off the service manager's PATH, which is the failure this refuses to create. ` +
           `Put 'node' on PATH, or re-run this from the npm-installed CLI itself so its own interpreter can be recorded.`,
         details: {
@@ -392,10 +392,26 @@ async function npmInterpreterInvocation(manifest: {
     : { command: interpreter, args: [manifest.binaryPath] };
 }
 
-// First executable `node` on PATH, absolute. Deliberately reads the
-// variable rather than shelling out to `which` / `where`: spawning a shell
-// during service registration is a far larger surface than the lookup it
-// would perform, and inherits whatever rc files that shell sources.
+// The interpreter floor this CLI is published against. Must agree with
+// `engines.node` in `clients/traycer-cli/package.json`; npm enforces that
+// field at INSTALL time, which says nothing about the interpreter a service
+// definition written later will name.
+const MIN_NODE_VERSION: readonly [number, number, number] = [20, 18, 1];
+
+// First `node` on PATH that is actually usable as this CLI's interpreter.
+//
+// Deliberately reads the variable rather than shelling out to `which` /
+// `where`: spawning a shell during service registration is a far larger
+// surface than the lookup it would perform, and inherits whatever rc files
+// that shell sources.
+//
+// "Usable" means a regular file that runs AND reports a supported version.
+// Being executable is not enough - the registration this feeds is long-lived
+// and nothing rewrites it, so picking the wrong `node` here converts a
+// working install into a service that dies at every start. That is a real
+// configuration rather than a contrived one: an nvm or asdf user installs
+// under Node 22 while `/usr/bin/node` 18 sits earlier on the SERVICE
+// manager's PATH, and this walk would otherwise pin the 18.
 async function resolveNodeOnPath(): Promise<string | null> {
   const rawPath = process.env.PATH;
   if (typeof rawPath !== "string" || rawPath.length === 0) return null;
@@ -415,11 +431,51 @@ async function resolveNodeOnPath(): Promise<string | null> {
         const candidateStat = await stat(candidate);
         if (!candidateStat.isFile()) continue;
         await access(candidate, constants.X_OK);
-        return candidate;
       } catch {
         continue;
       }
+      if (await nodeMeetsMinimum(candidate)) return candidate;
     }
   }
   return null;
+}
+
+// Whether this `node` reports a version at or above `MIN_NODE_VERSION`.
+//
+// Unlike the slot's execute probe, an inconclusive answer here is a NO:
+// there the question was "can the supervisor run this at all", where guessing
+// yes preserves a working registration, while here it is "is this the right
+// interpreter", where guessing yes bakes an unusable one into a unit file and
+// the walk still has other candidates to try.
+async function nodeMeetsMinimum(candidate: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(candidate, ["--version"], {
+      timeout: SLOT_EXEC_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    const parsed = parseNodeVersion(stdout);
+    return parsed !== null && atLeastMinimum(parsed);
+  } catch {
+    return false;
+  }
+}
+
+// `node --version` prints `v22.11.0`. Prerelease and build suffixes are
+// ignored: a `v21.0.0-nightly` is treated as its 21.0.0 release, which is the
+// right call for a floor check.
+function parseNodeVersion(
+  stdout: string,
+): readonly [number, number, number] | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(stdout.trim());
+  if (match === null) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function atLeastMinimum(version: readonly [number, number, number]): boolean {
+  for (let index = 0; index < 3; index += 1) {
+    const found = version[index] ?? 0;
+    const required = MIN_NODE_VERSION[index] ?? 0;
+    if (found !== required) return found > required;
+  }
+  return true;
 }

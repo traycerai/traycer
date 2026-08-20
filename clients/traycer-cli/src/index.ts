@@ -95,6 +95,7 @@ import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
 import {
+  isRunningFromWellKnownSlot,
   refreshWellKnownSlotForSupervisedStart,
   refreshWellKnownSlotIfStale,
 } from "./store/well-known-cli";
@@ -210,39 +211,6 @@ export function buildProgram(): Command {
   return buildProgramWithAgentRoles(readFeatureSettingsSync().agentRoles);
 }
 
-// One path in a form two spellings of the same file both reduce to.
-//
-// By SPELLING, deliberately, where the rest of this change compares inode
-// identity. Inode identity would answer the wrong question here: the slot has
-// just been republished by `rename`, so the running image is on the old inode
-// while the path now leads to a new one - the two are guaranteed to differ
-// precisely when the answer should be yes. What is being asked is whether the
-// binary this process was launched FROM is the one that got replaced, and
-// that is a question about the path.
-//
-// A bare string compare gets it wrong on Windows in two ways, both of which
-// silently skip the restart and leave the supervised host on stale bytes:
-// `process.execPath` and a path built from `homedir()` routinely differ in
-// case (`C:\Users` vs `c:\users`), and either side can arrive in 8.3 short
-// form (`PROGRA~1`). `realpath` collapses the short form; case-folding covers
-// the rest, since Windows path comparison is case-insensitive and neither
-// `resolve` nor `realpath` reliably normalizes case there. POSIX is
-// case-sensitive and must NOT be folded.
-//
-// Falling back to `resolve` when `realpath` throws is load-bearing rather
-// than defensive: on POSIX the running image may already have been unlinked
-// by the very rename this is asking about, and an unlinked path cannot be
-// realpath-ed.
-//
-// Exported for the same reason `isTraycerCliEntrypoint` and
-// `argvSelectsSupervisedHostStart` are: the interesting cases here are
-// platform-conditional, and pinning them by unit test beats spawning a
-// subprocess on an OS the suite may not be running on.
-export async function canonicalBinaryPath(path: string): Promise<string> {
-  const canonical = await realpath(path).catch(() => resolve(path));
-  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
-}
-
 // Upkeep, never a gate: a command must run whatever the slot's state is, so
 // every outcome here is logged and swallowed. `stageWellKnownCliBinary`
 // reports filesystem trouble as a `failed` OUTCOME rather than throwing, so
@@ -259,6 +227,26 @@ async function refreshCliSlotBeforeCommand(
 ): Promise<boolean> {
   const logger = createCliLogger(config.environment);
   try {
+    // Asked BEFORE the refresh, and the ordering is the entire point.
+    //
+    // Afterwards the question cannot be answered at all in the case that
+    // matters most. A slot left as a SYMLINK by an older Desktop resolves to
+    // some other binary A, and `process.execPath` reports A because Node
+    // resolves symlinks when it reports the running executable. The refresh
+    // then replaces that link with a real copy - which is exactly what it
+    // should do - and a comparison made after the fact sees A's path against
+    // a freshly written file and concludes this process was not the one
+    // replaced. It was. The supervisor would go on running A until something
+    // restarted the service, which is the stale-supervisor failure this whole
+    // change exists to end, reached through the fix for it.
+    //
+    // Before the refresh both sides still resolve to A, so they match.
+    //
+    // Only the supervised entry acts on the answer, so only it pays for the
+    // two `realpath` calls; every other command skips them entirely.
+    const launchedFromSlot = supervised
+      ? await isRunningFromWellKnownSlot(config.environment)
+      : false;
     // The supervised entry waits for the lock; an ordinary command does not.
     // See `refreshWellKnownSlotForSupervisedStart` for why the cost of losing
     // this race is not symmetric between the two.
@@ -299,11 +287,7 @@ async function refreshCliSlotBeforeCommand(
     });
     // Only `staged` publishes a replacement; `already-well-known` and
     // `not-applicable` leave the running binary exactly where it was.
-    if (refreshed.staged !== "staged") return false;
-    return (
-      (await canonicalBinaryPath(process.execPath)) ===
-      (await canonicalBinaryPath(refreshed.wellKnownPath))
-    );
+    return refreshed.staged === "staged" && launchedFromSlot;
   } catch (cause) {
     logger.warn("CLI well-known slot refresh threw", {
       environment: config.environment,

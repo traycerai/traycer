@@ -6,6 +6,7 @@ import {
   lstat,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   stat,
@@ -233,6 +234,54 @@ async function refreshSlot(
     // the first one explains a supervisor still on old bytes.
     return { staged: "deferred-busy", wellKnownPath };
   }
+}
+
+// One path in a form two spellings of the same file both reduce to.
+//
+// By SPELLING, deliberately, where the rest of this change compares inode
+// identity. Inode identity would answer the wrong question here: the slot has
+// just been republished by `rename`, so the running image is on the old inode
+// while the path now leads to a new one - the two are guaranteed to differ
+// precisely when the answer should be yes. What is being asked is whether the
+// binary this process was launched FROM is the one that got replaced, and
+// that is a question about the path.
+//
+// A bare string compare gets it wrong on Windows in two ways, both of which
+// silently skip the restart and leave the supervised host on stale bytes:
+// `process.execPath` and a path built from `homedir()` routinely differ in
+// case (`C:\Users` vs `c:\users`), and either side can arrive in 8.3 short
+// form (`PROGRA~1`). `realpath` collapses the short form; case-folding covers
+// the rest, since Windows path comparison is case-insensitive and neither
+// `resolve` nor `realpath` reliably normalizes case there. POSIX is
+// case-sensitive and must NOT be folded.
+//
+// Falling back to `resolve` when `realpath` throws is load-bearing rather
+// than defensive: on POSIX the running image may already have been unlinked
+// by the very rename this is asking about, and an unlinked path cannot be
+// realpath-ed.
+//
+// Exported so the platform-conditional cases can be pinned by unit test
+// rather than by spawning a subprocess on an OS the suite may not be
+// running on.
+export async function canonicalBinaryPath(path: string): Promise<string> {
+  const canonical = await realpath(path).catch(() => resolve(path));
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+// Whether the image this process is executing came from the well-known slot.
+//
+// Must be called BEFORE the slot is refreshed - see the call site. Compares
+// canonical paths rather than inode identity deliberately: a legacy SYMLINK
+// slot and `process.execPath` name one file by two spellings, which is what
+// `realpath` collapses, while the inode comparison used elsewhere in this
+// change answers a different question ("are these the same file NOW").
+export async function isRunningFromWellKnownSlot(
+  environment: Environment,
+): Promise<boolean> {
+  return (
+    (await canonicalBinaryPath(process.execPath)) ===
+    (await canonicalBinaryPath(wellKnownCliBinaryPath(environment)))
+  );
 }
 
 // The binary the slot should be staged from, or null when it is already

@@ -16,7 +16,7 @@ import {
 import type { PathLike } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
 import type { CliInstallSource } from "../../manifest/cli-manifest";
@@ -1577,4 +1577,165 @@ describe("refreshWellKnownSlotIfStale", () => {
     expect(result?.staged).toBe("staged");
     expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBBBB");
   });
+});
+
+// The restart decision compares the running binary against the slot that was
+// just republished. Getting that comparison wrong is silent in both
+// directions - a missed restart leaves the supervised host running the
+// previous CLI forever, which is the exact bug this whole change exists to
+// fix - so the spellings that must reduce to one path are pinned here.
+async function canonicalBinaryPathOf(path: string): Promise<string> {
+  const { canonicalBinaryPath } = await import("../well-known-cli");
+  return canonicalBinaryPath(path);
+}
+
+// The restart decision asks whether THIS process's image came from the slot,
+// and it has to be answered before the slot is replaced. These pin the
+// spellings that must reduce to "yes", the legacy-symlink case above all:
+// there `process.execPath` reports the link's TARGET, so the running binary
+// and the slot are one file under two names, and only resolving both sees it.
+describe("isRunningFromWellKnownSlot", () => {
+  it("is true when the running binary IS the slot", async () => {
+    const { isRunningFromWellKnownSlot, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "the slot binary itself");
+
+    await expect(
+      withExecPath(wellKnownPath, () =>
+        isRunningFromWellKnownSlot(ENVIRONMENT),
+      ),
+    ).resolves.toBe(true);
+  });
+
+  // The case the restart guard used to miss entirely. An older Desktop left
+  // the slot as a SYMLINK; the service launches through it, and Node reports
+  // the resolved TARGET as `process.execPath`. Comparing the target's path
+  // against the slot path finds two different strings and concludes this
+  // process was not the one replaced - so the supervisor keeps running the
+  // old image after the refresh swaps the link for a real copy.
+  it.skipIf(process.platform === "win32")(
+    "is true when the slot is a legacy SYMLINK and the process runs its target",
+    async () => {
+      const { isRunningFromWellKnownSlot, wellKnownCliBinaryPath } =
+        await import("../well-known-cli");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      mkdirSync(dirname(wellKnownPath), { recursive: true });
+      const target = join(workHome, "legacy-target-binary");
+      writeFileSync(target, "the binary an older Desktop linked to");
+      symlinkSync(target, wellKnownPath);
+
+      // What Node would report for a process launched through the link.
+      await expect(
+        withExecPath(target, () => isRunningFromWellKnownSlot(ENVIRONMENT)),
+      ).resolves.toBe(true);
+    },
+  );
+
+  it("is false for a packaged binary that is not the slot", async () => {
+    const { isRunningFromWellKnownSlot, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "the slot binary");
+    const elsewhere = join(workHome, "some-other-binary");
+    writeFileSync(elsewhere, "a co-installed CLI somewhere else");
+
+    await expect(
+      withExecPath(elsewhere, () => isRunningFromWellKnownSlot(ENVIRONMENT)),
+    ).resolves.toBe(false);
+  });
+});
+
+describe("canonicalBinaryPath", () => {
+  // Both spellings are assembled with the raw separator, NOT with `join`.
+  // `join` normalizes as it builds, so `join(workHome, "sub", "..", "traycer")`
+  // returns the very string `join(workHome, "traycer")` does - handing both sides
+  // of the assertion identical input and passing for any implementation at
+  // all, including one that never normalized anything. The `..` segment has
+  // to survive construction to reach the code under test.
+  it("reduces two spellings of the same existing file to one path", async () => {
+    const binary = join(workHome, "traycer");
+    writeFileSync(binary, "binary bytes");
+    mkdirSync(join(workHome, "sub"), { recursive: true });
+    const indirect = [workHome, "sub", "..", "traycer"].join(sep);
+    expect(indirect).not.toBe(binary);
+
+    expect(await canonicalBinaryPathOf(indirect)).toBe(
+      await canonicalBinaryPathOf(binary),
+    );
+  });
+
+  // A path that cannot be realpath-ed must not throw - and on POSIX this is
+  // the NORMAL case for the running image right after the slot is replaced,
+  // not an exotic one: the rename can leave `process.execPath` naming an
+  // unlinked inode. Throwing here would take out the restart decision with
+  // it.
+  //
+  // The input carries a `..` for the same reason as above. `resolve` on an
+  // already-absolute, already-normalized path is a no-op, so asserting
+  // against `resolve(missing)` would hold just as well for an implementation
+  // that returned its argument untouched.
+  it("falls back to a resolved path when the file cannot be realpath-ed", async () => {
+    const missing = [workHome, "never-existed", "..", "traycer"].join(sep);
+
+    expect(await canonicalBinaryPathOf(missing)).toBe(
+      join(workHome, "traycer"),
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reduces a symlink alias to the file it points at",
+    async () => {
+      const binary = join(workHome, "traycer");
+      writeFileSync(binary, "binary bytes");
+      const alias = join(workHome, "traycer-alias");
+      symlinkSync(binary, alias);
+
+      expect(await canonicalBinaryPathOf(alias)).toBe(
+        await canonicalBinaryPathOf(binary),
+      );
+    },
+  );
+
+  // Windows path comparison is case-insensitive, and neither `resolve` nor a
+  // JS-level `realpath` normalizes case - so `C:\Users\...` from
+  // `process.execPath` and `c:\users\...` built from `homedir()` would
+  // compare unequal and silently skip the restart. Driven against a
+  // non-existent path on purpose: that exercises the `resolve` fallback,
+  // which is the branch a real Windows run takes when the running image has
+  // just been replaced.
+  it("folds case on win32, so two spellings of one Windows path agree", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (descriptor === undefined) {
+      throw new Error("process.platform descriptor missing");
+    }
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+    try {
+      const upper = join(workHome, "BIN", "Traycer.exe");
+      const lower = join(workHome, "bin", "traycer.exe");
+
+      expect(await canonicalBinaryPathOf(upper)).toBe(
+        await canonicalBinaryPathOf(lower),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does NOT fold case off win32, where two spellings are two different files",
+    async () => {
+      const upper = join(workHome, "BIN", "Traycer");
+      const lower = join(workHome, "bin", "traycer");
+
+      expect(await canonicalBinaryPathOf(upper)).not.toBe(
+        await canonicalBinaryPathOf(lower),
+      );
+    },
+  );
 });
