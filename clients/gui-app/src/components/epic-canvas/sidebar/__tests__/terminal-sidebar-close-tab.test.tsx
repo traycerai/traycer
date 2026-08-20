@@ -549,7 +549,9 @@ describe("terminal sidebar Close", () => {
         wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
       );
 
-      const close = getByTestId(`epic-terminal-sidebar-kill-menu-${SESSION_ID}`);
+      const close = getByTestId(
+        `epic-terminal-sidebar-kill-menu-${SESSION_ID}`,
+      );
       expect(close.getAttribute("disabled")).toBeNull();
       fireEvent.click(close);
 
