@@ -152,11 +152,12 @@ function qosForStreamMethod(method: string): QosClassValue {
  * place. What is NOT shared is the verdict that leaves it:
  *
  *  - `host-transport-plane` - the relay socket closed, a Noise/handshake step
- *    was rejected, the peer went away, a phase deadline elapsed with the host
- *    silent. The host's own transport plane answered (or failed to), so this
- *    is `confirmed-refusal` evidence.
+ *    was rejected, a known host-leg peer loss arrived, or a phase deadline
+ *    elapsed with the host silent. The host's own transport plane answered (or
+ *    failed to), so this is `confirmed-refusal` evidence.
  *  - `not-host-evidence` - we tore the connection down ourselves (a caller's
- *    reconnect nudge) or could not present a credential (no bearer). The host
+ *    reconnect nudge), could not present a credential (no bearer), or the
+ *    relay killed only its client leg for a policy/future reason. The host
  *    refused nothing; it may be perfectly healthy. Reported `indeterminate`.
  *
  * This is the durable classification rule applied one layer down from where
@@ -193,6 +194,20 @@ function sessionFatalProvenance(
   return details.code === "UNAUTHORIZED"
     ? "not-host-evidence"
     : "host-transport-plane";
+}
+
+/**
+ * Relay `policy_violation` is commonly a client-leg congestion decision, not
+ * a statement from the host. Unknown relay kill reasons must fail the same
+ * way: new relays can emit them before this client learns their semantics.
+ * Only the two established host-leg losses are evidence about host liveness.
+ */
+function relayKillProvenance(
+  reason: RelayKillReason,
+): ConnectionLossProvenance {
+  return reason === "reauth_timeout" || reason === "host_gone"
+    ? "host-transport-plane"
+    : "not-host-evidence";
 }
 
 export interface RemoteSessionOptions<
@@ -1946,23 +1961,27 @@ export class RemoteSession<
     if (!this.isCurrent(generation)) {
       return;
     }
-    if (reason === "revoked" || reason === "policy_violation") {
+    if (reason === "revoked") {
       this.goTerminalFatal({
         code: "UNAUTHORIZED",
-        reason:
-          reason === "revoked"
-            ? "Host access was revoked"
-            : "Session closed by relay policy",
+        reason: "Host access was revoked",
         incompatibleMethods: null,
         upgradeGuidance: null,
       });
       return;
     }
-    this.handleConnectionLost(
-      generation,
-      `peer-gone:${reason}`,
-      "host-transport-plane",
-    );
+    const provenance = relayKillProvenance(reason);
+    if (provenance === "not-host-evidence") {
+      // A relay policy kill can be congestion (for example, the relay's
+      // client-leg buffer limit), not an authorization verdict. Future relay
+      // kill reasons are conservatively treated the same way: retry them, but
+      // never redial an unknown overloaded session at the ordinary 1s rung.
+      // The two known non-congestion losses retain their regular schedule.
+      // Keep this in the existing reconnect state machine; only its entry rung
+      // differs.
+      this.raiseReconnectBackoffToMax();
+    }
+    this.handleConnectionLost(generation, `peer-gone:${reason}`, provenance);
   }
 
   /**
@@ -2311,6 +2330,20 @@ export class RemoteSession<
       this.beginConnectGuarded();
     }, delay);
     return delay;
+  }
+
+  /**
+   * Starts a congestion-triggered reconnect at the capped backoff rung while
+   * preserving the ordinary scheduler and its ready-boundary reset.
+   */
+  private raiseReconnectBackoffToMax(): void {
+    const attemptAtMaxBackoff = Math.ceil(
+      Math.log2(RECONNECT_MAX_BACKOFF_MS / RECONNECT_INITIAL_BACKOFF_MS),
+    );
+    this.reconnectAttempt = Math.max(
+      this.reconnectAttempt,
+      attemptAtMaxBackoff,
+    );
   }
 
   /**

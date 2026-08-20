@@ -2,6 +2,7 @@ import type { InstallHostLifecycle, SwapLockRecovery } from "../installer";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
+import { isSelfNamingCliInvocation } from "./cli-invocation-shape";
 import {
   createServiceController,
   serviceLabelFor,
@@ -331,10 +332,24 @@ export function createServiceInstallLifecycle(
         // systemd-unit / Scheduled-Task-XML parsers for a failure mode
         // whose worst case is the service running a stale-but-functional
         // CLI. Revisit with real parsers if a non-macOS cohort surfaces.
-        const preservedCli =
+        //
+        // One registration is never worth preserving: the self-naming
+        // `<SEA> traycer host start` vector the pre-fix packaged fallback
+        // emitted, which cannot launch at all. Preserving it is how a
+        // machine that registered under `cli-v1.2.0-rc.1` would stay broken
+        // across every subsequent `host update` - `launchctl kickstart`
+        // reports success as soon as the binary spawns, so no failure path
+        // downstream ever rewrites it. Dropping it here falls through to
+        // normal resolution, which emits the corrected vector.
+        const registeredCli =
           options.bootstrap === null && process.platform === "darwin"
             ? await readRegisteredCliInvocation(label)
             : null;
+        const preservedCli =
+          registeredCli !== null &&
+          (await isSelfNamingCliInvocation(registeredCli))
+            ? null
+            : registeredCli;
         await registerService({
           controller,
           label,

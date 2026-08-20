@@ -236,7 +236,7 @@ export async function maybeAutoBootstrap(
     decision.status !== "service-registered" &&
     decision.status !== "installed"
   ) {
-    // "skipped" or "ready" - nothing to do.
+    // "skipped" or "ready" - no provisioning to do.
     opts.runtime.logger.debug("Auto-bootstrap returning without provisioning", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,

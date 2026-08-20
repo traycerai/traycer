@@ -43,8 +43,8 @@ describe("rename-aside CLI binary install (Windows lock workaround)", () => {
     );
   });
 
-  it("treats a missing binary as a no-op (fresh install / self-heal)", async () => {
-    await expect(renameCliBinaryAside(stablePath)).resolves.toBeUndefined();
+  it("treats a missing binary as a no-op (fresh install / self-heal), reporting nothing to restore", async () => {
+    await expect(renameCliBinaryAside(stablePath)).resolves.toBeNull();
     expect(await readdir(dir)).toEqual([]);
   });
 
