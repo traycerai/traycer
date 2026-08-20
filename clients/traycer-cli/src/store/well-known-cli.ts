@@ -8,9 +8,14 @@ import {
   rename,
   rm,
   stat,
+  utimes,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import type { CliInstallSource } from "../manifest/cli-manifest";
+import {
+  readCliManifest,
+  type CliInstallManifest,
+  type CliInstallSource,
+} from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { cliInstallHomeDir } from "./paths";
 
@@ -87,57 +92,99 @@ export async function isPackagedRun(): Promise<boolean> {
 // auto-bootstrap's already-ready branch without ever resolving. The service
 // and the host daemon would keep launching the old CLI indefinitely.
 //
-// Three guards keep this cheap and safe:
-//   - packaged runs only, checked FIRST. An interpreter run (dev, tests)
-//     returns before touching the filesystem, so no suite can be tricked
-//     into copying over a developer's real `~/.traycer` slot.
-//   - an ABSENT slot is left absent. Creating it is registration's job;
-//     a machine that never registered a service should not grow one here.
-//   - staleness is two stats, not a hash. `copyFile` does not preserve
-//     mtime, so a freshly staged slot is always newer than its source;
-//     a source that is newer than the slot, or differs in size, is a new
-//     binary. Identical size AND an older-or-equal source is the fresh
-//     case and costs nothing.
+// Guards, in order, each cheap enough to sit on every CLI startup:
 //
-// The size half of that test is deliberate rather than redundant. A
-// package manager that preserves archive timestamps can install NEW bytes
-// carrying an OLD mtime, and mtime alone would never notice - which is the
-// exact bug this exists to close. The cost is that a machine with two
-// co-installed packaged CLIs (say Desktop's bundled one plus a Homebrew
-// one) re-stages when the user alternates between them. That converges
-// after one copy per alternation rather than repeating per invocation, and
-// Desktop already re-stages this slot on every app launch, so the marginal
-// churn is symmetric with behaviour that is already there.
-export async function refreshWellKnownSlotIfStale(opts: {
-  readonly environment: Environment;
-  readonly binaryPath: string;
-}): Promise<WellKnownCliStageOutcome | null> {
+//   - packaged runs only, checked FIRST. An interpreter run (dev, tests)
+//     returns before touching the filesystem or reading anything, so no
+//     suite can be tricked into copying over a developer's real
+//     `~/.traycer` slot.
+//   - the running binary IS the slot (the host daemon and the service
+//     itself, which launch from it) - nothing to do.
+//   - the slot already MIRRORS a source: staging copies the source's mtime
+//     onto the slot (see `stageWellKnownCliBinary`), so "same size and same
+//     mtime" means the slot is a faithful copy of that exact file. Any
+//     upgrade changes one of the two, including a package manager that
+//     preserves archive timestamps and happens to ship a same-sized binary
+//     - mirroring is what makes an OLDER timestamp detectable, which a
+//     `slot newer than source` comparison could not see.
+//
+// The source is NOT simply the running process. The CLI manifest is the
+// resolver's source of truth, and a machine can have several packaged CLIs
+// installed at once; letting whichever one was invoked last win would
+// silently repoint both the registered service and the host daemon at a
+// possibly OLDER binary. So the manifest's binary wins when it names one,
+// and `process.execPath` is the fallback for an install that has no
+// manifest - which is the hookless cohort this exists for.
+//
+// The manifest is only read once the cheap comparison has already found a
+// mismatch, so the common (nothing changed) path stays two stats.
+export async function refreshWellKnownSlotIfStale(
+  environment: Environment,
+): Promise<WellKnownCliStageOutcome | null> {
   if (!(await isPackagedRun())) return null;
-  const wellKnownPath = wellKnownCliBinaryPath(opts.environment);
-  const source = resolve(opts.binaryPath);
-  if (resolve(wellKnownPath) === source) return null;
-  let slotStat: Stats;
-  let sourceStat: Stats;
+  const wellKnownPath = wellKnownCliBinaryPath(environment);
+  const running = resolve(process.execPath);
+  if (resolve(wellKnownPath) === running) return null;
+
+  const slotStat = await statOrNull(wellKnownPath);
+  if (slotStat !== null && (await mirrors(slotStat, running))) return null;
+
+  const source = await authoritativeSlotSource(environment, running);
+  if (source === null) return null;
+  if (slotStat !== null && (await mirrors(slotStat, source))) return null;
+  // A slot that is absent, dangling, or holding something else is repaired
+  // here rather than left for the next registration: the service and the
+  // host daemon both launch from this path, so on an already-registered
+  // machine "no slot" is a broken machine, not a clean one.
+  return stageWellKnownCliBinary({ environment, binaryPath: source });
+}
+
+// Which binary the slot SHOULD hold. The manifest wins when it names an
+// executable that exists; an interpreter distribution (npm) owns no slot at
+// all and is reported as such by refusing to nominate a source.
+async function authoritativeSlotSource(
+  environment: Environment,
+  running: string,
+): Promise<string | null> {
+  let manifest: CliInstallManifest | null;
   try {
-    [slotStat, sourceStat] = await Promise.all([
-      stat(wellKnownPath),
-      stat(source),
-    ]);
+    manifest = await readCliManifest(environment);
   } catch {
-    // Slot absent (the common case before first registration) or the
-    // running binary vanished mid-flight. Either way, nothing to refresh.
-    return null;
+    // A malformed manifest is this helper's problem to survive, not to
+    // report - the commands that own the manifest already diagnose it.
+    return running;
   }
-  if (
+  if (manifest === null) return running;
+  if (isInterpreterDistribution(manifest.source)) return null;
+  const manifestBinary = resolve(manifest.binaryPath);
+  return (await statOrNull(manifestBinary)) === null ? running : manifestBinary;
+}
+
+// Whether the slot is a faithful copy of `source`, by the identity staging
+// writes: same length, same mtime.
+//
+// Compared at Date (millisecond) precision, NOT via `mtimeMs`. Filesystems
+// keep nanoseconds and `mtimeMs` exposes the fraction, but `utimes` accepts
+// only a Date - so staging can never reproduce a source's sub-millisecond
+// digits, and an `mtimeMs` equality test would report "not mirrored" for a
+// slot this module had just written. That would re-copy the whole binary on
+// every single command. `getTime()` truncates both sides the same way
+// staging did, so a freshly staged slot compares equal.
+async function mirrors(slotStat: Stats, source: string): Promise<boolean> {
+  const sourceStat = await statOrNull(source);
+  if (sourceStat === null) return false;
+  return (
     slotStat.size === sourceStat.size &&
-    slotStat.mtimeMs >= sourceStat.mtimeMs
-  ) {
+    slotStat.mtime.getTime() === sourceStat.mtime.getTime()
+  );
+}
+
+async function statOrNull(path: string): Promise<Stats | null> {
+  try {
+    return await stat(path);
+  } catch {
     return null;
   }
-  return stageWellKnownCliBinary({
-    environment: opts.environment,
-    binaryPath: source,
-  });
 }
 
 export type WellKnownCliStageOutcome =
@@ -212,6 +259,20 @@ export async function stageWellKnownCliBinary(opts: {
       asidePath = await renameSlotBinaryAside(wellKnownPath);
     } else {
       await chmod(staging, 0o755);
+    }
+    // Mirror the source's timestamps onto the copy. This is what lets
+    // `refreshWellKnownSlotIfStale` decide freshness by identity rather
+    // than by recency: a slot whose (size, mtime) equal its source's is a
+    // faithful copy of that exact file, so ANY replacement of the source is
+    // detectable - including a package manager that preserves archive
+    // timestamps and ships a same-sized binary with an OLDER mtime, which
+    // no "is the slot newer?" comparison could ever see. Best-effort: an
+    // unsupported filesystem costs freshness precision, not the staging.
+    const sourceStat = await statOrNull(source);
+    if (sourceStat !== null) {
+      await utimes(staging, sourceStat.atime, sourceStat.mtime).catch(
+        () => undefined,
+      );
     }
     await rename(staging, wellKnownPath);
     return { staged: "staged", wellKnownPath };

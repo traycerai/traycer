@@ -92,6 +92,7 @@ import { serviceUninstallCommand } from "./commands/service-uninstall";
 import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
+import { refreshWellKnownSlotIfStale } from "./store/well-known-cli";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
 import { finishAndExit, markProcessFatal } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
@@ -204,6 +205,38 @@ export function buildProgram(): Command {
   return buildProgramWithAgentRoles(readFeatureSettingsSync().agentRoles);
 }
 
+// Upkeep, never a gate: a command must run whatever the slot's state is, so
+// every outcome here is logged and swallowed. `stageWellKnownCliBinary`
+// reports filesystem trouble as a `failed` OUTCOME rather than throwing, so
+// that case needs its own branch - logging it as a success would hide the
+// one situation where the service really is pinned to stale bytes.
+async function refreshCliSlotBeforeCommand(): Promise<void> {
+  const logger = createCliLogger(config.environment);
+  try {
+    const refreshed = await refreshWellKnownSlotIfStale(config.environment);
+    if (refreshed === null) return;
+    if (refreshed.staged === "failed") {
+      logger.warn("CLI well-known slot refresh failed", {
+        environment: config.environment,
+        wellKnownPath: refreshed.wellKnownPath,
+        errorName: refreshed.errorName,
+        errorMessage: refreshed.errorMessage,
+      });
+      return;
+    }
+    logger.info("CLI well-known slot refreshed", {
+      environment: config.environment,
+      staged: refreshed.staged,
+    });
+  } catch (cause) {
+    logger.warn("CLI well-known slot refresh threw", {
+      environment: config.environment,
+      errorName: errorFromUnknown(cause).name,
+      errorMessage: errorFromUnknown(cause).message,
+    });
+  }
+}
+
 export function buildProgramWithAgentRoles(
   agentRolesEnabled: boolean,
 ): Command {
@@ -224,6 +257,27 @@ export function buildProgramWithAgentRoles(
   // `optsWithGlobals()` which is what the runner-aware action handlers
   // rely on.
   addRunnerFlags(program);
+  // Keep the well-known CLI slot pointing at the anchored binary, before
+  // any command runs.
+  //
+  // The slot is what the host daemon shells and what registered services
+  // launch, but the only code that re-stages it sits on service
+  // REGISTRATION paths. A channel whose upgrade replaces the executable
+  // without re-registering - winget, whose portable manifest cannot run a
+  // post-install hook at all - would otherwise leave both running the
+  // previous version indefinitely, up to a protocol-incompatible one, no
+  // matter how much the user exercises the CLI in between.
+  //
+  // A `preAction` hook is the one place that sees every command. It is
+  // affordable there because the refresh self-guards: an interpreter run
+  // (dev, tests) returns before touching the filesystem, and an unchanged
+  // install costs two `stat` calls. Awaited rather than fired and
+  // forgotten - a copy racing process exit would be interrupted on every
+  // short command and never complete. Commander awaits async hooks during
+  // `parseAsync`, and `--help` / `--version` exit before hooks run.
+  program.hook("preAction", async () => {
+    await refreshCliSlotBeforeCommand();
+  });
   registerCommands(program, agentRolesEnabled);
   // Route commander's own parse failures (missing required option, unknown
   // option/command) through the runner's error contract so `--json`

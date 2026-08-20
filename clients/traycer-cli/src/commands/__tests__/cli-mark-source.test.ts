@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -7,7 +8,7 @@ import {
 } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
 import type { CommandContext } from "../../runner/runner";
@@ -180,6 +181,51 @@ describe("writeMarkSource", () => {
     }
     expect(result.human).toContain("note:");
     expect(result.human).toContain(wellKnownPath);
+  });
+
+  // The state Codex flagged: anchoring to npm on a machine that already has
+  // an executable in the slot. It is deliberately NOT deleted - the host
+  // daemon and any registered service launch from it, so removing it would
+  // break a working machine - but the message must say what is really
+  // running rather than claim the interpreter now serves the host.
+  it("for an npm source over an EXISTING slot, warns that the prior executable is still what runs", async () => {
+    const { writeMarkSource } = await import("../cli-mark-source");
+    const { wellKnownCliBinaryPath } =
+      await import("../../store/well-known-cli");
+
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "previously anchored homebrew executable");
+
+    const anchoredBinary = join(workHome, "npm-cli-bundle.js");
+    writeFileSync(
+      anchoredBinary,
+      "#!/usr/bin/env node\nconsole.log('npm bundle');\n",
+      { mode: 0o644 },
+    );
+
+    const result = await writeMarkSource({
+      ctx: fakeCtx(),
+      source: "npm",
+      binaryPath: anchoredBinary,
+      version: "1.4.0",
+      reason: "cli-mark-source",
+    });
+
+    const data = result.data as WriteMarkSourceData;
+    expect(data.wellKnown.staged).toBe("not-applicable");
+    // Left in place, not retired.
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(
+      "previously anchored homebrew executable",
+    );
+    if (result.human === null) {
+      throw new Error("expected human output for a non-json run");
+    }
+    expect(result.human).toContain("warning:");
+    expect(result.human).toContain("still holds the previously anchored");
+    expect(result.human).not.toContain(
+      "the service runs the CLI through its interpreter",
+    );
   });
 
   it("for a non-interpreter source (homebrew), writes the manifest AND stages the slot with the anchored binary's bytes", async () => {

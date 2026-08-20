@@ -235,9 +235,20 @@ export async function writeMarkSource(opts: {
       // `traycer.exe`. Staging it is worse than leaving the slot empty -
       // the host would fail to execute a CLI it believes it has. The same
       // predicate gates the resolver, so the two writers cannot drift.
-      const wellKnown: WellKnownCliStageOutcome = isInterpreterDistribution(
-        opts.source,
-      )
+      const interpreterDistribution = isInterpreterDistribution(opts.source);
+      // Whether a PREVIOUS distribution already put an executable in the
+      // slot. It stays there: the host daemon and any service registered
+      // against that path both launch from it, so deleting it to reflect
+      // the new anchor would take a working machine down rather than
+      // improve it. What changes is what we TELL the user - the note below
+      // must not claim the service now runs through the interpreter when a
+      // foreign executable is still what actually gets launched.
+      const priorSlotExists =
+        interpreterDistribution &&
+        (await slotHasBinary(
+          wellKnownCliBinaryPath(opts.ctx.runtime.environment),
+        ));
+      const wellKnown: WellKnownCliStageOutcome = interpreterDistribution
         ? {
             staged: "not-applicable",
             wellKnownPath: wellKnownCliBinaryPath(opts.ctx.runtime.environment),
@@ -278,7 +289,7 @@ export async function writeMarkSource(opts: {
           : wellKnown.staged === "failed"
             ? `${anchoredLine}\nwarning: could not stage ${wellKnown.wellKnownPath} (${wellKnown.errorMessage}); the host daemon resolves the CLI only at that path, so host-driven doctor/update will not see this install until it is staged`
             : wellKnown.staged === "not-applicable"
-              ? `${anchoredLine}\nnote: this distribution ships a script rather than an executable, so ${wellKnown.wellKnownPath} is left alone; the service runs the CLI through its interpreter, but host-driven doctor/update will not see this install`
+              ? `${anchoredLine}\n${interpreterSlotNote(wellKnown.wellKnownPath, priorSlotExists)}`
               : anchoredLine,
         exitCode: 0,
       };
@@ -290,4 +301,29 @@ function readErrorCode(error: unknown): string | null {
   if (error === null || typeof error !== "object") return null;
   const code = Reflect.get(error, "code");
   return typeof code === "string" ? code : null;
+}
+
+// Human note for an interpreter distribution, which owns no slot. The two
+// states are materially different for the reader and must not be conflated:
+// with no slot the host simply cannot see this install, while a slot left
+// over from a previous executable install keeps being launched by both the
+// host daemon and any service registered against it - so the machine is
+// running a DIFFERENT CLI than the manifest now names.
+function interpreterSlotNote(
+  wellKnownPath: string,
+  priorSlotExists: boolean,
+): string {
+  if (!priorSlotExists) {
+    return `note: this distribution ships a script rather than an executable, so ${wellKnownPath} is left alone; the service runs the CLI through its interpreter, but host-driven doctor/update will not see this install`;
+  }
+  return `warning: this distribution ships a script rather than an executable, so ${wellKnownPath} still holds the previously anchored executable; the host daemon and any already-registered service keep launching THAT binary, not this one. Re-register the service ('traycer host service install') to point it at this install, or remove ${wellKnownPath} once nothing depends on it`;
+}
+
+async function slotHasBinary(wellKnownPath: string): Promise<boolean> {
+  try {
+    await stat(wellKnownPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
