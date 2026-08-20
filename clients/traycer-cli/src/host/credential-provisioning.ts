@@ -24,6 +24,7 @@ import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transpor
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import type { HostAuth } from "../internal/host-auth";
+import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
@@ -127,6 +128,16 @@ export async function provisionInstalledHostCredential(
 ): Promise<HostCredentialProvisionOutcome> {
   const deadlineAt = Date.now() + options.deadlineMs;
 
+  // Everything acquirable is declared here and ACQUIRED INSIDE the `try`, so
+  // no setup failure can escape this module. The caller runs after the bytes
+  // are swapped and the service started, so a throw out of a best-effort
+  // probe would report a completed install as a failed one - and a throw
+  // between two acquisitions would leak the earlier one. `finally` releases
+  // whatever was actually obtained.
+  let poll: NodeJS.Timeout | null = null;
+  let store: CredentialsMutationStore | null = null;
+  let client: WsStreamClient<HostStreamRpcRegistry> | null = null;
+
   // The endpoint provider is synchronous, so a poller keeps a mutable slot
   // fresh (the monitor's pattern): the freshly-started host writes its pid
   // metadata some time after the service start, and dials retry through
@@ -158,79 +169,80 @@ export async function provisionInstalledHostCredential(
       pollInFlight = false;
     }
   };
-  await refreshEndpoint();
-  const poll = setInterval(() => {
-    void refreshEndpoint();
-  }, ENDPOINT_POLL_MS);
-
   // Routes each session's ack observation to the attempt currently waiting on
   // it; the client-level observer outlives individual sessions.
   let observeState: ((state: HostCredentialState) => void) | null = null;
   let mintInvoked = false;
   let mintSettled: Promise<HostCredentialMintOutcome> | null = null;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
-  const innerMint = createCliHostCredentialMintFlow({
-    authnBaseUrl: options.auth.authnBaseUrl,
-    // The LIVE lease, not the token this call was handed: a revalidation
-    // below can rotate the bearer mid-probe, and minting on the snapshot
-    // would spend a token authn has already retired.
-    bearer: () => readLeaseBearer(lease),
-    diag: (message) => options.progress(message),
-  });
-  // The stored access token has a ~4h TTL, so an ordinary "already signed in"
-  // install routinely starts this probe on an EXPIRED bearer - the common
-  // case, not an edge one. `auth: null` (correct only for a client that has
-  // no revalidator) would make that first UNAUTHORIZED terminal, and the host
-  // would never be minted for at all. Route reconnect recovery through the
-  // same locked, single-flight `rotate` the monitor uses, so a probe refresh
-  // and a concurrent desktop refresh cannot double-spend the refresh token.
-  const store = createCliCredentialsStore();
-  // Named narrowing, as `monitor` does: the factory's return intersects
-  // `AuthRevalidator`, whose `revalidateCurrentContext` is declared
-  // `Promise<unknown>` for the unary path that ignores it, and the call
-  // otherwise resolves to that looser overload.
-  const revalidator: ProbeRevalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-  });
-  const streamAuth: StreamAuthRevalidator = {
-    revalidateForReconnect: () => revalidator.revalidateCurrentContext(),
-  };
-
-  const client = new WsStreamClient<HostStreamRpcRegistry>({
-    registry: hostStreamRpcRegistry,
-    endpoint: () => endpoint,
-    bearer: () => lease,
-    auth: streamAuth,
-    hostCredentialMint: (request) => {
-      mintInvoked = true;
-      const settled = innerMint(request);
-      mintSettled = settled;
-      return settled;
-    },
-    onHostCredentialState: (hostId, state) => {
-      options.logger.debug("Host credential provisioning observed ack state", {
-        environment: options.environment,
-        hostId,
-        state,
-      });
-      if (observeState !== null) {
-        observeState(state);
-      }
-    },
-    evidence: NO_TRANSPORT_EVIDENCE,
-    webSocketFactory: createWhatwgStreamWebSocketFactory(),
-    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-    openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
-    pingIntervalMs: PING_INTERVAL_MS,
-    pongTimeoutMs: PONG_TIMEOUT_MS,
-    initialBackoffMs: INITIAL_BACKOFF_MS,
-    maxBackoffMs: MAX_BACKOFF_MS,
-  });
-
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
 
   try {
+    await refreshEndpoint();
+    poll = setInterval(() => {
+      void refreshEndpoint();
+    }, ENDPOINT_POLL_MS);
+
+    const innerMint = createCliHostCredentialMintFlow({
+      authnBaseUrl: options.auth.authnBaseUrl,
+      // The LIVE lease, not the token this call was handed: a revalidation
+      // below can rotate the bearer mid-probe, and minting on the snapshot
+      // would spend a token authn has already retired.
+      bearer: () => readLeaseBearer(lease),
+      diag: (message) => options.progress(message),
+    });
+    // The stored access token has a ~4h TTL, so an ordinary "already signed
+    // in" install routinely starts this probe on an EXPIRED bearer - the
+    // common case, not an edge one. `auth: null` (correct only for a client
+    // that has no revalidator) would make that first UNAUTHORIZED terminal,
+    // and the host would never be minted for at all. Route reconnect recovery
+    // through the same locked, single-flight `rotate` the monitor uses, so a
+    // probe refresh and a concurrent desktop refresh cannot double-spend the
+    // refresh token.
+    store = createCliCredentialsStore();
+    // Named narrowing, as `monitor` does: the factory's return intersects
+    // `AuthRevalidator`, whose `revalidateCurrentContext` is declared
+    // `Promise<unknown>` for the unary path that ignores it, and the call
+    // otherwise resolves to that looser overload.
+    const revalidator: ProbeRevalidator = createStoreBackedRevalidator({
+      store,
+      lease,
+    });
+    const streamAuth: StreamAuthRevalidator = {
+      revalidateForReconnect: () => revalidator.revalidateCurrentContext(),
+    };
+
+    const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => endpoint,
+      bearer: () => lease,
+      auth: streamAuth,
+      hostCredentialMint: (request) => {
+        mintInvoked = true;
+        const settled = innerMint(request);
+        mintSettled = settled;
+        return settled;
+      },
+      onHostCredentialState: (hostId, state) => {
+        options.logger.debug(
+          "Host credential provisioning observed ack state",
+          { environment: options.environment, hostId, state },
+        );
+        if (observeState !== null) {
+          observeState(state);
+        }
+      },
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: createWhatwgStreamWebSocketFactory(),
+      dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+      openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
+      pingIntervalMs: PING_INTERVAL_MS,
+      pongTimeoutMs: PONG_TIMEOUT_MS,
+      initialBackoffMs: INITIAL_BACKOFF_MS,
+      maxBackoffMs: MAX_BACKOFF_MS,
+    });
+    client = activeClient;
+
     let sawSilentOpen = false;
     // A mint that resolved without handing us a credential. NOT terminal on
     // its own: the same `unavailable` covers the 409 supersede, where another
@@ -255,7 +267,7 @@ export async function provisionInstalledHostCredential(
         break;
       }
       const { observation, session } = await observeNextAck(
-        client,
+        activeClient,
         (resolver) => {
           observeState = resolver;
         },
@@ -281,16 +293,30 @@ export async function provisionInstalledHostCredential(
           // next lap - stacking a second live session onto the handoff one
           // would route the verify ack ambiguously.
           if (mintSettled !== null) {
-            const outcome = await settleMint(
-              mintSettled,
-              options.logger,
-              remaining(),
-            );
+            // Annotated: `mintSettled` is only ever assigned inside the
+            // `hostCredentialMint` callback, so TS's linear flow analysis
+            // narrows the declared `| null` down to `null` here and the
+            // non-null branch to `never`.
+            const pendingMint: Promise<HostCredentialMintOutcome> = mintSettled;
             mintSettled = null;
-            // Fall through to the verification lap either way. A supersede
-            // reads as `unavailable` here, and the winner's credential is
-            // exactly what the next ack will report as `active`.
-            mintUnavailable = outcome !== "provisioned";
+            const mintBoundMs = remaining();
+            if (mintBoundMs > 0) {
+              const outcome = await settleMint(
+                pendingMint,
+                options.logger,
+                mintBoundMs,
+              );
+              // Fall through to the verification lap either way. A supersede
+              // reads as `unavailable` here, and the winner's credential is
+              // exactly what the next ack will report as `active`.
+              mintUnavailable = outcome !== "provisioned";
+            } else {
+              // Out of budget before the mint could even be waited on. That is
+              // "minted, never verified" - `not-adopted` - and NOT a mint
+              // failure, so `mintUnavailable` stays false rather than letting
+              // a zero-length bound manufacture a `mint-unavailable` report.
+              pendingMint.catch(() => {});
+            }
           }
           await sleep(Math.min(PUSH_DRAIN_MS, remaining()));
           session.close();
@@ -328,11 +354,19 @@ export async function provisionInstalledHostCredential(
     });
     return { kind: "error", message: error.message };
   } finally {
-    clearInterval(poll);
-    client.close("host-install-credential-provisioning-settled");
+    // Null-checked because setup now happens inside the `try`: a throw part
+    // way through it must still release whatever was already acquired.
+    if (poll !== null) {
+      clearInterval(poll);
+    }
+    if (client !== null) {
+      client.close("host-install-credential-provisioning-settled");
+    }
     // Stops any `commit-failed` continuation timer a revalidation armed;
     // without it the process keeps a timer alive past the probe.
-    store.dispose();
+    if (store !== null) {
+      store.dispose();
+    }
   }
 }
 

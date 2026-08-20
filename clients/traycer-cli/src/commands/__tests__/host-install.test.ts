@@ -283,6 +283,11 @@ describe("buildHostInstallCommand", () => {
       devSlot: null,
     });
     mocks.currentInstallPlatformMock.mockReturnValue("darwin");
+    // Pin the prompt gate rather than depending on vitest leaving `isTTY`
+    // absent: a TTY-attached local run would otherwise send the signed-out
+    // tests down the prompt path and fail only on some machines. Tests that
+    // want the prompt call `setStdoutIsTTY(true)` themselves.
+    setStdoutIsTTY(false);
     // Every existing test predates the sign-in pre-flight and expects to run
     // as signed-in with zero prompt/warning noise - default to that so only
     // the tests that care about auth need to override it.
@@ -691,6 +696,63 @@ describe("buildHostInstallCommand", () => {
     expect(ctx.output.humanRequired).toHaveBeenCalledWith(
       expect.stringContaining("Signed in as u@x.dev"),
     );
+  });
+
+  it("signed out + interactive: the inline sign-in's OWN credentials provision the started host", async () => {
+    // The end-to-end shape of the whole feature, and the one combination the
+    // test above cannot show: the real device flow persists credentials, so
+    // the post-install re-read succeeds and provisioning runs on the token
+    // the inline sign-in just wrote - not on the pre-flight's (absent) one.
+    mocks.resolveHostAuthMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        token: "inline-token",
+        authnBaseUrl: "https://authn.test",
+        userId: "user-1",
+      });
+    mocks.runDeviceAuthFlowMock.mockResolvedValue({
+      token: "inline-token",
+      user: { id: "u1", email: "u@x.dev", name: "U" },
+      authnBaseUrl: "https://authn.test",
+    });
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    mocks.provisionInstalledHostCredentialMock.mockResolvedValue({
+      kind: "active",
+      minted: true,
+    });
+    setStdoutIsTTY(true);
+
+    const command = buildHostInstallCommand(baseArgs({}));
+    const result = await command(fakeCtx());
+
+    expect(mocks.callOrder).toEqual([
+      "auth-resolve",
+      "device-login",
+      "stage",
+      "lock-enter",
+      "commit",
+      "lock-exit",
+      "auth-resolve",
+      "credential-provision",
+    ]);
+    expect(mocks.provisionInstalledHostCredentialMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: expect.objectContaining({ token: "inline-token" }),
+      }),
+    );
+    expect(result.data).toMatchObject({
+      authPreflight: { state: "signed-in-inline", reason: null },
+      credentialProvision: { kind: "active", minted: true },
+    });
+    expect(result.human ?? "").toMatch(/host credential provisioned$/);
   });
 
   it("signed out + interactive, device flow declined: install still commits, reports sign-in-incomplete", async () => {

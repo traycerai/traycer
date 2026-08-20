@@ -279,13 +279,31 @@ async function maybeProvisionCredential(
     });
   };
   progress("authorizing the installed host (waiting for it to come up)...");
-  const outcome = await provisionInstalledHostCredential({
-    environment: ctx.runtime.environment,
-    auth,
-    deadlineMs: CREDENTIAL_PROVISION_DEADLINE_MS,
-    progress,
-    logger: ctx.runtime.logger,
-  });
+  // Belt and braces on the advisory contract. The probe maps its own failures
+  // to an outcome and should never throw - but it runs AFTER the bytes are
+  // swapped and the service started, so "should never" is not good enough
+  // here: an escape would report a completed install as a failed one.
+  let outcome: HostCredentialProvisionOutcome;
+  try {
+    outcome = await provisionInstalledHostCredential({
+      environment: ctx.runtime.environment,
+      auth,
+      deadlineMs: CREDENTIAL_PROVISION_DEADLINE_MS,
+      progress,
+      logger: ctx.runtime.logger,
+    });
+  } catch (err) {
+    const error = errorFromUnknown(err);
+    ctx.runtime.logger.warn(
+      "Host install credential provisioning threw; the install itself was unaffected",
+      {
+        environment: ctx.runtime.environment,
+        errorName: error.name,
+        errorMessage: error.message,
+      },
+    );
+    outcome = { kind: "error", message: error.message };
+  }
   ctx.runtime.logger.info("Host install credential provisioning settled", {
     environment: ctx.runtime.environment,
     outcome: outcome.kind,

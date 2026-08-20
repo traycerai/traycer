@@ -474,19 +474,21 @@ describe("provisionInstalledHostCredential", () => {
       }, 0);
     };
 
-    const deadlineMs = 600;
-    const startedAt = Date.now();
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs, progress: vi.fn() }),
+      makeOptions({ deadlineMs: 600, progress: vi.fn() }),
     );
-    const elapsed = Date.now() - startedAt;
 
+    // Deliberately NOT a wall-clock assertion: this suite runs real timers
+    // with 750ms drains, so an elapsed-time bound is a flake waiting for a
+    // loaded runner. The regression is a HANG - an unbounded await on a mint
+    // that never settles - and it shows up as the outcome being reached at
+    // all, plus the single lap the exhausted budget allows. Under the old
+    // code this test does not fail an assertion, it times out.
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "mint-unavailable",
     });
-    // Generous headroom over the deadline, but far under the unbounded case:
-    // a hung mint used to hold the loop open indefinitely.
-    expect(elapsed).toBeLessThan(deadlineMs + 1_500);
+    expect(mocks.sessions).toHaveLength(1);
+    expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
     expectCleanTeardown();
   });
 
@@ -655,5 +657,30 @@ describe("provisionInstalledHostCredential", () => {
     });
     // The finally block runs on the error path too.
     expectCleanTeardown();
+  });
+
+  it("a throw during SETUP is mapped, not propagated, and releases what was already acquired", async () => {
+    // The setup (endpoint poll, mint flow, credentials store, stream client)
+    // used to run OUTSIDE this module's try. A throw there escaped the error
+    // mapping entirely and surfaced out of `host install` - after the bytes
+    // were swapped and the service started - turning a completed install into
+    // a reported failure, and leaking the poll interval on the way out.
+    mocks.createMintFlowMock.mockImplementationOnce(() => {
+      throw new Error("simulated setup failure");
+    });
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "error",
+      message: "simulated setup failure",
+    });
+    // The interval was armed before the throw, so it must be cleared; the
+    // client never got constructed, so closing it must NOT be attempted.
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(mocks.clientCloseMock).not.toHaveBeenCalled();
+    expect(mocks.subscribeMock).not.toHaveBeenCalled();
   });
 });
