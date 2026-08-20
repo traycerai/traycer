@@ -5,11 +5,10 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
-  HostControllerStatus,
   IHostManagement,
   InstallVersionOk,
   MaintenanceDoctorProjection,
-  MutationLaneStatus,
+  MaintenanceInstallDispatch,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
@@ -169,83 +168,110 @@ describe("localWsDoctorResponse", () => {
   });
 });
 
-function idleControllerStatus(): HostControllerStatus {
-  return {
-    download: null,
-    mutation: null,
-    installedVersion: "1.1.11",
-    latestVersion: "1.2.0",
-    stagedVersion: null,
-    installedRuntimeVersion: "1.1.11",
-    runningRuntimeVersion: "1.1.11",
-    updateReady: false,
-    activation: "activated",
-    reachable: true,
-    removedByUser: false,
-    checkedAt: "2026-08-12T00:00:00Z",
-  };
-}
-
-function occupiedControllerStatus(
-  mutation: MutationLaneStatus,
-): HostControllerStatus {
-  return { ...idleControllerStatus(), mutation };
-}
-
 describe("buildMaintenanceFallbackServeMap", () => {
-  it("refuses host.update.install with already-updating when the shared controller lane is occupied, without calling installVersion", async () => {
-    // Discriminator: if the gate is removed, this becomes `accepted` and
-    // `installVersion` is called — the desktop controller QUEUES a competing
-    // intent rather than refusing it.
-    const installVersion = vi.fn(() =>
-      Promise.resolve({
-        kind: "ok" as const,
-        value: { installedVersion: "1.2.0", runningActivated: true },
-      }),
-    );
-    const getHostControllerStatus = vi.fn(() =>
-      Promise.resolve(
-        occupiedControllerStatus({
-          kind: "apply",
-          progress: null,
-          startedAt: "2026-08-12T00:00:00Z",
-        }),
-      ),
+  it("maps lane-busy to already-updating without consulting getHostControllerStatus or installVersion", async () => {
+    // Discriminator: the old two-step read `getHostControllerStatus` then
+    // called `installVersion`. Reintroducing that read makes this red.
+    const maintenanceInstallVersion = vi.fn(
+      (input: { readonly version: string; readonly force: boolean }) => {
+        expect(input).toEqual({ version: "1.2.0", force: false });
+        return Promise.resolve({
+          kind: "lane-busy" as const,
+        } satisfies MaintenanceInstallDispatch);
+      },
     );
     const management = buildOverviewManagement({
-      getHostControllerStatus,
-      installVersion,
+      maintenanceInstallVersion,
     });
     const serve = buildMaintenanceFallbackServeMap(management);
 
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: false }),
     ).resolves.toEqual({ outcome: "already-updating" });
-    expect(getHostControllerStatus).toHaveBeenCalledTimes(1);
-    expect(installVersion).not.toHaveBeenCalled();
+    expect(maintenanceInstallVersion).toHaveBeenCalledTimes(1);
+    expect(management.getHostControllerStatus).not.toHaveBeenCalled();
+    expect(management.installVersion).not.toHaveBeenCalled();
   });
 
-  it("installs through installVersion when the shared controller lane is null", async () => {
-    const installVersion = vi.fn((version: string, _force: boolean) =>
-      Promise.resolve({
-        kind: "ok" as const,
-        value: { installedVersion: version, runningActivated: true },
-      }),
-    );
-    const getHostControllerStatus = vi.fn(() =>
-      Promise.resolve(idleControllerStatus()),
+  it("maps a dispatched ok through mapInstallVersionOutcome without a status read", async () => {
+    const maintenanceInstallVersion = vi.fn(
+      (input: { readonly version: string; readonly force: boolean }) =>
+        Promise.resolve({
+          kind: "dispatched" as const,
+          outcome: {
+            kind: "ok" as const,
+            value: { installedVersion: input.version, runningActivated: true },
+          },
+        } satisfies MaintenanceInstallDispatch),
     );
     const management = buildOverviewManagement({
-      getHostControllerStatus,
-      installVersion,
+      maintenanceInstallVersion,
     });
     const serve = buildMaintenanceFallbackServeMap(management);
 
     await expect(
-      serve["host.update.install"]({ version: "1.2.0", force: false }),
+      serve["host.update.install"]({ version: "1.2.0", force: true }),
     ).resolves.toEqual({ outcome: "accepted" });
-    expect(getHostControllerStatus).toHaveBeenCalledTimes(1);
-    expect(installVersion).toHaveBeenCalledWith("1.2.0", false);
+    expect(maintenanceInstallVersion).toHaveBeenCalledWith({
+      version: "1.2.0",
+      force: true,
+    });
+    expect(management.getHostControllerStatus).not.toHaveBeenCalled();
+    expect(management.installVersion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: "busy" as const,
+      continuation: "retry-with-force" as const,
+      message: "Host is busy installing another version.",
+    },
+    {
+      kind: "deferred" as const,
+      message: "CLI lock is held; retry when idle.",
+    },
+  ])(
+    "maps a dispatched $kind through mapInstallVersionOutcome as a thrown HostRpcError",
+    async (outcome) => {
+      const management = buildOverviewManagement({
+        maintenanceInstallVersion: () =>
+          Promise.resolve({
+            kind: "dispatched" as const,
+            outcome,
+          }),
+      });
+      const serve = buildMaintenanceFallbackServeMap(management);
+      await expect(
+        serve["host.update.install"]({ version: "1.2.0", force: false }),
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(error).toBeInstanceOf(HostRpcError);
+        if (!(error instanceof HostRpcError)) return false;
+        expect(error.message).toBe(outcome.message);
+        expect(error.method).toBe("host.update.install");
+        return true;
+      });
+      expect(management.getHostControllerStatus).not.toHaveBeenCalled();
+      expect(management.installVersion).not.toHaveBeenCalled();
+    },
+  );
+
+  it("maps a dispatched failed through mapInstallVersionOutcome to cli-failed", async () => {
+    const management = buildOverviewManagement({
+      maintenanceInstallVersion: () =>
+        Promise.resolve({
+          kind: "dispatched" as const,
+          outcome: {
+            kind: "failed" as const,
+            message: "install failed",
+          },
+        }),
+    });
+    const serve = buildMaintenanceFallbackServeMap(management);
+    await expect(
+      serve["host.update.install"]({ version: "1.2.0", force: false }),
+    ).resolves.toEqual({ outcome: "cli-failed" });
+    expect(management.getHostControllerStatus).not.toHaveBeenCalled();
+    expect(management.installVersion).not.toHaveBeenCalled();
   });
 
   it("forwards includePreReleases verbatim on host.update.check", async () => {
@@ -425,11 +451,17 @@ describe("createLocalMaintenanceFallbackClient", () => {
           manifest: updateCheckManifest("1.2.0"),
         });
       },
-      installVersion: (version, force) => {
-        installCalls.push({ version, force });
+      maintenanceInstallVersion: (input) => {
+        installCalls.push({ version: input.version, force: input.force });
         return Promise.resolve({
-          kind: "ok" as const,
-          value: { installedVersion: version, runningActivated: true },
+          kind: "dispatched" as const,
+          outcome: {
+            kind: "ok" as const,
+            value: {
+              installedVersion: input.version,
+              runningActivated: true,
+            },
+          },
         });
       },
       maintenanceDoctor: () => {
@@ -523,6 +555,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
     expect(served.installInfoCalls).toBe(1);
     expect(served.installCalls).toEqual([{ version: "1.2.0", force: false }]);
     expect(install).toEqual({ outcome: "accepted" });
+    expect(served.management.installVersion).not.toHaveBeenCalled();
+    expect(served.management.getHostControllerStatus).not.toHaveBeenCalled();
   });
 
   it("delegates when the wrapped client's active host is not the local host, even on handshake-false", async () => {

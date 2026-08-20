@@ -295,8 +295,12 @@ function mountFallbackOverview(options: {
         manifest: updateCheckManifest(BRIDGE_CHECK_VERSION),
       }),
     ),
-    installVersion: vi.fn((_version: string, _force: boolean) =>
-      Promise.resolve(options.installOutcome),
+    maintenanceInstallVersion: vi.fn(
+      (_input: { readonly version: string; readonly force: boolean }) =>
+        Promise.resolve({
+          kind: "dispatched" as const,
+          outcome: options.installOutcome,
+        }),
     ),
     maintenanceDoctor: vi.fn(() =>
       Promise.resolve({
@@ -376,7 +380,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(restart.getAttribute("aria-disabled")).not.toBe("true");
   });
 
-  it("Update now dispatches installVersion(version, false) and an ok outcome lands the accepted path", async () => {
+  it("Update now dispatches maintenanceInstallVersion({version, force:false}) and an ok outcome lands the accepted path", async () => {
     const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -391,11 +395,13 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
 
     await waitFor(() => {
-      expect(management.installVersion).toHaveBeenCalledWith(
-        BRIDGE_CHECK_VERSION,
-        false,
-      );
+      expect(management.maintenanceInstallVersion).toHaveBeenCalledWith({
+        version: BRIDGE_CHECK_VERSION,
+        force: false,
+      });
     });
+    expect(management.installVersion).not.toHaveBeenCalled();
+    expect(management.getHostControllerStatus).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(
         `Updating Local Host to v${BRIDGE_CHECK_VERSION}`,
@@ -420,11 +426,12 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     fireEvent.click(updateNow);
 
     await waitFor(() => {
-      expect(management.installVersion).toHaveBeenCalledWith(
-        BRIDGE_CHECK_VERSION,
-        false,
-      );
+      expect(management.maintenanceInstallVersion).toHaveBeenCalledWith({
+        version: BRIDGE_CHECK_VERSION,
+        force: false,
+      });
     });
+    expect(management.installVersion).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalled();
     });
@@ -602,11 +609,11 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
   });
 
-  it("a host-restart doctor fix on a capability-false local host dispatches the bridge respawn, not host.restart", async () => {
-    // Discriminator: if `rpcRestartSupported` is hardcoded true, the fix
-    // button takes the RPC route and `fixture.restartCalls()` increments
-    // instead of `management.restartHost`.
-    const { management, fixture } = mountFallbackOverview({
+  it("a host-restart doctor fix on a capability-false local host dispatches the page's force-restart, not host.restart or hostRunDoctor", async () => {
+    // Discriminator: `onLocalFix` would land on `hostRunDoctor` (outside
+    // every lifecycle gate). `rpcRestartSupported` hardcoded true would
+    // increment `fixture.restartCalls()` instead of `management.restartHost`.
+    const { management, fixture, queryClient } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
         value: { installedVersion: "1.2.0", runningActivated: true },
@@ -622,6 +629,14 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
 
     await openHostOverviewMenu();
     fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    const doctorMutationsBefore = queryClient
+      .getMutationCache()
+      .getAll()
+      .filter(
+        (mutation) =>
+          JSON.stringify(mutation.options.mutationKey) ===
+          JSON.stringify(runnerMutationKeys.hostRunDoctor()),
+      ).length;
     fireEvent.click(
       await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
     );
@@ -630,5 +645,88 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       expect(management.restartHost).toHaveBeenCalledTimes(1);
     });
     expect(fixture.restartCalls()).toBe(0);
+    const doctorMutationsAfter = queryClient
+      .getMutationCache()
+      .getAll()
+      .filter(
+        (mutation) =>
+          JSON.stringify(mutation.options.mutationKey) ===
+          JSON.stringify(runnerMutationKeys.hostRunDoctor()),
+      ).length;
+    expect(doctorMutationsAfter).toBe(doctorMutationsBefore);
+    const restartMutations = queryClient
+      .getMutationCache()
+      .getAll()
+      .filter(
+        (mutation) =>
+          JSON.stringify(mutation.options.mutationKey) ===
+          JSON.stringify(runnerMutationKeys.hostRestart()),
+      );
+    expect(restartMutations.length).toBeGreaterThan(0);
+  });
+
+  it("a host-restart doctor fix does not dispatch while a same-key hostRestart is already in flight", async () => {
+    // `onBridgeRestart` returns early while `anyPending` (which includes
+    // the cache-wide `hostRestart` count). Routing through `onLocalFix` /
+    // `hostRunDoctor` would still call `restartHost`.
+    //
+    // Not pinnable without a production change: `DoctorFixControl` still
+    // reads `localFixPending` on the local-bridge route, so
+    // `bridgeRestartPending` never disables the button. The click no-op
+    // is the gate that actually exists.
+    let releaseExternal: (() => void) | null = null;
+    const externalGate = new Promise<void>((resolve) => {
+      releaseExternal = resolve;
+    });
+    const mutateRef: { current: (() => void) | null } = { current: null };
+    const { management, queryClient } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHost: () => Promise.resolve({ kind: "restarted" as const }),
+      extra: (
+        <ExternalHostRestartTrigger
+          onReady={(mutate) => {
+            mutateRef.current = mutate;
+          }}
+          mutationFn={async () => {
+            await externalGate;
+            return { kind: "restarted" as const };
+          }}
+        />
+      ),
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [CLI_UPGRADE_PENDING],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING");
+
+    act(() => {
+      if (mutateRef.current === null) {
+        throw new Error("external restart trigger was not armed");
+      }
+      mutateRef.current();
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.isMutating({
+          mutationKey: runnerMutationKeys.hostRestart(),
+        }),
+      ).toBeGreaterThan(0);
+    });
+
+    fireEvent.click(screen.getByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"));
+    expect(management.restartHost).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseExternal?.();
+      await externalGate;
+    });
   });
 });

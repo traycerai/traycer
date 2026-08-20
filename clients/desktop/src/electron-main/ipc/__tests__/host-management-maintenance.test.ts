@@ -2,6 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  InstallVersionOk,
+  MutationLaneStatus,
+  MutationOutcome,
+} from "@traycer-clients/shared/platform/runner-host";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { TraycerCliError } from "../../cli/traycer-cli";
 import { classifyCliShellError } from "../host-management-ipc";
@@ -162,7 +167,12 @@ interface HandlerBridge {
       readonly getSnapshot: () => { readonly version: string };
     };
     readonly hostController: {
+      mutationLane: MutationLaneStatus | null;
       readonly getStatus: () => Promise<{ readonly updateReady: boolean }>;
+      installVersion: (
+        version: string,
+        force: boolean,
+      ) => Promise<MutationOutcome<InstallVersionOk>>;
     };
   };
 }
@@ -180,7 +190,13 @@ function makeBridge(): HandlerBridge {
         getSnapshot: () => ({ version: "1.1.11" }),
       },
       hostController: {
+        mutationLane: null,
         getStatus: () => Promise.resolve({ updateReady: false }),
+        installVersion: () =>
+          Promise.resolve({
+            kind: "ok" as const,
+            value: { installedVersion: "1.2.0", runningActivated: true },
+          }),
       },
     },
     handleInvoke(channel, handler) {
@@ -653,5 +669,114 @@ describe("maintenanceInstallationInfo IPC", () => {
         pendingUpgrade: null,
       },
     });
+  });
+});
+
+describe("maintenanceInstallVersion IPC", () => {
+  beforeEach(beginSandbox);
+  afterEach(endSandbox);
+
+  async function registerInstallHandler(
+    bridge: HandlerBridge,
+  ): Promise<(event: unknown, raw: unknown) => Promise<unknown>> {
+    installFakeCli(resolveWith({}));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceInstallVersion,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceInstallVersion handler");
+    }
+    return handler;
+  }
+
+  it("returns lane-busy when mutationLane is occupied, without calling installVersion", async () => {
+    const installVersion = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.mutationLane = {
+      kind: "apply",
+      progress: null,
+      startedAt: "2026-08-12T00:00:00Z",
+    };
+    bridge.options.hostController.installVersion = installVersion;
+    const handler = await registerInstallHandler(bridge);
+
+    await expect(
+      handler(null, { version: "1.2.0", force: false }),
+    ).resolves.toEqual({ kind: "lane-busy" });
+    expect(installVersion).not.toHaveBeenCalled();
+  });
+
+  it("dispatches installVersion when mutationLane is null", async () => {
+    const installVersion = vi.fn((version: string, force: boolean) =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: version, runningActivated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.mutationLane = null;
+    bridge.options.hostController.installVersion = installVersion;
+    const handler = await registerInstallHandler(bridge);
+
+    await expect(
+      handler(null, { version: "1.3.0", force: true }),
+    ).resolves.toEqual({
+      kind: "dispatched",
+      outcome: {
+        kind: "ok",
+        value: { installedVersion: "1.3.0", runningActivated: true },
+      },
+    });
+    expect(installVersion).toHaveBeenCalledWith("1.3.0", true);
+  });
+
+  it("reads mutationLane before submitting — occupying the lane inside installVersion still dispatches", async () => {
+    // Discriminator: if the handler checked the lane AFTER awaiting
+    // installVersion, occupying it inside the submit would flip the
+    // answer to lane-busy. Reading first, with no await in between,
+    // still dispatches.
+    const bridge = makeBridge();
+    const occupied: { current: MutationLaneStatus | null } = {
+      current: null,
+    };
+    const installVersion = vi.fn((version: string, _force: boolean) => {
+      occupied.current = {
+        kind: "install",
+        progress: null,
+        startedAt: "2026-08-12T00:00:00Z",
+      };
+      bridge.options.hostController.mutationLane = occupied.current;
+      return Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: version, runningActivated: true },
+      });
+    });
+    bridge.options.hostController.installVersion = installVersion;
+    const handler = await registerInstallHandler(bridge);
+
+    await expect(
+      handler(null, { version: "1.2.0", force: false }),
+    ).resolves.toEqual({
+      kind: "dispatched",
+      outcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+    });
+    expect(installVersion).toHaveBeenCalledTimes(1);
+    if (occupied.current === null) {
+      throw new Error("expected installVersion to occupy the mutation lane");
+    }
+    expect(occupied.current.kind).toBe("install");
   });
 });
