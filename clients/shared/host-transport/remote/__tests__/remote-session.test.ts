@@ -3258,3 +3258,92 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
     TEST_BUDGET_MS,
   );
 });
+
+describe("RemoteSession per-stream retryable FATAL recovery", () => {
+  // `retryable` has to mean the same thing on both transports. On the local
+  // socket a retryable close is followed by the session's own reconnect, which
+  // re-subscribes the stream; here the stream used to be disposed and dropped
+  // from `subscriptions` with nothing left to revive it. Consumers read only
+  // the flag, so they silenced their error UI for a stream that was in fact
+  // permanently dead - strictly worse than the visible failure it replaced.
+  it(
+    "re-subscribes the stream instead of disposing it, and reports reconnecting rather than closed",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => {
+        statuses.push(status);
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        await relay.sendStreamFatal(streamId, {
+          code: "EPIC_INIT_FAILED",
+          reason: "cloud unreachable while opening",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+
+        // The recovery is a real re-subscribe on the wire, not merely a status
+        // the client invented for itself.
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        expect(statuses).toContain("reconnecting");
+        expect(statuses).not.toContain("closed");
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // The other direction, so the recovery cannot swallow a real verdict: an
+  // adjudicated fatal must still end the stream terminally.
+  it(
+    "still disposes the stream terminally when the FATAL is not retryable",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => {
+        statuses.push(status);
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        await relay.sendStreamFatal(streamId, unauthorizedDetails());
+
+        await vi.waitFor(() => expect(statuses).toContain("closed"), WAIT);
+        // No re-subscribe was ever issued for it.
+        expect(relay.subscribeStreamIds).toHaveLength(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});

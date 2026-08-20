@@ -48,7 +48,7 @@ import {
   prepareStreamSubscribeRequest,
   type ParamsOf,
 } from "../ws-stream-client";
-import { backoffFor } from "../backoff";
+import { backoffFor, jitteredBackoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
   CLIENT_REAUTH_JITTER_MS,
@@ -514,6 +514,19 @@ export class RemoteSession<
   private backoffTimer: TimerHandle | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
+  /**
+   * Pending per-stream re-opens after a RETRYABLE per-stream fatal, keyed by
+   * stream id, with the escalating attempt count that paces them. Separate
+   * from `backoffTimer` (which re-dials the whole socket): one resolver
+   * failing its init says nothing about the session, and dropping every other
+   * stream to recover it would be the shared-fate outcome this avoids.
+   *
+   * `streamReopenAttempts` outlives its timer deliberately - it is cleared
+   * when the stream ends or delivers a frame, so a stream that flaps every few
+   * minutes does not inherit the backoff rung of an hour-old episode.
+   */
+  private readonly streamReopenTimers = new Map<number, TimerHandle>();
+  private readonly streamReopenAttempts = new Map<number, number>();
 
   /**
    * Throttled connect-loop failure logging (see `dial-failure-log.ts`). The
@@ -1157,6 +1170,9 @@ export class RemoteSession<
     this.subscriptions.delete(streamId);
     this.restoredStreamIds.delete(streamId);
     this.outboundSeq.delete(streamId);
+    // A caller close outranks a pending retryable re-open: without this the
+    // timer would re-subscribe a stream the consumer has already abandoned.
+    this.clearStreamReopen(streamId);
     // Locally-closed is terminal: clear any partial inbound accumulator and
     // tombstone the id so an in-flight/delayed server frame can't reseed one.
     connection?.reassembler.forget(streamId);
@@ -1638,10 +1654,26 @@ export class RemoteSession<
       if (stream === undefined) {
         return;
       }
+      // A RETRYABLE per-stream fatal is the resolver saying "this open failed,
+      // ask again" - not a verdict on the subscription. Disposing it here made
+      // `retryable` mean something different on this transport than on the
+      // local socket, where the session's own reconnect re-subscribes: the
+      // stream went permanently dead while every consumer, reading the same
+      // flag, believed a recovery was in flight. Re-open it on the shared
+      // backoff instead and keep it in `subscriptions`, so a later session
+      // reconnect replays it like any other live stream.
+      if (parsed.data.details.retryable === true && this.phase !== "closed") {
+        this.restoredStreamIds.delete(message.streamId);
+        this.outboundSeq.delete(message.streamId);
+        this.scheduleStreamReopen(stream);
+        this.maybeReachReadyBoundary();
+        return;
+      }
       stream.goFatal(parsed.data.details);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
+      this.clearStreamReopen(message.streamId);
       this.maybeReachReadyBoundary();
       return;
     }
@@ -1670,6 +1702,10 @@ export class RemoteSession<
         const delivered = stream.deliverServerFrame(envelope, message.binary);
         if (delivered) {
           this.markStreamRestored(message.streamId);
+          // A frame is the only proof the re-open actually worked, so the
+          // escalation resets here rather than at subscribe time - a stream
+          // that fails init repeatedly must keep climbing the backoff.
+          this.streamReopenAttempts.delete(message.streamId);
         }
       }
     }
@@ -2907,10 +2943,79 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Re-opens ONE logical stream after a retryable per-stream fatal, on a
+   * per-stream backoff so a resolver that keeps failing its init cannot spin.
+   *
+   * The status goes to `reconnecting` rather than `closed`: that is the same
+   * projection the local transport gives a stream whose session is re-dialling,
+   * and it is what makes a consumer's "retryable, so something is recovering"
+   * reading true here. The stream stays in `subscriptions` throughout, so a
+   * session-level reconnect landing first simply replays it and the pending
+   * timer is dropped as redundant.
+   */
+  private scheduleStreamReopen(stream: LogicalStream): void {
+    const streamId = stream.streamId;
+    const attempt = this.streamReopenAttempts.get(streamId) ?? 0;
+    this.streamReopenAttempts.set(streamId, attempt + 1);
+    // `null`, like the session-wide reconnect projection at `notifyStatus`
+    // above: `StreamCloseReason` describes a CLOSE, and this stream is not
+    // closed. The reason travels in the log line instead.
+    stream.notifyStatus("reconnecting", null);
+    const existing = this.streamReopenTimers.get(streamId);
+    if (existing !== null && existing !== undefined) {
+      clearTimeout(existing);
+    }
+    const delay = jitteredBackoffFor(
+      attempt,
+      RECONNECT_INITIAL_BACKOFF_MS,
+      RECONNECT_MAX_BACKOFF_MS,
+      () => this.pseudoJitter(),
+    );
+    const timer = setTimeout(() => {
+      this.streamReopenTimers.delete(streamId);
+      // Anything that closed the stream or the session in the meantime wins:
+      // `subscriptions` no longer holding it is exactly that signal.
+      if (this.phase === "closed") {
+        return;
+      }
+      if (this.subscriptions.get(streamId) !== stream) {
+        return;
+      }
+      const connection = this.connection;
+      // Not ready: the session is between sockets and will replay every
+      // subscription itself once the next `open` is accepted.
+      if (connection === null || this.phase !== "ready") {
+        return;
+      }
+      this.openSubscription(connection, stream);
+    }, delay);
+    this.streamReopenTimers.set(streamId, timer);
+  }
+
+  /** Drops any pending re-open for a stream that has terminally ended. */
+  private clearStreamReopen(streamId: number): void {
+    const timer = this.streamReopenTimers.get(streamId);
+    if (timer !== null && timer !== undefined) {
+      clearTimeout(timer);
+    }
+    this.streamReopenTimers.delete(streamId);
+    this.streamReopenAttempts.delete(streamId);
+  }
+
+  /** Clears every pending per-stream re-open (session teardown / re-dial). */
+  private clearAllStreamReopens(): void {
+    for (const timer of this.streamReopenTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.streamReopenTimers.clear();
+  }
+
   private clearAllTimers(): void {
     this.clearPhaseTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
+    this.clearAllStreamReopens();
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);
       this.backoffTimer = null;

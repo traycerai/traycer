@@ -186,26 +186,37 @@ const LINK_DOWN_ESCALATION_MS = 60_000;
  */
 function useLinkDownTooLong(state: EpicSyncPillState): boolean {
   const isLinkDown = state === "connecting" || state === "reconnecting";
+  // `connected` is the NEUTRAL rung - the socket is up but nothing about cloud
+  // or durability has been established yet (see `deriveEpicSyncPillState` rule
+  // 3). It is therefore NOT proof of recovery, and treating it as such is what
+  // this clock has to survive: in an ack-then-fatal loop the transport reaches
+  // `open` on every handshake before the resolver's retryable close lands, so
+  // resetting here restarted the minute on each cycle and the escalated copy
+  // could never appear for the exact loop it was written to explain. Only a
+  // state that took real application evidence to reach ends the outage.
+  const hasRecovered = !isLinkDown && state !== "connected";
   const [escalated, setEscalated] = useState(false);
 
-  // Render-phase reset, like the settle hook above: the moment the link is not
-  // down, the escalated copy must not paint even one frame.
-  if (!isLinkDown && escalated) {
+  // Render-phase reset, like the settle hook above: the moment the link has
+  // genuinely recovered, the escalated copy must not paint even one frame.
+  if (hasRecovered && escalated) {
     setEscalated(false);
   }
 
   useEffect(() => {
-    if (!isLinkDown) return undefined;
+    if (hasRecovered) return undefined;
     const timer = setTimeout(() => {
       setEscalated(true);
     }, LINK_DOWN_ESCALATION_MS);
     return () => {
       clearTimeout(timer);
     };
-    // Deliberately keyed on the BOOLEAN, not on `state`: `connecting` and
-    // `reconnecting` are one outage, and re-running on that flip would restart
-    // the clock on a link that never came back.
-  }, [isLinkDown]);
+    // Deliberately keyed on the BOOLEAN, not on `state`: `connecting`,
+    // `reconnecting` and a handshake-only `connected` are ONE outage, and
+    // re-running on those flips would restart the clock on a link that never
+    // came back. Arming while `connected` costs nothing - the return below
+    // still gates display on the link actually being down.
+  }, [hasRecovered]);
 
   return isLinkDown && escalated;
 }
