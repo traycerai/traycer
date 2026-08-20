@@ -1961,9 +1961,16 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       onConnectionStatus: (status, reason) => {
         if (!isCurrentStream(streamGeneration)) return;
+        // A RETRYABLE fatalError is the transport saying "not now" - the client
+        // is already reconnecting on its own backoff and the user needs to do
+        // nothing. Notifying on it turned an overnight sleep into a stack of
+        // "Agent stream closed unexpectedly" rows (one per dark wake), which
+        // read as data loss when nothing was lost. Only an adjudicated close -
+        // one the user must act on - is worth a notification.
         if (
           status === "closed" &&
           reason?.kind === "fatalError" &&
+          reason.details.retryable !== true &&
           fatalCloseNotificationGeneration !== streamGeneration
         ) {
           fatalCloseNotificationGeneration = streamGeneration;

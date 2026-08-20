@@ -512,7 +512,12 @@ describe("HostStreamProvider", () => {
       }
     });
 
-    expect(reconnectSpy).toHaveBeenCalledWith("wake-resume");
+    // A wake PROBES rather than force-dropping: the socket that survived a
+    // lid-open on the same network is kept, so waking does not re-run every
+    // stream's open against a machine whose Wi-Fi is still re-associating.
+    expect(reconnectSpy).toHaveBeenCalledWith("wake-resume", {
+      probeFirst: true,
+    });
   });
 
   it("keeps the SAME client across a same-host endpoint change and nudges an immediate re-dial", () => {
@@ -541,7 +546,12 @@ describe("HostStreamProvider", () => {
 
     expect(result.current).toBe(first);
     expect(closeSpy).not.toHaveBeenCalled();
-    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change");
+    // The inverse of the wake case: this socket points at an address that no
+    // longer serves the host, so it is dropped whether or not it still
+    // answers. Probing here would keep a socket to nowhere alive.
+    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+    });
   });
 
   it("rebuilds and closes the client only on a host identity change", () => {
@@ -788,7 +798,9 @@ describe("HostStreamProvider", () => {
 
     expect(result.current).toBe(first);
     expect(reconnectSpy).toHaveBeenCalledTimes(1);
-    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change");
+    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+    });
   });
 
   // R-1: the owner-layer discriminator the S1 cache test cannot provide (see

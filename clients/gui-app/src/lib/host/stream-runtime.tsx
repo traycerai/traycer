@@ -372,7 +372,10 @@ function useReconnectStreamOnEndpointChange(
         "[stream] app stream endpoint changed - reconnecting",
         {},
       );
-      client.reconnectAll("host-endpoint-change");
+      // The host moved to a new address: the current socket points somewhere
+      // that no longer serves this host, so it must be dropped whether or not
+      // it still answers. Not a wake - no probe.
+      client.reconnectAll("host-endpoint-change", { probeFirst: false });
     }
   }, [client, transportKey]);
 }
