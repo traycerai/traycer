@@ -323,16 +323,23 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
-    // T5 (artifactRoomDirty) bumped the registry's latestMinor to 1, then
-    // @1.2 (roomId on the snapshot frame's meta) bumped it again to 2 - the
-    // client now opens at {major:1, minor:2}.
+    // T5 (artifactRoomDirty) bumped the registry's latestMinor to 1, @1.2
+    // (roomId on the snapshot frame's meta) bumped it to 2, and @1.3
+    // (delta-seed reattach) bumped it to 3 - the client now opens at
+    // {major:1, minor:3}.
+    //
+    // `params` stays `{epicId}` here because this client offers no seed
+    // (`seedOfferProvider: () => null`), and a null offer omits the key
+    // rather than sending `seedOffer: undefined`. That is the cold-open row
+    // of the skew matrix, asserted on the wire.
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-1" },
     });
     client.close();
@@ -345,6 +352,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -366,6 +374,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -385,6 +394,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -420,6 +430,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -441,6 +452,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -516,6 +528,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -551,6 +564,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -592,6 +606,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
@@ -616,6 +631,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       wsStreamClient: makeWsStreamClient(factory),
       epicId: "epic-1",
       callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
     });
     completeHandshake(sockets[0]);
 
