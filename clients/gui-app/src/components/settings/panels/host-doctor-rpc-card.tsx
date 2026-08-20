@@ -69,6 +69,12 @@ export function HostDoctorRpcCard(props: {
   readonly hasLocalBridge: boolean;
   /** `host.doctor` capability; `null` (no handshake yet) is NOT a degrade. */
   readonly degrade: OverviewDegradeReason | null;
+  /**
+   * Whether `host.restart` can actually be served for this host. `false`
+   * routes both restart fix actions to the bridge respawn instead of an RPC
+   * this host would refuse — see `doctorFixRoute`.
+   */
+  readonly rpcRestartSupported: boolean;
   /** Runs the local-only repair actions on this computer. */
   readonly onLocalFix: (issue: HostDoctorIssue) => void;
   readonly localFixPendingCode: string | null;
@@ -213,6 +219,7 @@ export function HostDoctorRpcCard(props: {
             fixAction: issue.fixAction ?? "",
             isLocalMachine: props.isLocalMachine,
             hasLocalBridge: props.hasLocalBridge,
+            rpcRestartSupported: props.rpcRestartSupported,
           })}
           restartPending={restartMutation.isPending}
           logsPending={logsMutation.isPending}

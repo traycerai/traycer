@@ -193,10 +193,30 @@ export function buildMaintenanceFallbackServeMap(
       management.maintenanceUpdateCheck({
         includePreReleases: params.includePreReleases,
       }),
-    "host.update.install": async (params) =>
-      mapInstallVersionOutcome(
+    "host.update.install": async (params) => {
+      // The RPC resolver refuses a second install while its own update claim
+      // is live (`already-updating`), because the CLI's lock covers only the
+      // brief precheck and promote phases — two runs download in parallel and
+      // can swap twice. This lane needs the same refusal from a different
+      // fact: the desktop controller's mutation lane is exclusive, so it does
+      // not refuse a competing intent, it QUEUES it. Submitting here would
+      // therefore start a second install the moment the first finished,
+      // retargeting (and possibly downgrading) the host nobody asked to move.
+      //
+      // The page's own gate cannot cover this: `updateInFlight` reads
+      // `host.status.updateProgress`, which is exactly the field these
+      // pre-1.2.0 hosts do not have, and the lane can be occupied by the
+      // banner, the tray, or the background reconciler rather than by this
+      // page. Reading the shared lane is the same rule the update banner
+      // states — one intent system-wide at a time.
+      const controller = await management.getHostControllerStatus();
+      if (controller.mutation !== null) {
+        return { outcome: "already-updating" };
+      }
+      return mapInstallVersionOutcome(
         await management.installVersion(params.version, params.force),
-      ),
+      );
+    },
     "host.doctor": async () =>
       localWsDoctorResponse(await management.maintenanceDoctor()),
     "host.getInstallationInfo": () => management.maintenanceInstallationInfo(),

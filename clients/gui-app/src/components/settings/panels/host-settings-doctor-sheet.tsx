@@ -36,6 +36,11 @@ export type DoctorSheetSource =
       readonly isLocalMachine: boolean;
       readonly hasLocalBridge: boolean;
       readonly degrade: OverviewDegradeReason | null;
+      /**
+       * Whether `host.restart` is servable for this host. `false` routes the
+       * restart fix actions through the bridge respawn — see `doctorFixRoute`.
+       */
+      readonly rpcRestartSupported: boolean;
       /** Runs a local-only repair on this computer via the CLI bridge. */
       readonly onLocalFix: (issue: HostDoctorIssue) => void;
       readonly localFixPendingCode: string | null;
@@ -101,6 +106,7 @@ function DoctorSheetBody(props: {
       isLocalMachine={source.isLocalMachine}
       hasLocalBridge={source.hasLocalBridge}
       degrade={source.degrade}
+      rpcRestartSupported={source.rpcRestartSupported}
       onLocalFix={source.onLocalFix}
       localFixPendingCode={source.localFixPendingCode}
     />

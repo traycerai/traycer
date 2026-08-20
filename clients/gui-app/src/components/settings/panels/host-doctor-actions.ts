@@ -117,7 +117,9 @@ export async function runFixAction(
  *
  *   - `rpc`         — `host-restart` / `host-start` route to `host.restart`, and
  *     `host-logs` to `diagnostics.logs.tail`. Both work for any reachable host,
- *     local or remote, which is the whole point.
+ *     local or remote, which is the whole point — EXCEPT on a host that
+ *     negotiated `host.restart` away (see `rpcRestartSupported`), where the
+ *     mechanism that can actually do it is the local bridge's respawn.
  *   - `local-bridge` — the three repair-a-down-host actions, on THIS computer,
  *     where the CLI bridge can still run them.
  *   - `copy-command` — the same three for a host on another machine. Nothing
@@ -132,9 +134,23 @@ export function doctorFixRoute(input: {
   readonly fixAction: string;
   readonly isLocalMachine: boolean;
   readonly hasLocalBridge: boolean;
+  /**
+   * Whether `host.restart` is actually servable for this host. `false` only
+   * for a local host too old to advertise it, whose Doctor is being served
+   * over the CLI fallback: the report is real, so the fix must be too, and
+   * `runFixAction` already carries out both restart actions through the
+   * bridge respawn. Without this the Doctor sheet the fallback ENABLES would
+   * offer a Restart host button that dispatches an RPC the host refuses.
+   */
+  readonly rpcRestartSupported: boolean;
 }): DoctorFixRoute {
   if (input.fixAction === "host-restart" || input.fixAction === "host-start") {
-    return "rpc";
+    if (input.rpcRestartSupported) return "rpc";
+    // Same precedence as below: the bridge when it can reach this machine,
+    // otherwise the command to run on the box itself.
+    return input.isLocalMachine && input.hasLocalBridge
+      ? "local-bridge"
+      : "copy-command";
   }
   if (input.fixAction === "host-logs") return "rpc";
   return input.isLocalMachine && input.hasLocalBridge

@@ -896,21 +896,16 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       try {
         payload = await runBundledTraycerCliJson<unknown>(args);
       } catch (err) {
-        // Same normalisation as `traycerHostAvailable` above: a build without
-        // trusted registry keys answers "nothing to install" rather than an
-        // error nobody can act on from Settings. The empty manifest is the
-        // protocol-shaped twin of `emptyAvailableSnapshot()`.
-        if (isVerifyDisabledForBuild(err)) {
-          return {
-            outcome: "ok",
-            manifest: {
-              schemaVersion: 1,
-              generatedAt: "",
-              latest: "",
-              versions: [],
-            },
-          };
-        }
+        // Every failure classifies, including a build without trusted registry
+        // keys. Deliberately NOT `traycerHostAvailable`'s
+        // `emptyAvailableSnapshot()` normalisation: that lane's consumer reads
+        // an empty snapshot as "nothing to install", while a protocol manifest
+        // with `latest: ""` reaches a consumer that reads `latest` as a real
+        // version — it renders `v is available, but <host> can't install it.`
+        // whenever the installed version is unknown. The host's own
+        // `host.update.check` resolver returns the classified outcome for any
+        // non-ok CLI result and never synthesises a manifest, and this lane
+        // answers the same wire contract, so it classifies too.
         return { outcome: classifyCliShellError(err) };
       }
       const manifest = hostAvailableManifestSchema.safeParse(

@@ -965,6 +965,13 @@ export function HostOverviewPanel(props: {
                 isLocalMachine: host.isLocalMachine,
                 hasLocalBridge: props.hasLocalBridge,
                 degrade: doctorDegrade,
+                // The same fact the header item's Restart routes on. This
+                // fallback ENABLES the Doctor sheet on hosts that refuse
+                // `host.restart`, so a `host-restart` fix offered inside it
+                // has to reach the same bridge respawn the header does —
+                // otherwise the sheet the fallback opened is the one surface
+                // still dispatching the refused RPC.
+                rpcRestartSupported: !restartViaForceFallback,
                 onLocalFix: props.onLocalDoctorFix,
                 localFixPendingCode: props.localDoctorFixPendingCode,
               }
