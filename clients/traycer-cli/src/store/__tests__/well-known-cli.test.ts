@@ -2039,6 +2039,76 @@ it("packaged, no manifest, slot version probe fails: stages (seniority unprovabl
   expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
 });
 
+// Answering `--version` proves a program RUNS, not that it may hold the
+// slot. `isInterpreterDistribution` already refuses to nominate an npm
+// install for exactly one reason - the slot is spawned by the host daemon
+// and the registered service, where `#!/usr/bin/env node` resolves `node`
+// off the service manager's PATH - but that rule reads the MANIFEST, and
+// this guard only ever runs unanchored, where there is none.
+//
+// So the seniority contest must ask the file. An npm CLI answers a version
+// perfectly well, and this is the direction that matters: without the
+// check the slot keeps a Node script that reports itself newer on every
+// later probe, so the guard protects it forever while the service cannot
+// start. Staging over it is the recovery path.
+it("packaged, no manifest, a slot that is an INTERPRETER SCRIPT loses however new it claims to be", async () => {
+  seaState.current = true;
+  const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+    await import("../well-known-cli");
+  const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+  mkdirSync(dirname(wellKnownPath), { recursive: true });
+  const scriptBytes = '#!/usr/bin/env node\nconsole.log("1.9.9");\n';
+  writeFileSync(wellKnownPath, scriptBytes);
+  const running = join(workHome, "running-binary");
+  const runningBytes = "binary A - the running packaged CLI";
+  writeFileSync(running, runningBytes);
+  // Mapped, so the probe would answer STRICTLY NEWER and the guard would
+  // preserve it - this test is about eligibility, not about a failed spawn.
+  slotProbeControl.versionForPath.set(wellKnownPath, "9.9.9\n");
+
+  const result = await withExecPath(running, () =>
+    refreshWellKnownSlotIfStale(ENVIRONMENT),
+  );
+
+  expect(result?.staged).toBe("staged");
+  expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+  expect(readFileSync(wellKnownPath, "utf8")).not.toBe(scriptBytes);
+});
+
+// The same rule on the other call site, which is how it is actually
+// reachable in the field: an old Desktop left a symlink, and it points at an
+// npm install that is genuinely NEWER. Copying those bytes is what puts a
+// Node script behind `bin/traycer`.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to a newer INTERPRETER SCRIPT: stages the running binary",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "npm-installed-cli");
+    const scriptBytes = '#!/usr/bin/env node\nconsole.log("9.9.9");\n';
+    writeFileSync(linkTarget, scriptBytes);
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - the running packaged SEA";
+    writeFileSync(running, runningBytes);
+    const resolvedTarget = realpathSync(linkTarget);
+    slotProbeControl.versionForPath.set(resolvedTarget, "9.9.9\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    // A real file holding the SEA - not the script, and not a surviving link.
+    expect(lstatSync(wellKnownPath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+    expect(readFileSync(wellKnownPath, "utf8")).not.toBe(scriptBytes);
+  },
+);
+
 // An ANCHORED nomination - the manifest names a different existing binary
 // - is trusted outright: the guard only ever applies to the two
 // self-nominated (unanchored) cases, so a manifest-driven stage must
@@ -2175,14 +2245,18 @@ it.skipIf(process.platform === "win32")(
 );
 
 // The third cell, and the one that decides whether `realpath` succeeding is
-// enough on its own: a link resolving to something that is NOT a CLI - a
-// shim, another tool, anything an old installer left behind. Copying those
-// bytes in would hand the registered service and the host a program that
-// never runs this refresh, so nothing would ever repair the slot; only a
-// separate, by-hand invocation of a real CLI could. The running packaged
-// CLI demonstrably can answer, so it wins. Driven by the mock's default
-// spawn failure for an unmapped path - what pointing `execFile` at a
+// enough on its own: a link resolving to something that is NOT a CLI -
+// another tool, anything an old installer left behind. Copying those bytes
+// in would hand the registered service and the host a program that never
+// runs this refresh, so nothing would ever repair the slot; only a separate,
+// by-hand invocation of a real CLI could. The running packaged CLI
+// demonstrably can answer, so it wins. Driven by the mock's default spawn
+// failure for an unmapped path - what pointing `execFile` at a
 // non-executable actually does.
+//
+// Deliberately NOT a shebang script, which is the neighbouring cell: that
+// one is refused for being ineligible for the slot before anything spawns,
+// and a fixture carrying both properties could not tell the two apart.
 it.skipIf(process.platform === "win32")(
   "packaged, no manifest, legacy SYMLINK to something that cannot answer: stages the running binary",
   async () => {
@@ -2192,7 +2266,7 @@ it.skipIf(process.platform === "win32")(
     const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
     mkdirSync(dirname(wellKnownPath), { recursive: true });
     const linkTarget = join(workHome, "not-a-traycer-cli-at-all");
-    const targetBytes = '#!/bin/sh\nexec some-other-tool "$@"\n';
+    const targetBytes = "binary C - some other tool an installer left behind";
     writeFileSync(linkTarget, targetBytes);
     symlinkSync(linkTarget, wellKnownPath);
     const running = join(workHome, "running-binary");

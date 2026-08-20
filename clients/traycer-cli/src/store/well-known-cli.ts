@@ -2,10 +2,12 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import type { Stats } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import {
   chmod,
   copyFile,
   lstat,
+  open,
   readFile,
   readdir,
   realpath,
@@ -481,9 +483,11 @@ async function slotRefreshPlan(
     // runs only when a real CLI is invoked, and after this the thing being
     // invoked is not one. So a target that cannot say what it is loses to
     // the running packaged CLI, which demonstrably can. (What "usable"
-    // means is exactly what it means one branch below: it answered
-    // `--version` with something parseable. No stronger signal exists
-    // without running more of it.)
+    // means is exactly what it means one branch below, and both halves are
+    // decided in `slotOutranksRunning`: it answered `--version` with
+    // something parseable, AND it is a binary the slot may hold at all -
+    // an npm install answers that question perfectly well and still must
+    // never be copied here.)
     //
     // Not strictly newer - older, equal, unreadable, dangling - all fall
     // through to the ordinary stage from `source`, which de-symlinks and
@@ -574,6 +578,23 @@ async function slotOutranksRunning(candidatePath: string): Promise<boolean> {
   ) {
     return false;
   }
+  // Answering `--version` proves a program runs, not that it may HOLD the
+  // slot, and the difference has a rule already: `isInterpreterDistribution`
+  // refuses to nominate an npm install at all, because the slot is spawned by
+  // the host daemon and the registered service, where a `#!/usr/bin/env node`
+  // shebang resolves `node` off the SERVICE manager's PATH rather than a
+  // login shell's. That rule is keyed on the MANIFEST, and every caller here
+  // is unanchored - no manifest, by definition - so the file has to be asked
+  // directly.
+  //
+  // A version answer is exactly what an npm CLI gives (the shebang runs it),
+  // so without this an old Desktop symlink pointing at a newer npm install
+  // puts a Node script behind `bin/traycer`, and nothing repairs it: the next
+  // packaged run probes that slot, the script answers newer again, and the
+  // guard leaves it there forever while the service cannot start. Refusing
+  // here is also what makes that state RECOVERABLE if it is ever reached by
+  // hand - `false` stages the running SEA over it.
+  if (!(await isSlotEligibleBinary(candidatePath))) return false;
   let reported: string;
   try {
     const { stdout } = await execFileAsync(candidatePath, ["--version"], {
@@ -589,6 +610,48 @@ async function slotOutranksRunning(candidatePath: string): Promise<boolean> {
 
 const SLOT_VERSION_PROBE_TIMEOUT_MS = 10_000;
 const execFileAsync = promisify(execFile);
+
+// Whether a binary may OCCUPY the slot, as opposed to merely being able to
+// run. See `isInterpreterDistribution` for the rule this enforces without a
+// manifest to read it from.
+//
+// Deliberately a NEGATIVE test. Proving a file IS a packaged executable means
+// recognising Mach-O, ELF and PE magic on every platform this ships to, and
+// being wrong there REFUSES a legitimate newer CLI - the silent downgrade
+// this whole guard exists to prevent. Being wrong the other way only stages
+// the running SEA, which is always a working CLI, and always converges. So
+// the question asked is the narrow one the failure is actually about: does
+// this file start with a shebang.
+//
+// Two bytes, not `readFile`: the candidate is a ~100 MB binary in the case
+// this runs for.
+//
+// On Windows the slot is `traycer.exe` and Scheduled Tasks spawns it as an
+// image, so a non-`.exe` target - npm's `.cmd`/`.ps1` shims, a bare shell
+// script - cannot serve there whatever its first bytes are. Unreadable
+// counts as ineligible for the same fail-safe reason.
+async function isSlotEligibleBinary(binaryPath: string): Promise<boolean> {
+  if (
+    process.platform === "win32" &&
+    !binaryPath.toLowerCase().endsWith(".exe")
+  ) {
+    return false;
+  }
+  let handle: FileHandle;
+  try {
+    handle = await open(binaryPath, "r");
+  } catch {
+    return false;
+  }
+  try {
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(2), 0, 2, 0);
+    return !(bytesRead === 2 && buffer[0] === 0x23 && buffer[1] === 0x21);
+  } catch {
+    return false;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
 
 // A nominated slot source, and whether an install AUTHORITY vouches for it.
 // `anchored: false` marks the two self-nominations - no manifest at all, and
