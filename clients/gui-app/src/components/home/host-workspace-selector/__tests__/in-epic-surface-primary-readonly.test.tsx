@@ -339,7 +339,12 @@ it("explains why a terminal agent's host selector is locked", async () => {
 it("uses the shared host switcher for a live chat", () => {
   renderBoundSurface("chat", true);
 
-  fireEvent.click(screen.getByTestId("settings-host-switcher"));
+  const switcher = screen.getByTestId("settings-host-switcher");
+  const switcherSlot = switcher.parentElement?.parentElement;
+  expect(switcherSlot?.className).toContain("flex-[0_1_auto]");
+  expect(switcherSlot?.className).toContain("max-w-[min(50%,20rem)]");
+
+  fireEvent.click(switcher);
   expect(screen.getByTestId("settings-host-switcher-list")).toBeTruthy();
   expect(
     screen.getByTestId("settings-host-switcher-option-host-test"),

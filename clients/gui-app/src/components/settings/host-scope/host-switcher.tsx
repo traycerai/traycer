@@ -159,7 +159,7 @@ const HOST_SWITCHER_SURFACES: Record<
   },
   inline: {
     trigger:
-      "h-7 gap-1.5 rounded-lg px-1.5 py-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+      "h-7 w-fit max-w-full gap-1.5 rounded-lg px-1.5 py-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
     list: "",
     sideOffsetPx: 4,
   },
