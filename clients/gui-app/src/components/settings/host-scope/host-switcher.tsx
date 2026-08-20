@@ -460,8 +460,9 @@ function HostSwitcherTrigger(props: {
         className={cn(
           "min-w-0 flex-1 truncate text-ui-sm font-medium",
           selected === null || props.surfaceKind === "inline"
-            ? "text-muted-foreground group-hover/host-switcher:text-foreground"
+            ? "text-muted-foreground"
             : "text-foreground",
+          !props.disabled && "group-hover/host-switcher:text-foreground",
         )}
       >
         {selected === null ? "Select a host" : selected.name}
