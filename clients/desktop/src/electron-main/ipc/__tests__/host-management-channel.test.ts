@@ -357,6 +357,13 @@ interface FakeBridge {
     readonly host: {
       readonly reloadSnapshotFromDisk: Mock;
       readonly getSnapshot: Mock;
+      // The identity-fenced handlers classify this machine from these two
+      // files. Pointed into the test home with NEITHER written, which is the
+      // `unenrolled` arm - a legacy install with no identity machinery, where
+      // the fence has nothing to compare and admits. That keeps these argv
+      // tests about argv; the fence itself is pinned in the maintenance suite.
+      readonly identityEnrollmentFile: string;
+      readonly pidMetadataFile: string;
     };
     readonly hostController: FakeHostController;
   };
@@ -385,6 +392,8 @@ function makeBridgeWithHostController(
       host: {
         reloadSnapshotFromDisk: vi.fn(() => Promise.resolve(null)),
         getSnapshot: vi.fn(() => ({ version: "1.7.0" })),
+        identityEnrollmentFile: join(workHome, "identity", "enrollment.json"),
+        pidMetadataFile: join(workHome, "pid.json"),
       },
       hostController,
     },

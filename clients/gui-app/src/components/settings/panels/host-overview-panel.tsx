@@ -1014,10 +1014,13 @@ export function HostOverviewPanel(props: {
           localDown
             ? {
                 kind: "bridge",
-                // Non-null in this branch by construction: `localDown` already
-                // requires a local host with a bridge, which is what makes
-                // `forceRestartLocalHostId` an id. Empty stays the fail-closed
-                // reading if that ever stops holding.
+                // Non-null in this branch by construction, and the `??` is
+                // unreachable: `localDown` requires `hasLocalBridge`, which the
+                // parent defines as `management !== null && isLocalMachine` —
+                // every conjunct `forceRestartLocalHostId` needs. Not a
+                // fail-closed default: an empty id is ALLOWED against a host
+                // with no identity machinery (the `unenrolled` arm), so this
+                // rests on the proof above, not on the fallback.
                 expectedHostId: forceRestartLocalHostId ?? "",
               }
             : {

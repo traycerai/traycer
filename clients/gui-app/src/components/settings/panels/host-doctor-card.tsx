@@ -94,11 +94,12 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
     data: report,
     isPending: reportPending,
     isFetching: reportFetching,
+    error: reportError,
     refetch: refetchReport,
   } = useQuery(
     queryOptions<HostDoctorReport>({
-      queryKey: runnerQueryKeys.hostDoctor(management),
-      queryFn: () => management.runDoctor(),
+      queryKey: runnerQueryKeys.hostDoctor(management, expectedHostId),
+      queryFn: () => management.runDoctor({ expectedHostId }),
     }),
   );
 
@@ -125,7 +126,10 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       toast.success("Fix applied");
       recurrenceModel.setRecurrence({ failures: [], locked: false });
       void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostDoctor(context.management),
+        queryKey: runnerQueryKeys.hostDoctor(
+          context.management,
+          expectedHostId,
+        ),
       });
     },
     onError: (err, issue) => {
@@ -144,12 +148,16 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   >({
     mutationKey: runnerMutationKeys.hostFreePortAndRestart(),
     onMutate: () => ({ management }),
-    mutationFn: (input) => management.freePortAndRestart(input),
+    mutationFn: (input) =>
+      management.freePortAndRestart({ ...input, expectedHostId }),
     onSuccess: (_data, _input, context) => {
       toast.success("Restarted with port freed");
       setFreePortPrompt(null);
       void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostDoctor(context.management),
+        queryKey: runnerQueryKeys.hostDoctor(
+          context.management,
+          expectedHostId,
+        ),
       });
     },
     onError: (err) => toastFromRunnerError(err, "Couldn't free port"),
@@ -212,6 +220,18 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
           variant={undefined}
         />
         Running Doctor…
+      </div>
+    );
+  }
+
+  // A report that FAILED is not a report with no issues. Without this arm the
+  // `issues ?? []` default below renders "no issues detected" for a read that
+  // never produced one — an identity refusal, a CLI that could not run — which
+  // is the most dangerous thing this card could say.
+  if (reportError !== null) {
+    return (
+      <div className="rounded-md border border-rose-700/40 bg-rose-900/20 px-3 py-2 text-ui-sm text-rose-200">
+        Doctor could not run: {reportError.message}
       </div>
     );
   }

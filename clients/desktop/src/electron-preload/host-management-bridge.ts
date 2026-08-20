@@ -68,7 +68,9 @@ export interface HostManagementBridgeSurface {
     readonly tailLines: number;
     readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
-  runDoctor(): Promise<HostDoctorReport>;
+  runDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostDoctorReport>;
   availableVersions(
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
@@ -79,8 +81,11 @@ export interface HostManagementBridgeSurface {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
   freePortAndRestart(
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<FreePortAndRestartInput>;
+  freePortAndRestartIfIdle(
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
   // Maintenance-RPC projections for the GUI's local fallback — protocol
   // response shapes, classified in main (see `host-management-ipc.ts`).
@@ -160,9 +165,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         tailLines,
         expectedHostId,
       }) as Promise<HostLogsTailResult>,
-    runDoctor: () =>
+    runDoctor: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostDoctor,
+        input,
       ) as Promise<HostDoctorReport>,
     availableVersions: ({ includePreReleases }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostAvailable, {
@@ -189,6 +195,11 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         RunnerHostInvoke.traycerFreePortAndRestart,
         input,
       ) as Promise<FreePortAndRestartInput>,
+    freePortAndRestartIfIdle: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
+        input,
+      ) as Promise<DoctorRepairDispatch>,
     cliManifest: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerCliManifestRead,

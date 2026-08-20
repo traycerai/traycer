@@ -296,7 +296,9 @@ export interface DesktopHostManagementBridge {
     readonly tailLines: number;
     readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
-  runDoctor(): Promise<HostDoctorReport>;
+  runDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostDoctorReport>;
   availableVersions(
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
@@ -307,8 +309,11 @@ export interface DesktopHostManagementBridge {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
   freePortAndRestart(
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<FreePortAndRestartInput>;
+  freePortAndRestartIfIdle(
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
   maintenanceUpdateCheck(
     input: HostAvailableVersionsInput & { readonly expectedHostId: string },
@@ -795,13 +800,15 @@ export class DesktopRunnerHost implements IRunnerHost {
       clearRemoval: () => managementBridge.clearRemoval(),
       restartHost: () => managementBridge.restartHost(),
       getHostLogs: (input) => managementBridge.getHostLogs(input),
-      runDoctor: () => managementBridge.runDoctor(),
+      runDoctor: (input) => managementBridge.runDoctor(input),
       availableVersions: (input) => managementBridge.availableVersions(input),
       installedRecord: () => managementBridge.installedRecord(),
       registerService: () => managementBridge.registerService(),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
+      freePortAndRestartIfIdle: (input) =>
+        managementBridge.freePortAndRestartIfIdle(input),
       cliManifest: () => managementBridge.cliManifest(),
       maintenanceUpdateCheck: (input) =>
         managementBridge.maintenanceUpdateCheck(input),

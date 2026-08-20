@@ -120,6 +120,11 @@ function buildManagementSpy(): ManagementSpy {
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
     freePortAndRestart: (input) => Promise.resolve(input),
+    freePortAndRestartIfIdle: () =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
     cliManifest: () => Promise.resolve(null),
     maintenanceUpdateCheck: notImplemented("maintenanceUpdateCheck"),
     maintenanceDoctor: notImplemented("maintenanceDoctor"),

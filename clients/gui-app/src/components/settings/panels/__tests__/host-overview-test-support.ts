@@ -288,7 +288,7 @@ export function buildOverviewManagement(
     clearRemoval: vi.fn(() => Promise.resolve()),
     restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     getHostLogs: vi.fn(() => Promise.resolve({ path: null, tail: "" })),
-    runDoctor: vi.fn(() =>
+    runDoctor: vi.fn((_input: { readonly expectedHostId: string }) =>
       Promise.resolve({ issues: [], ranAt: "2026-08-12T00:00:00Z" }),
     ),
     availableVersions: vi.fn(() =>
@@ -314,6 +314,12 @@ export function buildOverviewManagement(
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    freePortAndRestartIfIdle: vi.fn((_input) =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
     maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),

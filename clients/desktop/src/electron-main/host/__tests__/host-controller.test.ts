@@ -5139,6 +5139,107 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       value: { running: true, version: "1.7.0" },
     });
   });
+
+  async function occupyInstallAndParkOutsideRevision(input: {
+    readonly joiner: "outside-lane" | "within-lane-job";
+  }) {
+    // Probe starts resolved so install can occupy the lane; flipped to a
+    // pending promise before the outside tick so that tick parks in
+    // `readRunningRuntimeVersion` (the first uncoalesced await) with the
+    // D1 slot already populated.
+    const probeResult: { current: Promise<boolean> } = {
+      current: Promise.resolve(true),
+    };
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newControllerWithReachability(
+      "production",
+      async () => probeResult.current,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const installGate = deferred<{ data: unknown }>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("install")) return installGate.promise;
+      return { data: {} };
+    });
+
+    const installPromise = controller.installVersion("1.8.0", false);
+    await vi.waitFor(() => {
+      const block = controller.lifecycleAdmissionBlock;
+      if (block === null || block.kind !== "mutation") {
+        throw new Error("expected the mutation lane to be occupied");
+      }
+    });
+
+    const reachabilityGate = deferred<boolean>();
+    probeResult.current = reachabilityGate.promise;
+    const outside =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    await flushMicrotasks();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+
+    const joined = controller.applyPendingLoginItemRevisionIfIdle(input.joiner);
+    reachabilityGate.resolve(true);
+    return {
+      outside,
+      joined,
+      installPromise,
+      installGate,
+      registerCalls: () => vi.mocked(registerHostLoginItem).mock.calls.length,
+    };
+  }
+
+  it("a within-lane joiner upgrades an in-flight outside tick still in prechecks so the cycle runs", async () => {
+    // Discriminator: before the coalescing upgrade, the parked outside tick
+    // kept its own `outside-lane` policy, saw the mutation lane the JOINER
+    // occupies, and returned null — a cycle refusing because of the caller
+    // waiting on it. Red against f705b8eb^ (join returned the in-flight
+    // promise as-is).
+    const parked = await occupyInstallAndParkOutsideRevision({
+      joiner: "within-lane-job",
+    });
+    const expected = {
+      kind: "ok" as const,
+      value: { running: true, version: "1.7.0" },
+    };
+    expect(await parked.joined).toEqual(expected);
+    expect(await parked.outside).toEqual(expected);
+    expect(parked.registerCalls()).toBe(1);
+
+    parked.installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await parked.installPromise;
+  });
+
+  it("an outside-lane joiner of a parked outside tick still defers while the mutation lane is occupied", async () => {
+    // Pin against applying the upgrade unconditionally: an outside joiner
+    // must not widen what the cycle may do. Same interleaving as the
+    // within-lane upgrade pin; only the joiner's owner policy changes.
+    const parked = await occupyInstallAndParkOutsideRevision({
+      joiner: "outside-lane",
+    });
+    expect(await parked.joined).toBeNull();
+    expect(await parked.outside).toBeNull();
+    expect(parked.registerCalls()).toBe(0);
+
+    parked.installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await parked.installPromise;
+  });
 });
 
 describe("Class B no-op liveness", () => {

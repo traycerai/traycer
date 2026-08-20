@@ -177,6 +177,12 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    freePortAndRestartIfIdle: vi.fn(() =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     maintenanceUpdateCheck: vi.fn(() =>
       Promise.reject(new Error("maintenanceUpdateCheck not implemented")),

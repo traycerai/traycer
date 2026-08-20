@@ -1636,4 +1636,55 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     }
     expect(occupied.current.kind).toBe("ensure");
   });
+
+  it("traycerHostLogs throws on a mismatched expectedHostId and never shells the CLI", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const logs = await registerHandler(bridge, invoke.traycerHostLogs);
+
+    await expect(
+      logs(null, { tailLines: 50, expectedHostId: OTHER_HOST_ID }),
+    ).rejects.toThrow(HOST_CHANGED_MESSAGE);
+    expect(bundledCliCalls).toEqual([]);
+  });
+
+  it("traycerHostLogs returns the tail when expectedHostId matches the enrolled host", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    installFakeCli(
+      resolveWith({ path: "/tmp/host.log", tail: "matching-host-line" }),
+    );
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const logs = bridge.handlers.get(invoke.traycerHostLogs);
+    if (logs === undefined) {
+      throw new Error("expected traycerHostLogs handler");
+    }
+
+    await expect(
+      logs(null, { tailLines: 50, expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({
+      path: "/tmp/host.log",
+      tail: "matching-host-line",
+    });
+    expect(bundledCliCalls).toEqual([
+      ["host", "logs", "--tail", "50", "--json"],
+    ]);
+  });
+
+  it("traycerHostLogs refuses when the enrollment record exists but is unreadable, without shelling the CLI", async () => {
+    // Discriminator: round 7 treated unusable enrollment as "no change".
+    writeMalformedEnrollment();
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const logs = await registerHandler(bridge, invoke.traycerHostLogs);
+
+    await expect(
+      logs(null, { tailLines: 50, expectedHostId: LIVE_HOST_ID }),
+    ).rejects.toThrow(HOST_UNVERIFIED_MESSAGE);
+    expect(bundledCliCalls).toEqual([]);
+  });
 });

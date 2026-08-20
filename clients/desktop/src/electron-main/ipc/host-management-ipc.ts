@@ -984,10 +984,26 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  bridge.handleInvoke(RunnerHostInvoke.traycerHostDoctor, async () => {
-    const raw = await runTraycerCliJson<unknown>(["host", "doctor", "--json"]);
-    return projectDoctorReport(raw);
-  });
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostDoctor,
+    async (_event, raw: unknown) => {
+      // Fenced like the log read: the report describes THIS machine, and its
+      // issues carry the port/pid the repairs act on, so attributing a
+      // replacement host's report to the scope that froze its predecessor
+      // hands out another machine's repair inputs.
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
+      }
+      const json = await runTraycerCliJson<unknown>([
+        "host",
+        "doctor",
+        "--json",
+      ]);
+      return projectDoctorReport(json);
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostAvailable,
@@ -1252,6 +1268,18 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const port = optionalNumber(raw, "port");
       const pid = optionalNumber(raw, "pid");
       const processName = optionalString(raw, "processName");
+      // The port and pid above describe the machine AS THE REPORT SAW IT, and
+      // the approval was given for that host. If this computer's host has been
+      // replaced since, the same numbers name whatever now holds the port, so
+      // the repair is refused rather than aimed at a host nobody approved.
+      // Queueing behind the lane stays deliberate here (see the contract) —
+      // this is the down-host recovery route, and identity is a separate
+      // question from timing.
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
+      }
       log.info("[host-management] free-port restart confirmed", {
         port,
         pid,
@@ -1268,6 +1296,47 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         processName,
       };
       return result;
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
+    async (_event, raw: unknown): Promise<DoctorRepairDispatch> => {
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "host-changed", message: identity.message };
+      }
+      const port = optionalNumber(raw, "port");
+      const pid = optionalNumber(raw, "pid");
+      // The refusing twin of the handler above, for the Doctor sheet someone
+      // is WATCHING. `freePortAndRestart` goes through the exclusive lane and
+      // QUEUES behind whatever is running, so a confirm that raced a lifecycle
+      // write arming in main fires its kill after that write finishes —
+      // against a host in a state the person never saw. The renderer's own
+      // gate cannot close this: it can only refuse on what it last rendered.
+      //
+      // Same atomicity rule as the other `*IfIdle` handlers: test admission
+      // and submit with NO await in between.
+      const block = bridge.options.hostController.lifecycleAdmissionBlock;
+      if (block !== null) {
+        return {
+          kind: "lane-busy",
+          message: admissionBlockRestartMessage(block),
+        };
+      }
+      log.info("[host-management] free-port restart confirmed (refusing)", {
+        port,
+        pid,
+      });
+      const outcome = await bridge.options.hostController.freePortAndRestart(
+        pid,
+        port,
+      );
+      return {
+        kind: "dispatched",
+        outcome: outcome.kind === "ok" ? { kind: "ok", value: null } : outcome,
+      };
     },
   );
 

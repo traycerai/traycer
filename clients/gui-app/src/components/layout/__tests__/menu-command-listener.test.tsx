@@ -560,6 +560,9 @@ describe("<MenuCommandListener />", () => {
       deregisterService: vi.fn(() => Promise.resolve()),
       registryCheck: vi.fn(() => Promise.reject(new Error("not used"))),
       freePortAndRestart: vi.fn(() => Promise.reject(new Error("not used"))),
+      freePortAndRestartIfIdle: vi.fn(() =>
+        Promise.reject(new Error("not used")),
+      ),
       cliManifest: vi.fn(() => Promise.resolve(null)),
       maintenanceUpdateCheck: vi.fn(() =>
         Promise.reject(new Error("not used")),

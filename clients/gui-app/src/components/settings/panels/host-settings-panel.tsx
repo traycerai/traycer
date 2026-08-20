@@ -16,6 +16,7 @@ import { useScopedHostBinding } from "@/components/settings/host-scope/use-scope
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
 import {
   fixActionLabel,
+  parseFreePortInput,
   runFixAction,
 } from "@/components/settings/panels/host-doctor-actions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -372,6 +373,29 @@ function useLocalDoctorFixMutation(
       // its own: its lifecycle state cannot see a lane the tray or the
       // background reconciler armed. The remaining repairs keep the queueing
       // path, which is right for a host that is already down.
+      // Free port + restart is the third repair that must be REFUSED rather
+      // than queued for a sheet someone is watching: it kills the recorded
+      // process and forces a restart, so landing it behind a competing
+      // lifecycle write aims a kill the person approved for one state at
+      // another. The card's own gate cannot close that window — it sees only
+      // what it last rendered — so admission is tested in main, atomically.
+      if (issue.fixAction === "host-free-port-and-restart") {
+        const input = parseFreePortInput(issueForBridge);
+        if (input === null) {
+          throw new Error("Doctor issue is missing a valid conflicting port.");
+        }
+        const dispatch = await management.freePortAndRestartIfIdle({
+          ...input,
+          expectedHostId: localHostId ?? "",
+        });
+        if (dispatch.kind !== "dispatched") {
+          return { applied: false, declinedMessage: dispatch.message };
+        }
+        if (dispatch.outcome.kind !== "ok") {
+          throw new Error(dispatch.outcome.message);
+        }
+        return { applied: true, declinedMessage: null };
+      }
       const repair = doctorRepairIntentFor(issue.fixAction);
       if (repair !== null && localHostId !== null) {
         const dispatch = await management.runDoctorRepairIfIdle({

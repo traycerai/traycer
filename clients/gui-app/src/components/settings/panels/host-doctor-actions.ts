@@ -65,10 +65,15 @@ export async function runFixAction(
   management: IHostManagement,
   issue: HostDoctorIssue,
   /**
-   * The local host these fixes are for. Only the log read consults it today —
-   * the lifecycle repairs that need fencing take `runDoctorRepairIfIdle`
-   * instead — but it is threaded here rather than at that one call so a fix
-   * added to this switch cannot reach the bridge without one.
+   * The local host these fixes are for. The log read and the free-port repair
+   * both carry it to main; the two lifecycle repairs reach their own fenced
+   * dispatch (`runDoctorRepairIfIdle`) before they get here. Threaded as a
+   * parameter rather than at the individual calls so a fix added to this
+   * switch cannot reach the bridge without one.
+   *
+   * This is the QUEUEING route — the down-host recovery console. A Doctor
+   * sheet someone is watching sends free-port through
+   * `freePortAndRestartIfIdle` instead, which also refuses on a busy lane.
    */
   expectedHostId: string,
 ): Promise<FixActionResult> {
@@ -107,7 +112,7 @@ export async function runFixAction(
       if (input === null) {
         throw new Error("Doctor issue is missing a valid conflicting port.");
       }
-      await management.freePortAndRestart(input);
+      await management.freePortAndRestart({ ...input, expectedHostId });
       return { kind: "applied" };
     }
     default:
@@ -178,10 +183,13 @@ export function doctorFixRoute(input: {
  * close for (`host-overview-panel.tsx`, `host-overview-advanced.tsx`): opened
  * while idle, the dialog stays answerable while an install, a service change
  * or a restart arms the page-wide lifecycle gate underneath it. Gating the
- * issue card's BUTTON cannot reach a dialog that is already up, and
- * `freePortAndRestart` queues rather than refusing — so a confirm landing
- * there kills the recorded process and forces a restart immediately after the
- * competing write.
+ * issue card's BUTTON cannot reach a dialog that is already up.
+ *
+ * This is the renderer's half only, and it cannot be the whole answer: it
+ * refuses on what was last RENDERED, so a lifecycle write arming in main after
+ * that snapshot still sees a confirm arrive. `freePortAndRestartIfIdle` is the
+ * other half — it tests admission in main, atomically with the submission.
+ * Closing the dialog remains worth doing because it is what the person sees.
  *
  * Stale for every arming EXCEPT this repair's own dispatch, which has to keep
  * the dialog (and its spinner) up until it settles.

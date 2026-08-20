@@ -1604,7 +1604,18 @@ export interface IHostManagement {
     readonly tailLines: number;
     readonly expectedHostId: string;
   }) => Promise<HostLogsTailResult>;
-  readonly runDoctor: () => Promise<HostDoctorReport>;
+  /**
+   * This machine's Doctor report.
+   *
+   * Fenced for the same reason `getHostLogs` is: the report is host-scoped
+   * content rendered under a named host, and its issues carry the port and pid
+   * numbers the repairs then act on. A report produced for a replacement host
+   * but shown under its predecessor hands someone another machine's repair
+   * inputs.
+   */
+  readonly runDoctor: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostDoctorReport>;
   readonly availableVersions: (
     input: HostAvailableVersionsInput,
   ) => Promise<HostAvailableSnapshot>;
@@ -1622,9 +1633,33 @@ export interface IHostManagement {
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
+  /**
+   * Kill the process holding the host's port and restart it, QUEUEING behind
+   * whatever the lane is running. The down-host recovery console's route: it
+   * repairs a host that is already not answering, where waiting is the point.
+   *
+   * Fenced on identity even though it queues. The consent this carries out
+   * was given for a SPECIFIC host's port and pid, and those numbers describe
+   * the machine as the report saw it - running them against a replacement
+   * kills whatever now holds that port. The lane exemption is about WHEN the
+   * repair may run, not about WHICH host it may run against.
+   */
   readonly freePortAndRestart: (
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ) => Promise<FreePortAndRestartInput>;
+  /**
+   * The refusing twin, for the Doctor sheet a person is WATCHING.
+   *
+   * Same reasoning as `restartHostIfIdle` and `runDoctorRepairIfIdle`: the
+   * renderer's own gate can only see what it last rendered, so a lifecycle
+   * write that arms in main after that snapshot still lets a confirm through,
+   * and this repair QUEUES rather than refusing - the kill then lands after
+   * the competing write, against a host in a state nobody approved. Main
+   * tests the lane and submits with no await between.
+   */
+  readonly freePortAndRestartIfIdle: (
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ) => Promise<DoctorRepairDispatch>;
   readonly cliManifest: () => Promise<CliInstallManifestSnapshot | null>;
   // The four `maintenance*` members below serve ONE consumer: the GUI's
   // local-maintenance fallback, which answers the v1.2.0 `host.*` maintenance

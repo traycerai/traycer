@@ -30,14 +30,20 @@ vi.mock("sonner", () => ({
   },
 }));
 
+import { useEffect, type ReactNode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -45,6 +51,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  HostRestartRequestResult,
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -52,6 +59,7 @@ import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
   openHostOverviewMenu,
   buildOverviewHostFixture,
@@ -134,11 +142,32 @@ const FREE_PORT_ISSUE: HostDoctorIssue = {
   details: { port: 8765, conflictingPid: 4242, conflictingProcess: "node" },
 };
 
+function ExternalHostRestartTrigger(props: {
+  readonly mutationFn: () => Promise<HostRestartRequestResult>;
+  readonly onReady: (mutate: () => void) => void;
+}): null {
+  const { mutate } = useMutation({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: props.mutationFn,
+  });
+  const { onReady } = props;
+  useEffect(() => {
+    onReady(() => {
+      mutate();
+    });
+  }, [mutate, onReady]);
+  return null;
+}
+
 function renderDoctor(options: {
   readonly isLocalMachine: boolean;
   readonly withBridge: boolean;
   readonly doctorFails: boolean;
-}): IHostManagement {
+  readonly extra: ReactNode | undefined;
+}): {
+  readonly management: IHostManagement;
+  readonly queryClient: QueryClient;
+} {
   const hostId = options.isLocalMachine ? "host-local" : "host-remote";
   const fixture = buildOverviewHostFixture({
     hostId,
@@ -207,11 +236,12 @@ function renderDoctor(options: {
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
+        {options.extra ?? null}
         <HostSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
-  return management;
+  return { management, queryClient };
 }
 
 describe("Overview doctor — the three local-only repairs", () => {
@@ -222,10 +252,11 @@ describe("Overview doctor — the three local-only repairs", () => {
     // front of this one — it ends the conflicting process and restarts the
     // host — and the first RPC card shipped without it, so a single click
     // killed a process with no warning.
-    const management = renderDoctor({
+    const { management } = renderDoctor({
       isLocalMachine: true,
       withBridge: true,
       doctorFails: false,
+      extra: undefined,
     });
 
     await openHostOverviewMenu();
@@ -238,16 +269,19 @@ describe("Overview doctor — the three local-only repairs", () => {
     expect(dialog.textContent).toContain("8765");
     expect(dialog.textContent).toContain("node");
     // Nothing has happened yet — the click ARMED the action, it did not run it.
+    expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
     expect(management.freePortAndRestart).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
-      expect(management.freePortAndRestart).toHaveBeenCalledWith({
+      expect(management.freePortAndRestartIfIdle).toHaveBeenCalledWith({
         port: 8765,
         pid: 4242,
         processName: "node",
+        expectedHostId: "host-local",
       });
     });
+    expect(management.freePortAndRestart).not.toHaveBeenCalled();
   });
 
   it("offers the command instead of a fix button for a host on another machine", async () => {
@@ -260,6 +294,7 @@ describe("Overview doctor — the three local-only repairs", () => {
       isLocalMachine: false,
       withBridge: true,
       doctorFails: false,
+      extra: undefined,
     });
 
     await openHostOverviewMenu();
@@ -282,6 +317,7 @@ describe("Overview doctor — the three local-only repairs", () => {
       isLocalMachine: true,
       withBridge: false,
       doctorFails: false,
+      extra: undefined,
     });
 
     await openHostOverviewMenu();
@@ -301,6 +337,7 @@ describe("Overview doctor — the three local-only repairs", () => {
       isLocalMachine: true,
       withBridge: false,
       doctorFails: true,
+      extra: undefined,
     });
 
     await openHostOverviewMenu();
@@ -309,6 +346,72 @@ describe("Overview doctor — the three local-only repairs", () => {
     expect(await screen.findByTestId("host-doctor-run-failed")).toBeTruthy();
     expect(screen.queryByText("Running Doctor…")).toBeNull();
     expect(screen.getByTestId("host-doctor-rerun")).toBeTruthy();
+  });
+
+  it("arming the page lifecycle gate closes an open free-port dialog, and a confirm after that dispatches nothing", async () => {
+    // Discriminator: gating the issue card's button never reached a dialog
+    // that was ALREADY open, so a confirm after an install/restart armed
+    // queued a process kill behind that write. Red against f705b8eb^ (the
+    // dialog stayed answerable).
+    let releaseExternal: (() => void) | null = null;
+    const externalGate = new Promise<void>((resolve) => {
+      releaseExternal = resolve;
+    });
+    const mutateRef: { current: (() => void) | null } = { current: null };
+    const { management, queryClient } = renderDoctor({
+      isLocalMachine: true,
+      withBridge: true,
+      doctorFails: false,
+      extra: (
+        <ExternalHostRestartTrigger
+          onReady={(mutate) => {
+            mutateRef.current = mutate;
+          }}
+          mutationFn={async () => {
+            await externalGate;
+            return { kind: "restarted" as const };
+          }}
+        />
+      ),
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(await screen.findByTestId("host-doctor-fix-PORT_CONFLICT"));
+    expect(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).toBeTruthy();
+    expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
+    expect(management.freePortAndRestart).not.toHaveBeenCalled();
+
+    act(() => {
+      if (mutateRef.current === null) {
+        throw new Error("external restart trigger was not armed");
+      }
+      mutateRef.current();
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.isMutating({
+          mutationKey: runnerMutationKeys.hostRestart(),
+        }),
+      ).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+
+    const confirm = screen.queryByTestId("confirm-action");
+    if (confirm !== null) {
+      fireEvent.click(confirm);
+    }
+    expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
+    expect(management.freePortAndRestart).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseExternal?.();
+      await externalGate;
+    });
   });
 });
 

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { doctorFixRoute } from "@/components/settings/panels/host-doctor-actions";
+import {
+  doctorFixRoute,
+  freePortConfirmWentStale,
+} from "@/components/settings/panels/host-doctor-actions";
 
 describe("doctorFixRoute", () => {
   it.each([
@@ -93,5 +96,46 @@ describe("doctorFixRoute", () => {
         bridgeRestartRoute: false,
       }),
     ).toBe("rpc");
+  });
+});
+
+describe("freePortConfirmWentStale", () => {
+  it.each([
+    {
+      name: "no dialog open",
+      issue: null,
+      lifecycleArmed: true,
+      ownDispatchCode: null,
+      expected: false,
+    },
+    {
+      name: "open + gate idle",
+      issue: { code: "PORT_CONFLICT" },
+      lifecycleArmed: false,
+      ownDispatchCode: null,
+      expected: false,
+    },
+    {
+      name: "open + gate armed + a different code dispatching",
+      issue: { code: "PORT_CONFLICT" },
+      lifecycleArmed: true,
+      ownDispatchCode: "HOST_NOT_INSTALLED",
+      expected: true,
+    },
+    {
+      name: "open + gate armed + this code dispatching",
+      issue: { code: "PORT_CONFLICT" },
+      lifecycleArmed: true,
+      ownDispatchCode: "PORT_CONFLICT",
+      expected: false,
+    },
+  ] as const)("$name → $expected", (row) => {
+    expect(
+      freePortConfirmWentStale({
+        issue: row.issue,
+        lifecycleArmed: row.lifecycleArmed,
+        ownDispatchCode: row.ownDispatchCode,
+      }),
+    ).toBe(row.expected);
   });
 });

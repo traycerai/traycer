@@ -766,6 +766,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerServiceDeregister,
         RunnerHostInvoke.traycerRegistryCheck,
         RunnerHostInvoke.traycerFreePortAndRestart,
+        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
         RunnerHostInvoke.traycerCliManifestRead,
         // The maintenance-RPC projections the GUI's local fallback serves
         // when a local host too old for the v1.2.0 `host.*` maintenance

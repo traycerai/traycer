@@ -551,6 +551,10 @@ function buildFakeBridge(
         includePreReleases: false,
       }),
       freePortAndRestart: async (input) => input,
+      freePortAndRestartIfIdle: async () => ({
+        kind: "dispatched",
+        outcome: { kind: "ok", value: null },
+      }),
       cliManifest: async () => null,
       maintenanceUpdateCheck: async () => {
         throw new Error("maintenanceUpdateCheck not used in test");

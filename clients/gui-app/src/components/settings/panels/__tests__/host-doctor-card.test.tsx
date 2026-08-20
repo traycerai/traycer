@@ -29,10 +29,12 @@ vi.mock("sonner", () => ({
 }));
 
 interface ManagementOverrides {
-  readonly runDoctor?: () => Promise<HostDoctorReport>;
+  readonly runDoctor?: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostDoctorReport>;
   readonly restartHost?: () => Promise<HostRestartRequestResult>;
   readonly freePortAndRestart?: (
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ) => Promise<FreePortAndRestartInput>;
 }
 
@@ -63,6 +65,12 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     registryCheck: vi.fn(notImplemented("registryCheck")),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
+    freePortAndRestartIfIdle: vi.fn((_input) =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
     maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),
@@ -166,8 +174,9 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   });
 
   it("opens the Free Port + Restart confirmation when PORT_CONFLICT carries process identity", async () => {
-    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
-      Promise.resolve(input),
+    const freePortAndRestart = vi.fn(
+      (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
+        Promise.resolve(input),
     );
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
@@ -221,16 +230,21 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     await waitFor(() => {
       expect(freePortAndRestart).toHaveBeenCalledTimes(1);
     });
+    // The recovery console keeps the QUEUEING route (it repairs a host that is
+    // already down) but still carries the identity fence: the port and pid it
+    // is about to act on describe the machine as this report saw it.
     expect(freePortAndRestart).toHaveBeenCalledWith({
       port: 7300,
       pid: 4321,
       processName: "node",
+      expectedHostId: "local-host",
     });
   });
 
   it("allows Free Port + Restart when PID and process name are unknown", async () => {
-    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
-      Promise.resolve(input),
+    const freePortAndRestart = vi.fn(
+      (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
+        Promise.resolve(input),
     );
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
@@ -273,12 +287,14 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       port: 7300,
       pid: null,
       processName: null,
+      expectedHostId: "local-host",
     });
   });
 
   it("never presents Free Port + Restart with port 0", async () => {
-    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
-      Promise.resolve(input),
+    const freePortAndRestart = vi.fn(
+      (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
+        Promise.resolve(input),
     );
     const restartHost = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
@@ -376,5 +392,20 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("renders an error arm when the report read fails, not no issues detected", async () => {
+    const management = makeManagement({
+      runDoctor: () =>
+        Promise.reject(new Error("can't confirm its identity right now")),
+    });
+    renderCard(makeHostWithManagement(management));
+
+    expect(
+      await screen.findByText(
+        /Doctor could not run: can't confirm its identity right now/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/no issues detected/i)).toBeNull();
   });
 });

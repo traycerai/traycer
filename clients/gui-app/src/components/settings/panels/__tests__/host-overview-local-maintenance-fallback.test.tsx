@@ -1150,6 +1150,93 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(management.convergeReady).not.toHaveBeenCalled();
   });
 
+  it("a lane-busy Register service repair names the clicked action, not a refused restart", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [SERVICE_MISSING],
+    });
+    vi.mocked(management.runDoctorRepairIfIdle).mockResolvedValue({
+      kind: "lane-busy",
+      message: LANE_BUSY_INSTALL_MESSAGE,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-LAUNCH_AGENT_MISSING"),
+    );
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith("Register service didn't run", {
+        description: LANE_BUSY_INSTALL_MESSAGE,
+      });
+    });
+    expect(toast.info).not.toHaveBeenCalledWith(
+      "Host not restarted",
+      expect.anything(),
+    );
+    expect(toast.success).not.toHaveBeenCalledWith("Fix applied");
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(management.convergeReady).not.toHaveBeenCalled();
+  });
+
+  it("a declined doctor restart still reports Host not restarted", async () => {
+    // The split must not over-rotate: a genuine restart decline keeps the
+    // restart wording, it does not become "Restart host didn't run".
+    const { management, fixture } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: () =>
+        Promise.resolve({
+          kind: "declined" as const,
+          message: LANE_BUSY_INSTALL_MESSAGE,
+        }),
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [CLI_UPGRADE_PENDING],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
+    );
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
+    });
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+        description: LANE_BUSY_INSTALL_MESSAGE,
+      });
+    });
+    expect(toast.info).not.toHaveBeenCalledWith(
+      "Restart host didn't run",
+      expect.anything(),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(fixture.restartCalls()).toBe(0);
+  });
+
   it("a dispatched non-ok doctor repair surfaces as a thrown Fix failed error", async () => {
     const { management } = mountFallbackOverview({
       installOutcome: {
@@ -1218,7 +1305,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
   });
 
-  it("host-free-port-and-restart keeps the queueing path and does not call runDoctorRepairIfIdle", async () => {
+  it("host-free-port-and-restart on the watched sheet dispatches freePortAndRestartIfIdle, not the queueing freePortAndRestart", async () => {
     const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -1242,12 +1329,14 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     fireEvent.click(await screen.findByTestId("confirm-action"));
 
     await waitFor(() => {
-      expect(management.freePortAndRestart).toHaveBeenCalledWith({
+      expect(management.freePortAndRestartIfIdle).toHaveBeenCalledWith({
         port: 7420,
         pid: 99,
         processName: "other",
+        expectedHostId: HOST_ID,
       });
     });
+    expect(management.freePortAndRestart).not.toHaveBeenCalled();
     expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
   });
 
