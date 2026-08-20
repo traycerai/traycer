@@ -491,8 +491,9 @@ export type WorkspacePathRejectionReason = z.infer<
 /**
  * Shared outcome shape for both the `validatePath` operation (live,
  * as-you-type probing - safe to call on every keystroke, never records
- * anything) and `recordRecentWorkspace` (an explicit commit action:
- * re-validates, and only on success appends to the recent list).
+ * anything) and a newly-opened `recordRecentWorkspace` commit. A
+ * `bumpRecency: false` move transfers an already-prepared Active path without
+ * probing the filesystem again, so its response leaves `validation` null.
  * `resolvedPath` is the realpath-canonicalized absolute directory the client
  * should bind the workspace to.
  */
@@ -569,6 +570,34 @@ export const workspacePrepareFoldersResponseSchemaV11 = z.object({
 });
 export type WorkspacePrepareFoldersResponseV11 = z.infer<
   typeof workspacePrepareFoldersResponseSchemaV11
+>;
+
+// v1.2 keeps the v1.1 operation envelope and adds the one mutation needed by
+// the creation pickers' integrated Recent tier. `bumpRecency` distinguishes a
+// successful attach/reactivation (`true`) from moving an already-active folder
+// out of context (`false`), which must not make an old workspace look newly
+// used. v1.1 callers upgrade with `true`, preserving their released behavior.
+export const workspacePrepareFoldersOperationSchemaV12 = z.enum([
+  ...workspacePrepareFoldersOperationSchema.options,
+  "forgetRecentWorkspace",
+]);
+
+export const workspacePrepareFoldersRequestSchemaV12 =
+  workspacePrepareFoldersRequestSchemaV11.extend({
+    operation: workspacePrepareFoldersOperationSchemaV12,
+    /** Set only for `operation: "recordRecentWorkspace"`. */
+    bumpRecency: z.boolean().nullable(),
+  });
+export type WorkspacePrepareFoldersRequestV12 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV12
+>;
+
+export const workspacePrepareFoldersResponseSchemaV12 =
+  workspacePrepareFoldersResponseSchemaV11.extend({
+    operation: workspacePrepareFoldersOperationSchemaV12,
+  });
+export type WorkspacePrepareFoldersResponseV12 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV12
 >;
 
 /**

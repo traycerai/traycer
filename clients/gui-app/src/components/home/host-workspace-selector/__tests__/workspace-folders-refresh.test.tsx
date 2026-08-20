@@ -332,6 +332,9 @@ describe("folder-mapping refresh affordance", () => {
       >
         <TooltipProvider>
           <WorkspaceFolderSummaryControl
+            recentWorkspaces={null}
+            recentWorkspaceCount={0}
+            moveToRecent={false}
             items={[ITEM]}
             readOnly={false}
             bindingResolved
@@ -397,6 +400,9 @@ describe("folder-mapping refresh affordance", () => {
       >
         <TooltipProvider>
           <WorkspaceFolderSummaryControl
+            recentWorkspaces={null}
+            recentWorkspaceCount={0}
+            moveToRecent={false}
             items={[ITEM]}
             readOnly={false}
             bindingResolved
@@ -532,6 +538,9 @@ function renderControl(over: {
     >
       <TooltipProvider>
         <WorkspaceFolderSummaryControl
+          recentWorkspaces={null}
+          recentWorkspaceCount={0}
+          moveToRecent={false}
           items={[ITEM]}
           readOnly={false}
           bindingResolved

@@ -67,6 +67,7 @@ export {
   worktreeListByWorkspacePathsV14,
   worktreeListByWorkspacePathsUpgradeV10ToV11,
   workspacePrepareFoldersUpgradeV10ToV11,
+  workspacePrepareFoldersUpgradeV11ToV12,
   worktreeListByWorkspacePathsUpgradeV11ToV12,
   worktreeListByWorkspacePathsUpgradeV12ToV13,
   worktreeListByWorkspacePathsUpgradeV13ToV14,

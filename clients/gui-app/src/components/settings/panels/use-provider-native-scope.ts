@@ -215,7 +215,7 @@ export function useProviderNativeScope(
   );
   const { pickAndPrepareFolders } = folderActions;
   const browseForWorkspace = useCallback(async (): Promise<string | null> => {
-    const result = await pickAndPrepareFolders();
+    const result = await pickAndPrepareFolders(false);
     if (result === null) return null;
     addResolvedFolders(
       // `result.hostId` is the dispatch-time identity the action captured
