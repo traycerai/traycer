@@ -30,7 +30,7 @@ const DIRTY_CONTENT: JsonContent = {
 };
 
 const testState = vi.hoisted(() => ({
-  createChat: vi.fn(),
+  createChat: vi.fn(() => Promise.resolve({ initialTurnStarted: false })),
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   ingesting: false,
@@ -215,7 +215,8 @@ vi.mock("@/lib/composer/workspace-composer-availability", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
     isPending: false,
-    mutate: testState.createChat,
+    // `mutateAsync`, matching the modal - see `new-conversation-placement`.
+    mutateAsync: testState.createChat,
   }),
 }));
 
@@ -270,7 +271,7 @@ vi.mock("@/stores/epics/initial-chat-handoff-store", () => ({
     getState: () => ({
       register: vi.fn(),
       markInitialTurnStarted: vi.fn(),
-      markFailed: vi.fn(),
+      markFailedByAction: vi.fn(),
     }),
   },
 }));

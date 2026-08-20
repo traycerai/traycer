@@ -171,6 +171,11 @@ export async function applyHost(
     : createServiceInstallLifecycle({
         environment: opts.environment,
         bootstrap: null,
+        // Threaded through to the pre-swap stop, not just the busy
+        // pre-check above: without it, a busy Desktop-managed host still
+        // denied the cooperative shutdown claim and `--force` aborted
+        // anyway.
+        force: opts.force,
       });
 
   const stagedDir = hostStagedDir(opts.environment);

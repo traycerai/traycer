@@ -1,9 +1,7 @@
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  classifyHostRequestFailure,
-  type HostRpcError,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { classifyRecoverableForkFailure } from "@/lib/chats/recoverable-fork-refusal";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
@@ -19,20 +17,12 @@ import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
-/**
- * Which of the two client-visible ways a latest-checkpoint fork request can
- * fail this flow recovers from, if any - see the module doc below for what
- * each one means and why both retry identically.
- */
-function classifyRecoverableForkFailure(
-  error: HostRpcError,
-): "no-checkpoint" | "host-too-old" | null {
-  if (error.code === "E_FORK_CHECKPOINT_UNAVAILABLE") return "no-checkpoint";
-  if (classifyHostRequestFailure(error).kind === "downgrade-unsupported") {
-    return "host-too-old";
-  }
-  return null;
-}
+// `classifyRecoverableForkFailure` - which of the two client-visible ways a
+// latest-checkpoint fork request can fail this flow recovers from, if any -
+// lives in `lib/chats/recoverable-fork-refusal.ts` rather than here, so the
+// shared `epic.createChat` error toast can stay silent on exactly the failures
+// this flow retries on. Two seams, one classifier, deliberately: see that
+// module for why duplicating it fails silently.
 
 /**
  * Clone-not-migrate flow for switching a chat tab's bound host: chat tabs

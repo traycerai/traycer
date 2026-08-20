@@ -10,6 +10,11 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 
 // Minimal harness for reaching the "file-tree" left panel's load-error state.
 // Mirrors the mocking approach in epic-sidebar-selection-mode.test.tsx (dnd
@@ -149,6 +154,10 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 // pattern the sibling picker suites use.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
+  // The failure state names the host it could not reach, so the panel reads
+  // the directory entry for its resolved host.
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null ? undefined : { hostId, label: "Host One" },
 }));
 
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
@@ -342,29 +351,37 @@ vi.mock("@/stores/settings/settings-store", () => ({
 }));
 
 // File-tree-panel-specific dependencies.
+// Configurable so one arm can drive the ZERO-ROW read a host that cannot
+// answer produces - the state `useFileTreeWorkspaceSelection` resolves to a
+// null workspace path from, and therefore the panel's empty state.
+// `error` carries the CLASS, not just the fact of failure: only
+// `HostTransportFailureError` means the host never answered, and the panel
+// tells a different story for anything else.
+const fileTreeBindingsState = vi.hoisted(() => ({
+  rows: [] as Array<{
+    readonly runningDir: string;
+    readonly disabledReason: string | null;
+  }>,
+  error: null as HostRpcError | null,
+  refetch: vi.fn<() => Promise<unknown>>(),
+}));
+
+function fileTreeBindingsResult() {
+  return {
+    data:
+      fileTreeBindingsState.error === null
+        ? { rows: fileTreeBindingsState.rows }
+        : undefined,
+    error: fileTreeBindingsState.error,
+    refetch: fileTreeBindingsState.refetch,
+  };
+}
+
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  useWorktreeListBindingsForEpic: () => ({
-    data: {
-      rows: [
-        {
-          runningDir: "/work/repo",
-          disabledReason: null,
-        },
-      ],
-    },
-  }),
+  useWorktreeListBindingsForEpic: () => fileTreeBindingsResult(),
   // `useFileTreeWorkspaceSelection` (also reached from the P0.2 pin chain)
   // calls the host-client-parametric variant, not the app-wide one above.
-  useWorktreeListBindingsForEpicForClient: () => ({
-    data: {
-      rows: [
-        {
-          runningDir: "/work/repo",
-          disabledReason: null,
-        },
-      ],
-    },
-  }),
+  useWorktreeListBindingsForEpicForClient: () => fileTreeBindingsResult(),
 }));
 
 vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
@@ -418,12 +435,31 @@ vi.mock("@pierre/trees/react", () => ({
   }),
 }));
 
+// Rendered rather than nulled: whether this survives the panel's empty state
+// is the assertion, and a stub that renders nothing cannot make it. It still
+// renders its `picker` slot so the inner picker's presence is observable too -
+// that is the one carrying `WorktreePickerHostSection`.
 vi.mock("@/components/worktree/workspace-picker-with-opener", () => ({
-  WorkspacePickerWithOpener: () => null,
+  WorkspacePickerWithOpener: (props: { readonly picker: ReactNode }) => (
+    <div data-testid="mock-workspace-picker-with-opener">{props.picker}</div>
+  ),
 }));
 
+// `data-selected-path` distinguishes a NULL selection from an empty string:
+// collapsing both to "" would make the "renders with no workspace chosen"
+// assertion below unable to tell them apart, and "" is a path the picker could
+// in principle be handed.
 vi.mock("@/components/epic-canvas/sidebar/file-tree-workspace-picker", () => ({
-  FileTreeWorkspacePicker: () => null,
+  FileTreeWorkspacePicker: (props: {
+    readonly selectedPath: string | null;
+  }) => (
+    <div
+      data-testid="mock-file-tree-workspace-picker"
+      data-selected-path={
+        props.selectedPath === null ? "<null>" : props.selectedPath
+      }
+    />
+  ),
 }));
 
 import { EpicLeftPanelHost } from "@/components/epic-canvas/sidebar/epic-sidebar";
@@ -434,6 +470,9 @@ const EPIC_ID = "epic-1";
 describe("epic sidebar file-tree load failure report action", () => {
   beforeEach(() => {
     cleanup();
+    fileTreeBindingsState.rows = [
+      { runningDir: "/work/repo", disabledReason: null },
+    ];
   });
 
   afterEach(() => {
@@ -484,5 +523,130 @@ describe("epic sidebar file-tree load failure report action", () => {
     const context = useDesktopDialogStore.getState().reportIssueContext;
     expect(JSON.stringify(context)).not.toContain("secret-token");
     expect(JSON.stringify(context)).not.toContain("/Users/hostile/path");
+  });
+});
+
+describe("epic sidebar file-tree workspace picker persistence", () => {
+  beforeEach(() => {
+    cleanup();
+    fileTreeBindingsState.rows = [
+      { runningDir: "/work/repo", disabledReason: null },
+    ];
+    fileTreeBindingsState.error = null;
+    fileTreeBindingsState.refetch.mockReset();
+    fileTreeBindingsState.refetch.mockResolvedValue(undefined);
+    // The selected workspace is STORE state, not fixture state, so without
+    // this the second test inherits whatever the first resolved and the order
+    // of these cases becomes load-bearing.
+    useFileTreeStore.setState({ selectedWorkspaceByEpicAndHost: {} });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderPanel(): void {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("keeps the picker when NO workspace resolves", () => {
+    // Zero rows is what a host that cannot answer resolves to, so the panel
+    // falls to "No workspace linked." The picker used to live in that
+    // conditional's OTHER arm, which meant choosing a host that could not
+    // answer removed the control that could choose a different one - and the
+    // pin is persisted, so it survived a reload. Same defect the git-diff
+    // panel had; `NewTerminalPickerBody` never had it.
+    fileTreeBindingsState.rows = [];
+
+    renderPanel();
+
+    expect(screen.getByTestId("epic-file-tree-empty")).toBeDefined();
+    expect(
+      screen.getByTestId("mock-workspace-picker-with-opener"),
+    ).toBeDefined();
+    const picker = screen.getByTestId("mock-file-tree-workspace-picker");
+    // Rendered with a NULL selection rather than being skipped - the picker
+    // already models "no workspace chosen" ("Select workspace").
+    expect(picker.getAttribute("data-selected-path")).toBe("<null>");
+  });
+
+  it("does not claim 'No workspace linked' when the host never ANSWERED", () => {
+    // A failed read and an answered-but-empty read both leave the selection
+    // null, so the panel used to tell one story for both. "No workspace
+    // linked." is a claim about the agent; this is a fact about the
+    // connection, and only one of them has a remedy the user can act on.
+    fileTreeBindingsState.rows = [];
+    fileTreeBindingsState.error = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "dial failed",
+      requestId: "req-test",
+      method: "worktree.listBindingsForEpic",
+      fatalDetails: null,
+    });
+
+    renderPanel();
+
+    expect(
+      screen.getByTestId("file-tree-workspaces-unavailable"),
+    ).toBeDefined();
+    expect(screen.queryByTestId("epic-file-tree-empty")).toBeNull();
+    // The picker still outlives it - the same invariant as the empty state.
+    expect(
+      screen.getByTestId("mock-workspace-picker-with-opener"),
+    ).toBeDefined();
+  });
+
+  it("offers a retry, because nothing else re-reads the bindings", () => {
+    fileTreeBindingsState.rows = [];
+    fileTreeBindingsState.error = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "dial failed",
+      requestId: "req-test",
+      method: "worktree.listBindingsForEpic",
+      fatalDetails: null,
+    });
+
+    renderPanel();
+    fireEvent.click(
+      screen.getByTestId("file-tree-workspaces-unavailable-retry"),
+    );
+
+    // Host-scoped queries disable retry, polling and focus/reconnect refetch,
+    // so without this button the panel sits there until the tab is reloaded.
+    expect(fileTreeBindingsState.refetch).toHaveBeenCalled();
+  });
+
+  it("shows the host's own reason when it ANSWERED with a refusal", () => {
+    fileTreeBindingsState.rows = [];
+    fileTreeBindingsState.error = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "not authorized",
+      requestId: "req-test",
+      method: "worktree.listBindingsForEpic",
+      fatalDetails: null,
+    });
+
+    renderPanel();
+
+    expect(
+      screen.getByTestId("file-tree-workspaces-unavailable-reason").textContent,
+    ).toBe("not authorized");
+  });
+
+  it("still renders the picker once a workspace resolves", () => {
+    renderPanel();
+
+    expect(screen.queryByTestId("epic-file-tree-empty")).toBeNull();
+    expect(
+      screen
+        .getByTestId("mock-file-tree-workspace-picker")
+        .getAttribute("data-selected-path"),
+    ).toBe("/work/repo");
   });
 });

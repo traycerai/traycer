@@ -1077,8 +1077,10 @@ function VersionMenuTrigger({
         // published version plus every retained install. Past the dialog's
         // collision boundary the older rows and their Use / Delete controls
         // were simply unreachable, because `overflow-hidden` clips rather than
-        // scrolls. The panel scrolls its own list, so the header and the
-        // auto-download toggle stay put.
+        // scrolls. The panel scrolls its own list, so its banners and its
+        // auto-download footer stay put. This cap is now the outer of two -
+        // the list carries its own, tighter one - and remains the binding
+        // constraint only when the banners and a long notice are all present.
         className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden p-0"
       >
         {data.kind === "unavailable" ? (
@@ -1361,7 +1363,24 @@ function RowStatusLine({
         ? null
         : Math.min(100, Math.max(0, Math.round(status.percent)));
     return (
-      <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 items-center gap-2 px-2.5">
+      // STACKED, not side by side. The bar and the label used to share one
+      // flex line with the bar `w-full shrink-0` - it claimed the whole line
+      // and then refused to give any of it back, so the label was squeezed
+      // into whatever remained and wrapped to four lines against the right
+      // edge, under the narrow `0.2fr` Version column it does not even belong
+      // to. Nothing about the pair wants to be horizontal: the label is a
+      // sentence with a variable-length fallback clause appended, and a
+      // sentence next to a progress track is two things fighting for the same
+      // inline axis. Column layout also drops `shrink-0`, which only existed
+      // to stop the bar collapsing in that fight.
+      <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 flex-col gap-1.5 px-2.5">
+        <span className="min-w-0 text-ui-xs text-muted-foreground">
+          {/* Own element so the visible progress label stays byte-identical to
+              the progressbar's accessible name, whether or not a fallback
+              clause follows it. */}
+          <span>{status.label}</span>
+          {status.note === null ? null : <span> · {status.note}</span>}
+        </span>
         <span
           role="progressbar"
           aria-label={status.label}
@@ -1372,7 +1391,7 @@ function RowStatusLine({
           // width, which this repo's UI rule excludes for layout surfaces - the
           // track has to shrink with a narrow settings dialog rather than hold
           // a rem figure chosen against one window size.
-          className="h-1 w-full max-w-[min(100%,30vw)] shrink-0 overflow-hidden rounded-full bg-foreground/8"
+          className="h-1 w-full max-w-[min(100%,30vw)] overflow-hidden rounded-full bg-foreground/8"
         >
           <span
             className={cn(
@@ -1383,13 +1402,6 @@ function RowStatusLine({
               percent === null ? undefined : { width: `${String(percent)}%` }
             }
           />
-        </span>
-        <span className="min-w-0 text-ui-xs text-muted-foreground">
-          {/* Own element so the visible progress label stays byte-identical to
-              the progressbar's accessible name, whether or not a fallback
-              clause follows it. */}
-          <span>{status.label}</span>
-          {status.note === null ? null : <span> · {status.note}</span>}
         </span>
       </span>
     );

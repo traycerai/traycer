@@ -297,7 +297,7 @@ async function installService(
   if (agentOwnership.kind === "smappservice") {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service install: Traycer Desktop owns host registration on this machine (SMAppService agent '${agentLabelId}' loaded from ${agentOwnership.path}); installing the raw '${options.label.id}' LaunchAgent would run a second host beside it. Re-run with --takeover to move host management to the CLI (the running host is stopped cooperatively first), or relaunch the Traycer app to let it repair its own host.`,
+      message: `service install: Traycer Desktop owns host registration on this machine (SMAppService agent '${agentLabelId}' loaded from ${agentOwnership.path}); installing the raw '${options.label.id}' LaunchAgent would run a second host beside it. If you only need the host running again, run 'traycer host restart' (it starts the Desktop-managed host). To move host management to the CLI instead, re-run with --takeover (the running host is stopped cooperatively first), or relaunch the Traycer app to let it repair its own host.`,
       details: {
         label: options.label.id,
         agentLabel: agentLabelId,
