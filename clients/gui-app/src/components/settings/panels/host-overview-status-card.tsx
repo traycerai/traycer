@@ -84,7 +84,12 @@ export function HostOverviewActionButton(props: {
       {pending ? (
         <AgentSpinningDots
           className="mr-2 size-3"
-          testId={undefined}
+          // Named, unlike this card's other spinners: this one is the only
+          // evidence that the button a person pressed is still the button doing
+          // the work, and `disabled` cannot stand in for it — three different
+          // props drive that. See the retry-name pin in
+          // `host-overview-identity-card.test.tsx`.
+          testId={`${testId}-spinner`}
           variant={undefined}
         />
       ) : null}
@@ -129,7 +134,15 @@ export function HostOverviewNameAction(props: {
   readonly degrade: OverviewDegradeReason | null;
   /** The identity read has answered, so there is a name to edit. */
   readonly loaded: boolean;
-  /** The identity read REJECTED — distinct from "has not answered yet". */
+  /**
+   * The last SETTLED identity read rejected and there is still no name —
+   * distinct from "has not answered yet".
+   *
+   * Deliberately not "the query is in its error state": this arm owns the
+   * retry's own spinner, so it has to stay mounted ACROSS the retry, and a
+   * query with no data behind it leaves its error state the moment a refetch
+   * starts. The caller derives it accordingly (`host-overview-panel.tsx`).
+   */
   readonly failed: boolean;
   readonly retrying: boolean;
   readonly onRetry: () => void;
@@ -144,6 +157,13 @@ export function HostOverviewNameAction(props: {
   // nothing short of a remount ever cleared it. The failed read keeps a
   // WORDED button — an icon that means "your name failed to load, press to
   // try again" is not a pictogram anyone owns.
+  //
+  // `pending` below is only reachable because `failed` outlives the retry it
+  // starts (see the prop's own note). Sibling `host-doctor-card.tsx` had the
+  // identical shape and was fixed the OTHER way — by deleting its unreachable
+  // pending gate — because there a shared "Running Doctor…" line already owns
+  // the in-flight surface. This button has no such replacement: drop the
+  // spinner here and the press has no acknowledgement at all.
   if (props.failed) {
     return (
       <HostOverviewActionButton
