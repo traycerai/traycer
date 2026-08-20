@@ -100,6 +100,18 @@ describe("history search params", () => {
     ).toBeUndefined();
   });
 
+  it("collapses whitespace variants of one chat-host id to a single entry", () => {
+    // Deduping raw values first would let `" host-a "` and `"host-a"` both
+    // survive and then trim into the same id, serializing it twice.
+    const parsed = parseHistorySearch({
+      historyChatHosts: ["host-a", " host-a ", "host-a  "],
+    });
+    expect(parsed.chatHosts).toEqual(["host-a"]);
+    expect(historySearchToParams(parsed).historyChatHosts).toEqual(["host-a"]);
+    // One id, so no match mode belongs in the URL either.
+    expect(historySearchToParams(parsed).historyChatHostMode).toBeUndefined();
+  });
+
   it("drops blank chat-host ids and clears the params", () => {
     expect(
       parseHistorySearch({ historyChatHosts: ["", "  ", "host-a"] }).chatHosts,

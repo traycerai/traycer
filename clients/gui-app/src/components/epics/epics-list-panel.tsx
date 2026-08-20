@@ -988,7 +988,7 @@ function describeDeleteTitle(
 function EpicsListChatHostFilterUnsupported(): ReactNode {
   return (
     <div
-      className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+      className="flex flex-col items-center justify-center gap-2 py-[min(4rem,12vh)] text-center text-ui-sm text-muted-foreground"
       data-testid="epics-list-chat-host-filter-unsupported"
     >
       <p className="font-medium text-foreground">

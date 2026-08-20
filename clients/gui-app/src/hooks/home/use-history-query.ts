@@ -207,12 +207,15 @@ export function useHistoryQuery(
     // hand are UNFILTERED, and showing them under an active host filter is
     // the exact failure this whole gate exists to prevent. Withhold them and
     // let the panel say why.
+    //
+    // A MISSING `facets` object counts too, and deliberately has no exemption:
+    // this query never carries a cursor ("Show more" pages append through a
+    // separate mutation and store), so its response is always a first page,
+    // and a first page without facets is a server that never computed them.
     const chatHostFilterUnsupported =
       chatHostFilterActive &&
       (hostChatHostSupport === "unsupported" ||
-        (canUseServerFacets &&
-          tasksQuery.data.facets !== undefined &&
-          facets.chatHosts === null));
+        (canUseServerFacets && facets.chatHosts === null));
     if (chatHostFilterUnsupported) {
       return {
         items: [],

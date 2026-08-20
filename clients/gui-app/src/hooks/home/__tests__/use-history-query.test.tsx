@@ -59,8 +59,14 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
       currentUserId: "user-1",
       tasks,
       query: {
+        // Facets ride along even on the query branch: the real server computes
+        // them for every FIRST page regardless of filters, and this query
+        // never carries a cursor. Dropping them here would fake the
+        // old-cloud-tier signal the host filter fails closed on.
         data:
-          query.length === 0 ? testState.response : { tasks, hasMore: false },
+          query.length === 0
+            ? testState.response
+            : { tasks, hasMore: false, facets: testState.response.facets },
         isPending: false,
         isFetching: testState.isFetching,
         isPlaceholderData: testState.isPlaceholderData,
@@ -530,6 +536,23 @@ describe("useHistoryQuery", () => {
           ownershipScopes: [],
         },
       };
+      render(<HistoryQueryHarness search={hostSearch} />);
+
+      expect(screen.getByTestId("chat-host-unsupported").textContent).toBe(
+        "true",
+      );
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("");
+    });
+
+    it("withholds rows when the response carries no facets object at all", () => {
+      // This query never carries a cursor - "Show more" pages append through a
+      // separate mutation and store - so its response is always a first page.
+      // A first page with no facets is a server that never computed them, not
+      // a later page that legitimately omits them.
+      testState.chatHostSupport = "supported";
+      testState.response = { tasks: testState.tasks, hasMore: false };
       render(<HistoryQueryHarness search={hostSearch} />);
 
       expect(screen.getByTestId("chat-host-unsupported").textContent).toBe(
