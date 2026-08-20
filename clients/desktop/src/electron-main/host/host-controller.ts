@@ -720,6 +720,15 @@ export class HostController {
    * not refuse a distinct intent, it queues it, so a stale "idle" verdict
    * becomes a write that lands after whatever was running. Pair this with the
    * submission and put no `await` between them.
+   *
+   * This reports the RUNNING intent, and `mutationStatus` is set when a job
+   * begins rather than when it is enqueued — which is nevertheless sufficient
+   * for every caller here, because the gap is not observable from one. A job
+   * queued behind another is queued behind a job that has already set the
+   * field; the only window where something is enqueued and this reads `null`
+   * is between one job's `finally` and the next job's first line, and those
+   * are adjacent microtasks in a single drain. No macrotask — no IPC handler,
+   * no timer — can be scheduled inside it.
    */
   get mutationLane(): MutationLaneStatus | null {
     return this.mutationStatus;
