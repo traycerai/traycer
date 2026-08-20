@@ -1055,7 +1055,11 @@ describe("buildHostInstallCommand", () => {
       expect(result.exitCode).toBe(0);
     });
 
-    it("json mode: never provisions a credential", async () => {
+    it("json mode: STILL provisions - automation is the caller that most needs it", async () => {
+      // `--json` is the documented automation mode, not a signal that some
+      // GUI will connect and mint later. A headless provisioning script is
+      // precisely the run with no other minting client coming, so gating on
+      // output format denied the credential to the cohort that needed it.
       mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
       mocks.createServiceInstallLifecycleMock.mockReturnValue(
         sampleLifecycleHandle(),
@@ -1065,13 +1069,21 @@ describe("buildHostInstallCommand", () => {
         previous: null,
         installGeneration: "id:install-2.0.0",
       });
+      mocks.provisionInstalledHostCredentialMock.mockResolvedValue({
+        kind: "active",
+        minted: true,
+      });
 
       const ctx = fakeCtxWithRuntime({ nonInteractive: false, json: true });
       const command = buildHostInstallCommand(baseArgs({}));
       const result = await command(ctx);
 
-      expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
-      expect(result.data).toMatchObject({ credentialProvision: null });
+      expect(mocks.provisionInstalledHostCredentialMock).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(result.data).toMatchObject({
+        credentialProvision: { kind: "active", minted: true },
+      });
     });
 
     it("unauthenticated preflight (non-interactive, cannot prompt): never provisions a credential", async () => {

@@ -70,11 +70,11 @@ import { withCliLock } from "../store/cli-lock";
 // nothing is started, and the actor that later starts the service owns the
 // sign-in question.
 //
-// Post-install credential provisioning: a signed-in, non-JSON install that
-// started a host follows up with a short-lived stream connection carrying the
-// CLI mint flow (`provisionInstalledHostCredential`), so the host comes up
-// holding its own `aud: "host"` credential instead of waiting for the first
-// minting client. Best-effort and deadline-bounded; failures warn.
+// Post-install credential provisioning: a signed-in install that started a
+// host follows up with a short-lived stream connection carrying the CLI mint
+// flow (`provisionInstalledHostCredential`), so the host comes up holding its
+// own `aud: "host"` credential instead of waiting for the first minting
+// client. Best-effort and deadline-bounded; failures warn.
 export interface HostInstallArgs {
   // Always a concrete version token - "latest" or a semver. A local
   // file is signalled by a non-null `fromPath` and supersedes
@@ -248,7 +248,18 @@ async function maybeProvisionCredential(
   const signedIn =
     authPreflight.state === "signed-in" ||
     authPreflight.state === "signed-in-inline";
-  if (postSwapAction === "none" || !signedIn || ctx.runtime.json) {
+  // Deliberately NOT gated on `--json`. That flag means "emit NDJSON for
+  // automation" (README, "Scripting"), and a headless provisioning script is
+  // the caller that most needs its host credentialed - it is the one with no
+  // GUI arriving later to mint. The gate used to exist to keep this probe from
+  // racing a Desktop shellout's own mint; that race is now handled where it
+  // belongs, in the probe (a superseded mint verifies rather than failing), so
+  // gating on output format only denied automation the credential.
+  //
+  // Safe for Desktop's shellouts too: its stream runner bounds on an IDLE
+  // timeout of 10 minutes, not a total one, so a probe bounded at 30s cannot
+  // trip it, and `parseInstallResult` reads named fields only.
+  if (postSwapAction === "none" || !signedIn) {
     return null;
   }
   // Re-read rather than reusing the pre-flight's read: an inline sign-in
