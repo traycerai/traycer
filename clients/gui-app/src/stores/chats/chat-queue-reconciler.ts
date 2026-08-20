@@ -5,8 +5,11 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
-import { classifyContentRecovery } from "@/lib/composer/content-recovery";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import {
+  classifyContentRecovery,
+  recoveryTextFromContent,
+} from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
   FailedSendRestorationState,
@@ -148,8 +151,9 @@ function unrecoverableSendNotice(
   clientActionId: string,
   content: JsonContent,
   circumstance: string,
+  worktreeIntent: WorktreeIntent | null,
 ): ChatErrorNotice {
-  const text = extractPlainTextFromComposerJSONContent(content).trim();
+  const text = recoveryTextFromContent(content);
   const losses = classifyContentRecovery(content);
   const attachments = losses.get("attachment") ?? 0;
   const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
@@ -172,9 +176,17 @@ function unrecoverableSendNotice(
         verbPhrase: "lose the link to what they quote - re-quote",
         tail: "so that link comes back",
       }),
+      countedClause({
+        count: losses.get("link") ?? 0,
+        singular: "link",
+        plural: "links",
+        verbPhrase: "paste as their label only - re-add",
+        tail: "so the target comes back",
+      }),
       (losses.get("unknown") ?? 0) > 0
         ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
         : "",
+      worktreeClause(worktreeIntent),
     ].join(""),
     severity: "warning",
     clientActionId,
@@ -215,6 +227,30 @@ interface CountedLossClause {
   readonly verbPhrase: string;
   /** Why re-doing it matters, phrased to follow the pronoun. */
   readonly tail: string;
+}
+
+/**
+ * The staged worktree a STATED send was going to run in.
+ *
+ * Unlike the restored send's, this binding cannot be handed back: the staging
+ * slot is single and per chat, and the send that won the restoration slot
+ * rightfully holds it. So this is a statement obligation rather than a restore
+ * one - the same rule as the text itself. Naming the branch makes it
+ * actionable: re-picking blind is how the resubmit silently runs somewhere
+ * else, which is exactly what the restore path exists to prevent.
+ */
+function worktreeClause(intent: WorktreeIntent | null): string {
+  if (intent === null) return "";
+  // Only a `worktree` entry names a branch; `local` runs in place and
+  // `import` adopts an existing checkout, so neither has one to re-pick.
+  const branches = intent.entries.flatMap((entry) =>
+    entry.kind === "worktree" && entry.branch.name.length > 0
+      ? [entry.branch.name]
+      : [],
+  );
+  if (branches.length === 0) return "";
+  const noun = branches.length === 1 ? "worktree" : "worktrees";
+  return ` It was staged to run in the ${noun} ${branches.join(", ")} - re-pick that before resending, or it runs against this chat's current worktree.`;
 }
 
 function countedClause(clause: CountedLossClause): string {
@@ -369,6 +405,7 @@ export function reconcileSnapshotChange(
               pending.clientActionId,
               pending.restoreContent,
               "A message was not confirmed after reconnect",
+              pending.restoreWorktreeIntent,
             ),
           ],
         };
@@ -539,6 +576,7 @@ export function reconcileTurnSettled(
           message.clientActionId,
           message.content,
           "A message was not recorded before the turn stopped",
+          message.restoreWorktreeIntent,
         ),
       ),
   };

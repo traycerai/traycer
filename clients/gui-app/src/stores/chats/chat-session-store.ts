@@ -863,19 +863,12 @@ export interface StagedWorktreeIntentSource {
   readonly restoreWorktreeStagingRevision: number | null;
 }
 
-function restoreRestoredWorktreeIntent(
+function restoreStagedWorktreeIntent(
   source: StagedWorktreeIntentSource | null,
   stagingKey: WorktreeStagingKey,
 ): void {
-  if (source === null) return;
-  restoreStagedWorktreeIntent(source, stagingKey);
-}
-
-function restoreStagedWorktreeIntent(
-  source: StagedWorktreeIntentSource,
-  stagingKey: WorktreeStagingKey,
-): void {
   if (
+    source === null ||
     source.restoreWorktreeIntent === null ||
     source.restoreWorktreeStagingRevision === null
   ) {
@@ -1388,7 +1381,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // it, or the resubmit silently runs against the chat's previous
         // binding. Same revision guard as the rejection ack and the reconnect
         // sweep: a NEWER pick made since dispatch wins.
-        restoreRestoredWorktreeIntent(restoredWorktreeIntentForSnapshot, {
+        restoreStagedWorktreeIntent(restoredWorktreeIntentForSnapshot, {
           surface: "owner",
           hostId: options.hostId,
           epicId: options.epicId,
@@ -1649,11 +1642,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           restoredWorktreeIntentForTurnState =
             settledPatch.restoredWorktreeIntent;
           return {
-            ...settledPatch,
-            // MUST follow the spread: `appendedErrorNotices` is a delta, and
-            // the state key it feeds is `errorNotices` - spreading the patch
-            // never writes that key, so the append has to be explicit here or
-            // a stranded send's statement is built and then thrown away.
+            // Taken FIELD BY FIELD, never spread. Two of the patch's keys -
+            // `appendedErrorNotices` and `restoredWorktreeIntent` - are
+            // reconcile plumbing, not state, and a spread writes them into
+            // the store where every `useShallow` subscriber compares them for
+            // the rest of the session. The delta feeds `errorNotices`, which
+            // the spread would not have written anyway.
+            pendingUserMessages: settledPatch.pendingUserMessages,
+            failedSendRestoration: settledPatch.failedSendRestoration,
             errorNotices: appendErrorNoticeDelta(
               state.errorNotices,
               settledPatch.appendedErrorNotices,
@@ -1683,7 +1679,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             ...(turnIdChanged ? { liveTurnUsage: null } : {}),
           };
         });
-        restoreRestoredWorktreeIntent(restoredWorktreeIntentForTurnState, {
+        restoreStagedWorktreeIntent(restoredWorktreeIntentForTurnState, {
           surface: "owner",
           hostId: options.hostId,
           epicId: options.epicId,

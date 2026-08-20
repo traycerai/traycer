@@ -133,6 +133,29 @@ const SOURCED_QUOTE_CONTENT: JsonContent = {
   ],
 };
 
+const LIST_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "foo" }] },
+          ],
+        },
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "bar" }] },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
 const UNKNOWN_NODE_CONTENT: JsonContent = {
   type: "doc",
   content: [
@@ -1730,19 +1753,21 @@ describe("createChatSessionStore", () => {
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
 
-    const notice = {
-      code: "SEND_NOT_RECORDED",
-      message: "A message was not recorded. Copy it from here to resend: draft",
-      severity: "warning" as const,
-      clientActionId: "send-1",
-    };
+    // A FRESH object each time, so the dedupe cannot pass on reference
+    // equality - the store has to key on the client action id.
     for (let index = 0; index < 5; index += 1) {
       callbacks.onErrorNotice({
         kind: "errorNotice",
         hasBinaryPayload: false,
         epicId: EPIC_ID,
         chatId: CHAT_ID,
-        notice,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message:
+            "A message was not recorded. Copy it from here to resend: draft",
+          severity: "warning",
+          clientActionId: "send-1",
+        },
       });
     }
 
@@ -1751,6 +1776,109 @@ describe("createChatSessionStore", () => {
         .getState()
         .errorNotices.filter((entry) => entry.clientActionId === "send-1"),
     ).toHaveLength(1);
+  });
+
+  // R5 `-LSI`: the slot LOSER's worktree. Round 4 gave the winner its binding
+  // back; a send that loses the race is STATED, and its intent dies with the
+  // row. The staging slot is single and the winner holds it, so this cannot be
+  // a restore - it is a statement obligation, and the branch name is the part
+  // worth naming so the user can re-pick it deliberately.
+  it("names the worktree a stated send was going to run in", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    // First send takes the slot on reconnect; the second is stated.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat/rescue",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("World");
+    expect(notice.message).toContain("feat/rescue");
+  });
+
+  // R5 `-LSS`: the quoted draft must be the user's text, not a mangling of it.
+  // `plainTextFromNode` joins a list's children with "", so `foo`/`bar` come
+  // back as `foobar` - the statement tells them to copy something they never
+  // wrote, which is worse than saying nothing.
+  it("keeps list-item boundaries in the text it tells the user to copy", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, LIST_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).not.toContain("foobar");
+    expect(notice.message).toContain("foo\nbar");
+  });
+
+  // R5 `-KNQ`: the settled patch is spread into the state object, so its
+  // non-state keys land in the store. They are reconcile plumbing, not state,
+  // and every `useShallow` subscriber compares them forever after.
+  it("keeps reconcile-only patch keys out of the store state", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const stateKeys = Object.keys(harness.handle.store.getState());
+    expect(stateKeys).not.toContain("appendedErrorNotices");
+    expect(stateKeys).not.toContain("restoredWorktreeIntent");
   });
 
   // R4-2: a terminal/artifact quote projects through the blockquote branch to
