@@ -231,7 +231,7 @@ interface HandlerBridge {
     };
     readonly hostController: {
       lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
-      readonly getStatus: () => Promise<{ readonly updateReady: boolean }>;
+      getStatus: () => Promise<{ readonly updateReady: boolean }>;
       installVersion: (
         version: string,
         force: boolean,
@@ -841,6 +841,74 @@ describe("maintenanceInstallVersion IPC", () => {
       },
     });
     expect(installVersion).toHaveBeenCalledWith("1.3.0", true);
+    // Drain the post-install fire-and-forget registry re-probe before the
+    // test ends - `bundledCliCalls` is shared across tests, so a probe left
+    // in flight here would land in a later test's call log.
+    await vi.waitFor(() => {
+      expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
+    });
+  });
+
+  it("re-probes the registry after a successful dispatch even when the cache is fresh", async () => {
+    // Discriminator: the pre-install cache is minutes old and reachable, so
+    // an UNFORCED refresh (or none at all) would serve it and never shell
+    // the probe - the tray and Updates row would keep advertising the
+    // version this dispatch just installed for the rest of the 24h TTL.
+    // Only the forced post-install re-probe fires `host available` here.
+    const cacheDir = join(workHome, ".traycer", "desktop");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      join(cacheDir, "registry-update-cache.json"),
+      JSON.stringify({
+        checkedAt: new Date().toISOString(),
+        latestVersion: "1.2.0",
+        installedVersion: "1.1.11",
+        reachable: true,
+        errorMessage: null,
+        environment: "production",
+      }),
+      "utf8",
+    );
+    const bridge = makeBridge();
+    const handler = await registerInstallHandler(bridge);
+
+    await expect(
+      handler(null, { version: "1.2.0", force: false }),
+    ).resolves.toEqual({
+      kind: "dispatched",
+      outcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
+    });
+  });
+
+  it("returns the committed dispatch when the post-install registry projection rejects", async () => {
+    // Mirror of the sibling `traycerHostInstallVersion` pin: the refresh is
+    // fire-and-forget, so a rejecting status projection inside it must never
+    // turn the already-committed dispatch into a rejected invoke.
+    const bridge = makeBridge();
+    bridge.options.hostController.getStatus = () =>
+      Promise.reject(new Error("status projection failed"));
+    const handler = await registerInstallHandler(bridge);
+
+    await expect(
+      handler(null, { version: "1.2.0", force: false }),
+    ).resolves.toEqual({
+      kind: "dispatched",
+      outcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+    });
+    // The refresh still ran - its probe is on record - and its rejection was
+    // swallowed by the handler's own catch, not surfaced to the invoker.
+    await vi.waitFor(() => {
+      expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
+    });
   });
 
   it("reads admission before submitting — occupying the lane inside installVersion still dispatches", async () => {
@@ -884,6 +952,11 @@ describe("maintenanceInstallVersion IPC", () => {
       throw new Error("expected installVersion to occupy the mutation lane");
     }
     expect(occupied.current.kind).toBe("install");
+    // Drain the post-install re-probe so it cannot land in a later test's
+    // shared `bundledCliCalls` log.
+    await vi.waitFor(() => {
+      expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
+    });
   });
 });
 
@@ -1185,6 +1258,11 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     });
     expect(respawn).toHaveBeenCalledTimes(1);
     expect(installVersion).toHaveBeenCalledTimes(1);
+    // Drain the post-install re-probe so it cannot land in a later test's
+    // shared `bundledCliCalls` log.
+    await vi.waitFor(() => {
+      expect(bundledCliCalls).toContainEqual(["host", "available", "--json"]);
+    });
   });
 
   it("refuses when the enrollment record exists but is unreadable, without calling installVersion", async () => {

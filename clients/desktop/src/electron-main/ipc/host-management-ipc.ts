@@ -1320,6 +1320,26 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         version,
         force,
       );
+      if (outcome.kind === "ok") {
+        // Same forced re-probe as `traycerHostInstallVersion` above, for the
+        // same stale-cache reason: the install record on disk now names the
+        // new version, and without `force` the pre-install cache — reachable
+        // and minutes old — would keep serving the OLD `installedVersion`
+        // (and `updateAvailable`) for the rest of the 24h TTL, so the tray
+        // and Updates row keep advertising the version this dispatch just
+        // installed. Fire-and-forget: the install already committed, so a
+        // rejection in this secondary probe must never turn the dispatched
+        // outcome into a rejected invoke.
+        void refreshRegistryUpdateState(bridge.options.hostController, {
+          force: true,
+          maxAgeMs: null,
+        }).catch((err: unknown) => {
+          log.warn(
+            "[host-management] registry refresh after maintenance install failed",
+            { err },
+          );
+        });
+      }
       return { kind: "dispatched", outcome };
     },
   );
