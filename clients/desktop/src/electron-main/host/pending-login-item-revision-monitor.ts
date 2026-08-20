@@ -1,5 +1,9 @@
 import { log } from "../app/logger";
-import type { ConvergeReadyOk, MutationOutcome } from "./host-controller-types";
+import type {
+  ConvergeReadyOk,
+  MutationOutcome,
+  PendingRevisionCaller,
+} from "./host-controller-types";
 
 // `HostController.convergeReadyPackagedMac`'s already-reachable branch only
 // gets a chance to apply a deferred LaunchAgent revision
@@ -40,7 +44,9 @@ const MAX_REFRESH_ATTEMPTS_WITHOUT_SUCCESS = 3;
  * standing up every other `HostController` method.
  */
 export interface PendingLoginItemRevisionMonitorHostController {
-  applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null>;
+  applyPendingLoginItemRevisionIfIdle(
+    caller: PendingRevisionCaller,
+  ): Promise<MutationOutcome<ConvergeReadyOk> | null>;
   isPendingRevisionRefreshQuarantined(): boolean;
 }
 
@@ -81,7 +87,9 @@ export function startPendingLoginItemRevisionMonitor(
     ticking = true;
     try {
       const outcome =
-        await deps.hostController.applyPendingLoginItemRevisionIfIdle();
+        await deps.hostController.applyPendingLoginItemRevisionIfIdle(
+          "outside-lane",
+        );
       if (disposed) return;
       if (outcome === null) {
         // Nothing to do this tick (no marker, not reachable, busy, or a

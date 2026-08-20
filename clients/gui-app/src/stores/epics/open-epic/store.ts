@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { EpicSubscribeClientSeedOffer } from "@traycer/protocol/host/epic/subscribe";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   StreamCloseReason,
@@ -83,6 +84,13 @@ import { appLogger } from "@/lib/logger";
 export type EpicStreamClientFactory = (
   epicId: string,
   callbacks: EpicStreamCallbacks,
+  /**
+   * Reports the host-originated root state this store already holds, so a
+   * reattach is served as a delta instead of the whole document. Passed
+   * straight through to `EpicStreamClient`, which re-reads it before every
+   * wire subscribe — so it must stay a live read, never a captured value.
+   */
+  seedOfferProvider: () => EpicSubscribeClientSeedOffer | null,
 ) => Pick<
   EpicStreamClient,
   | "applyUpdate"
@@ -827,6 +835,63 @@ export function createOpenEpicStore(
   let doc = new Y.Doc();
   let awareness = new Awareness(doc);
   let hostCoverageDoc = new Y.Doc();
+  /**
+   * The room {@link hostCoverageDoc}'s contents came from, or `null` when it
+   * holds nothing attributable to a room — a fresh store, a replica reset, or
+   * state seeded by a pre-`@1.2` host that never reported a `roomId`.
+   *
+   * Gates the reattach seed offer: without a room name there is nothing safe
+   * to offer, because a major migration mints a NEW room for the same
+   * `epicId` and a host diffing against the wrong room's state would omit
+   * bytes this client genuinely lacks.
+   */
+  let hostCoverageRoomId: string | null = null;
+  /**
+   * Bumped every time {@link hostCoverageDoc} is REPLACED (never when it is
+   * merged into). Identifies the doc instance a seed offer was taken from, so
+   * a delta can be checked against the doc it was actually diffed against
+   * rather than against whatever `hostCoverageDoc` happens to name when the
+   * reply lands.
+   *
+   * Needed because doc identity is not carried on the wire: the offer says
+   * "here is my state vector" and the reply says "this is a delta", and
+   * nothing in that pair names the doc. Between the two lies a network round
+   * trip in which the store may have thrown the doc away.
+   *
+   * DO NOT MAKE THIS BUMP ON EVERY UPDATE. A counter sitting beside a Y.Doc
+   * looks like it should track every change, and tightening it that way would
+   * silently disable delta-seed for any actively-syncing epic — every offer
+   * would be invalidated by the next inbound update before its reply landed,
+   * every reattach would fall back to the full document, and every test would
+   * stay green. `applyRootSeedToHostCoverage`'s "forward movement still
+   * merges" test exists to catch exactly that edit.
+   *
+   * The reason only replacement counts is an asymmetry in Yjs itself: a delta
+   * computed against an OLDER state vector is a SUPERSET of what the doc still
+   * needs, and applying it is idempotent. So coverage moving FORWARD under an
+   * in-flight offer is harmless — ordinary updates, and even a resolver
+   * re-emitting a second delta against the original offer (`retryMigration`
+   * re-runs the host's `initialize()` without re-reading params), all converge.
+   * REPLACEMENT is the only thing that destroys the basis the host diffed
+   * against, so replacement is the only thing that invalidates an offer.
+   *
+   * This guard is the WHOLE protection, deliberately. Two of the three paths
+   * that replace coverage happen to be safe without it — `requestFreshSnapshot`
+   * runs synchronously and ends by bumping `streamGeneration`, so its stale
+   * frames are dropped; a room migration cannot produce a delta at all, since
+   * the host rejects an offer naming a different room. Neither of those is a
+   * declared property: the first survives only until someone makes a step in
+   * that block async, and nothing anywhere pins it. Do not restore either as
+   * the reason this is safe. The third path — `onPermissionChanged(null)`,
+   * which clears coverage WITHOUT ending the stream cycle — was never covered
+   * by them at all.
+   */
+  let hostCoverageGeneration = 0;
+  /**
+   * The value of {@link hostCoverageGeneration} at the moment the live seed
+   * offer was read, or `null` when no offer is outstanding.
+   */
+  let offeredCoverageGeneration: number | null = null;
 
   // In-flight `readAttachmentBytes` waits. Held here (not per call) so a replica
   // swap can re-point each one at the live doc's attachments map instead of
@@ -1829,7 +1894,121 @@ export function createOpenEpicStore(
     if (snapshotBytes !== null) {
       Y.applyUpdate(hostCoverageDoc, snapshotBytes);
     }
+    // Whatever room the discarded doc represented, the replacement does not
+    // represent it: callers either reset coverage to empty or rebase it onto a
+    // full snapshot whose room only `applyRootSeedToHostCoverage` knows. Left
+    // stale, this would offer a new room's state under the old room's name.
+    hostCoverageRoomId = null;
+    // The doc any outstanding offer was taken from no longer exists, so a
+    // delta computed against it can no longer be applied anywhere.
+    hostCoverageGeneration += 1;
     previous.destroy();
+  };
+
+  /**
+   * Folds this cycle's root payload into {@link hostCoverageDoc} and records
+   * the room it came from.
+   *
+   * THE SEAM THE `seededFromOffer` FLAG EXISTS FOR. A full snapshot is
+   * self-sufficient, so coverage is rebuilt from it — that is what
+   * {@link replaceHostCoverageDoc} does and what every pre-`@1.3` cycle did. A
+   * DELTA is not self-sufficient: it deliberately omits everything the host
+   * knew this client already had, so rebuilding a fresh doc from it would
+   * discard exactly the state the delta was computed to leave out, silently
+   * collapsing coverage to the handful of bytes that changed. It must be
+   * merged into the existing doc instead.
+   *
+   * WHY THE REBUILD ARM STILL EXISTS — and it is NOT to bound growth.
+   *
+   * Merging deltas forever does not make this doc grow. Yjs integrates
+   * operations into a struct store keyed by client and clock; it does not
+   * append the update messages that delivered them. So the encoded size is a
+   * function of the document's operation set, not of how many merges built it.
+   * Measured: 50 reattach cycles merging deltas produce a byte-IDENTICAL doc
+   * to rebuilding from a full snapshot each cycle (ratio 1.000000), and with
+   * deletions, in-place edits and redundant full-snapshot re-delivery mixed in,
+   * 1.000108 — 78 bytes on 722 KB of fragmentation noise, with identical
+   * content and identical state vectors. A client that reattaches fifty times
+   * on a flaky link therefore needs no periodic re-baseline, and none is
+   * armed.
+   *
+   * The rebuild arm earns its place on CORRECTNESS instead: a full snapshot
+   * may come from a DIFFERENT ROOM. A major migration mints a new room for the
+   * same `epicId`, and merging its snapshot into coverage built from the old
+   * room would union two logically different documents. Discarding the old doc
+   * is the only correct handling, and the arms line up with that by
+   * construction — a room change makes the host reject the offer
+   * (`offer.roomId !== storage.getRoomId()`), so it answers with a full
+   * snapshot and no `seededFromOffer`, which lands here on exactly the rebuild
+   * arm that drops the stale room.
+   */
+  const applyRootSeedToHostCoverage = (
+    meta: SnapshotMetaEpic,
+    snapshotBytes: Uint8Array,
+  ): void => {
+    if (meta.seededFromOffer !== true) {
+      replaceHostCoverageDoc(snapshotBytes);
+      hostCoverageRoomId = meta.roomId ?? null;
+      offeredCoverageGeneration = null;
+      return;
+    }
+    // A delta, so it is only meaningful against the doc whose state vector was
+    // offered. If that doc has been replaced since (permission loss clears
+    // coverage without ending the stream cycle), merging here would fold a
+    // diff into a doc it was never computed against, and the result would
+    // silently hold only the bytes that changed.
+    //
+    // Leave coverage untouched in that case, and take no room id — so no
+    // further offer is made until a full snapshot re-establishes a basis. The
+    // replica still receives these bytes at the call site, so the user's view
+    // is unaffected; only host-coverage precision degrades, and it degrades by
+    // UNDER-stating what the host has. That is the safe direction: coverage is
+    // read to decide whether local work is durable, and over-reporting dirty
+    // work costs a redundant reconcile, while under-reporting it would claim
+    // unsynced edits are safe.
+    if (offeredCoverageGeneration !== hostCoverageGeneration) {
+      offeredCoverageGeneration = null;
+      return;
+    }
+    Y.applyUpdate(hostCoverageDoc, snapshotBytes);
+    hostCoverageRoomId = meta.roomId ?? null;
+    offeredCoverageGeneration = null;
+  };
+
+  /**
+   * The reattach offer: what this client has already received from the host,
+   * so the host can answer a resubscribe with only what changed.
+   *
+   * Read live at every wire subscribe, including reconnects — never cached.
+   *
+   * Offers {@link hostCoverageDoc}'s state vector rather than the local
+   * replica's, and the distinction is load-bearing rather than stylistic.
+   * `doc` additionally holds local edits the host may not have accepted yet;
+   * naming those in the offer would tell the host "I already have this", and
+   * the delta it computed would omit the host's own copy of anything it had
+   * in fact accepted and not echoed back. The replica would still converge —
+   * it holds those bytes locally — but `hostCoverageDoc` would not, leaving
+   * host coverage understated and the sync pill claiming unsynced work that
+   * is actually durable. Coverage is precisely "what the host has sent me",
+   * which is exactly the question a seed offer asks.
+   *
+   * `doc ⊇ hostCoverageDoc` always (both receive every snapshot and update;
+   * only `doc` also receives local edits), so a delta computed against
+   * coverage is a superset of what the replica needs and applying it to both
+   * converges.
+   */
+  const readSeedOffer = (): EpicSubscribeClientSeedOffer | null => {
+    if (hostCoverageRoomId === null) {
+      offeredCoverageGeneration = null;
+      return null;
+    }
+    // Record WHICH doc this vector describes, so the reply can be checked
+    // against it rather than against whatever `hostCoverageDoc` names by then.
+    offeredCoverageGeneration = hostCoverageGeneration;
+    return {
+      stateVectorBase64: encodeDocStateVectorBase64(hostCoverageDoc),
+      roomId: hostCoverageRoomId,
+    };
   };
 
   bindCurrentReplica();
@@ -1998,609 +2177,632 @@ export function createOpenEpicStore(
           hasFreshRootSnapshotForOpenCycle = false;
 
           let client: OpenEpicStreamClient | null = null;
-          client = options.streamClientFactory(epicId, {
-            onSnapshot: (meta, snapshotBytes) => {
-              if (disposed || generation !== streamGeneration) return;
-              // Suspend projector so the per-event observeDeep storm
-              // triggered by `Y.applyUpdate` does not race with the
-              // deterministic full re-project below.
-              projector.suspend();
-              try {
-                Y.applyUpdate(doc, snapshotBytes, STREAM_ORIGIN);
-                replaceHostCoverageDoc(snapshotBytes);
-              } finally {
-                projector.resume();
-              }
-              const reconcileUpdate = Y.encodeStateAsUpdate(
-                doc,
-                decodeBase64(meta.hostStateVectorBase64),
-              );
-              const dirtyState = resolvePublicDirtyState(
-                get().dirtyWatermarkStateVectorBase64,
-                meta.hostStateVectorBase64,
-              );
-              // Only writable roles may push the reconcile delta back. A
-              // viewer's local doc carries no legitimate offline edits, and the
-              // delta vs `hostStateVectorBase64` can be non-trivial purely
-              // because the host re-encoded its snapshot and state vector at
-              // different instants on an actively-syncing room. Sending it as a
-              // viewer hits the host's guarded `applyCollabUpdate`, which
-              // refuses the mutate AND evicts the warm slot - tearing the room
-              // down mid-open. Mirror the same gate as `applyLocalUpdate`.
-              if (
-                isNonTrivialYUpdate(reconcileUpdate) &&
-                isWritablePermissionRole(meta.permissionRole)
-              ) {
-                client?.applyUpdate(reconcileUpdate);
-              }
-              clearUnsyncedQueue();
-              currentRole = meta.permissionRole;
-              hasFreshRootSnapshotForOpenCycle = true;
-              const slices = projector.projectFull();
-              set((state) => ({
-                snapshotMeta: meta,
-                permissionRole: meta.permissionRole,
-                accessLost:
-                  meta.permissionRole === null ? state.accessLost : false,
-                snapshotLoaded: true,
-                snapshotFetchError: null,
-                // The snapshot landing is the unambiguous "migration
-                // succeeded" signal - there is nothing further to render.
-                migration:
-                  state.migration.status === "idle"
-                    ? state.migration
-                    : IDLE_MIGRATION_SLICE,
-                ...dirtyState,
-                ...slices,
-                unsyncedQueueSize: 0,
-              }));
-              if (!isWritablePermissionRole(currentRole)) {
-                const hadArtifactRoomState =
-                  Object.keys(get().artifactRooms.stateByArtifactRoomId)
-                    .length > 0;
-                clearAllPendingArtifactRoomUpdates();
-                destroyAllArtifactRoomReplicas();
+          client = options.streamClientFactory(
+            epicId,
+            {
+              onSnapshot: (meta, snapshotBytes) => {
+                if (disposed || generation !== streamGeneration) return;
+                // Suspend projector so the per-event observeDeep storm
+                // triggered by `Y.applyUpdate` does not race with the
+                // deterministic full re-project below.
+                projector.suspend();
+                try {
+                  // The replica merges either way: a delta and a full snapshot
+                  // are both just updates to apply here, and `doc` is never
+                  // rebuilt on this path. It is host COVERAGE that has a
+                  // rebuild-vs-merge decision, and it is the one that would lose
+                  // state if a delta reached the rebuild arm.
+                  Y.applyUpdate(doc, snapshotBytes, STREAM_ORIGIN);
+                  applyRootSeedToHostCoverage(meta, snapshotBytes);
+                } finally {
+                  projector.resume();
+                }
+                const reconcileUpdate = Y.encodeStateAsUpdate(
+                  doc,
+                  decodeBase64(meta.hostStateVectorBase64),
+                );
+                const dirtyState = resolvePublicDirtyState(
+                  get().dirtyWatermarkStateVectorBase64,
+                  meta.hostStateVectorBase64,
+                );
+                // Only writable roles may push the reconcile delta back. A
+                // viewer's local doc carries no legitimate offline edits, and the
+                // delta vs `hostStateVectorBase64` can be non-trivial purely
+                // because the host re-encoded its snapshot and state vector at
+                // different instants on an actively-syncing room. Sending it as a
+                // viewer hits the host's guarded `applyCollabUpdate`, which
+                // refuses the mutate AND evicts the warm slot - tearing the room
+                // down mid-open. Mirror the same gate as `applyLocalUpdate`.
+                if (
+                  isNonTrivialYUpdate(reconcileUpdate) &&
+                  isWritablePermissionRole(meta.permissionRole)
+                ) {
+                  client?.applyUpdate(reconcileUpdate);
+                }
+                clearUnsyncedQueue();
+                currentRole = meta.permissionRole;
+                hasFreshRootSnapshotForOpenCycle = true;
+                const slices = projector.projectFull();
+                set((state) => ({
+                  snapshotMeta: meta,
+                  permissionRole: meta.permissionRole,
+                  accessLost:
+                    meta.permissionRole === null ? state.accessLost : false,
+                  snapshotLoaded: true,
+                  snapshotFetchError: null,
+                  // The snapshot landing is the unambiguous "migration
+                  // succeeded" signal - there is nothing further to render.
+                  migration:
+                    state.migration.status === "idle"
+                      ? state.migration
+                      : IDLE_MIGRATION_SLICE,
+                  ...dirtyState,
+                  ...slices,
+                  unsyncedQueueSize: 0,
+                }));
+                if (!isWritablePermissionRole(currentRole)) {
+                  const hadArtifactRoomState =
+                    Object.keys(get().artifactRooms.stateByArtifactRoomId)
+                      .length > 0;
+                  clearAllPendingArtifactRoomUpdates();
+                  destroyAllArtifactRoomReplicas();
+                  set((state) => {
+                    const publicDirtyState = resolvePublicDirtyState(
+                      state.dirtyWatermarkStateVectorBase64,
+                      state.latestHostStateVectorBase64,
+                    );
+                    if (!hadArtifactRoomState) return publicDirtyState;
+                    return {
+                      bindingVersion: state.bindingVersion + 1,
+                      artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
+                      ...publicDirtyState,
+                    };
+                  });
+                  return;
+                }
+                if (transportStatus === "open") {
+                  flushAllPendingArtifactRoomUpdates();
+                }
+              },
+              onUpdate: (updateBytes) => {
+                if (disposed || generation !== streamGeneration) return;
+                Y.applyUpdate(doc, updateBytes, STREAM_ORIGIN);
+                Y.applyUpdate(hostCoverageDoc, updateBytes);
+                // Skip the expensive state-vector encode on the steady-stream
+                // clean-to-clean case: with no dirty watermark, coverage check
+                // is trivially satisfied and `latestHostStateVectorBase64`
+                // would only be consulted after the next local edit, at which
+                // point the next onUpdate path below will recompute it.
+                if (get().dirtyWatermarkStateVectorBase64 === null) return;
+                const latestHostStateVectorBase64 =
+                  encodeDocStateVectorBase64(hostCoverageDoc);
+                set((state) =>
+                  resolvePublicDirtyState(
+                    state.dirtyWatermarkStateVectorBase64,
+                    latestHostStateVectorBase64,
+                  ),
+                );
+              },
+              onEarlyMeta: (earlyMeta) => {
+                if (disposed || generation !== streamGeneration) return;
+                // Metadata-only frame from the host - populate snapshotMeta
+                // so workspace-derived UI (git status, file tree, sidebar
+                // repo chip, permission display) starts working before the
+                // full Y.Doc snapshot lands. Intentionally does NOT flip
+                // `snapshotLoaded` - canvas content still gates on the real
+                // `onSnapshot` callback.
+                //
+                // We do NOT update the closure-scoped `currentRole` here:
+                // that variable gates local writes (`applyLocalUpdate`,
+                // artifact-room `docUpdateHandler`). The early
+                // `permissionRole` is the host's projection of cloud
+                // `epic.permission.role`, which can disagree with the
+                // snapshot-derived role (which factors in team memberships
+                // via `derivePermissionRole`). Allowing early-meta to flip
+                // `currentRole` would fail-closed for a team-derived owner
+                // (writes silently dropped for ~8s) or fail-open for a
+                // stale-cached editor (writes go out but host rejects).
+                // Snapshot is authoritative - leave `currentRole` alone.
+                //
+                // The merged `snapshotMeta` uses placeholders for
+                // `schemaVersion` and `hostStateVectorBase64` since
+                // earlyMeta doesn't know them. Consumers must not read
+                // those two fields before `snapshotLoaded === true`.
+                const meta: SnapshotMetaEpic = {
+                  ...earlyMeta,
+                  schemaVersion: "",
+                  hostStateVectorBase64: "",
+                };
+                set((state) => ({
+                  snapshotMeta: meta,
+                  permissionRole: earlyMeta.permissionRole,
+                  // Mirror the snapshot's accessLost-clear semantics so a
+                  // role-restored reconnect doesn't leave the renderer in a
+                  // self-contradicting state (sidebar shows editor while the
+                  // session is still flagged access-lost for the access
+                  // coordinator).
+                  accessLost:
+                    earlyMeta.permissionRole === null
+                      ? state.accessLost
+                      : false,
+                }));
+              },
+              onAwareness: (awarenessBytes) => {
+                if (disposed || generation !== streamGeneration) return;
+                applyAwarenessUpdate(awareness, awarenessBytes, "remote");
+              },
+              onArtifactRoomSnapshot: (
+                artifactRoomId,
+                snapshotBytes,
+                hostArtifactRoomStateVectorBase64,
+              ) => {
+                if (disposed || generation !== streamGeneration) return;
+                // A room nobody is editing never materializes: keep the bytes
+                // and flip availability so the tile can render its state, and
+                // let the first lease pay for the `Y.Doc`. There is nothing to
+                // reconcile on this path - a cold room has no local edits by
+                // construction - so the whole reconcile/queue dance below is
+                // reachable only for rooms an editor is (or was) bound to.
+                if (
+                  !artifactRoomReplicas.has(artifactRoomId) &&
+                  !isArtifactRoomLeased(artifactRoomId)
+                ) {
+                  recordColdArtifactRoomBytes(
+                    artifactRoomId,
+                    snapshotBytes,
+                    hostArtifactRoomStateVectorBase64,
+                  );
+                  set((state) => ({
+                    artifactRooms: {
+                      stateByArtifactRoomId: {
+                        ...state.artifactRooms.stateByArtifactRoomId,
+                        [artifactRoomId]: "ready",
+                      },
+                    },
+                  }));
+                  return;
+                }
+                // Reuse any prior replica for this artifactRoom so a snapshot during
+                // reconnect/recovery does NOT destroy local in-flight
+                // edits. The host is now the merge source - its bytes
+                // get applied on top of the existing local replica, and
+                // dirty tracking drives a reconcile fan-out for any local
+                // edits the host has not yet seen.
+                const hadPrior = artifactRoomReplicas.has(artifactRoomId);
+                const entry = getOrCreateArtifactRoomReplica(artifactRoomId);
+                Y.applyUpdate(entry.doc, snapshotBytes, BIN_STREAM_ORIGIN);
+                entry.latestHostStateVectorBase64 =
+                  hostArtifactRoomStateVectorBase64;
+                // If the local replica is ahead of the host's snapshot,
+                // ship a reconcile update so offline edits round-trip.
+                const reconcileUpdate = Y.encodeStateAsUpdate(
+                  entry.doc,
+                  decodeBase64(hostArtifactRoomStateVectorBase64),
+                );
+                const reconcileNeeded = isNonTrivialYUpdate(reconcileUpdate);
+                const canSendNow = canSendArtifactRoomBodyWritesNow();
+                if (reconcileNeeded && canSendNow) {
+                  streamClient?.applyArtifactRoomUpdate(
+                    artifactRoomId,
+                    reconcileUpdate,
+                  );
+                  // Reconcile shipped: every local update is already
+                  // represented in the merged replica, so the single
+                  // reconcile subsumes both the queue and any prior
+                  // pending reconcile. Convergence is proven by the next
+                  // coverage check, not by replaying each queued frame.
+                  clearPendingRoomUpdates(entry);
+                  entry.pendingReconcileUpdate = null;
+                } else if (
+                  reconcileNeeded &&
+                  isWritablePermissionRole(currentRole)
+                ) {
+                  // Stream is reconnecting/closed, or raw-open before the
+                  // fresh root snapshot. Stash the reconcile so the root
+                  // snapshot permission gate can flush it later. Without this,
+                  // clearing `pendingUpdates` here would silently drop the only
+                  // outbound propagation path for local edits made during the
+                  // reconnect window. The merged-replica reconcile subsumes
+                  // those queued frames.
+                  entry.pendingReconcileUpdate = reconcileUpdate;
+                  clearPendingRoomUpdates(entry);
+                } else {
+                  // Either no divergence (reconcile is trivial) or the
+                  // role is viewer/null (fail-closed). In both cases
+                  // there is nothing safe to send and nothing to retain.
+                  clearPendingRoomUpdates(entry);
+                  entry.pendingReconcileUpdate = null;
+                }
+                if (
+                  latestHostCoversDirtyWatermark(
+                    hostArtifactRoomStateVectorBase64,
+                    entry.dirtyWatermarkStateVectorBase64,
+                  )
+                ) {
+                  entry.dirtyWatermarkStateVectorBase64 = null;
+                }
                 set((state) => {
-                  const publicDirtyState = resolvePublicDirtyState(
+                  const stateByArtifactRoomId = {
+                    ...state.artifactRooms.stateByArtifactRoomId,
+                    [artifactRoomId]: "ready" as EpicArtifactRoomAvailability,
+                  };
+                  const dirtyState = resolvePublicDirtyState(
                     state.dirtyWatermarkStateVectorBase64,
                     state.latestHostStateVectorBase64,
                   );
-                  if (!hadArtifactRoomState) return publicDirtyState;
                   return {
-                    bindingVersion: state.bindingVersion + 1,
-                    artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
-                    ...publicDirtyState,
+                    // Bumping bindingVersion only when the artifactRoom replica is
+                    // a fresh one - for an already-bound replica we keep
+                    // the editor mounted so user typing is uninterrupted.
+                    bindingVersion: hadPrior
+                      ? state.bindingVersion
+                      : state.bindingVersion + 1,
+                    artifactRooms: { stateByArtifactRoomId },
+                    ...dirtyState,
                   };
                 });
-                return;
-              }
-              if (transportStatus === "open") {
-                flushAllPendingArtifactRoomUpdates();
-              }
-            },
-            onUpdate: (updateBytes) => {
-              if (disposed || generation !== streamGeneration) return;
-              Y.applyUpdate(doc, updateBytes, STREAM_ORIGIN);
-              Y.applyUpdate(hostCoverageDoc, updateBytes);
-              // Skip the expensive state-vector encode on the steady-stream
-              // clean-to-clean case: with no dirty watermark, coverage check
-              // is trivially satisfied and `latestHostStateVectorBase64`
-              // would only be consulted after the next local edit, at which
-              // point the next onUpdate path below will recompute it.
-              if (get().dirtyWatermarkStateVectorBase64 === null) return;
-              const latestHostStateVectorBase64 =
-                encodeDocStateVectorBase64(hostCoverageDoc);
-              set((state) =>
-                resolvePublicDirtyState(
-                  state.dirtyWatermarkStateVectorBase64,
-                  latestHostStateVectorBase64,
-                ),
-              );
-            },
-            onEarlyMeta: (earlyMeta) => {
-              if (disposed || generation !== streamGeneration) return;
-              // Metadata-only frame from the host - populate snapshotMeta
-              // so workspace-derived UI (git status, file tree, sidebar
-              // repo chip, permission display) starts working before the
-              // full Y.Doc snapshot lands. Intentionally does NOT flip
-              // `snapshotLoaded` - canvas content still gates on the real
-              // `onSnapshot` callback.
-              //
-              // We do NOT update the closure-scoped `currentRole` here:
-              // that variable gates local writes (`applyLocalUpdate`,
-              // artifact-room `docUpdateHandler`). The early
-              // `permissionRole` is the host's projection of cloud
-              // `epic.permission.role`, which can disagree with the
-              // snapshot-derived role (which factors in team memberships
-              // via `derivePermissionRole`). Allowing early-meta to flip
-              // `currentRole` would fail-closed for a team-derived owner
-              // (writes silently dropped for ~8s) or fail-open for a
-              // stale-cached editor (writes go out but host rejects).
-              // Snapshot is authoritative - leave `currentRole` alone.
-              //
-              // The merged `snapshotMeta` uses placeholders for
-              // `schemaVersion` and `hostStateVectorBase64` since
-              // earlyMeta doesn't know them. Consumers must not read
-              // those two fields before `snapshotLoaded === true`.
-              const meta: SnapshotMetaEpic = {
-                ...earlyMeta,
-                schemaVersion: "",
-                hostStateVectorBase64: "",
-              };
-              set((state) => ({
-                snapshotMeta: meta,
-                permissionRole: earlyMeta.permissionRole,
-                // Mirror the snapshot's accessLost-clear semantics so a
-                // role-restored reconnect doesn't leave the renderer in a
-                // self-contradicting state (sidebar shows editor while the
-                // session is still flagged access-lost for the access
-                // coordinator).
-                accessLost:
-                  earlyMeta.permissionRole === null ? state.accessLost : false,
-              }));
-            },
-            onAwareness: (awarenessBytes) => {
-              if (disposed || generation !== streamGeneration) return;
-              applyAwarenessUpdate(awareness, awarenessBytes, "remote");
-            },
-            onArtifactRoomSnapshot: (
-              artifactRoomId,
-              snapshotBytes,
-              hostArtifactRoomStateVectorBase64,
-            ) => {
-              if (disposed || generation !== streamGeneration) return;
-              // A room nobody is editing never materializes: keep the bytes
-              // and flip availability so the tile can render its state, and
-              // let the first lease pay for the `Y.Doc`. There is nothing to
-              // reconcile on this path - a cold room has no local edits by
-              // construction - so the whole reconcile/queue dance below is
-              // reachable only for rooms an editor is (or was) bound to.
-              if (
-                !artifactRoomReplicas.has(artifactRoomId) &&
-                !isArtifactRoomLeased(artifactRoomId)
-              ) {
-                recordColdArtifactRoomBytes(
-                  artifactRoomId,
-                  snapshotBytes,
-                  hostArtifactRoomStateVectorBase64,
-                );
-                set((state) => ({
-                  artifactRooms: {
-                    stateByArtifactRoomId: {
-                      ...state.artifactRooms.stateByArtifactRoomId,
-                      [artifactRoomId]: "ready",
-                    },
-                  },
-                }));
-                return;
-              }
-              // Reuse any prior replica for this artifactRoom so a snapshot during
-              // reconnect/recovery does NOT destroy local in-flight
-              // edits. The host is now the merge source - its bytes
-              // get applied on top of the existing local replica, and
-              // dirty tracking drives a reconcile fan-out for any local
-              // edits the host has not yet seen.
-              const hadPrior = artifactRoomReplicas.has(artifactRoomId);
-              const entry = getOrCreateArtifactRoomReplica(artifactRoomId);
-              Y.applyUpdate(entry.doc, snapshotBytes, BIN_STREAM_ORIGIN);
-              entry.latestHostStateVectorBase64 =
-                hostArtifactRoomStateVectorBase64;
-              // If the local replica is ahead of the host's snapshot,
-              // ship a reconcile update so offline edits round-trip.
-              const reconcileUpdate = Y.encodeStateAsUpdate(
-                entry.doc,
-                decodeBase64(hostArtifactRoomStateVectorBase64),
-              );
-              const reconcileNeeded = isNonTrivialYUpdate(reconcileUpdate);
-              const canSendNow = canSendArtifactRoomBodyWritesNow();
-              if (reconcileNeeded && canSendNow) {
-                streamClient?.applyArtifactRoomUpdate(
-                  artifactRoomId,
-                  reconcileUpdate,
-                );
-                // Reconcile shipped: every local update is already
-                // represented in the merged replica, so the single
-                // reconcile subsumes both the queue and any prior
-                // pending reconcile. Convergence is proven by the next
-                // coverage check, not by replaying each queued frame.
-                clearPendingRoomUpdates(entry);
-                entry.pendingReconcileUpdate = null;
-              } else if (
-                reconcileNeeded &&
-                isWritablePermissionRole(currentRole)
-              ) {
-                // Stream is reconnecting/closed, or raw-open before the
-                // fresh root snapshot. Stash the reconcile so the root
-                // snapshot permission gate can flush it later. Without this,
-                // clearing `pendingUpdates` here would silently drop the only
-                // outbound propagation path for local edits made during the
-                // reconnect window. The merged-replica reconcile subsumes
-                // those queued frames.
-                entry.pendingReconcileUpdate = reconcileUpdate;
-                clearPendingRoomUpdates(entry);
-              } else {
-                // Either no divergence (reconcile is trivial) or the
-                // role is viewer/null (fail-closed). In both cases
-                // there is nothing safe to send and nothing to retain.
-                clearPendingRoomUpdates(entry);
-                entry.pendingReconcileUpdate = null;
-              }
-              if (
-                latestHostCoversDirtyWatermark(
-                  hostArtifactRoomStateVectorBase64,
-                  entry.dirtyWatermarkStateVectorBase64,
-                )
-              ) {
-                entry.dirtyWatermarkStateVectorBase64 = null;
-              }
-              set((state) => {
-                const stateByArtifactRoomId = {
-                  ...state.artifactRooms.stateByArtifactRoomId,
-                  [artifactRoomId]: "ready" as EpicArtifactRoomAvailability,
-                };
-                const dirtyState = resolvePublicDirtyState(
-                  state.dirtyWatermarkStateVectorBase64,
-                  state.latestHostStateVectorBase64,
-                );
-                return {
-                  // Bumping bindingVersion only when the artifactRoom replica is
-                  // a fresh one - for an already-bound replica we keep
-                  // the editor mounted so user typing is uninterrupted.
-                  bindingVersion: hadPrior
-                    ? state.bindingVersion
-                    : state.bindingVersion + 1,
-                  artifactRooms: { stateByArtifactRoomId },
-                  ...dirtyState,
-                };
-              });
-              // The snapshot may have been what cleared this replica's last
-              // local divergence, so re-test the linger arm here: without it a
-              // room whose editor closed while it was still dirty would stay
-              // materialized for the rest of the session.
-              scheduleArtifactRoomCooldown(artifactRoomId);
-            },
-            onArtifactRoomUpdate: (
-              artifactRoomId,
-              updateBytes,
-              hostArtifactRoomStateVectorBase64,
-            ) => {
-              if (disposed || generation !== streamGeneration) return;
-              const entry = artifactRoomReplicas.get(artifactRoomId);
-              if (entry === undefined) {
-                // Cold room: accumulate the bytes rather than materializing a
-                // doc for a body nothing is displaying. An unknown room is
-                // still skipped - `recordColdArtifactRoomBytes` only extends
-                // rooms the host has already snapshotted.
-                const cold = coldArtifactRooms.get(artifactRoomId);
-                if (cold === undefined) return;
-                pushColdArtifactRoomUpdate(cold, updateBytes);
-                cold.latestHostStateVectorBase64 =
+                // The snapshot may have been what cleared this replica's last
+                // local divergence, so re-test the linger arm here: without it a
+                // room whose editor closed while it was still dirty would stay
+                // materialized for the rest of the session.
+                scheduleArtifactRoomCooldown(artifactRoomId);
+              },
+              onArtifactRoomUpdate: (
+                artifactRoomId,
+                updateBytes,
+                hostArtifactRoomStateVectorBase64,
+              ) => {
+                if (disposed || generation !== streamGeneration) return;
+                const entry = artifactRoomReplicas.get(artifactRoomId);
+                if (entry === undefined) {
+                  // Cold room: accumulate the bytes rather than materializing a
+                  // doc for a body nothing is displaying. An unknown room is
+                  // still skipped - `recordColdArtifactRoomBytes` only extends
+                  // rooms the host has already snapshotted.
+                  const cold = coldArtifactRooms.get(artifactRoomId);
+                  if (cold === undefined) return;
+                  pushColdArtifactRoomUpdate(cold, updateBytes);
+                  cold.latestHostStateVectorBase64 =
+                    hostArtifactRoomStateVectorBase64;
+                  return;
+                }
+                Y.applyUpdate(entry.doc, updateBytes, BIN_STREAM_ORIGIN);
+                entry.latestHostStateVectorBase64 =
                   hostArtifactRoomStateVectorBase64;
-                return;
-              }
-              Y.applyUpdate(entry.doc, updateBytes, BIN_STREAM_ORIGIN);
-              entry.latestHostStateVectorBase64 =
-                hostArtifactRoomStateVectorBase64;
-              if (
-                latestHostCoversDirtyWatermark(
-                  hostArtifactRoomStateVectorBase64,
-                  entry.dirtyWatermarkStateVectorBase64,
-                )
-              ) {
-                entry.dirtyWatermarkStateVectorBase64 = null;
-              }
-              refreshPublicDirtyState?.();
-              scheduleArtifactRoomCooldown(artifactRoomId);
-            },
-            onArtifactRoomAwareness: (artifactRoomId, awarenessBytes) => {
-              if (disposed || generation !== streamGeneration) return;
-              // Apply inbound awareness to the artifact-room-scoped Awareness
-              // instance, NOT the root Epic awareness. CollaborationCaret
-              // bindings on artifact-room-doc fragments listen on this instance, so
-              // routing them through the root awareness would mis-attribute
-              // cursors and lose the per-artifact-room presence channel.
-              const entry = artifactRoomReplicas.get(artifactRoomId);
-              if (entry === undefined) {
-                // Cold room: retain the frame rather than dropping it. Without
-                // this a collaborator already present in a room this client
-                // has never opened stays invisible until their next renewal.
-                recordColdArtifactRoomAwareness(artifactRoomId, awarenessBytes);
-                return;
-              }
-              applyAwarenessUpdate(
-                entry.awareness,
-                awarenessBytes,
-                BIN_AWARENESS_REMOTE_ORIGIN,
-              );
-              // A peer leaving can drop the presence pin that was holding this
-              // room hot, so re-test it here rather than waiting for a doc
-              // frame that may never come.
-              scheduleArtifactRoomCooldown(artifactRoomId);
-            },
-            onArtifactRoomState: (artifactRoomId, nextState) => {
-              if (disposed || generation !== streamGeneration) return;
-              if (nextState !== "ready") {
-                // A artifactRoom transitioning out of `ready` invalidates the
-                // local replica - the next `artifactRoomSnapshot` will rebuild.
-                // The cold copy is invalidated with it; leases survive, so a
-                // mounted editor re-materializes from that next snapshot.
-                cancelArtifactRoomCooldown(artifactRoomId);
-                coldArtifactRooms.delete(artifactRoomId);
-                artifactRoomTouchSeq.delete(artifactRoomId);
-                destroyArtifactRoomReplica(artifactRoomId);
-              }
-              set((prev) => {
-                const current =
-                  prev.artifactRooms.stateByArtifactRoomId[artifactRoomId];
-                if (current === nextState) return prev;
-                const stateByArtifactRoomId = {
-                  ...prev.artifactRooms.stateByArtifactRoomId,
-                  [artifactRoomId]: nextState,
-                };
-                const dirtyState = resolvePublicDirtyState(
-                  prev.dirtyWatermarkStateVectorBase64,
-                  prev.latestHostStateVectorBase64,
+                if (
+                  latestHostCoversDirtyWatermark(
+                    hostArtifactRoomStateVectorBase64,
+                    entry.dirtyWatermarkStateVectorBase64,
+                  )
+                ) {
+                  entry.dirtyWatermarkStateVectorBase64 = null;
+                }
+                refreshPublicDirtyState?.();
+                scheduleArtifactRoomCooldown(artifactRoomId);
+              },
+              onArtifactRoomAwareness: (artifactRoomId, awarenessBytes) => {
+                if (disposed || generation !== streamGeneration) return;
+                // Apply inbound awareness to the artifact-room-scoped Awareness
+                // instance, NOT the root Epic awareness. CollaborationCaret
+                // bindings on artifact-room-doc fragments listen on this instance, so
+                // routing them through the root awareness would mis-attribute
+                // cursors and lose the per-artifact-room presence channel.
+                const entry = artifactRoomReplicas.get(artifactRoomId);
+                if (entry === undefined) {
+                  // Cold room: retain the frame rather than dropping it. Without
+                  // this a collaborator already present in a room this client
+                  // has never opened stays invisible until their next renewal.
+                  recordColdArtifactRoomAwareness(
+                    artifactRoomId,
+                    awarenessBytes,
+                  );
+                  return;
+                }
+                applyAwarenessUpdate(
+                  entry.awareness,
+                  awarenessBytes,
+                  BIN_AWARENESS_REMOTE_ORIGIN,
                 );
-                return {
-                  bindingVersion:
-                    nextState !== "ready"
-                      ? prev.bindingVersion + 1
-                      : prev.bindingVersion,
-                  artifactRooms: { stateByArtifactRoomId },
-                  ...dirtyState,
-                };
-              });
-            },
-            onArtifactRoomDirty: (artifactRoomId, dirty) => {
-              if (disposed || generation !== streamGeneration) return;
-              set((prev) => {
-                const current =
-                  prev.artifactRoomDirtyByArtifactRoomId[artifactRoomId] ??
-                  false;
-                if (current === dirty) return prev;
-                return {
-                  artifactRoomDirtyByArtifactRoomId: {
-                    ...prev.artifactRoomDirtyByArtifactRoomId,
-                    [artifactRoomId]: dirty,
-                  },
-                };
-              });
-            },
-            onRootDirty: (dirty) => {
-              if (disposed || generation !== streamGeneration) return;
-              set((prev) => {
-                if (prev.rootDirty === dirty) return prev;
-                // A delta does not establish that this subscription has seen
-                // every room. Only the atomic dirtySnapshot can make
-                // dirtiness known for sync-pill purposes.
-                return { rootDirty: dirty };
-              });
-            },
-            onDirtySnapshot: (rootDirty, rooms) => {
-              if (disposed || generation !== streamGeneration) return;
-              const artifactRoomDirtyByArtifactRoomId: Record<string, boolean> =
-                {};
-              for (const room of rooms) {
-                artifactRoomDirtyByArtifactRoomId[room.artifactRoomId] =
-                  room.dirty;
-              }
-              set({
-                rootDirty,
-                hasDirtySnapshotForOpenCycle: true,
-                artifactRoomDirtyByArtifactRoomId,
-              });
-            },
-            onPermissionChanged: (permissionRole) => {
-              if (disposed || generation !== streamGeneration) return;
-              if (permissionRole === null) {
-                clearUnsyncedQueue();
-                clearAllPendingArtifactRoomUpdates();
-                replaceHostCoverageDoc(null);
-                currentRole = null;
-                set({
-                  permissionRole: null,
-                  accessLost: true,
-                  unsyncedQueueSize: 0,
-                  ...knownCleanDirtyState(),
+                // A peer leaving can drop the presence pin that was holding this
+                // room hot, so re-test it here rather than waiting for a doc
+                // frame that may never come.
+                scheduleArtifactRoomCooldown(artifactRoomId);
+              },
+              onArtifactRoomState: (artifactRoomId, nextState) => {
+                if (disposed || generation !== streamGeneration) return;
+                if (nextState !== "ready") {
+                  // A artifactRoom transitioning out of `ready` invalidates the
+                  // local replica - the next `artifactRoomSnapshot` will rebuild.
+                  // The cold copy is invalidated with it; leases survive, so a
+                  // mounted editor re-materializes from that next snapshot.
+                  cancelArtifactRoomCooldown(artifactRoomId);
+                  coldArtifactRooms.delete(artifactRoomId);
+                  artifactRoomTouchSeq.delete(artifactRoomId);
+                  destroyArtifactRoomReplica(artifactRoomId);
+                }
+                set((prev) => {
+                  const current =
+                    prev.artifactRooms.stateByArtifactRoomId[artifactRoomId];
+                  if (current === nextState) return prev;
+                  const stateByArtifactRoomId = {
+                    ...prev.artifactRooms.stateByArtifactRoomId,
+                    [artifactRoomId]: nextState,
+                  };
+                  const dirtyState = resolvePublicDirtyState(
+                    prev.dirtyWatermarkStateVectorBase64,
+                    prev.latestHostStateVectorBase64,
+                  );
+                  return {
+                    bindingVersion:
+                      nextState !== "ready"
+                        ? prev.bindingVersion + 1
+                        : prev.bindingVersion,
+                    artifactRooms: { stateByArtifactRoomId },
+                    ...dirtyState,
+                  };
                 });
-                return;
-              }
-
-              const previous = get().permissionRole;
-              if (
-                previous !== null &&
-                previous !== "viewer" &&
-                permissionRole === "viewer"
-              ) {
-                clearUnsyncedQueue();
-                clearAllPendingArtifactRoomUpdates();
-                currentRole = permissionRole;
-                set({
-                  permissionRole,
-                  unsyncedQueueSize: 0,
-                });
-                requestFreshSnapshotImpl?.();
-                return;
-              }
-
-              currentRole = permissionRole;
-              set({ permissionRole });
-            },
-            onEpicDeleted: (attribution) => {
-              if (disposed || generation !== streamGeneration) return;
-              // Record the remote-delete signal + attribution. The app-level
-              // access coordinator observes this and force-closes the tab
-              // (redirecting an active tab to landing); no further local work
-              // is needed here.
-              set({ epicDeleted: attribution });
-            },
-            onMigrationStarted: () => {
-              if (disposed || generation !== streamGeneration) return;
-              // First tick of a migration. Snap the slice into the running
-              // shape with placeholder counts so the modal can render the
-              // Prepare row immediately - the host will follow up with a
-              // `migrationProgress(prepare, 0, 1)` frame right away.
-              set({
-                migration: {
-                  status: "running",
-                  phase: "prepare",
-                  chunksDone: 0,
-                  chunksTotal: 1,
-                },
-              });
-            },
-            onMigrationProgress: (phase, chunksDone, chunksTotal) => {
-              if (disposed || generation !== streamGeneration) return;
-              set({
-                migration: {
-                  status: "running",
-                  phase,
-                  chunksDone,
-                  chunksTotal: chunksTotal > 0 ? chunksTotal : 1,
-                },
-              });
-            },
-            onMigrationFailed: (reason) => {
-              if (disposed || generation !== streamGeneration) return;
-              // Host kept the WS alive so the modal's Retry button can fire
-              // `retryMigration` in-stream. Log the `reason` so support can
-              // diagnose failed migrations from a renderer console dump even
-              // when the host log is unavailable; the modal copy itself is
-              // fixed and never displays this string.
-              appLogger.warn("[epic-migration] host reported migrationFailed", {
-                epicId,
-                reason,
-              });
-              set({
-                migration: ERROR_MIGRATION_SLICE,
-              });
-            },
-            onMigrationNotAllowed: () => {
-              if (disposed || generation !== streamGeneration) return;
-              // The epic needs a major migration this caller may not perform
-              // (viewer / sub-editor). The host did not start one and there is
-              // nothing to retry, so this is a distinct terminal state from
-              // `error`: the modal shows a fixed "ask an owner/editor" message.
-              set({
-                migration: NOT_ALLOWED_MIGRATION_SLICE,
-              });
-            },
-            onCloudSyncStatus: (status) => {
-              if (disposed || generation !== streamGeneration) return;
-              const previousCloudSyncStatus = cloudSyncStatus;
-              cloudSyncStatus = status;
-              hasFreshCloudSyncStatus = true;
-              if (
-                hasConnectedOnce &&
-                previousCloudSyncStatus !== "connected" &&
-                status === "connected"
-              ) {
-                // Wake-recovery latency marker: the host<->cloud link is back
-                // online. Paired with the `[stream] reconnectAll` log, the gap
-                // between them is the measured time-to-online after wake (the
-                // gate the plan tracks on a real device). `warn` is the only
-                // info-ish console level this workspace's lint permits.
-                // `hasConnectedOnce` keeps this to genuine RE-connections (wake)
-                // - not the first connect or a `requestFreshSnapshot` re-open,
-                // which would pollute the trace.
-                appLogger.debug("[epic-stream] cloud sync connected", {
-                  epicId,
-                });
-              }
-              // A genuine cloud "connected" frame is the ONLY thing that latches
-              // "connected once" - never the optimistic default - so a new
-              // room's pre-connect catch-up reads as the bootstrap "connecting"
-              // while a drop AFTER a real connect reads as "reconnecting".
-              if (status === "connected") hasConnectedOnce = true;
-              syncCurrentConnectionStatus();
-              set(connectionStateSlice());
-              flushPendingWritesAfterReconnect(client);
-            },
-            onConnectionStatus: (status, reason) => {
-              if (disposed || generation !== streamGeneration) return;
-              const previousTransportStatus = transportStatus;
-              transportStatus = status;
-              const startedSubscriptionCycle =
-                previousTransportStatus !== "open" && status === "open";
-              if (
-                hasConnectedOnce &&
-                previousTransportStatus !== "open" &&
-                status === "open"
-              ) {
-                // Wake-recovery sub-marker: the renderer<->host stream
-                // re-subscribed, so the host has the live request context
-                // again. The gap from here to `[epic-stream] cloud sync
-                // connected` isolates the host<->cloud recovery latency.
-                // `warn` is the only info-ish console level lint permits here.
-                // Gated on `hasConnectedOnce` so it marks only RE-connections
-                // (wake), not the initial connect or a fresh-snapshot re-open.
-                appLogger.debug("[epic-stream] transport open", {
-                  epicId,
-                  contextRegistered: true,
-                });
-              }
-              const cycleDurabilityState = startedSubscriptionCycle
-                ? resetDurabilityProofForOpenCycle()
-                : null;
-              const nextStatus = syncCurrentConnectionStatus();
-              hasFreshRootSnapshotForOpenCycle = false;
-              set(
-                cycleDurabilityState === null
-                  ? connectionStateSlice()
-                  : {
-                      ...cycleDurabilityState,
-                      ...connectionStateSlice(),
+              },
+              onArtifactRoomDirty: (artifactRoomId, dirty) => {
+                if (disposed || generation !== streamGeneration) return;
+                set((prev) => {
+                  const current =
+                    prev.artifactRoomDirtyByArtifactRoomId[artifactRoomId] ??
+                    false;
+                  if (current === dirty) return prev;
+                  return {
+                    artifactRoomDirtyByArtifactRoomId: {
+                      ...prev.artifactRoomDirtyByArtifactRoomId,
+                      [artifactRoomId]: dirty,
                     },
-              );
-              // Convert a fatal close into the modal's error state, but only
-              // when a migration had actually started - a fatal close before
-              // any `migrationStarted` is a normal connection error owned by
-              // `snapshotFetchError`, not the migration modal. UNAUTHORIZED
-              // also bypasses the modal so the auth/unavailable handlers
-              // below can still recover the session; leaving the user pinned
-              // on a migration-error modal after a token expiry would block
-              // re-auth entirely.
-              if (
-                isFatalMigrationClose(status, reason, get().migration.status)
-              ) {
-                // Convert the fatal close into the modal's error state and
-                // return - letting control fall through would ALSO populate
-                // `snapshotFetchError` from the same fatalError, surfacing
-                // two redundant failure UIs (migration modal AND the snapshot
-                // empty-state) for one underlying cause. The migration
-                // modal's Retry/Close already covers recovery; Close routes
-                // the user away cleanly.
+                  };
+                });
+              },
+              onRootDirty: (dirty) => {
+                if (disposed || generation !== streamGeneration) return;
+                set((prev) => {
+                  if (prev.rootDirty === dirty) return prev;
+                  // A delta does not establish that this subscription has seen
+                  // every room. Only the atomic dirtySnapshot can make
+                  // dirtiness known for sync-pill purposes.
+                  return { rootDirty: dirty };
+                });
+              },
+              onDirtySnapshot: (rootDirty, rooms) => {
+                if (disposed || generation !== streamGeneration) return;
+                const artifactRoomDirtyByArtifactRoomId: Record<
+                  string,
+                  boolean
+                > = {};
+                for (const room of rooms) {
+                  artifactRoomDirtyByArtifactRoomId[room.artifactRoomId] =
+                    room.dirty;
+                }
+                set({
+                  rootDirty,
+                  hasDirtySnapshotForOpenCycle: true,
+                  artifactRoomDirtyByArtifactRoomId,
+                });
+              },
+              onPermissionChanged: (permissionRole) => {
+                if (disposed || generation !== streamGeneration) return;
+                if (permissionRole === null) {
+                  clearUnsyncedQueue();
+                  clearAllPendingArtifactRoomUpdates();
+                  replaceHostCoverageDoc(null);
+                  currentRole = null;
+                  set({
+                    permissionRole: null,
+                    accessLost: true,
+                    unsyncedQueueSize: 0,
+                    ...knownCleanDirtyState(),
+                  });
+                  return;
+                }
+
+                const previous = get().permissionRole;
+                if (
+                  previous !== null &&
+                  previous !== "viewer" &&
+                  permissionRole === "viewer"
+                ) {
+                  clearUnsyncedQueue();
+                  clearAllPendingArtifactRoomUpdates();
+                  currentRole = permissionRole;
+                  set({
+                    permissionRole,
+                    unsyncedQueueSize: 0,
+                  });
+                  requestFreshSnapshotImpl?.();
+                  return;
+                }
+
+                currentRole = permissionRole;
+                set({ permissionRole });
+              },
+              onEpicDeleted: (attribution) => {
+                if (disposed || generation !== streamGeneration) return;
+                // Record the remote-delete signal + attribution. The app-level
+                // access coordinator observes this and force-closes the tab
+                // (redirecting an active tab to landing); no further local work
+                // is needed here.
+                set({ epicDeleted: attribution });
+              },
+              onMigrationStarted: () => {
+                if (disposed || generation !== streamGeneration) return;
+                // First tick of a migration. Snap the slice into the running
+                // shape with placeholder counts so the modal can render the
+                // Prepare row immediately - the host will follow up with a
+                // `migrationProgress(prepare, 0, 1)` frame right away.
+                set({
+                  migration: {
+                    status: "running",
+                    phase: "prepare",
+                    chunksDone: 0,
+                    chunksTotal: 1,
+                  },
+                });
+              },
+              onMigrationProgress: (phase, chunksDone, chunksTotal) => {
+                if (disposed || generation !== streamGeneration) return;
+                set({
+                  migration: {
+                    status: "running",
+                    phase,
+                    chunksDone,
+                    chunksTotal: chunksTotal > 0 ? chunksTotal : 1,
+                  },
+                });
+              },
+              onMigrationFailed: (reason) => {
+                if (disposed || generation !== streamGeneration) return;
+                // Host kept the WS alive so the modal's Retry button can fire
+                // `retryMigration` in-stream. Log the `reason` so support can
+                // diagnose failed migrations from a renderer console dump even
+                // when the host log is unavailable; the modal copy itself is
+                // fixed and never displays this string.
+                appLogger.warn(
+                  "[epic-migration] host reported migrationFailed",
+                  {
+                    epicId,
+                    reason,
+                  },
+                );
                 set({
                   migration: ERROR_MIGRATION_SLICE,
                 });
-                return;
-              }
-              if (isFatalClose(status, reason)) {
-                const { details } = reason;
-                if (isUnavailableFatal(details)) {
+              },
+              onMigrationNotAllowed: () => {
+                if (disposed || generation !== streamGeneration) return;
+                // The epic needs a major migration this caller may not perform
+                // (viewer / sub-editor). The host did not start one and there is
+                // nothing to retry, so this is a distinct terminal state from
+                // `error`: the modal shows a fixed "ask an owner/editor" message.
+                set({
+                  migration: NOT_ALLOWED_MIGRATION_SLICE,
+                });
+              },
+              onCloudSyncStatus: (status) => {
+                if (disposed || generation !== streamGeneration) return;
+                const previousCloudSyncStatus = cloudSyncStatus;
+                cloudSyncStatus = status;
+                hasFreshCloudSyncStatus = true;
+                if (
+                  hasConnectedOnce &&
+                  previousCloudSyncStatus !== "connected" &&
+                  status === "connected"
+                ) {
+                  // Wake-recovery latency marker: the host<->cloud link is back
+                  // online. Paired with the `[stream] reconnectAll` log, the gap
+                  // between them is the measured time-to-online after wake (the
+                  // gate the plan tracks on a real device). `warn` is the only
+                  // info-ish console level this workspace's lint permits.
+                  // `hasConnectedOnce` keeps this to genuine RE-connections (wake)
+                  // - not the first connect or a `requestFreshSnapshot` re-open,
+                  // which would pollute the trace.
+                  appLogger.debug("[epic-stream] cloud sync connected", {
+                    epicId,
+                  });
+                }
+                // A genuine cloud "connected" frame is the ONLY thing that latches
+                // "connected once" - never the optimistic default - so a new
+                // room's pre-connect catch-up reads as the bootstrap "connecting"
+                // while a drop AFTER a real connect reads as "reconnecting".
+                if (status === "connected") hasConnectedOnce = true;
+                syncCurrentConnectionStatus();
+                set(connectionStateSlice());
+                flushPendingWritesAfterReconnect(client);
+              },
+              onConnectionStatus: (status, reason) => {
+                if (disposed || generation !== streamGeneration) return;
+                const previousTransportStatus = transportStatus;
+                transportStatus = status;
+                const startedSubscriptionCycle =
+                  previousTransportStatus !== "open" && status === "open";
+                if (
+                  hasConnectedOnce &&
+                  previousTransportStatus !== "open" &&
+                  status === "open"
+                ) {
+                  // Wake-recovery sub-marker: the renderer<->host stream
+                  // re-subscribed, so the host has the live request context
+                  // again. The gap from here to `[epic-stream] cloud sync
+                  // connected` isolates the host<->cloud recovery latency.
+                  // `warn` is the only info-ish console level lint permits here.
+                  // Gated on `hasConnectedOnce` so it marks only RE-connections
+                  // (wake), not the initial connect or a fresh-snapshot re-open.
+                  appLogger.debug("[epic-stream] transport open", {
+                    epicId,
+                    contextRegistered: true,
+                  });
+                }
+                const cycleDurabilityState = startedSubscriptionCycle
+                  ? resetDurabilityProofForOpenCycle()
+                  : null;
+                const nextStatus = syncCurrentConnectionStatus();
+                hasFreshRootSnapshotForOpenCycle = false;
+                set(
+                  cycleDurabilityState === null
+                    ? connectionStateSlice()
+                    : {
+                        ...cycleDurabilityState,
+                        ...connectionStateSlice(),
+                      },
+                );
+                // Convert a fatal close into the modal's error state, but only
+                // when a migration had actually started - a fatal close before
+                // any `migrationStarted` is a normal connection error owned by
+                // `snapshotFetchError`, not the migration modal. UNAUTHORIZED
+                // also bypasses the modal so the auth/unavailable handlers
+                // below can still recover the session; leaving the user pinned
+                // on a migration-error modal after a token expiry would block
+                // re-auth entirely.
+                if (
+                  isFatalMigrationClose(status, reason, get().migration.status)
+                ) {
+                  // Convert the fatal close into the modal's error state and
+                  // return - letting control fall through would ALSO populate
+                  // `snapshotFetchError` from the same fatalError, surfacing
+                  // two redundant failure UIs (migration modal AND the snapshot
+                  // empty-state) for one underlying cause. The migration
+                  // modal's Retry/Close already covers recovery; Close routes
+                  // the user away cleanly.
+                  set({
+                    migration: ERROR_MIGRATION_SLICE,
+                  });
+                  return;
+                }
+                if (isFatalClose(status, reason)) {
+                  const { details } = reason;
+                  if (isUnavailableFatal(details)) {
+                    set({
+                      snapshotFetchError: snapshotFetchErrorFrom(details),
+                    });
+                    return;
+                  }
+                  if (details.code === "UNAUTHORIZED") {
+                    // The stream owns UNAUTHORIZED recovery now: it stays
+                    // "reconnecting" and self-revalidates, so a terminal
+                    // closed/UNAUTHORIZED means it GAVE UP - the credential was
+                    // rejected (the stream's revalidator already signed out) or
+                    // the host kept rejecting a still-valid bearer (reload
+                    // required). Surface the error so the user isn't stranded on a
+                    // silent "closed"; keep the revalidate as the sign-out
+                    // cascade's net (single-flight, a no-op once already settled).
+                    set({
+                      snapshotFetchError: snapshotFetchErrorFrom(details),
+                    });
+                    options.onAuthError?.();
+                    return;
+                  }
                   set({ snapshotFetchError: snapshotFetchErrorFrom(details) });
                   return;
                 }
-                if (details.code === "UNAUTHORIZED") {
-                  // The stream owns UNAUTHORIZED recovery now: it stays
-                  // "reconnecting" and self-revalidates, so a terminal
-                  // closed/UNAUTHORIZED means it GAVE UP - the credential was
-                  // rejected (the stream's revalidator already signed out) or
-                  // the host kept rejecting a still-valid bearer (reload
-                  // required). Surface the error so the user isn't stranded on a
-                  // silent "closed"; keep the revalidate as the sign-out
-                  // cascade's net (single-flight, a no-op once already settled).
-                  set({ snapshotFetchError: snapshotFetchErrorFrom(details) });
-                  options.onAuthError?.();
-                  return;
-                }
-                set({ snapshotFetchError: snapshotFetchErrorFrom(details) });
-                return;
-              }
-              if (nextStatus !== "open") return;
-              emitCurrentAwareness(awareness, doc, client);
+                if (nextStatus !== "open") return;
+                emitCurrentAwareness(awareness, doc, client);
+              },
             },
-          });
+            readSeedOffer,
+          );
           streamClient = client;
         };
 

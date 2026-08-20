@@ -97,6 +97,10 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     // tested against it took branches they never take in the app.
     status: host === null ? "unreachable" : "following",
     client: null,
+    // False by default for the same reason `client` is null: a suite about
+    // the fallback lane must say so explicitly, and every other suite keeps
+    // the plain-RPC branches production takes on a current host.
+    localMaintenanceFallback: false,
     setHostId: () => undefined,
     makeActive: () => undefined,
     isActivating: false,

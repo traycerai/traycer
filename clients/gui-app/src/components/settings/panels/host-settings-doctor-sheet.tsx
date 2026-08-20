@@ -28,7 +28,11 @@ import type { HostRpcRegistry } from "@/lib/host";
  * this computer's diagnostics under another host's name.
  */
 export type DoctorSheetSource =
-  | { readonly kind: "bridge" }
+  | {
+      readonly kind: "bridge";
+      /** This machine's host id, fencing the console's own bridge calls. */
+      readonly expectedHostId: string;
+    }
   | {
       readonly kind: "rpc";
       readonly client: HostClient<HostRpcRegistry> | null;
@@ -36,6 +40,31 @@ export type DoctorSheetSource =
       readonly isLocalMachine: boolean;
       readonly hasLocalBridge: boolean;
       readonly degrade: OverviewDegradeReason | null;
+      /**
+       * Whether `host.restart` is servable for this host — the capability
+       * itself, so `false` for ANY host whose handshake refused it, remote
+       * ones included. Routing on refusal is `bridgeRestartRoute`'s job.
+       */
+      readonly rpcRestartSupported: boolean;
+      /**
+       * Whether a refused `host.restart` has the page's bridge respawn to
+       * stand in — the SAME derived fact the restart confirm's dispatch leg
+       * branches on, threaded so the card cannot route to a confirm whose
+       * dispatch would disagree. `false` with `rpcRestartSupported` false
+       * means no route at all: the fix degrades to its terminal command.
+       */
+      readonly bridgeRestartRoute: boolean;
+      /** Opens the page's restart confirm, whose confirm dispatches the
+       * bridge respawn — never a direct dispatch, the respawn always forces. */
+      readonly onBridgeRestart: () => void;
+      /** True while that restart write is in flight. */
+      readonly bridgeRestartPending: boolean;
+      /** Whether `diagnostics.logs.tail` is servable for this host. */
+      readonly rpcLogsSupported: boolean;
+      /** Reads this machine's host log over the CLI bridge. */
+      readonly onBridgeLogs: () => Promise<readonly string[]>;
+      /** True while that bridge read is in flight. */
+      readonly bridgeLogsPending: boolean;
       /** Runs a local-only repair on this computer via the CLI bridge. */
       readonly onLocalFix: (issue: HostDoctorIssue) => void;
       readonly localFixPendingCode: string | null;
@@ -89,6 +118,7 @@ function DoctorSheetBody(props: {
   if (source.kind === "bridge") {
     return (
       <HostDoctorCard
+        expectedHostId={source.expectedHostId}
         recurrenceState={props.recurrence}
         onRecurrenceChange={props.onRecurrenceChange}
       />
@@ -101,6 +131,13 @@ function DoctorSheetBody(props: {
       isLocalMachine={source.isLocalMachine}
       hasLocalBridge={source.hasLocalBridge}
       degrade={source.degrade}
+      rpcRestartSupported={source.rpcRestartSupported}
+      bridgeRestartRoute={source.bridgeRestartRoute}
+      onBridgeRestart={source.onBridgeRestart}
+      bridgeRestartPending={source.bridgeRestartPending}
+      rpcLogsSupported={source.rpcLogsSupported}
+      onBridgeLogs={source.onBridgeLogs}
+      bridgeLogsPending={source.bridgeLogsPending}
       onLocalFix={source.onLocalFix}
       localFixPendingCode={source.localFixPendingCode}
     />

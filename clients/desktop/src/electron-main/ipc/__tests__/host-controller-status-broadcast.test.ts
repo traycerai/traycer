@@ -59,6 +59,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
   >();
   let statusReads = 0;
   const base: FakeHostController = {
+    lifecycleAdmissionBlock: null,
     status: fakeStatus(null),
     getStatusError: null,
     getStatusCallCount(): number {

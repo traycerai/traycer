@@ -25,6 +25,7 @@ import type {
   ApplyStagedTrigger,
   ConvergeReadyOk,
   HostControllerStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
@@ -247,6 +248,7 @@ const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
 class FakeHostController implements IpcHostController {
   respawnCalls = 0;
 
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   async getStatus(): Promise<HostControllerStatus> {
     return FAKE_HOST_CONTROLLER_STATUS;
   }
@@ -764,7 +766,19 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerServiceDeregister,
         RunnerHostInvoke.traycerRegistryCheck,
         RunnerHostInvoke.traycerFreePortAndRestart,
+        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
         RunnerHostInvoke.traycerCliManifestRead,
+        // The maintenance-RPC projections the GUI's local fallback serves
+        // when a local host too old for the v1.2.0 `host.*` maintenance
+        // family negotiated it away. Registered by the same
+        // `registerHostManagementIpc` call as the block above.
+        RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+        RunnerHostInvoke.traycerMaintenanceDoctor,
+        RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+        RunnerHostInvoke.traycerMaintenanceInstallVersion,
+        RunnerHostInvoke.traycerHostRestartIfIdle,
+        RunnerHostInvoke.traycerDoctorRepairQueued,
+        RunnerHostInvoke.traycerDoctorRepairIfIdle,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
         // which is now invoked from `RunnerIpcBridge.install()` rather than
         // wired by the host. They cover recent docs, window effects, GPU,

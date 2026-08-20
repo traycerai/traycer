@@ -399,7 +399,10 @@ export function ChatTile(props: ChatTileProps) {
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
-  // costs no extra host RPC.
+  // costs no extra host RPC. The provider is handed `tabHostId` alongside it
+  // because this list is evidence about a profile only for anchors minted on
+  // THIS host - an anchor a fork carried from another machine names a
+  // profile id that is host-local there and can never match here.
   const providersList = useTabProvidersList({
     enabled: true,
     subscribed: false,
@@ -476,6 +479,7 @@ export function ChatTile(props: ChatTileProps) {
       {deadTileBanner}
       <TombstonedProfileProvider
         providers={providersList.data?.providers ?? []}
+        hostId={tabHostId}
       >
         <ChatTileSessionView
           handle={handle}

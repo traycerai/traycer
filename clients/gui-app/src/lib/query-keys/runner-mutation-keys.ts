@@ -47,6 +47,10 @@ export const runnerMutationKeys = {
   hostConvergeReady: () => ["runner.host.convergeReady"] as const,
   hostApplyStaged: () => ["runner.host.applyStaged"] as const,
   hostActivateInstalled: () => ["runner.host.activateInstalled"] as const,
+  // On-demand bridge read of this machine's host log, for a Doctor report on a
+  // host with no `diagnostics.*` family to ask. Mutation-shaped like the RPC
+  // card's own logs read: it is a button, not a subscription.
+  hostDoctorBridgeLogs: () => ["runner.host.doctorBridgeLogs"] as const,
   hostRestart: () => ["runner.host.restart"] as const,
   hostRegisterService: () => ["runner.host.registerService"] as const,
   hostDeregisterService: () => ["runner.host.deregisterService"] as const,
@@ -208,8 +212,13 @@ export const runnerQueryKeys = {
     ["runner.host.installedRecord", "unavailable"] as const,
   hostLogs: (management: object, tailLines: number) =>
     ["runner.host.logs", management, tailLines] as const,
-  hostDoctor: (management: object) =>
-    ["runner.host.doctor", management] as const,
+  // Keyed on the HOST ID as well, unlike its neighbours. The `management`
+  // segment hashes to `{}` (see the note above) and the bridge is app-wide, so
+  // it survives a local host replacement — a report cached for host A would
+  // otherwise be served to host B's console, and this report's issues carry
+  // the port/pid numbers its repairs act on. A primitive is what discriminates.
+  hostDoctor: (management: object, expectedHostId: string) =>
+    ["runner.host.doctor", management, expectedHostId] as const,
   hostCliManifest: (management: object) =>
     ["runner.host.cliManifest", management] as const,
   // Same no-bridge placeholder contract as `hostInstalledRecordUnavailable`.

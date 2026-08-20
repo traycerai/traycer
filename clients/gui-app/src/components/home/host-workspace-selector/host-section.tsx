@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
-import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
+import {
+  HostSwitcher,
+  type HostSwitcherSurface,
+} from "@/components/settings/host-scope/host-switcher";
 import {
   findHostOption,
   type HostScopeOption,
@@ -51,6 +54,46 @@ interface HostSectionProps {
   readonly onRetryLists: () => void;
 }
 
+interface WorkspaceHostSwitcherProps extends HostSectionProps {
+  readonly surface: Extract<HostSwitcherSurface, "field" | "inline">;
+  readonly keepFocusableWhenDisabled?: boolean;
+}
+
+export function WorkspaceHostSwitcher(
+  props: WorkspaceHostSwitcherProps,
+): ReactNode {
+  const { openSettings } = useSystemTabModalActions();
+  useRegisteredHostsPollLiveness();
+  return (
+    <HostSwitcher
+      hosts={props.hosts}
+      selected={findHostOption(props.hosts, props.activeHostId)}
+      activeHostId={props.activeHostId}
+      onSelect={props.onSelect}
+      refusalByHostId={props.refusalByHostId}
+      inertExceptHostId={props.inertExceptHostId}
+      intent={props.intent}
+      action={{
+        kind: "manage-hosts",
+        onSelect: () => {
+          if (props.activeHostId !== null) {
+            useSettingsHostScopeStore
+              .getState()
+              .setScopedHostId(props.activeHostId);
+          }
+          openSettings({ section: "host", resetToGeneral: false });
+        },
+      }}
+      surface={props.surface}
+      isLoading={props.isLoading}
+      listsFailed={props.listsFailed}
+      onRetryLists={props.onRetryLists}
+      disabled={props.disabled}
+      keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
+    />
+  );
+}
+
 /**
  * Host block for the workspace/worktree picker surfaces (composer, git-diff
  * panel, terminal creation, file tree, the fork dialogs). What a click
@@ -66,14 +109,6 @@ interface HostSectionProps {
  * pairs with "Workspaces" below it.
  */
 export function HostSection(props: HostSectionProps): ReactNode {
-  const { openSettings } = useSystemTabModalActions();
-  // The rows' presence dots come from the registry through a deliberately
-  // NON-polling observer; every surface that shows the dots opts the window
-  // into the liveness poll while it is on screen (the Settings sidebar's
-  // rule, then the usage picker's and the shell host dialog's). This section
-  // mounts only inside open pickers and fork dialogs, so the poll runs
-  // exactly while someone is looking at the dots.
-  useRegisteredHostsPollLiveness();
   return (
     <section
       data-testid="host-workspace-selector-host-section"
@@ -82,43 +117,7 @@ export function HostSection(props: HostSectionProps): ReactNode {
       <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
         Host
       </DropdownMenuLabel>
-      <HostSwitcher
-        hosts={props.hosts}
-        // Here the check and the active host are the same fact: this picker
-        // chooses where work LANDS, so the row it marks is the bound one.
-        selected={findHostOption(props.hosts, props.activeHostId)}
-        activeHostId={props.activeHostId}
-        onSelect={props.onSelect}
-        refusalByHostId={props.refusalByHostId}
-        inertExceptHostId={props.inertExceptHostId}
-        // Undialable rows list with their reason and stay inert (`bind` and
-        // `pin` share that gate). The composer still binds the window.
-        intent={props.intent}
-        action={{
-          kind: "manage-hosts",
-          onSelect: () => {
-            // The host this surface is SHOWING travels with the jump - same
-            // transfer as the usage popover's cross-scope links. Without it,
-            // a stale explicit Settings pin lands Manage hosts on a machine
-            // other than the one whose row launched it. In a fixed-scope
-            // dialog `activeHostId` IS the pinned host, so the transfer is
-            // right there too.
-            if (props.activeHostId !== null) {
-              useSettingsHostScopeStore
-                .getState()
-                .setScopedHostId(props.activeHostId);
-            }
-            openSettings({ section: "host", resetToGeneral: false });
-          },
-        }}
-        // A field, like the workspace search directly beneath it: inside an
-        // already-open panel a quiet fill does not read as a control at all.
-        surface="field"
-        isLoading={props.isLoading}
-        listsFailed={props.listsFailed}
-        onRetryLists={props.onRetryLists}
-        disabled={props.disabled}
-      />
+      <WorkspaceHostSwitcher {...props} surface="field" />
     </section>
   );
 }

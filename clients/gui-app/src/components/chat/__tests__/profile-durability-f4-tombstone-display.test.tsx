@@ -139,7 +139,10 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
 
 function renderTombstoned(labelSnapshot: string) {
   return render(
-    <TombstonedProfileProvider providers={[claudeStateWithoutProfile()]}>
+    <TombstonedProfileProvider
+      providers={[claudeStateWithoutProfile()]}
+      hostId="host-1"
+    >
       <ChatExpansionTestProviders tileInstanceId="tombstone-f4-tile">
         <TooltipProvider>
           <UserMessageBody

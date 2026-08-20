@@ -64,6 +64,11 @@ vi.mock("../platforms/windows", () => ({
   describeSlotLockHolders: mocks.describeSlotLockHoldersMock,
 }));
 
+// Deliberately NOT mocked: `../cli-invocation-shape`. The self-naming
+// predicate under test in the preserve-path suite below must run for real -
+// mocking it would make those tests assert nothing about the actual
+// drop/preserve decision.
+
 const label: ServiceLabel = {
   id: "ai.traycer.host",
   displayName: "Traycer Host",
@@ -159,6 +164,31 @@ async function runLifecycle(
   await handle.lifecycle.beforeSwap();
   await handle.lifecycle.afterSwap();
   return { state: handle.state, harness };
+}
+
+// Async-capable counterpart to the sync `withPlatform` helper further down
+// this file (scoped to the "swap-lock recovery wiring" describe block,
+// unchanged). The preserve-path tests below need `process.platform` pinned
+// across `await`s spanning `beforeSwap`/`afterSwap` - `it.runIf(process
+// .platform === "darwin")` would silently never run on Linux CI, which is
+// exactly the gap this stub closes.
+async function withPlatformAsync<T>(
+  platform: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  if (original === undefined) {
+    throw new Error("process.platform descriptor missing");
+  }
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
 }
 
 describe("service install lifecycle re-registration", () => {
@@ -564,6 +594,62 @@ describe("service install lifecycle re-registration", () => {
       expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
     },
   );
+
+  // Preserve-path coverage for the self-naming drop (isSelfNamingCliInvocation
+  // is NOT mocked in this suite - see the module comment near the top of this
+  // file). Platform is stubbed rather than `it.runIf`-gated so this actually
+  // runs on Linux CI, not just real darwin hosts.
+  it("drops a registered self-naming invocation instead of preserving it, re-resolving via resolveServiceCliInvocation", async () => {
+    // The pre-fix packaged fallback registered `<SEA> traycer host start` -
+    // a shape that can never launch (`error: unknown command 'traycer'`).
+    // `isSelfNamingCliInvocation` recognizes this, so host update must fall
+    // through to normal resolution rather than preserving a broken unit.
+    const brokenSelfNaming = {
+      command: "/usr/local/bin/traycer",
+      args: ["traycer"],
+    };
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(brokenSelfNaming);
+    const resolvedCli = {
+      command: "/Users/example/.traycer/cli/bin/traycer",
+      args: [] as string[],
+    };
+    mocks.resolveServiceCliInvocationMock.mockResolvedValue(resolvedCli);
+
+    const { state, harness } = await withPlatformAsync("darwin", () =>
+      runLifecycle("running", null, false),
+    );
+
+    expect(state.postSwapAction).toBe("install");
+    expect(state.postSwapError).toBeNull();
+    expect(mocks.resolveServiceCliInvocationMock).toHaveBeenCalledWith({
+      environment: "production",
+      override: null,
+      allowSelfInvocation: true,
+    });
+    expect(harness.install).toHaveBeenCalledWith({
+      label,
+      cli: resolvedCli,
+      enableLinger: false,
+    });
+  });
+
+  it("still preserves a legitimate registered invocation (no leading args) verbatim without consulting the resolver", async () => {
+    const legitimate = { command: "/opt/homebrew/bin/traycer", args: [] };
+    mocks.readRegisteredCliInvocationMock.mockResolvedValue(legitimate);
+
+    const { state, harness } = await withPlatformAsync("darwin", () =>
+      runLifecycle("running", null, false),
+    );
+
+    expect(state.postSwapAction).toBe("install");
+    expect(state.postSwapError).toBeNull();
+    expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
+    expect(harness.install).toHaveBeenCalledWith({
+      label,
+      cli: legitimate,
+      enableLinger: false,
+    });
+  });
 
   it("manifest-based existing-registration reload still uses install, not kickstart", async () => {
     // Explicit bootstrap (host install / orchestrator) with a staged CLI
