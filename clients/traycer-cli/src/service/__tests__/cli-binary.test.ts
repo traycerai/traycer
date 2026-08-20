@@ -520,12 +520,15 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  // No `node` reachable anywhere on PATH: the PATH scan comes back empty,
-  // `npmInterpreterInvocation` returns null, and the CALLER's own fallback
-  // (not a second helper) registers the bare bundle path with empty args -
-  // exactly as functional (or as broken) as running over a shell whose PATH
-  // has no `node` on it at all.
-  it("falls back to the bundle path with empty args when source is npm and no node executable exists anywhere on PATH", async () => {
+  // No `node` reachable anywhere on PATH: the scan comes back empty,
+  // `npmInterpreterInvocation` returns null, and the caller REFUSES rather
+  // than registering the bare bundle. Registering it would not be a
+  // best-effort guess - the service would re-run this very lookup through
+  // the shebang's `/usr/bin/env node`, against the service manager's PATH
+  // rather than this one, and Windows cannot execute a .js at all. A unit
+  // that installs cleanly and then never launches is worse than an error,
+  // because nothing downstream rewrites it.
+  it("refuses to register when source is npm and no node executable exists anywhere on PATH", async () => {
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
     const { writeCliManifest } = await import("../../manifest/cli-manifest");
@@ -540,15 +543,15 @@ describe("resolveServiceCliInvocation", () => {
     try {
       const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-      const result = await withPath(emptyPathDir, () =>
-        resolveServiceCliInvocation({
-          environment: ENVIRONMENT,
-          override: null,
-          allowSelfInvocation: false,
-        }),
-      );
-
-      expect(result).toEqual({ command: binaryPath, args: [] });
+      await expect(
+        withPath(emptyPathDir, () =>
+          resolveServiceCliInvocation({
+            environment: ENVIRONMENT,
+            override: null,
+            allowSelfInvocation: false,
+          }),
+        ),
+      ).rejects.toThrow(/no 'node' was found on PATH/);
     } finally {
       rmSync(emptyPathDir, { recursive: true, force: true });
     }

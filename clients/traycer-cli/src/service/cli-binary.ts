@@ -126,12 +126,29 @@ export async function resolveServiceCliInvocation(
     // goes false for every source and this falls through to the staging
     // below with everything else.
     if (isInterpreterDistribution(manifest.source)) {
-      return (
-        (await npmInterpreterInvocation(manifest)) ?? {
-          command: manifest.binaryPath,
-          args: [],
-        }
-      );
+      const interpreted = await npmInterpreterInvocation(manifest);
+      if (interpreted !== null) return interpreted;
+      // Refusing beats registering the bare script. With no interpreter
+      // found anywhere, `<bundle> host start` is not a command that might
+      // work - it is one we know cannot: POSIX would re-run the same failed
+      // lookup through the shebang's `/usr/bin/env node`, against the
+      // SERVICE manager's PATH rather than this richer one, and Windows
+      // cannot execute a .js at all. A unit that reports "installed" and
+      // then never launches is strictly worse than an error naming the
+      // reason, because nothing downstream ever rewrites it.
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+        message:
+          `service install: this CLI is recorded as an npm install, which ships a Node script rather than an executable, and no 'node' was found on PATH to pin into the service definition. ` +
+          `Registering ${manifest.binaryPath} directly would leave the service resolving 'node' off the service manager's PATH, which is the failure this refuses to create. ` +
+          `Put 'node' on PATH, or re-run this from the npm-installed CLI itself so its own interpreter can be recorded.`,
+        details: {
+          binaryPath: manifest.binaryPath,
+          source: manifest.source,
+          environment: opts.environment,
+        },
+        exitCode: 1,
+      });
     }
     return stagedSlotInvocation(opts.environment, manifest.binaryPath);
   }
@@ -254,8 +271,9 @@ async function stagedSlotInvocation(
 //      shebang would select for this user, and an absolute path is exactly
 //      what the service manager cannot work out for itself.
 //
-// Null only when neither is available, leaving the caller its direct-script
-// fallback. Superseded once npm ships per-platform SEA binaries.
+// Null only when neither is available, which the caller turns into a refusal
+// rather than a direct-script registration - there is no third option that
+// launches. Superseded once npm ships per-platform SEA binaries.
 async function npmInterpreterInvocation(manifest: {
   readonly binaryPath: string;
   readonly source: string;

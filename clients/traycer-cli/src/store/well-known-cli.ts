@@ -3,6 +3,7 @@ import type { Stats } from "node:fs";
 import {
   chmod,
   copyFile,
+  lstat,
   mkdir,
   readdir,
   rename,
@@ -17,6 +18,7 @@ import {
   type CliInstallSource,
 } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
+import { withCliLock } from "./cli-lock";
 import { cliInstallHomeDir, ensureCliInstallHomeDir } from "./paths";
 
 // The well-known per-environment CLI binary location,
@@ -127,24 +129,87 @@ export async function isPackagedRun(): Promise<boolean> {
 // after the filesystem problem cleared. The manifest is the only witness
 // that the slot is wrong, so it is consulted first; the cost is one small
 // JSON read per packaged startup.
+//
+// The decision is taken TWICE: once unlocked to answer "is there anything to
+// do at all", and again under the CLI lock to answer "is it still true".
+//
+// Only the second one may act. Copying a ~100 MB binary takes seconds, and a
+// package-manager hook re-anchoring the install in that window writes its
+// manifest and stages its own binary through `writeMarkSource`, which holds
+// this same lock. Without it the slower copy publishes last and leaves the
+// slot on the binary the manifest no longer names - not permanently, since
+// the next refresh sees the mismatch, but silently until then.
+//
+// The lock is taken with `waitMs: 0`, never a wait. This runs on every
+// packaged command, so blocking startup behind another process's staging
+// would be a far worse bug than the one it fixes; contention means some
+// other writer is already staging this slot, which is precisely when doing
+// nothing is right. A skipped refresh is retried by the next command.
 export async function refreshWellKnownSlotIfStale(
   environment: Environment,
 ): Promise<WellKnownCliStageOutcome | null> {
   if (!(await isPackagedRun())) return null;
   const wellKnownPath = wellKnownCliBinaryPath(environment);
-  const source = await authoritativeSlotSource(
-    environment,
-    resolve(process.execPath),
-  );
+  const running = resolve(process.execPath);
+  // Cheap unlocked pre-check, so the common "nothing changed" path never
+  // touches the lock file at all.
+  if (
+    (await pendingRefreshSource(environment, wellKnownPath, running)) === null
+  ) {
+    return null;
+  }
+  try {
+    return await withCliLock(
+      {
+        environment,
+        reason: "refresh-well-known-slot",
+        waitMs: 0,
+        pollIntervalMs: 100,
+      },
+      async () => {
+        const source = await pendingRefreshSource(
+          environment,
+          wellKnownPath,
+          running,
+        );
+        if (source === null) return null;
+        // A slot that is absent, dangling, or holding something else is
+        // repaired here rather than left for the next registration: the
+        // service and the host daemon both launch from this path, so on an
+        // already-registered machine "no slot" is a broken machine, not a
+        // clean one.
+        return stageWellKnownCliBinary({ environment, binaryPath: source });
+      },
+    );
+  } catch {
+    // Lock busy is the expected outcome under contention, not an error worth
+    // surfacing - and this whole refresh is best-effort besides.
+    return null;
+  }
+}
+
+// The binary the slot should be staged from, or null when it is already
+// correct (or when nothing can be said about what correct means).
+async function pendingRefreshSource(
+  environment: Environment,
+  wellKnownPath: string,
+  running: string,
+): Promise<string | null> {
+  const source = await authoritativeSlotSource(environment, running);
   if (source === null) return null;
   if (resolve(wellKnownPath) === source) return null;
-  const slotStat = await statOrNull(wellKnownPath);
-  if (slotStat !== null && (await mirrors(slotStat, source))) return null;
-  // A slot that is absent, dangling, or holding something else is repaired
-  // here rather than left for the next registration: the service and the
-  // host daemon both launch from this path, so on an already-registered
-  // machine "no slot" is a broken machine, not a clean one.
-  return stageWellKnownCliBinary({ environment, binaryPath: source });
+  // `lstat`, not `stat`, and the difference is load-bearing. A slot left as
+  // a SYMLINK by an older Desktop is the failure mode copy-not-symlink was
+  // adopted to end: `stat` would follow it to the authoritative source and
+  // `mirrors` would compare that source against itself, report a faithful
+  // copy, and leave the link in place forever - until the package manager
+  // moved its target and the slot began dangling, taking the registered
+  // service and host-side CLI discovery down with it. A symlink is
+  // therefore never "already fresh"; it is always restaged into a real
+  // file.
+  const slotStat = await lstatOrNull(wellKnownPath);
+  if (slotStat === null || slotStat.isSymbolicLink()) return source;
+  return (await mirrors(slotStat, source)) ? null : source;
 }
 
 // Which binary the slot SHOULD hold. The manifest wins when it names an
@@ -158,9 +223,17 @@ async function authoritativeSlotSource(
   try {
     manifest = await readCliManifest(environment);
   } catch {
-    // A malformed manifest is this helper's problem to survive, not to
-    // report - the commands that own the manifest already diagnose it.
-    return running;
+    // Unreadable is NOT the same as absent, and must not fall back to the
+    // running binary. `readCliManifest` returns null for a genuinely absent
+    // manifest and throws only for a corrupt one or a real I/O fault
+    // (EACCES, EIO). In the fault case the manifest may well name another
+    // installation, so treating whichever executable happened to be invoked
+    // as authoritative would let a transient read error repoint the slot -
+    // and with it the registered service - onto a possibly OLDER co-
+    // installed CLI. Nominating nothing leaves the slot exactly as it was,
+    // which is the only safe answer when the authority cannot be consulted.
+    // The commands that own the manifest already diagnose it.
+    return null;
   }
   if (manifest === null) return running;
   if (isInterpreterDistribution(manifest.source)) return null;
@@ -207,6 +280,17 @@ function isSameFile(before: Stats, after: Stats): boolean {
 async function statOrNull(path: string): Promise<Stats | null> {
   try {
     return await stat(path);
+  } catch {
+    return null;
+  }
+}
+
+// Deliberately does NOT follow symlinks - see `pendingRefreshSource` for why
+// the slot has to be inspected as the directory entry it is rather than as
+// whatever it points at.
+async function lstatOrNull(path: string): Promise<Stats | null> {
+  try {
+    return await lstat(path);
   } catch {
     return null;
   }
