@@ -82,6 +82,11 @@ const CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "Hello" }] }],
 };
 
+const SECOND_CONTENT: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph", content: [{ type: "text", text: "World" }] }],
+};
+
 const IMAGE_CONTENT: JsonContent = {
   type: "doc",
   content: [
@@ -1470,6 +1475,74 @@ describe("createChatSessionStore", () => {
       content: CONTENT,
       reason: "Message was not confirmed after reconnect.",
     });
+  });
+
+  // The restoration slot is a single slot, first-writer-wins - the rejection
+  // path documents that rule and states the displacement with an errorNotice.
+  // Two unconfirmed sends crossing one reconnect are the reconciler's version
+  // of the same collision (reachable through the half-open-socket window,
+  // where the composer's disconnect gate is not yet closed), so the second
+  // send must be stated too rather than going quiet.
+  it("states the displaced restoration when two unconfirmed sends cross one reconnect", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const first = harness.sent[0];
+    const second = harness.sent[1];
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    // First writer keeps the slot: it has waited longest, so last-wins would
+    // bury it instead.
+    expect(state.failedSendRestoration).toEqual({
+      clientActionId: first.clientActionId,
+      content: CONTENT,
+      reason: "Message was not confirmed after reconnect.",
+    });
+    // The displaced send is stated rather than dropped in silence.
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === second.clientActionId,
+      ),
+    ).toEqual([
+      {
+        code: "SEND_NOT_RESTORED",
+        message:
+          "A message was not confirmed after reconnect. Another unsent message is already waiting in the composer, so this one was left in the conversation instead - copy it from there to resend.",
+        severity: "warning",
+        clientActionId: second.clientActionId,
+      },
+    ]);
+    // ...and the statement is worthless if the text went with it: the
+    // displaced send keeps its optimistic transcript row, which is what the
+    // notice tells the user to copy from.
+    expect(
+      state.pendingUserMessages.find(
+        (message) => message.clientActionId === second.clientActionId,
+      )?.content,
+    ).toEqual(SECOND_CONTENT);
   });
 
   it("clears a pending send when reconnect snapshot contains the accepted message", () => {

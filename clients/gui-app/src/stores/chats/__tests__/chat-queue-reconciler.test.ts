@@ -373,6 +373,37 @@ describe("chat-queue-reconciler", () => {
       const result = reconcileSnapshotChange(input);
 
       expect(result.failedSendRestoration).toEqual(existingRestore);
+      // First writer keeps the slot, but the displaced send is stated rather
+      // than dropped in silence - and keeps its pending action and optimistic
+      // row, so the text the notice points at is still on screen.
+      expect(result.errorNotices).toEqual([
+        {
+          code: "SEND_NOT_RESTORED",
+          message:
+            "A message was not confirmed after reconnect. Another unsent message is already waiting in the composer, so this one was left in the conversation instead - copy it from there to resend.",
+          severity: "warning",
+          clientActionId: "action-1",
+        },
+      ]);
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.pendingUserMessages).toHaveLength(1);
+    });
+
+    it("emits no notice when the restoration claims a free slot", () => {
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
+      expect(result.errorNotices).toEqual([]);
     });
 
     it("ignores non-send actions during reconciliation", () => {

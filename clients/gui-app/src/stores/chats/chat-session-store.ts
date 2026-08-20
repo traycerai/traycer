@@ -1266,6 +1266,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
             pendingUserMessages: settled.pendingUserMessages,
             failedSendRestoration: settled.failedSendRestoration,
+            // Statements the reconcile owes the user - today, an unconfirmed
+            // send whose restoration lost the single-slot race. Appended
+            // through the same ring/cap as the rejection path's notice; an
+            // empty delta returns the identical array, so a snapshot with
+            // nothing to say does not touch the slice.
+            errorNotices: pending.errorNotices.reduce(
+              (notices, notice) => appendErrorNotice(notices, notice),
+              state.errorNotices,
+            ),
             restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
             snapshotLoaded: true,
             // Stamped with the CONNECTION, not a per-snapshot counter: a

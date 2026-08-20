@@ -1,4 +1,5 @@
 import type {
+  ChatErrorNotice,
   ChatQueueState,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -48,13 +49,43 @@ export type ReconcileSnapshotInput = {
 /**
  * Output patch for snapshot reconciliation. Contains updated state slices
  * to apply to the store, including the failedSendRestoration field.
+ *
+ * `errorNotices` is a DELTA - only the notices this pass produced, in order -
+ * not the store's ring. The caller appends them onto its own `errorNotices`
+ * (that is where the FIFO cap lives), so an empty delta writes nothing.
  */
 export type ReconcileSnapshotPatch = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
+  readonly errorNotices: ReadonlyArray<ChatErrorNotice>;
 };
+
+/**
+ * The notice for an unconfirmed send whose restoration could not claim the
+ * single `failedSendRestoration` slot. The slot is deliberately first-writer-
+ * wins (the earlier send has waited longest; last-wins would bury it), so a
+ * displacement is expected - what must not be silent is the DISPLACED send.
+ * The rejection ack path already pairs the same rule with an `errorNotice`;
+ * this is that statement for the reconnect path.
+ *
+ * The displaced send keeps its pending action and its optimistic transcript
+ * row, so the text the notice points at is still on screen. Carrying the
+ * `clientActionId` also means the toast layer's per-action dedupe collapses a
+ * re-displacement on a later snapshot into the one statement already made.
+ */
+function displacedRestorationNotice(
+  pending: PendingChatAction,
+): ChatErrorNotice {
+  return {
+    code: "SEND_NOT_RESTORED",
+    message:
+      "A message was not confirmed after reconnect. Another unsent message is already waiting in the composer, so this one was left in the conversation instead - copy it from there to resend.",
+    severity: "warning",
+    clientActionId: pending.clientActionId,
+  };
+}
 
 /**
  * Reconcile pending actions when the queue changes. Transitions pending
@@ -121,6 +152,7 @@ export function reconcileSnapshotChange(
     acceptedActions: {},
     pendingUserMessages: input.pendingUserMessages,
     failedSendRestoration: input.failedSendRestoration,
+    errorNotices: [],
   };
   return Object.values(input.pendingActions).reduce(
     (next, pending): ReconcileSnapshotPatch => {
@@ -152,11 +184,23 @@ export function reconcileSnapshotChange(
           ),
         };
       }
-      if (
-        pending.restoreContent === null ||
-        next.failedSendRestoration !== null
-      ) {
+      // Nothing to restore and nothing lost: the send stays pending and no
+      // statement is owed.
+      if (pending.restoreContent === null) {
         return next;
+      }
+      // The slot is taken by a longer-waiting send. Keep first-writer-wins -
+      // but say so, or this send's restoration is dropped in silence. Its
+      // pending action and optimistic row deliberately stay put, so the text
+      // remains on screen for the notice to point at.
+      if (next.failedSendRestoration !== null) {
+        return {
+          ...next,
+          errorNotices: [
+            ...next.errorNotices,
+            displacedRestorationNotice(pending),
+          ],
+        };
       }
       return {
         ...next,
