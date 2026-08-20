@@ -144,11 +144,23 @@ afterEach(() => {
   __resetTabNavigationControllerForTesting();
 });
 
+/**
+ * Models the real module's ONE-SHOT semantics: `consumeDesktopRestoredRoute`
+ * nulls `pendingRestoredRoute` as it reads it. A stub that answered the same
+ * route on every call could not tell "the token was spent" from "the token is
+ * still pending", which is exactly the distinction the remount case below is
+ * about.
+ */
 function seedRestoredRoute(route: string | null): void {
+  let pending = route;
   vi.spyOn(
     DesktopTabsPersistence,
     "consumeDesktopRestoredRoute",
-  ).mockReturnValue(route);
+  ).mockImplementation(() => {
+    const value = pending;
+    pending = null;
+    return value;
+  });
 }
 
 describe("TabNavigationRouteBridge restored-route replacement", () => {
@@ -328,6 +340,45 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
     });
 
     expect(testState.replaceCalls).toEqual([]);
+  });
+
+  it("spends the launch route even when the escape hatch wins, so a later remount cannot replay it", () => {
+    // Raised in review (#1328). Declining to APPLY the restored route is not a
+    // reason to leave it PENDING: `pendingRestoredRoute` is cleared only by
+    // `WindowsBridgeProvider`'s cleanup, and that provider outlives auth
+    // changes, while `RootComponent` unmounts and remounts this bridge on
+    // sign-out/sign-in. A stale token surviving that gap gets spent by the
+    // later mount - after the location has lost the marker - and replaces
+    // whatever the user is looking at with an epic from the previous session.
+    seedRestoredRoute("/epics/stale-epic/stale-tab");
+    testState.routerLocation = {
+      pathname: "/settings/host",
+      search: {},
+      searchStr: "",
+      state: { [STARTUP_NAVIGATION_INTENT_KEY]: true },
+    };
+
+    const { unmount } = render(<TabNavigationRouteBridge />);
+    expect(
+      testState.replaceCalls,
+      "the escape hatch outranks the restore on this mount",
+    ).toEqual([]);
+
+    // Sign-out unmounts the bridge; sign-in remounts it. By then the user has
+    // navigated on, so the current location carries no marker.
+    unmount();
+    testState.routerLocation = {
+      pathname: "/epics/current-epic/current-tab",
+      search: {},
+      searchStr: "",
+      state: {},
+    };
+    render(<TabNavigationRouteBridge />);
+
+    expect(
+      testState.replaceCalls,
+      "a spent launch token must not be replayed onto a later session",
+    ).toEqual([]);
   });
 
   it("does not replace at all when nothing was restored", async () => {

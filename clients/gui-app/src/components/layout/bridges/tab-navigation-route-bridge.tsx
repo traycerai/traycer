@@ -111,14 +111,23 @@ export function TabNavigationRouteBridge(): null {
 
   useEffect(() => {
     if (!hydrationReady) return;
-    // Read off the CURRENT location as well as the observed one, so this does
-    // not depend on the subscription having been live when the commit landed.
-    // The marker rides in history state, so a press taken in the gap between
-    // first paint and this bridge's passive effects is still honoured.
+    // SPEND the launch's restored route unconditionally, then decide whether to
+    // apply it. It is a one-shot for THIS launch, and leaving it pending when
+    // the user's intent wins is not inert: only `WindowsBridgeProvider`'s
+    // cleanup clears it, and that provider outlives auth changes, while THIS
+    // bridge is unmounted and remounted by `RootComponent` on sign-out/sign-in.
+    // A later mount - by which point the current location no longer carries the
+    // marker - would then spend the stale token and replace whatever the user
+    // was looking at with an epic from the previous session.
+    const pendingRestoredRoute = consumeDesktopRestoredRoute();
+    // Read the marker off the CURRENT location as well as the observed commit,
+    // so this does not depend on the subscription having been live when the
+    // commit landed. The marker rides in history state, so a press taken in the
+    // gap between first paint and this bridge's passive effects is honoured.
     const startupIntent =
       startupIntentBeforeHydrationRef.current ||
       isStartupNavigationIntent(router.state.location.state);
-    const restoredRoute = startupIntent ? null : consumeDesktopRestoredRoute();
+    const restoredRoute = startupIntent ? null : pendingRestoredRoute;
     if (restoredRoute !== null) {
       // Replace the current persisted entry BEFORE T3's first startup
       // synchronization. The subscription deliberately ignores this one
