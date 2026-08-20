@@ -17,6 +17,7 @@ import {
   resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
+import { useRegisterTileMinimap } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import {
   MinimapListCard,
   type MinimapListEntry,
@@ -31,7 +32,7 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   useSettingsStore,
-  type MinimapSide,
+  type MinimapPlacement,
 } from "@/stores/settings/settings-store";
 
 export interface ChatTurnMinimapProps {
@@ -42,7 +43,8 @@ export interface ChatTurnMinimapProps {
   readonly bottomInset: number;
   readonly inViewRefreshRef: RefObject<() => void>;
   readonly onSelect: (messageId: string) => void;
-  readonly side: MinimapSide;
+  /** `hide` keeps the turn model published for the tile bar, rail and all. */
+  readonly side: MinimapPlacement;
 }
 
 interface ChatTurnMinimapItem extends MinimapListEntry {
@@ -166,9 +168,27 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   }, [bottomInset, refreshCurrent, uiFontSize, viewportRef]);
 
   const visible = items.length > 0;
+  const railHidden = side === "hide";
   const isInert = hitStripWidth === null || hitStripWidth <= 0;
   const resolvedCurrentIndex = clampIndex(currentIndex, items.length);
   const resolvedCursorIndex = clampIndex(cursorIndex, items.length);
+
+  const selectByIndex = useCallback(
+    (index: number): void => {
+      if (index < 0 || index >= items.length) return;
+      onSelect(items[index].messageId);
+    },
+    [items, onSelect],
+  );
+
+  // Published even when the rail is hidden or inert: the phone tile bar's
+  // button is an explicit affordance and is the only way in on a touch device.
+  useRegisterTileMinimap({
+    title: "Messages",
+    items,
+    currentIndex: resolvedCurrentIndex,
+    onSelect: selectByIndex,
+  });
 
   useEffect(() => {
     const region = regionRef.current;
@@ -252,7 +272,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     ],
   );
 
-  if (!visible || isInert) return null;
+  if (railHidden || !visible || isInert) return null;
 
   const window = resolveMinimapWindow({
     currentIndex: resolvedCurrentIndex,

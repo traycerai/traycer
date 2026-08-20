@@ -1,5 +1,5 @@
 import type { Editor } from "@tiptap/core";
-import type { MinimapSide } from "@/stores/settings/settings-store";
+import type { MinimapPlacement } from "@/stores/settings/settings-store";
 import { resolveMinimapVisibleItemCapacity } from "@/components/minimap/minimap-track-geometry";
 import {
   useCallback,
@@ -59,7 +59,8 @@ export function useArtifactHeadingMetrics(input: {
   readonly scroller: HTMLElement | null;
   /** Invoked by the tile's own scroll handler - no second scroll listener. */
   readonly refreshRef: RefObject<() => void>;
-  readonly side: MinimapSide;
+  /** Which gutter to measure. `hide` measures the right one and goes unused. */
+  readonly side: MinimapPlacement;
 }): ArtifactHeadingMetrics {
   const { editor, refreshRef, scroller, side } = input;
   const [outline, setOutline] = useState<

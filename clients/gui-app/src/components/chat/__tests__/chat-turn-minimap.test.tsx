@@ -10,6 +10,9 @@ import {
 import type { RefObject } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
+import { shouldMountChatTurnMinimap } from "@/components/chat/chat-turn-minimap-logic";
+import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
+import { useTileMinimapStore } from "@/stores/tile-minimap";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   DEFAULT_UI_FONT_SIZE,
@@ -108,6 +111,7 @@ afterEach(() => {
   cleanup();
   document.body.replaceChildren();
   useSettingsStore.setState({ uiFontSize: DEFAULT_UI_FONT_SIZE });
+  useTileMinimapStore.setState({ targetsByTileInstanceId: {} });
 });
 
 describe("ChatTurnMinimap", () => {
@@ -270,5 +274,72 @@ describe("ChatTurnMinimap", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("First question");
     expect(rows[1].textContent).toContain("Second question");
+  });
+});
+
+describe("ChatTurnMinimap publication under a hidden rail", () => {
+  it("still registers a navigable outline the phone tile bar can open", async () => {
+    const viewport = document.createElement("div");
+    viewport.getBoundingClientRect = () =>
+      ({ width: 400, height: 600, top: 0, left: 0 }) as DOMRect;
+    document.body.append(viewport);
+    const onSelect = vi.fn<(messageId: string) => void>();
+    render(
+      <TileMinimapScope tileInstanceId="tile-1">
+        <ChatTurnMinimap
+          bottomInset={0}
+          inViewRefreshRef={{ current: () => undefined }}
+          listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
+          messages={makeTranscript(3)}
+          onSelect={onSelect}
+          side="hide"
+          topOffsetAdjustmentRef={{ current: 0 }}
+          viewportRef={{ current: viewport }}
+        />
+      </TileMinimapScope>,
+    );
+    await flushFrame();
+
+    // The rail itself obeys `hide`.
+    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+
+    const adapter =
+      useTileMinimapStore.getState().targetsByTileInstanceId["tile-1"]?.adapter;
+    expect(adapter?.title).toBe("Messages");
+    const items = adapter?.getSnapshot().items ?? [];
+    expect(items.map((item) => item.label)).toEqual([
+      "Question 0",
+      "Question 1",
+      "Question 2",
+    ]);
+
+    adapter?.select(1);
+    expect(onSelect).toHaveBeenCalledWith("message-2");
+  });
+
+  it("only keeps that publication alive on a phone viewport", () => {
+    // Desktop under `hide` unmounts exactly as it did before the button
+    // existed: nothing there reads the outline.
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        side: "hide",
+        mobileViewport: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        side: "hide",
+        mobileViewport: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: false,
+        side: "right",
+        mobileViewport: true,
+      }),
+    ).toBe(false);
   });
 });
