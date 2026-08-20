@@ -97,6 +97,19 @@ export interface WsStreamClientOptions<
    */
   readonly hostCredentialMint: HostCredentialMintFlow | null;
   /**
+   * Observation tap for the `openAck.hostCredentialState` a connected host
+   * reports. Fired on every ack that carries a state (the host must advertise
+   * the provision capability), BEFORE the client acts on it - so an observer
+   * sees `"active"` acks the mint machinery ignores. This is the only
+   * client-visible signal for "did the host adopt the credential": the
+   * provision frame has no receipt by design, and adoption is reported by the
+   * NEXT connection's ack (see `stream-ws-protocol.ts`). `null` for callers
+   * that don't verify provisioning - which is every long-lived surface; a
+   * short-lived provisioning probe (CLI `host install`) is who needs it.
+   */
+  readonly onHostCredentialState:
+    ((hostId: string, state: HostCredentialState) => void) | null;
+  /**
    * Where this transport's observations reach the selection authority.
    *
    * `/stream` is the LOCAL host's long-lived connection - a remote host's
@@ -319,6 +332,20 @@ export class WsStreamClient<
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
       onHostCredentialAck: (hostId, state) => {
+        // Observer first, and guarded: the tap must see the state even when
+        // the mint machinery below declines to act on it, and a throwing
+        // observer must not break the ack processing it merely watches.
+        const observe = this.options.onHostCredentialState;
+        if (observe !== null) {
+          try {
+            observe(hostId, state);
+          } catch (cause) {
+            console.warn(
+              `[stream] host-credential state observer threw (client=${this.instanceId}, host=${hostId})`,
+              cause,
+            );
+          }
+        }
         this.handleHostCredentialAck(hostId, state);
       },
       onAvailabilityRecovered: () => {

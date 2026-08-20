@@ -148,6 +148,8 @@ async function runWorktreeDelete(
       bearer: () => readLeaseBearer(lease),
       diag: (message) => relayStatus(ctx, message),
     }),
+    // Provisioning here is opportunistic; adoption is never verified.
+    onHostCredentialState: null,
     // The CLI has no selection authority to feed: it holds no lease
     // state and never fails a window over.
     evidence: NO_TRANSPORT_EVIDENCE,

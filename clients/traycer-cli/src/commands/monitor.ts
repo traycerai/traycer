@@ -215,6 +215,9 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       bearer: () => readLeaseBearer(lease),
       diag: (message) => diag(message),
     }),
+    // The monitor provisions opportunistically and never verifies adoption -
+    // the next connection's ack settles it.
+    onHostCredentialState: null,
     // The CLI has no selection authority to feed: it holds no lease
     // state and never fails a window over.
     evidence: NO_TRANSPORT_EVIDENCE,
