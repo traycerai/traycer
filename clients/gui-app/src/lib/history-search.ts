@@ -82,6 +82,52 @@ export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
   sortExplicit: false,
 };
 
+const persistedHistorySearchSchema = z.object({
+  query: z.string().optional(),
+  repos: z.array(z.string()).optional(),
+  repoMode: historyMatchModeSchema.optional(),
+  workspaces: z
+    .array(z.object({ hostId: z.string(), workspacePath: z.string() }))
+    .optional(),
+  workspaceMode: historyMatchModeSchema.optional(),
+  chatHosts: z.array(z.string()).optional(),
+  chatHostMode: historyMatchModeSchema.optional(),
+  ownershipScopes: z.array(historyOwnershipSchema).optional(),
+  sort: historySortSchema.optional(),
+  sortExplicit: z.boolean().optional(),
+});
+
+/**
+ * Total over unknown persisted shapes. A stored `search` written by a build
+ * that predates a field addition (e.g. `chatHosts`, #1303) is missing that
+ * field entirely, and zustand's default rehydration merge takes the nested
+ * object verbatim - so every reader of the new field would crash on
+ * `undefined`. Fill absent fields from defaults instead of trusting the
+ * persisted shape to match the current `HistorySearchState`.
+ */
+export function normalizePersistedHistorySearch(
+  value: unknown,
+): HistorySearchState {
+  const parsed = persistedHistorySearchSchema.safeParse(value);
+  if (!parsed.success) return DEFAULT_HISTORY_SEARCH;
+  return {
+    query: parsed.data.query ?? DEFAULT_HISTORY_SEARCH.query,
+    repos: parsed.data.repos ?? DEFAULT_HISTORY_SEARCH.repos,
+    repoMode: parsed.data.repoMode ?? DEFAULT_HISTORY_SEARCH.repoMode,
+    workspaces: parsed.data.workspaces ?? DEFAULT_HISTORY_SEARCH.workspaces,
+    workspaceMode:
+      parsed.data.workspaceMode ?? DEFAULT_HISTORY_SEARCH.workspaceMode,
+    chatHosts: parsed.data.chatHosts ?? DEFAULT_HISTORY_SEARCH.chatHosts,
+    chatHostMode:
+      parsed.data.chatHostMode ?? DEFAULT_HISTORY_SEARCH.chatHostMode,
+    ownershipScopes:
+      parsed.data.ownershipScopes ?? DEFAULT_HISTORY_SEARCH.ownershipScopes,
+    sort: parsed.data.sort ?? DEFAULT_HISTORY_SEARCH.sort,
+    sortExplicit:
+      parsed.data.sortExplicit ?? DEFAULT_HISTORY_SEARCH.sortExplicit,
+  };
+}
+
 export function parseHistorySearch(
   raw: Record<string, unknown>,
 ): HistorySearchState {
