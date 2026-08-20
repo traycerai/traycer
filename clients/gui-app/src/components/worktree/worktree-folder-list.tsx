@@ -108,7 +108,7 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                   }}
                   className={cn(
                     !disabled &&
-                      "cursor-pointer hover:bg-accent/60 hover:text-foreground data-selected:border-transparent data-selected:bg-accent/60 data-selected:text-foreground data-selected:shadow-none",
+                      "cursor-pointer hover:bg-accent/60 hover:text-foreground data-[selected=true]:border-transparent data-[selected=true]:bg-accent/60 data-[selected=true]:text-foreground data-[selected=true]:shadow-none",
                   )}
                 >
                   <div

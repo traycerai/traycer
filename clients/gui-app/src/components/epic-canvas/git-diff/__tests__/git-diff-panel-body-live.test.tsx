@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -19,6 +20,10 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   useWsStreamClient,
   type StreamRuntimeBinding,
@@ -96,17 +101,55 @@ vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
 const observedSubscriptionClients: Array<IHostStreamClient<HostStreamRpcRegistry> | null> =
   [];
 
+// The bindings read is the panel's ONE host call, so it is also the only
+// place a host that cannot answer shows up. `bindingsError` drives that arm;
+// the default stays a resolved, non-empty read so every other test is
+// unaffected.
+//
+// The error's CLASS is load-bearing, not decoration: only
+// `HostTransportFailureError` means the host never answered, and the panel
+// picks a different screen for anything else. Seeding a bare `Error` here
+// would silently exercise the answered-refusal arm while reading like an
+// offline host.
+const bindingsState = vi.hoisted(() => ({
+  error: null as HostRpcError | null,
+  refetch: vi.fn<() => Promise<unknown>>(),
+}));
+
+/** The host never answered - a dial/handshake failure, not a refusal. */
+function transportFailure(message: string): HostTransportFailureError {
+  return new HostTransportFailureError({
+    code: "RPC_ERROR",
+    message,
+    requestId: "req-test",
+    method: "worktree.listBindingsForEpic",
+    fatalDetails: null,
+  });
+}
+
+/** The host answered, and the answer was a refusal. */
+function answeredRefusal(message: string): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message,
+    requestId: "req-test",
+    method: "worktree.listBindingsForEpic",
+    fatalDetails: null,
+  });
+}
+
+function bindingsResult() {
+  return {
+    data: bindingsState.error === null ? { rows: testState.rows } : undefined,
+    error: bindingsState.error,
+    isPending: false,
+    refetch: bindingsState.refetch,
+  };
+}
+
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  useWorktreeListBindingsForEpic: () => ({
-    data: { rows: testState.rows },
-    error: null,
-    isPending: false,
-  }),
-  useWorktreeListBindingsForEpicForClient: () => ({
-    data: { rows: testState.rows },
-    error: null,
-    isPending: false,
-  }),
+  useWorktreeListBindingsForEpic: () => bindingsResult(),
+  useWorktreeListBindingsForEpicForClient: () => bindingsResult(),
 }));
 
 interface PinTestReachability {
@@ -119,7 +162,7 @@ interface PinTestState {
   activeHostId: string | null;
   lastClientHostId: string | null;
   reachability: PinTestReachability;
-  directory: Array<{ readonly hostId: string }>;
+  directory: Array<{ readonly hostId: string; readonly label: string }>;
 }
 
 const pinTestState = vi.hoisted((): PinTestState => ({
@@ -130,7 +173,7 @@ const pinTestState = vi.hoisted((): PinTestState => ({
     hostLabel: "Host One",
     unavailability: null,
   },
-  directory: [{ hostId: "host-1" }],
+  directory: [{ hostId: "host-1", label: "Host One" }],
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -160,6 +203,15 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     pinTestState.lastClientHostId = hostId;
     return null;
   },
+  // The panel resolves the host's DISPLAY NAME through the same module, for
+  // the unreachable state's "Can't reach <host>" line. Mocking the module
+  // replaces all of it, so this member has to exist here or the panel throws
+  // on a hook that is undefined - a failure that would read as a render bug.
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null
+      ? null
+      : (pinTestState.directory.find((entry) => entry.hostId === hostId) ??
+        null),
 }));
 
 vi.mock("@/hooks/git/use-git-prefetch-worktree-status", () => ({
@@ -465,6 +517,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       ],
     ]);
     testState.capabilities = new Map();
+    bindingsState.error = null;
+    bindingsState.refetch.mockReset();
+    bindingsState.refetch.mockResolvedValue(undefined);
     window.localStorage.clear();
     useGitPanelStore.setState({ stateByEpicId: {} });
     useSurfaceHostSelectionStore.getState().resetForTests();
@@ -476,7 +531,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       hostLabel: "Host One",
       unavailability: null,
     };
-    pinTestState.directory = [{ hostId: "host-1" }];
+    pinTestState.directory = [{ hostId: "host-1", label: "Host One" }];
   });
 
   afterEach(() => {
@@ -862,7 +917,11 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(screen.getByTestId("git-roots-unavailable")).toBeDefined();
     expect(screen.queryByText("No git workspaces available")).toBeNull();
     expect(screen.queryByTestId("diff-loading-skeleton")).toBeNull();
-    expect(screen.queryByTestId("git-diff-repo-switcher-trigger")).toBeNull();
+    // The picker SURVIVES the degrade. It used to be asserted absent here,
+    // which codified the dead end: every degraded state is reached by a host
+    // or workspace choice, and hiding the switcher removed the only control
+    // that could make a different one.
+    expect(screen.getByTestId("git-diff-repo-switcher-trigger")).toBeDefined();
     expect(screen.queryByText("No changes")).toBeNull();
   });
 
@@ -889,7 +948,11 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     // default-pick settles to null and the panel must surface an explicit state.
     expect(screen.getByTestId("git-roots-unavailable")).toBeDefined();
     expect(screen.queryByTestId("diff-loading-skeleton")).toBeNull();
-    expect(screen.queryByTestId("git-diff-repo-switcher-trigger")).toBeNull();
+    // The picker SURVIVES the degrade. It used to be asserted absent here,
+    // which codified the dead end: every degraded state is reached by a host
+    // or workspace choice, and hiding the switcher removed the only control
+    // that could make a different one.
+    expect(screen.getByTestId("git-diff-repo-switcher-trigger")).toBeDefined();
   });
 
   it("recovers via retry once a previously unavailable root is readable again", async () => {
@@ -1129,5 +1192,229 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
         gitDiffPanelSurfaceKey(TAB_ID)
       ],
     ).toBe("host-1");
+  });
+
+  /**
+   * The gap the arm above does NOT cover, and could not: it hands the store a
+   * lease already reading `dead`, so it proves the panel re-points when the
+   * authority has reached a verdict. It proves nothing about a host that goes
+   * offline and never earns one.
+   *
+   * That is the reported failure. Deposition needs
+   * `CONFIRMED_DEATH_REFUSAL_STREAK` transport-confirmed refusals; the panel
+   * dials once and host-scoped queries disable every automatic recovery route,
+   * so the streak stalls, the pin stays honored, and the panel sits on a host
+   * it cannot reach. Everything below is about being RECOVERABLE there -
+   * without the authority having to agree first.
+   */
+  describe("pinned host that cannot answer", () => {
+    function renderPinnedToUnreachableHost(): void {
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(gitDiffPanelSurfaceKey(TAB_ID), "host-2");
+      pinTestState.activeHostId = "host-1";
+      pinTestState.directory = [
+        { hostId: "host-1", label: "Host One" },
+        { hostId: "host-2", label: "Host Two" },
+      ];
+      // The lease deliberately does NOT read `dead` - that is the whole point.
+      // host-2 is quiet, not confirmed gone, which is the state the refusal
+      // streak leaves it in.
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        effectiveHostId: "host-1",
+        leases: [
+          { hostId: "host-1", status: "ready", dead: null },
+          { hostId: "host-2", status: "connecting", dead: null },
+        ],
+      });
+      bindingsState.error = transportFailure("host unreachable");
+      renderPanel(rootSelected);
+    }
+
+    it("keeps the host picker reachable so the pin can be changed", () => {
+      renderPinnedToUnreachableHost();
+
+      // The regression in one assertion: the switcher (whose popover carries
+      // `WorktreePickerHostSection`) must outlive the failure that a host pick
+      // caused. Without it the pin is unreachable, persisted, and permanent.
+      const trigger = screen.getByTestId("git-diff-repo-switcher-trigger");
+      expect(trigger).toBeDefined();
+      fireEvent.click(trigger);
+      expect(
+        screen.getByTestId("mock-worktree-picker-host-section"),
+      ).toBeDefined();
+    });
+
+    it("names the unreachable host instead of nudging the user to add workspaces", () => {
+      renderPinnedToUnreachableHost();
+
+      expect(screen.getByTestId("git-host-unreachable")).toBeDefined();
+      expect(screen.getByText("Can't reach Host Two")).toBeDefined();
+      // "Add workspaces to the agent to get started" names a remedy on a
+      // machine that never answered, and cannot be told apart from a host that
+      // answered with nothing.
+      expect(screen.queryByText("No git workspaces available")).toBeNull();
+    });
+
+    it("re-dials on Retry, since nothing else will", () => {
+      renderPinnedToUnreachableHost();
+
+      fireEvent.click(screen.getByTestId("git-host-unreachable-retry"));
+
+      expect(bindingsState.refetch).toHaveBeenCalled();
+    });
+
+    it("clears the pin on 'Use active host' so the panel returns to effective", async () => {
+      renderPinnedToUnreachableHost();
+
+      fireEvent.click(screen.getByTestId("git-host-unreachable-use-active"));
+
+      // Unpinned, not re-pinned: the surface resolves to `effective` from here
+      // and follows it, which is the same resting state a panel that was never
+      // pinned is in.
+      await waitFor(() => {
+        expect(
+          useSurfaceHostSelectionStore.getState().selections[
+            gitDiffPanelSurfaceKey(TAB_ID)
+          ],
+        ).toBeUndefined();
+      });
+      expect(pinTestState.lastClientHostId).toBe("host-1");
+    });
+
+    it("does not offer 'Use active host' when the panel already resolves to it", () => {
+      // Pinned to the EFFECTIVE host: clearing the pin would move nothing, so
+      // the action must not be offered - a button that cannot change the
+      // outcome reads as a remedy that failed.
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(gitDiffPanelSurfaceKey(TAB_ID), "host-1");
+      pinTestState.activeHostId = "host-1";
+      bindingsState.error = transportFailure("host unreachable");
+
+      renderPanel(rootSelected);
+
+      expect(screen.getByTestId("git-host-unreachable")).toBeDefined();
+      expect(
+        screen.queryByTestId("git-host-unreachable-use-active"),
+      ).toBeNull();
+    });
+
+    it("does not offer 'Use active host' once the pin has been DEPOSED", () => {
+      // The pin still names host-2, but the authority has declared it dead, so
+      // the panel has already auto-followed to host-1 and it is host-1's read
+      // that failed. Reading the raw preference here would offer to switch to
+      // the machine the panel is already on - clearing a sticky pin, moving
+      // nothing, and leaving the same error on screen.
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(gitDiffPanelSurfaceKey(TAB_ID), "host-2");
+      pinTestState.activeHostId = "host-1";
+      pinTestState.directory = [
+        { hostId: "host-1", label: "Host One" },
+        { hostId: "host-2", label: "Host Two" },
+      ];
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        effectiveHostId: "host-1",
+        leases: [
+          { hostId: "host-1", status: "ready", dead: null },
+          { hostId: "host-2", status: "dead", dead: { reason: "offline" } },
+        ],
+      });
+      bindingsState.error = transportFailure("host unreachable");
+
+      renderPanel(rootSelected);
+
+      expect(screen.getByTestId("git-host-unreachable")).toBeDefined();
+      // Deposed: the panel resolves to host-1, which is also what unpinning
+      // would land on.
+      expect(pinTestState.lastClientHostId).toBe("host-1");
+      expect(
+        screen.queryByTestId("git-host-unreachable-use-active"),
+      ).toBeNull();
+    });
+
+    it("keeps Retry pending until the re-dial actually settles", async () => {
+      // `useRefreshSpinner` holds the spinner for a 350ms MINIMUM regardless of
+      // the promise, so "spinner visible right after the click" is true whether
+      // or not the retry tracks the read - asserting only that measures
+      // nothing. The discriminating question is what happens PAST that window
+      // with the read still in flight: tracked, the button is still disabled;
+      // fire-and-forget, it re-enabled at 350ms and a second click can stack
+      // another dial on the first.
+      const settles: Array<() => void> = [];
+      bindingsState.refetch.mockImplementation(
+        () =>
+          new Promise<unknown>((resolve) => {
+            settles.push(() => resolve(undefined));
+          }),
+      );
+      vi.useFakeTimers();
+      try {
+        renderPinnedToUnreachableHost();
+        fireEvent.click(screen.getByTestId("git-host-unreachable-retry"));
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        const retryDisabled = (): boolean =>
+          screen
+            .getByTestId("git-host-unreachable-retry")
+            .hasAttribute("disabled");
+        expect(retryDisabled()).toBe(true);
+
+        // Well past the minimum-visible window; the refetch has NOT resolved.
+        await act(async () => {
+          vi.advanceTimersByTime(2_000);
+          await Promise.resolve();
+        });
+        expect(retryDisabled()).toBe(true);
+        expect(bindingsState.refetch).toHaveBeenCalledTimes(1);
+
+        // Now let the read finish, and the affordance comes back.
+        await act(async () => {
+          for (const settle of settles) settle();
+          await Promise.resolve();
+          vi.advanceTimersByTime(1_000);
+          await Promise.resolve();
+        });
+        expect(retryDisabled()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("surfaces the host's own reason when it ANSWERED with a refusal", () => {
+      // Not a reachability failure: the machine replied. Saying "can't reach"
+      // here would repeat, one layer up, the defect this panel was fixed for -
+      // asserting a remedy the user cannot act on while hiding the one fact
+      // that could point at a cause.
+      bindingsState.error = answeredRefusal(
+        "worktree.listBindingsForEpic: not authorized",
+      );
+
+      renderPanel(rootSelected);
+
+      expect(screen.getByTestId("git-bindings-unreadable")).toBeDefined();
+      expect(
+        screen.getByTestId("git-bindings-unreadable-message").textContent,
+      ).toBe("worktree.listBindingsForEpic: not authorized");
+      expect(screen.queryByTestId("git-host-unreachable")).toBeNull();
+      expect(screen.queryByText("No git workspaces available")).toBeNull();
+    });
+
+    it("keeps the host picker reachable on an answered refusal too", () => {
+      bindingsState.error = answeredRefusal("internal error");
+
+      renderPanel(rootSelected);
+
+      const trigger = screen.getByTestId("git-diff-repo-switcher-trigger");
+      fireEvent.click(trigger);
+      expect(
+        screen.getByTestId("mock-worktree-picker-host-section"),
+      ).toBeDefined();
+    });
   });
 });
