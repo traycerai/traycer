@@ -50,30 +50,35 @@ export function ProjectProfileSwitcher() {
           sideOffset={6}
           align={undefined}
         >
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={disabled}
-              aria-label={`Project: ${label}`}
-              data-testid="project-profile-switcher"
-              className="max-w-[min(40vw,11rem)] text-muted-foreground hover:text-foreground"
-            >
-              <FolderKanban className="size-3.5 shrink-0" />
-              {active !== null ? (
-                <span
-                  aria-hidden
-                  className={cn(
-                    "size-2 shrink-0 rounded-full",
-                    PROJECT_PROFILE_COLOR_DOT[active.color],
-                  )}
-                />
-              ) : null}
-              <span className="min-w-0 truncate">{label}</span>
-              <ChevronDown className="size-3 shrink-0 opacity-70" />
-            </Button>
-          </DropdownMenuTrigger>
+          {/* Span keeps TooltipTrigger from composing onto DropdownMenuTrigger.
+              Nested asChild slots drop the button children and leave a blank
+              hole in the frameless title bar. Same pattern as HistoryNavButtons. */}
+          <span className="inline-flex">
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={disabled}
+                aria-label={`Project: ${label}`}
+                data-testid="project-profile-switcher"
+                className="max-w-[min(40vw,12rem)] border border-border/70 bg-foreground/8 text-canvas-foreground hover:bg-foreground/12 hover:text-foreground"
+              >
+                <FolderKanban className="size-3.5 shrink-0" />
+                {active !== null ? (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "size-2 shrink-0 rounded-full",
+                      PROJECT_PROFILE_COLOR_DOT[active.color],
+                    )}
+                  />
+                ) : null}
+                <span className="min-w-0 truncate">{label}</span>
+                <ChevronDown className="size-3 shrink-0 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+          </span>
         </TooltipWrapper>
         <DropdownMenuContent
           align="end"

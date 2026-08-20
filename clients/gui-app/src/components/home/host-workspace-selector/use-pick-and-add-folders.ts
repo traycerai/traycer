@@ -47,7 +47,7 @@ export function usePickAndCreateProject(
 ): () => Promise<boolean> {
   const folderActions = useWorkspaceFolderActionsForClient(client);
   return useCallback(async (): Promise<boolean> => {
-    const result = await folderActions.pickAndPrepareFolders();
+    const result = await folderActions.pickAndPrepareFolders(true);
     if (result === null) return false;
     const folders = result.folders.map((folder) =>
       preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),

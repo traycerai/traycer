@@ -130,7 +130,7 @@ export function ProjectProfileCreateDialog(props: {
   };
 
   const chooseFolder = async () => {
-    const result = await pickAndPrepareFolders();
+    const result = await pickAndPrepareFolders(true);
     if (result === null || result.folders.length === 0) return;
     const first = result.folders[0];
     if (hostId !== null && result.hostId !== hostId) return;
