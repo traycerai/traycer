@@ -10,7 +10,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
   LifecycleAdmissionBlock,
-  ReprovisionIntent,
+  LocalHostMutationIntent,
 } from "../../host/host-controller-types";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { TraycerCliError } from "../../cli/traycer-cli";
@@ -238,10 +238,10 @@ interface HandlerBridge {
       respawn: () => Promise<MutationOutcome<{ readonly activated: boolean }>>;
       convergeReady: (
         force: boolean,
-        intent: ReprovisionIntent,
+        intent: LocalHostMutationIntent,
       ) => Promise<MutationOutcome<null>>;
       registerService: (
-        intent: ReprovisionIntent,
+        intent: LocalHostMutationIntent,
       ) => Promise<MutationOutcome<null>>;
       freePortAndRestart: (
         pid: number | undefined,
@@ -805,7 +805,13 @@ describe("maintenanceInstallVersion IPC", () => {
 
     await expect(
       handler(null, { version: "1.2.0", force: false }),
-    ).resolves.toEqual({ kind: "lane-busy" });
+    ).resolves.toEqual({
+      kind: "lane-busy",
+      // An install holding the lane IS update work, so this arm may honestly
+      // become the protocol's `already-updating`.
+      updateInFlight: true,
+      message: expect.stringContaining("installing an update"),
+    });
     expect(installVersion).not.toHaveBeenCalled();
   });
 
@@ -1342,7 +1348,14 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
         force: false,
         expectedHostId: LIVE_HOST_ID,
       }),
-    ).resolves.toEqual({ kind: "lane-busy" });
+    ).resolves.toEqual({
+      kind: "lane-busy",
+      // A login-item refresh is NOT update work. Reporting it as
+      // `already-updating` would arm the caller's accepted-update latch to
+      // wait on progress this operation never publishes.
+      updateInFlight: false,
+      message: expect.stringContaining("service registration"),
+    });
     await expect(
       restart(null, { expectedHostId: LIVE_HOST_ID }),
     ).resolves.toEqual({
@@ -1464,7 +1477,14 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
         force: false,
         expectedHostId: LIVE_HOST_ID,
       }),
-    ).resolves.toEqual({ kind: "lane-busy" });
+    ).resolves.toEqual({
+      kind: "lane-busy",
+      // A login-item refresh is NOT update work. Reporting it as
+      // `already-updating` would arm the caller's accepted-update latch to
+      // wait on progress this operation never publishes.
+      updateInFlight: true,
+      message: laneBusyRestartMessage("install"),
+    });
     await expect(
       restart(null, { expectedHostId: LIVE_HOST_ID }),
     ).resolves.toEqual({
@@ -1872,10 +1892,11 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       bridge,
       invoke.traycerDoctorRepairQueued,
     );
-    const convergeReady = vi.fn((_force: boolean, _intent: ReprovisionIntent) =>
-      Promise.resolve({ kind: "ok" as const, value: null }),
+    const convergeReady = vi.fn(
+      (_force: boolean, _intent: LocalHostMutationIntent) =>
+        Promise.resolve({ kind: "ok" as const, value: null }),
     );
-    const registerService = vi.fn((_intent: ReprovisionIntent) =>
+    const registerService = vi.fn((_intent: LocalHostMutationIntent) =>
       Promise.resolve({ kind: "ok" as const, value: null }),
     );
     const respawn = vi.fn(() =>
@@ -1920,11 +1941,12 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       bridge,
       invoke.traycerDoctorRepairQueued,
     );
-    const registerService = vi.fn((_intent: ReprovisionIntent) =>
+    const registerService = vi.fn((_intent: LocalHostMutationIntent) =>
       Promise.resolve({ kind: "ok" as const, value: null }),
     );
-    const convergeReady = vi.fn((_force: boolean, _intent: ReprovisionIntent) =>
-      Promise.resolve({ kind: "ok" as const, value: null }),
+    const convergeReady = vi.fn(
+      (_force: boolean, _intent: LocalHostMutationIntent) =>
+        Promise.resolve({ kind: "ok" as const, value: null }),
     );
     bridge.options.hostController.registerService = registerService;
     bridge.options.hostController.convergeReady = convergeReady;
@@ -1957,8 +1979,9 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       bridge,
       invoke.traycerDoctorRepairIfIdle,
     );
-    const convergeReady = vi.fn((_force: boolean, _intent: ReprovisionIntent) =>
-      Promise.resolve({ kind: "ok" as const, value: null }),
+    const convergeReady = vi.fn(
+      (_force: boolean, _intent: LocalHostMutationIntent) =>
+        Promise.resolve({ kind: "ok" as const, value: null }),
     );
     bridge.options.hostController.convergeReady = convergeReady;
 

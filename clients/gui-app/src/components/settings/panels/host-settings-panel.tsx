@@ -335,7 +335,10 @@ function useEmptyAccountLocalRecoveryZone(
 function doctorRepairIntentFor(
   fixAction: string | null,
 ): DoctorRepairIntent | null {
-  if (fixAction === "host-install-latest") return "converge-ready";
+  // Both spellings of "there is no usable host installed" converge.
+  if (fixAction === "host-install" || fixAction === "host-install-latest") {
+    return "converge-ready";
+  }
   if (fixAction === "service-install") return "register-service";
   return null;
 }

@@ -13,7 +13,6 @@ import type {
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
-  LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
   type HostDoctorResponse,
   type HostGetInstallationInfoResponse,
   type HostUpdateCheckRequest,
@@ -140,15 +139,28 @@ export function mapInstallVersionOutcome(
 }
 
 /**
- * Stamp the doctor projection with the LOCAL-WS trivially-green set.
+ * Project the bridge's doctor report with an EMPTY trivially-green set.
  *
- * The vantage is the caller's judgment, not the bridge's: this fallback only
- * ever serves this machine's local host over its direct loopback connection,
- * which is precisely the vantage the protocol's local-WS set describes — a
- * `SERVICE_STOPPED` in a report obtained while that host is answering us
- * describes a service that is demonstrably running. The desktop main process
- * cannot see the transport, which is why the projection arrives without the
- * field rather than with a guessed one.
+ * The protocol's local-WS exemption rests on the response and the evidence
+ * being the same event: when the host's own resolver answers over loopback,
+ * the fact that a reply arrived at all proves its listener is live, so a
+ * `SERVICE_STOPPED` in that report cannot describe a stopped service.
+ *
+ * This lane breaks that coupling and therefore cannot borrow the conclusion.
+ * The report comes from the bundled CLI over Electron IPC, which completes
+ * happily with the host down — and `delegateThenServeIfAbsent` reaches here
+ * precisely BECAUSE a delegated call just failed. The handshake that told us
+ * the method was absent may be minutes old. So "the host is answering us" is
+ * not something this projection knows; at its most common entry point it is
+ * affirmatively false.
+ *
+ * Getting that wrong is the dangerous direction, not the annoying one: the
+ * three exempted codes (`SERVICE_STOPPED`, `PORT_UNREACHABLE`,
+ * `PORT_CONFLICT`) are exactly the ones that describe a host that has stopped
+ * serving, so honouring the exemption hides a real outage behind a green
+ * Doctor card. The cost of dropping it is that a legitimately hand-started
+ * host lists a stopped SERVICE as actionable — which is true, and now
+ * repairable, since `host-install` routes to a real fix action.
  */
 export function localWsDoctorResponse(
   projection: MaintenanceDoctorProjection,
@@ -159,7 +171,7 @@ export function localWsDoctorResponse(
   return {
     status: "ok",
     issues: [...projection.issues],
-    triviallyGreenIssueCodes: [...LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES],
+    triviallyGreenIssueCodes: [],
   };
 }
 
@@ -239,7 +251,25 @@ export function buildMaintenanceFallbackServeMap(
         expectedHostId,
       });
       if (dispatch.kind === "lane-busy") {
-        return { outcome: "already-updating" };
+        // `already-updating` is reserved for lane work that IS an update.
+        // Claiming it for a service registration or a free-port repair does
+        // more than mislabel: `handleInstallOutcome` arms the accepted-update
+        // latch on it and then waits up to a minute for
+        // `host.status.updateProgress` — a field these hosts never publish,
+        // and which an unrelated operation would not populate in any case.
+        if (dispatch.updateInFlight) {
+          return { outcome: "already-updating" };
+        }
+        // Transient contention, reported the same way this map already
+        // reports the controller's own `busy` and `deferred`: a refusal the
+        // caller renders and the person can simply retry.
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: dispatch.message,
+          requestId: "local-maintenance-fallback",
+          method: "host.update.install",
+          fatalDetails: null,
+        });
       }
       return mapInstallVersionOutcome(dispatch.outcome);
     },

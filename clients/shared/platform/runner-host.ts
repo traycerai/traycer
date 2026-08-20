@@ -1530,7 +1530,26 @@ export type DoctorRepairDispatch =
   | { readonly kind: "dispatched"; readonly outcome: MutationOutcome<null> };
 
 export type MaintenanceInstallDispatch =
-  | { readonly kind: "lane-busy" }
+  | {
+      readonly kind: "lane-busy";
+      /**
+       * Whether the lane is occupied by UPDATE work (an install or an apply)
+       * as opposed to anything else that takes the same exclusive lane — a
+       * service registration, a restart, a removal, a free-port repair, or
+       * the pending login-item refresh.
+       *
+       * The distinction is not cosmetic. The compatibility lane maps a busy
+       * lane to the protocol's `already-updating`, and that answer arms the
+       * caller's accepted-update latch to wait on `host.status.updateProgress`
+       * — a field these pre-1.2.0 hosts do not publish, and which an unrelated
+       * service cycle would never populate even if they did. Reporting a
+       * service registration as "already updating" therefore both lies and
+       * hangs the surface on progress that cannot arrive.
+       */
+      readonly updateInFlight: boolean;
+      /** Main's rendered reason, for the surfaces that show one. */
+      readonly message: string;
+    }
   | {
       readonly kind: "dispatched";
       readonly outcome: MutationOutcome<InstallVersionOk>;

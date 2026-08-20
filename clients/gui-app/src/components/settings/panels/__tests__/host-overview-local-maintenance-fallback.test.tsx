@@ -550,7 +550,13 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expectButtonEnabled(updateNowAfter);
   });
 
-  it("Run doctor puts SERVICE_STOPPED in the disproven-by-transport bucket", async () => {
+  it("Run doctor leaves SERVICE_STOPPED ACTIONABLE on this lane", async () => {
+    // Inverted deliberately. The disproven-by-transport bucket exists because
+    // a host answering over loopback proves its own listener is live - but
+    // this lane's report comes from the bundled CLI over IPC and completes
+    // with the host down, so it has no such proof to offer. Bucketing
+    // SERVICE_STOPPED as disproven here hides a real outage behind a green
+    // card, which is the one direction that actually costs the user.
     const { management } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -570,14 +576,16 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         expectedHostId: HOST_ID,
       });
     });
-    expect(await screen.findByText("Doctor: no issues detected.")).toBeTruthy();
-    fireEvent.click(await screen.findByText(/this connection already answers/));
+    // Reported, not swallowed: the issue renders in the actionable list and
+    // no disproven bucket is offered at all, because this projection sends an
+    // empty trivially-green set.
     expect(
-      await screen.findByTestId("host-doctor-disproven-by-transport"),
+      await screen.findByTestId("host-doctor-issue-SERVICE_STOPPED"),
     ).toBeTruthy();
+    expect(screen.queryByText("Doctor: no issues detected.")).toBeNull();
     expect(
-      screen.getByTestId("host-doctor-disproven-SERVICE_STOPPED"),
-    ).toBeTruthy();
+      screen.queryByTestId("host-doctor-disproven-by-transport"),
+    ).toBeNull();
   });
 
   it("own Restart confirm stays open and pending until the deferred respawn settles, then closes", async () => {

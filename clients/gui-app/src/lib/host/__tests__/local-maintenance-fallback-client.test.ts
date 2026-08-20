@@ -139,7 +139,12 @@ describe("mapInstallVersionOutcome", () => {
 });
 
 describe("localWsDoctorResponse", () => {
-  it("stamps the local-WS trivially-green set on the ok arm", () => {
+  it("does NOT borrow the local-WS trivially-green exemption", () => {
+    // The exemption holds only when the response IS the liveness evidence -
+    // the host answering over loopback. This lane's report comes from the
+    // bundled CLI over IPC and completes with the host down, so honouring it
+    // would hide the three codes that describe a host that stopped serving
+    // behind a green Doctor card.
     const issues = [
       doctorIssue("SERVICE_STOPPED"),
       doctorIssue("STALE_CONFIG"),
@@ -152,10 +157,13 @@ describe("localWsDoctorResponse", () => {
     expect(response).toEqual({
       status: "ok",
       issues,
-      triviallyGreenIssueCodes: [
-        ...LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
-      ],
+      triviallyGreenIssueCodes: [],
     });
+    // Stated as an equality against the real set, so a future re-introduction
+    // of the exemption has to argue with this test rather than slip past it.
+    expect(LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES).toContain(
+      "SERVICE_STOPPED",
+    );
   });
 
   it.each([
@@ -170,6 +178,24 @@ describe("localWsDoctorResponse", () => {
 });
 
 describe("buildMaintenanceFallbackServeMap", () => {
+  it("reports a NON-update lane block as a refusal, never already-updating", async () => {
+    // `already-updating` arms the caller's accepted-update latch to wait on
+    // `host.status.updateProgress`, which a service registration never
+    // publishes - so mislabelling it both lies and hangs the surface.
+    const maintenanceInstallVersion = vi.fn(() =>
+      Promise.resolve({
+        kind: "lane-busy" as const,
+        updateInFlight: false,
+        message: "The host is registering its service.",
+      } satisfies MaintenanceInstallDispatch),
+    );
+    const management = buildOverviewManagement({ maintenanceInstallVersion });
+    const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
+    await expect(
+      serve["host.update.install"]({ version: "1.2.0", force: false }),
+    ).rejects.toThrow("The host is registering its service.");
+  });
+
   it("maps lane-busy to already-updating without consulting getHostControllerStatus or installVersion", async () => {
     // Discriminator: the old two-step read `getHostControllerStatus` then
     // called `installVersion`. Reintroducing that read makes this red.
@@ -186,6 +212,8 @@ describe("buildMaintenanceFallbackServeMap", () => {
         });
         return Promise.resolve({
           kind: "lane-busy" as const,
+          updateInFlight: true,
+          message: "An update is already installing.",
         } satisfies MaintenanceInstallDispatch);
       },
     );
@@ -327,6 +355,8 @@ describe("buildMaintenanceFallbackServeMap", () => {
     const maintenanceInstallVersion = vi.fn(() =>
       Promise.resolve({
         kind: "lane-busy" as const,
+        updateInFlight: true,
+        message: "An update is already installing.",
       } satisfies MaintenanceInstallDispatch),
     );
     const management = buildOverviewManagement({
@@ -762,9 +792,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
     expect(answer).toEqual({
       status: "ok",
       issues: [doctorIssue("SERVICE_STOPPED")],
-      triviallyGreenIssueCodes: [
-        ...LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
-      ],
+      triviallyGreenIssueCodes: [],
     });
     expect(rpcCalls).toEqual(["host.doctor"]);
     expect(served.doctorCalls).toEqual([{ expectedHostId: LOCAL_HOST_ID }]);

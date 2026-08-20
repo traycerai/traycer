@@ -102,7 +102,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
-  ReprovisionIntent,
+  LocalHostMutationIntent,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
@@ -374,7 +374,7 @@ export interface IpcHostController {
   getStatus(): Promise<HostControllerStatus>;
   convergeReady(
     force: boolean,
-    intent: ReprovisionIntent,
+    intent: LocalHostMutationIntent,
   ): Promise<MutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
@@ -389,7 +389,7 @@ export interface IpcHostController {
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>>;
   registerService(
-    intent: ReprovisionIntent,
+    intent: LocalHostMutationIntent,
   ): Promise<MutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
   respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
@@ -399,6 +399,7 @@ export interface IpcHostController {
   freePortAndRestart(
     pid: number | null,
     port: number | null,
+    intent: LocalHostMutationIntent,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
   removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;

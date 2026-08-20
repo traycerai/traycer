@@ -40,7 +40,7 @@ import {
 import type {
   LifecycleAdmissionBlock,
   MutationOutcome,
-  ReprovisionIntent,
+  LocalHostMutationIntent,
 } from "../host/host-controller-types";
 import {
   clearHostRemovedByUser,
@@ -134,6 +134,33 @@ function nullableString(raw: unknown, key: string): string | null {
 /** Every non-"ok" outcome rejects the IPC invoke - matches the legacy
  * CLI-throw contract for the handlers that never had a "keep the old
  * host, surface it for a compat probe" branch. */
+/**
+ * The failure message of a non-ok outcome, or `null` when it succeeded.
+ *
+ * Lets a caller inspect an outcome WITHOUT throwing yet - the Doctor repair
+ * routes have to ask their guard whether the non-ok was a refusal before
+ * deciding whether it is an error at all.
+ */
+/**
+ * Whether an admission block represents UPDATE work.
+ *
+ * `install` and `apply` are the two lane intents that move the host's
+ * version; every other kind (register, deregister, respawn, recoverIfDown,
+ * freePortAndRestart, uninstallHost, removeTraycer, ensure, activate) and the
+ * login-item refresh take the same exclusive lane without being an update.
+ * Listed positively so a NEW `MutationKind` defaults to "not an update" -
+ * the safe direction, since the alternative is telling someone an update is
+ * running when none is.
+ */
+function admissionBlockIsUpdateWork(block: LifecycleAdmissionBlock): boolean {
+  if (block.kind === "login-item-refresh") return false;
+  return block.lane.kind === "install" || block.lane.kind === "apply";
+}
+
+function failureMessageOf<TOk>(outcome: MutationOutcome<TOk>): string | null {
+  return outcome.kind === "ok" ? null : outcome.message;
+}
+
 function okOrThrow<TOk>(outcome: MutationOutcome<TOk>): TOk {
   if (outcome.kind !== "ok") {
     throw new Error(outcome.message);
@@ -611,14 +638,35 @@ async function fencedLocalHostRead<T>(
 function userRepairIntent(
   bridge: RunnerIpcBridge,
   expectedHostId: string,
-): ReprovisionIntent {
+): {
+  readonly intent: LocalHostMutationIntent;
+  /** The guard's refusal message once it has run, else `null`. */
+  readonly abandonedWith: () => string | null;
+} {
+  // The refusal has to be distinguishable from a genuine failure, and the
+  // outcome alone cannot carry that: an abandon and a real failure are both
+  // `{kind:"failed", message}`. Widening `MutationOutcome` for it would touch
+  // every switch over that union, so the handler that BUILDS the intent keeps
+  // a handle on what its own closure decided.
+  //
+  // Without this, the same identity mismatch renders two different ways
+  // depending only on WHEN it was noticed - "didn't run" if the handler
+  // caught it, "Fix failed" if the lane head did. The second is worse than
+  // cosmetic: the legacy console counts a failure toward the recurrence lock
+  // that disables Doctor after three, so a host that was merely renamed could
+  // lock the recovery console.
+  let abandoned: string | null = null;
   return {
-    kind: "user-repair",
-    guard: async () => {
-      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
-      return identity.ok
-        ? { kind: "proceed" }
-        : { kind: "abandon", message: identity.message };
+    abandonedWith: () => abandoned,
+    intent: {
+      kind: "user-repair",
+      targetHostId: expectedHostId,
+      guard: async () => {
+        const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+        if (identity.ok) return { kind: "proceed" };
+        abandoned = identity.message;
+        return { kind: "abandon", message: identity.message };
+      },
     },
   };
 }
@@ -1246,8 +1294,17 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // clearHostRemovalIfSet()` here (as the sibling handler does) would
       // reopen exactly the window this exists to close — `installVersion`
       // clears the removed-by-user sentinel inside the mutation body anyway.
-      if (bridge.options.hostController.lifecycleAdmissionBlock !== null) {
-        return { kind: "lane-busy" };
+      const installBlock =
+        bridge.options.hostController.lifecycleAdmissionBlock;
+      if (installBlock !== null) {
+        // WHAT holds the lane decides how the compatibility lane answers.
+        // Only real update work may be reported as `already-updating`;
+        // anything else is transient contention and says so.
+        return {
+          kind: "lane-busy",
+          updateInFlight: admissionBlockIsUpdateWork(installBlock),
+          message: admissionBlockRestartMessage(installBlock),
+        };
       }
       const outcome = await bridge.options.hostController.installVersion(
         version,
@@ -1303,17 +1360,38 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // question as a closure and the controller asks it again once admitted.
       // Restart is deliberately NOT a reprovision and keeps its own
       // removed-by-user deferral.
-      const intent = userRepairIntent(bridge, expectedHostId);
+      const { intent, abandonedWith } = userRepairIntent(
+        bridge,
+        expectedHostId,
+      );
       // Anything that stopped this repair is a genuine failure and rejects,
       // matching what the renderer did when it called the unfenced methods
       // directly. Branched rather than sharing one `okOrThrow` call: the two
       // intents resolve DIFFERENT ok-value types.
-      if (repair === "converge-ready") {
-        okOrThrow(
-          await bridge.options.hostController.convergeReady(false, intent),
-        );
-      } else {
-        okOrThrow(await bridge.options.hostController.registerService(intent));
+      // Read as a message rather than unified into one `MutationOutcome`:
+      // the two intents resolve DIFFERENT ok-value types, so a shared
+      // variable would widen `TOk` and defeat `okOrThrow`'s typing.
+      const failure =
+        repair === "converge-ready"
+          ? failureMessageOf(
+              await bridge.options.hostController.convergeReady(false, intent),
+            )
+          : failureMessageOf(
+              await bridge.options.hostController.registerService(intent),
+            );
+      // A guard refusal is NOT a failure. It reaches here as the same
+      // `{kind:"failed"}` a real error does, so the handler asks its own
+      // closure what it decided rather than pattern-matching the message.
+      // Without this the identity mismatch renders one way when the handler
+      // catches it and another when the lane head does - and the second also
+      // counts toward the console's recurrence lock, so a renamed host could
+      // disable Doctor after three clicks.
+      const refusal = abandonedWith();
+      if (refusal !== null) {
+        return { kind: "declined", message: refusal };
+      }
+      if (failure !== null) {
+        throw new Error(failure);
       }
       return { kind: "applied" };
     },
@@ -1352,11 +1430,22 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           message: admissionBlockRestartMessage(block),
         };
       }
-      const intent = userRepairIntent(bridge, expectedHostId);
-      const outcome =
+      const { intent, abandonedWith } = userRepairIntent(
+        bridge,
+        expectedHostId,
+      );
+      const dispatched =
         repair === "converge-ready"
           ? await bridge.options.hostController.convergeReady(false, intent)
           : await bridge.options.hostController.registerService(intent);
+      // Same rule as the queued twin: a late identity refusal is reported as
+      // the identity refusal it is, using the dispatch shape this channel
+      // already has for one caught before submission.
+      const lateRefusal = abandonedWith();
+      if (lateRefusal !== null) {
+        return { kind: "host-changed", message: lateRefusal };
+      }
+      const outcome = dispatched;
       return {
         kind: "dispatched",
         outcome: outcome.kind === "ok" ? { kind: "ok", value: null } : outcome,
@@ -1423,8 +1512,18 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         pid,
         processName,
       });
+      // The check above refuses cheaply and immediately; this one refuses a
+      // job whose target moved while it queued. `pid` and `port` were
+      // recorded against the host as it was at confirm time, so of all the
+      // queued repairs this is the one that most needs re-asking: the
+      // consequence of getting it wrong is killing a process nobody named.
+      const { intent } = userRepairIntent(bridge, expectedHostId);
       okOrThrow(
-        await bridge.options.hostController.freePortAndRestart(pid, port),
+        await bridge.options.hostController.freePortAndRestart(
+          pid,
+          port,
+          intent,
+        ),
       );
       // `ActivateInstalledOk` carries no port/pid/processName - echo the
       // confirmed input back, matching the renderer contract's shape.
@@ -1470,6 +1569,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const outcome = await bridge.options.hostController.freePortAndRestart(
         pid,
         port,
+        userRepairIntent(bridge, expectedHostId).intent,
       );
       return {
         kind: "dispatched",

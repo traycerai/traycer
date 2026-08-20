@@ -106,9 +106,18 @@ export type BusyContinuation = "retry-with-force" | "activate";
 // one definition rather than risk wording drift.
 export const HOST_REMOVED_BY_USER_MESSAGE = "Host was removed by the user.";
 
-// Why a (re)provision was asked for. `convergeReady` and `registerService`
-// serve two callers with genuinely different contracts, and conflating them
-// is what let "Install host" report success having installed nothing:
+// Who asked for a local-host mutation. Three methods take it -
+// `convergeReady`, `registerService` and `freePortAndRestart` - and they use
+// DIFFERENT halves of it, which is the distinction the name has to carry:
+//
+//   - all three run `guard` at the head of the lane;
+//   - only the two REPROVISION methods also clear the removal sentinel.
+//     Free-port-and-restart is a restart, not a reprovision, so it keeps the
+//     removed-by-user deferral exactly as a plain restart does.
+//
+// `convergeReady` and `registerService` serve two callers with genuinely
+// different contracts, and conflating them is what let "Install host" report
+// success having installed nothing:
 //
 //   - `background` is the reconciler, launch convergence and selection
 //     ports. The removal sentinel MEANS something to them: a removed host
@@ -124,10 +133,19 @@ export const HOST_REMOVED_BY_USER_MESSAGE = "Host was removed by the user.";
 // enqueueing proves nothing about the host the job will actually mutate.
 // The IPC layer owns identity policy and supplies it as this closure, so the
 // controller decides only WHEN the question is asked.
-export type ReprovisionIntent =
+export type LocalHostMutationIntent =
   | { readonly kind: "background" }
   | {
       readonly kind: "user-repair";
+      /**
+       * The host this repair was asked FOR. Part of the coalesce key, not
+       * decoration: two repairs are the same job only if they target the same
+       * host. Keyed on the intent KIND alone, a repair for replacement host B
+       * would join host A's in-flight promise, inherit A's guard, and be
+       * refused for the crime of being B - a correct request rejected by
+       * another request's identity check.
+       */
+      readonly targetHostId: string;
       readonly guard: () => Promise<ReprovisionGuardVerdict>;
     };
 

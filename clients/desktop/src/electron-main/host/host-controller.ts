@@ -71,7 +71,7 @@ import {
   type MutationProgress,
   type PendingRevisionCaller,
   type RemoveTraycerOk,
-  type ReprovisionIntent,
+  type LocalHostMutationIntent,
   type ServiceRegistrationOk,
   type UninstallOk,
 } from "./host-controller-types";
@@ -2103,16 +2103,19 @@ export class HostController {
 
   async convergeReady(
     force: boolean,
-    intent: ReprovisionIntent,
+    intent: LocalHostMutationIntent,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     return this.enqueueMutation<ConvergeReadyOk>(
       "ensure",
-      // The intent is part of the coalesce key, not decoration. A repair that
-      // coalesced onto a background converge would inherit that job's policy
-      // and silently skip both its guard and its sentinel clear - the same
-      // shape as the pending-revision coalescing bug, where the joiner's
-      // policy was discarded in favour of the occupant's.
-      `ensure:${force}:${intent.kind}`,
+      // The intent is part of the coalesce key, not decoration, and so is the
+      // host it targets. A repair that coalesced onto a background converge
+      // would inherit that job's policy and silently skip both its guard and
+      // its sentinel clear - the same shape as the pending-revision
+      // coalescing bug, where the joiner's policy was discarded in favour of
+      // the occupant's. Two repairs for DIFFERENT hosts are likewise not the
+      // same job: joining would hand the newcomer the occupant's guard, which
+      // then refuses it for naming a different host.
+      `ensure:${force}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
         const abandoned = await this.admitReprovision(intent);
         if (abandoned !== null) return abandoned;
@@ -2131,6 +2134,20 @@ export class HostController {
   }
 
   /**
+   * The coalesce-key fragment for a reprovision intent. A background job
+   * collapses to one bucket; a user repair is bucketed by the host it names,
+   * percent-encoded so a `:` inside a host id cannot split the key and make
+   * two different targets look like one.
+   */
+  private reprovisionCoalesceKeySuffix(
+    intent: LocalHostMutationIntent,
+  ): string {
+    return intent.kind === "background"
+      ? "background"
+      : `user-repair:${encodeURIComponent(intent.targetHostId)}`;
+  }
+
+  /**
    * The head-of-lane half of a user-driven reprovision: re-ask the identity
    * question the IPC handler asked before enqueueing, then clear the removal
    * sentinel so the reprovision is not swallowed by it.
@@ -2140,19 +2157,40 @@ export class HostController {
    * paths are byte-for-byte what they were.
    */
   private async admitReprovision(
-    intent: ReprovisionIntent,
+    intent: LocalHostMutationIntent,
   ): Promise<{ readonly kind: "failed"; readonly message: string } | null> {
+    const abandoned = await this.runLaneHeadGuard(intent);
+    if (abandoned !== null) return abandoned;
     if (intent.kind === "background") return null;
-    const verdict = await intent.guard();
-    if (verdict.kind === "abandon") {
-      return { kind: "failed", message: verdict.message };
-    }
     // Same rule as `installVersion`: an explicit reprovision means the person
-    // wants the host back on this device, so the sentinel goes.
+    // wants the host back on this device, so the sentinel goes. This half is
+    // what makes it a REPROVISION rather than merely a guarded mutation, and
+    // it is why `freePortAndRestart` calls the guard directly instead: a
+    // restart must keep the removed-by-user deferral.
     if (await isHostRemovedByUser()) {
       await clearHostRemovedByUser();
     }
     return null;
+  }
+
+  /**
+   * The guard half alone: re-ask the caller's identity question now that this
+   * job owns the lane, and abandon if the answer changed while it waited.
+   *
+   * Separate from `admitReprovision` because a guarded mutation is not
+   * necessarily a reprovision. `freePortAndRestart` needs exactly this and
+   * none of the sentinel handling - it kills a recorded PID and frees a
+   * recorded port, so running it against a host that was swapped in while it
+   * queued would kill a process nobody named.
+   */
+  private async runLaneHeadGuard(
+    intent: LocalHostMutationIntent,
+  ): Promise<{ readonly kind: "failed"; readonly message: string } | null> {
+    if (intent.kind === "background") return null;
+    const verdict = await intent.guard();
+    return verdict.kind === "abandon"
+      ? { kind: "failed", message: verdict.message }
+      : null;
   }
 
   private async convergeReadyCliOwned(
@@ -3026,12 +3064,13 @@ export class HostController {
   // ---- registerService / deregisterService --------------------------------
 
   async registerService(
-    intent: ReprovisionIntent,
+    intent: LocalHostMutationIntent,
   ): Promise<MutationOutcome<ServiceRegistrationOk>> {
     return this.enqueueMutation<ServiceRegistrationOk>(
       "register",
-      // Intent-discriminated for the same reason `convergeReady`'s key is.
-      `register:${intent.kind}`,
+      // Intent- and target-discriminated for the same reasons
+      // `convergeReady`'s key is.
+      `register:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
         const abandoned = await this.admitReprovision(intent);
         if (abandoned !== null) return abandoned;
@@ -3329,11 +3368,23 @@ export class HostController {
   async freePortAndRestart(
     pid: number | null,
     port: number | null,
+    intent: LocalHostMutationIntent,
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
     return this.enqueueMutation<ActivateInstalledOk>(
       "freePortAndRestart",
-      `freePortAndRestart:${pid}:${port}`,
+      // Target-discriminated like the reprovision keys: `pid`/`port` alone
+      // name a process, not the host that recorded it, so two repairs from
+      // different hosts could otherwise collide on identical numbers.
+      `freePortAndRestart:${pid}:${port}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
+        // Guard only - NOT `admitReprovision`. This is a restart, so the
+        // removed-by-user deferral stays. What it does need is the identity
+        // re-ask: the queued route waits behind whatever holds the lane, and
+        // `pid`/`port` were recorded against the host as it was THEN. Running
+        // them after a replacement kills a process nobody pointed at, and
+        // frees a port some other process may now hold.
+        const abandoned = await this.runLaneHeadGuard(intent);
+        if (abandoned !== null) return abandoned;
         if (await this.isPackagedMacOwned()) {
           if (pid !== null && port !== null) {
             try {

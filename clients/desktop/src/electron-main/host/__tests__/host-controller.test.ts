@@ -2997,6 +2997,7 @@ describe("platform matrix", () => {
 
     const outcome = await controller.convergeReady(false, {
       kind: "user-repair",
+      targetHostId: "local-host",
       guard: () => Promise.resolve({ kind: "proceed" }),
     });
 
@@ -3043,6 +3044,7 @@ describe("platform matrix", () => {
 
     const outcome = await controller.convergeReady(false, {
       kind: "user-repair",
+      targetHostId: "local-host",
       guard: () =>
         Promise.resolve({ kind: "abandon", message: "host changed" }),
     });
@@ -3071,6 +3073,7 @@ describe("platform matrix", () => {
     let guardAsked = false;
     const repair = controller.registerService({
       kind: "user-repair",
+      targetHostId: "local-host",
       guard: () => {
         guardAsked = true;
         return Promise.resolve({ kind: "proceed" });
@@ -3104,6 +3107,7 @@ describe("platform matrix", () => {
     let guardAsked = false;
     const repair = controller.convergeReady(false, {
       kind: "user-repair",
+      targetHostId: "local-host",
       guard: () => {
         guardAsked = true;
         return Promise.resolve({ kind: "proceed" });
@@ -5575,7 +5579,7 @@ describe("Class B CLI-owned caller publication", () => {
     configureRestartAndStamp();
 
     await expect(
-      controller.freePortAndRestart(null, null),
+      controller.freePortAndRestart(null, null, { kind: "background" }),
     ).resolves.toMatchObject({
       kind: "ok",
       value: { activated: true },
@@ -5767,7 +5771,9 @@ describe("freePortAndRestart (CLI-owned)", () => {
       outcome: "stamped",
     });
 
-    const outcome = await controller.freePortAndRestart(null, null);
+    const outcome = await controller.freePortAndRestart(null, null, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -5913,7 +5919,10 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.freePortAndRestart(null, null)).kind).toBe("ok");
+    expect(
+      (await controller.freePortAndRestart(null, null, { kind: "background" }))
+        .kind,
+    ).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 

@@ -35,6 +35,12 @@ export function describeFreePortPrompt(
 
 export function fixActionLabel(fixAction: string): string {
   switch (fixAction) {
+    // `host-install` and `host-install-latest` are two ways to be missing an
+    // installed host, not two different repairs. Linux systemd emits the
+    // former when `ConditionFileIsExecutable` fails because the service's CLI
+    // binary is gone (`traycer-cli/src/doctor/systemd-health.ts`); the
+    // converge that fixes one fixes the other.
+    case "host-install":
     case "host-install-latest":
       return "Install host";
     case "service-install":
@@ -85,6 +91,12 @@ export async function runFixAction(
     // install, a service cycle or a kill at a replacement. Queueing is kept;
     // only the "which host" question moved into main. `QueuedDoctorRepairResult`
     // is already this function's own result shape, declined arm included.
+    // `host-install` rides with `host-install-latest`. It reaches this
+    // console for the first time through the new fallback - a hand-started
+    // legacy host can now surface a systemd issue whose fix action is the
+    // bare form - and without this arm the click fell through to the default
+    // and rejected with "Unknown fix action: host-install".
+    case "host-install":
     case "host-install-latest":
       // No "install latest" intent survives the two-lane cutover - the
       // idempotent-converge intent (`convergeReady`) subsumes it: it
