@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type { CliInvocation } from "./cli-binary";
 
@@ -26,16 +27,45 @@ import type { CliInvocation } from "./cli-binary";
 // onto machines that already registered a broken unit under
 // `cli-v1.2.0-rc.1`.
 //
-// Deliberately narrow: exactly one leading argument that NAMES the command
-// itself, by resolved path or by basename. A legitimate interpreter
-// registration (`<node> /path/to/entry.js host start`) names a different
-// file and is preserved, and so is any invocation with no leading args.
-export function isSelfNamingCliInvocation(cli: CliInvocation): boolean {
+// The test is inverted on purpose: PRESERVE only what can be positively
+// verified as a legitimate interpreter registration - a single leading
+// argument that is an existing file, distinct from the command itself.
+// Everything else is either the known-broken shape or unverifiable, and
+// re-resolving is the safe answer for both.
+//
+// Comparing lexically is not enough. `process.execPath` reports the
+// RESOLVED executable while `argv[1]` keeps the raw invocation spelling, so
+// a CLI reached through a differently named symlink (`tr -> /opt/traycer`)
+// registered `{command: "/opt/traycer", args: ["tr"]}` - neither path-equal
+// nor basename-equal to its own command. Filesystem identity catches the
+// spellings that name a real path; the "not a file" arm catches the bare
+// and relative ones, which cannot be an entry script under any cwd.
+//
+// A legitimate interpreter registration (`<node> /path/to/entry.js host
+// start`) names a different existing file and is preserved. So is any
+// invocation with no leading args, which is every correctly registered
+// packaged CLI.
+export async function isSelfNamingCliInvocation(
+  cli: CliInvocation,
+): Promise<boolean> {
   if (cli.args.length !== 1) return false;
   const leading = cli.args[0];
   if (leading === undefined) return false;
-  return (
-    resolve(leading) === resolve(cli.command) ||
-    basename(leading) === basename(cli.command)
-  );
+  if (basename(leading) === basename(cli.command)) return true;
+  if (resolve(leading) === resolve(cli.command)) return true;
+  const leadingReal = await realpathOrNull(leading);
+  // Not a file on disk under any interpretation - it cannot be the entry
+  // script a real interpreter registration would name. Note the sibling
+  // reader already refuses to preserve a registration whose COMMAND has
+  // gone missing; this applies the same standard to its argument.
+  if (leadingReal === null) return true;
+  return leadingReal === (await realpathOrNull(cli.command));
+}
+
+async function realpathOrNull(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
 }

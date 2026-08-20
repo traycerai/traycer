@@ -7,6 +7,7 @@ import { CliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
 import { createServiceController, serviceLabelFor } from "../service";
+import { refreshWellKnownSlotIfStale } from "../store/well-known-cli";
 import {
   provisionHost,
   type HostProvisionResult,
@@ -219,6 +220,32 @@ export async function evaluateAutoBootstrap(
   };
 }
 
+// Best-effort well-known-slot refresh for an already-ready machine. Never
+// throws and never changes the caller's decision: this is upkeep layered on
+// a read path, so a failure must leave `login` / `host status` behaving
+// exactly as they would have.
+async function refreshReadySlot(opts: AutoBootstrapOptions): Promise<void> {
+  try {
+    const refreshed = await refreshWellKnownSlotIfStale({
+      environment: opts.runtime.environment,
+      binaryPath: process.execPath,
+    });
+    if (refreshed === null) return;
+    opts.runtime.logger.info("Auto-bootstrap refreshed the well-known slot", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+      staged: refreshed.staged,
+    });
+  } catch (cause) {
+    opts.runtime.logger.warn("Auto-bootstrap well-known slot refresh failed", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+      errorName: errorFromUnknown(cause).name,
+      errorMessage: errorFromUnknown(cause).message,
+    });
+  }
+}
+
 // Drive the shared provisioning core when bootstrap should proceed. This is
 // the surface `login` and `host status` call.
 //   - "ready" / "skipped" decisions are returned unchanged.
@@ -236,13 +263,29 @@ export async function maybeAutoBootstrap(
     decision.status !== "service-registered" &&
     decision.status !== "installed"
   ) {
-    // "skipped" or "ready" - nothing to do.
+    // "skipped" or "ready" - no provisioning to do.
     opts.runtime.logger.debug("Auto-bootstrap returning without provisioning", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
       status: decision.status,
       reason: decision.reason,
     });
+    // A ready machine is the ONLY place a stale well-known slot gets
+    // noticed. `resolveServiceCliInvocation` re-stages the slot, but all of
+    // its production callers are service registration paths - and a channel
+    // whose upgrade replaces the executable without re-registering (winget,
+    // whose portable manifest cannot run a post-install hook) never reaches
+    // one again. Without this, the service and the host daemon would keep
+    // launching the previous version's copy indefinitely, up to a
+    // protocol-incompatible one.
+    //
+    // `login` / `host status` on an installed machine land exactly here, so
+    // it is the cheapest recurring point that sees the running binary. The
+    // refresh self-guards: packaged runs only, an absent slot stays absent,
+    // and a matching slot costs two stats.
+    if (decision.status === "ready") {
+      await refreshReadySlot(opts);
+    }
     return decision;
   }
   const isServiceOnly = decision.status === "service-registered";

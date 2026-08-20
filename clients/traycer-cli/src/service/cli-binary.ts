@@ -4,6 +4,7 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { readCliManifest } from "../manifest/cli-manifest";
 import {
   isInterpreterDistribution,
+  isPackagedRun,
   stageWellKnownCliBinary,
   wellKnownCliBinaryPath,
 } from "../store/well-known-cli";
@@ -217,16 +218,4 @@ async function npmInterpreterInvocation(manifest: {
   if (process.env.TRAYCER_CLI_DISTRIBUTION !== "npm") return null;
   if (await isPackagedRun()) return null;
   return { command: process.execPath, args: [manifest.binaryPath] };
-}
-
-// Whether this process is a compiled single-executable (SEA) binary, i.e.
-// the program IS `process.execPath` with no entry script. `node:sea` is
-// absent under some interpreters (bun), where the answer is "no" anyway.
-async function isPackagedRun(): Promise<boolean> {
-  try {
-    const { isSea } = await import("node:sea");
-    return isSea();
-  } catch {
-    return false;
-  }
 }

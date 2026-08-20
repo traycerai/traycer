@@ -346,7 +346,8 @@ export function createServiceInstallLifecycle(
             ? await readRegisteredCliInvocation(label)
             : null;
         const preservedCli =
-          registeredCli !== null && isSelfNamingCliInvocation(registeredCli)
+          registeredCli !== null &&
+          (await isSelfNamingCliInvocation(registeredCli))
             ? null
             : registeredCli;
         await registerService({

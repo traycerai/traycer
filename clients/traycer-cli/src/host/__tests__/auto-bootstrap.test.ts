@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   serviceLabelForMock: vi.fn(),
   createServiceInstallLifecycleMock: vi.fn(),
   withCliLockMock: vi.fn(),
+  refreshWellKnownSlotIfStaleMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -68,6 +69,10 @@ vi.mock("../busy-check", () => ({
   assertHostNotBusy: vi.fn(async () => undefined),
 }));
 
+vi.mock("../../store/well-known-cli", () => ({
+  refreshWellKnownSlotIfStale: mocks.refreshWellKnownSlotIfStaleMock,
+}));
+
 const {
   stageHostInstallSourceMock,
   commitHostInstallSourceMock,
@@ -79,6 +84,7 @@ const {
   serviceLabelForMock,
   createServiceInstallLifecycleMock,
   withCliLockMock,
+  refreshWellKnownSlotIfStaleMock,
 } = mocks;
 
 import { evaluateAutoBootstrap, maybeAutoBootstrap } from "../auto-bootstrap";
@@ -150,6 +156,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   config.supportedHostVersion = null;
   resolveBundledHostArchiveMock.mockResolvedValue(null);
+  refreshWellKnownSlotIfStaleMock.mockResolvedValue(null);
   serviceLabelForMock.mockImplementation(
     (environment: "production" | "dev") => ({
       id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
@@ -562,5 +569,86 @@ describe("maybeAutoBootstrap", () => {
     expect(decision.status).toBe("failed");
     expect(decision.reason).toBe("service-registration-failed");
     expect(decision.error?.message).toContain("launchctl denied");
+  });
+});
+
+describe("maybeAutoBootstrap well-known slot refresh", () => {
+  // The well-known slot refresh (`refreshWellKnownSlotIfStale`,
+  // store/well-known-cli.ts) is best-effort upkeep layered on the "ready"
+  // read path - see `refreshReadySlot` in auto-bootstrap.ts. These pin the
+  // wiring: it fires only on a "ready" decision, with the right arguments,
+  // and a rejection must never leak into the decision `login` /
+  // `host status` render.
+  it("a ready decision calls refreshWellKnownSlotIfStale with process.execPath and the runtime environment, returning the decision unchanged", async () => {
+    readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
+    const fake = makeFakeServiceController({
+      state: "running",
+      installCalls: 0,
+      startCalls: 0,
+      installShouldThrow: null,
+    });
+    createServiceControllerMock.mockReturnValue(fake.controller);
+    refreshWellKnownSlotIfStaleMock.mockResolvedValue({
+      staged: "staged",
+      wellKnownPath: "/fake/well-known/traycer",
+    });
+
+    const decision = await maybeAutoBootstrap({
+      runtime: makeRuntime({}),
+      trigger: "host-status",
+      onProgress: null,
+    });
+
+    expect(refreshWellKnownSlotIfStaleMock).toHaveBeenCalledTimes(1);
+    expect(refreshWellKnownSlotIfStaleMock).toHaveBeenCalledWith({
+      environment: "production",
+      binaryPath: process.execPath,
+    });
+    expect(decision.status).toBe("ready");
+    expect(decision.reason).toBe("already-installed");
+  });
+
+  it("a non-ready (skipped) decision does not call refreshWellKnownSlotIfStale", async () => {
+    readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
+    const fake = makeFakeServiceController({
+      state: "not-installed",
+      installCalls: 0,
+      startCalls: 0,
+      installShouldThrow: null,
+    });
+    createServiceControllerMock.mockReturnValue(fake.controller);
+
+    const decision = await maybeAutoBootstrap({
+      runtime: makeRuntime({ noBootstrap: true }),
+      trigger: "login",
+      onProgress: null,
+    });
+
+    expect(decision.status).toBe("skipped");
+    expect(refreshWellKnownSlotIfStaleMock).not.toHaveBeenCalled();
+  });
+
+  it("still returns the unchanged ready decision without throwing when refreshWellKnownSlotIfStale rejects", async () => {
+    readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
+    const fake = makeFakeServiceController({
+      state: "running",
+      installCalls: 0,
+      startCalls: 0,
+      installShouldThrow: null,
+    });
+    createServiceControllerMock.mockReturnValue(fake.controller);
+    refreshWellKnownSlotIfStaleMock.mockRejectedValue(
+      new Error("simulated well-known slot refresh failure"),
+    );
+
+    const decision = await maybeAutoBootstrap({
+      runtime: makeRuntime({}),
+      trigger: "host-status",
+      onProgress: null,
+    });
+
+    expect(decision.status).toBe("ready");
+    expect(decision.reason).toBe("already-installed");
+    expect(decision.error).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import type { PathLike } from "node:fs";
@@ -26,6 +27,14 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
+
+// `node:sea` is absent under interpreter runs (bun, tsx); `isPackagedRun` in
+// `well-known-cli.ts` treats an import failure as "not packaged". Mock it
+// with mutable state so individual tests can flip "packaged" on and off -
+// mirrors `service/__tests__/cli-binary.test.ts`, which mocks the same
+// module for the same reason.
+const seaState = vi.hoisted(() => ({ current: false }));
+vi.mock("node:sea", () => ({ isSea: () => seaState.current }));
 
 // Lets the win32 publish-failure test intercept exactly ONE `rename()` call
 // by its 1-based call number: the call at `failOnCallNumber` throws, and
@@ -62,6 +71,7 @@ beforeEach(() => {
   osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
+  seaState.current = false;
   renameControl.callCount = 0;
   renameControl.failOnCallNumber = null;
   vi.resetModules();
@@ -356,5 +366,226 @@ describe("stageWellKnownCliBinary", () => {
       renameControl.callCount = 0;
       renameControl.failOnCallNumber = null;
     }
+  });
+
+  // Sweep tests exercise `sweepSlotLeftovers` indirectly through
+  // `stageWellKnownCliBinary`, which is its only caller - see the sweep's
+  // own doc comment in well-known-cli.ts for why `.staging-` orphans get
+  // age-gated treatment while `.old-` ones are swept on sight.
+  it("removes a .staging- orphan older than the 1 hour cutoff during the next staging", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const orphanPath = `${wellKnownPath}.staging-77777-killed-attempt`;
+    writeFileSync(orphanPath, "half-copied leftover from a killed staging");
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(orphanPath, old, old);
+    const source = join(workHome, "real-binary");
+    writeFileSync(source, "binary bytes");
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result.staged).toBe("staged");
+    expect(existsSync(orphanPath)).toBe(false);
+  });
+
+  it("does not remove a FRESH .staging- orphan, which may belong to a live concurrent writer", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const orphanPath = `${wellKnownPath}.staging-88888-concurrent-writer`;
+    writeFileSync(orphanPath, "in-flight copy from another installer");
+    const source = join(workHome, "real-binary");
+    writeFileSync(source, "binary bytes");
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result.staged).toBe("staged");
+    expect(existsSync(orphanPath)).toBe(true);
+  });
+
+  it("stages successfully with both a stale and a fresh .staging- orphan present, landing the new bytes", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const staleOrphan = `${wellKnownPath}.staging-11111-stale`;
+    writeFileSync(staleOrphan, "stale orphan");
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(staleOrphan, old, old);
+    const freshOrphan = `${wellKnownPath}.staging-22222-fresh`;
+    writeFileSync(freshOrphan, "fresh orphan");
+    const source = join(workHome, "real-binary");
+    const sourceBytes = "the newly staged binary bytes";
+    writeFileSync(source, sourceBytes);
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    // The sweep also runs against the current invocation's OWN staging
+    // file, skipped by name rather than by age - a successful stage with
+    // unrelated orphans present is proof it never mistook its own
+    // in-flight copy for one of them.
+    expect(result.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(sourceBytes);
+    expect(existsSync(staleOrphan)).toBe(false);
+    expect(existsSync(freshOrphan)).toBe(true);
+  });
+});
+
+describe("refreshWellKnownSlotIfStale", () => {
+  it("not packaged: returns null and leaves an existing stale slot's bytes untouched", async () => {
+    // seaState.current stays false (the beforeEach default), so this
+    // exercises isPackagedRun()'s real "not packaged" answer - the guard
+    // that stops any suite (or a plain dev invocation) from ever
+    // overwriting a developer's real `~/.traycer` slot.
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const staleBytes = "stale slot bytes that must survive untouched";
+    writeFileSync(wellKnownPath, staleBytes);
+    const source = join(workHome, "running-binary");
+    // Deliberately a different size AND a newer mtime than the slot, so a
+    // bypassed "not packaged" guard would visibly re-stage.
+    writeFileSync(source, "a completely different running binary payload");
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(source, future, future);
+
+    const result = await refreshWellKnownSlotIfStale({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result).toBeNull();
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
+  });
+
+  it("packaged, slot absent: returns null without creating the slot", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    const source = join(workHome, "running-binary");
+    writeFileSync(source, "running binary bytes");
+
+    const result = await refreshWellKnownSlotIfStale({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result).toBeNull();
+    expect(existsSync(wellKnownPath)).toBe(false);
+  });
+
+  it("packaged, slot matches source (same size, slot mtime >= source mtime): returns null", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const bytes = "matching binary bytes";
+    writeFileSync(wellKnownPath, bytes);
+    const source = join(workHome, "running-binary");
+    writeFileSync(source, bytes);
+    const base = Date.now();
+    utimesSync(source, new Date(base), new Date(base));
+    // Slot mtime strictly newer than the source's - the ">=" half of the
+    // guard.
+    utimesSync(wellKnownPath, new Date(base + 5_000), new Date(base + 5_000));
+
+    const result = await refreshWellKnownSlotIfStale({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result).toBeNull();
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(bytes);
+  });
+
+  it("packaged, source newer than slot (same size): re-stages with the source's bytes", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const slotBytes = "AAAAAAAAAA";
+    const sourceBytes = "BBBBBBBBBB";
+    writeFileSync(wellKnownPath, slotBytes);
+    const source = join(workHome, "running-binary");
+    writeFileSync(source, sourceBytes);
+    const base = Date.now();
+    utimesSync(wellKnownPath, new Date(base - 60_000), new Date(base - 60_000));
+    utimesSync(source, new Date(base), new Date(base));
+
+    const result = await refreshWellKnownSlotIfStale({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result).not.toBeNull();
+    if (result === null) {
+      throw new Error("expected a staged outcome");
+    }
+    expect(result.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(sourceBytes);
+  });
+
+  it("packaged, source size differs even with an older source mtime: re-stages", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "short");
+    const source = join(workHome, "running-binary");
+    const sourceBytes = "a much longer running binary payload";
+    writeFileSync(source, sourceBytes);
+    const base = Date.now();
+    // Source mtime OLDER than the slot's - if mtime alone gated staleness,
+    // this would read as fresh. The differing size must force a re-stage
+    // regardless.
+    utimesSync(source, new Date(base - 120_000), new Date(base - 120_000));
+    utimesSync(wellKnownPath, new Date(base), new Date(base));
+
+    const result = await refreshWellKnownSlotIfStale({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result).not.toBeNull();
+    if (result === null) {
+      throw new Error("expected a staged outcome");
+    }
+    expect(result.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(sourceBytes);
+  });
+
+  it("packaged, binaryPath IS the well-known slot: returns null", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const bytes = "the well-known binary itself";
+    writeFileSync(wellKnownPath, bytes);
+
+    const result = await refreshWellKnownSlotIfStale({
+      environment: ENVIRONMENT,
+      binaryPath: wellKnownPath,
+    });
+
+    expect(result).toBeNull();
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(bytes);
   });
 });

@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readdir, rename, rm } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { CliInstallSource } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
@@ -47,6 +56,88 @@ export function wellKnownCliBinaryPath(environment: Environment): string {
 // executable install and this returns false for every source.
 export function isInterpreterDistribution(source: CliInstallSource): boolean {
   return source === "npm";
+}
+
+// Whether this process is a compiled single-executable (SEA) binary, i.e.
+// the program IS `process.execPath` with no entry script. `node:sea` is
+// absent under some interpreters (bun) and under vitest, where the answer
+// is "no" anyway.
+//
+// Lives here rather than in `service/cli-binary.ts` so the slot-refresh
+// below can gate on it without importing a module that four suites mock
+// wholesale - and so there is exactly one definition of "packaged".
+export async function isPackagedRun(): Promise<boolean> {
+  try {
+    const { isSea } = await import("node:sea");
+    return isSea();
+  } catch {
+    return false;
+  }
+}
+
+// Re-stage the slot from the running packaged binary when the two have
+// diverged. Returns null when nothing was done.
+//
+// Why this exists separately from the resolver: `resolveServiceCliInvocation`
+// re-stages the slot, but every one of its production callers is a service
+// REGISTRATION path. A channel whose upgrade replaces the real executable
+// without re-registering - winget, whose portable manifest cannot run a
+// post-install hook at all - therefore leaves the slot holding the previous
+// version's bytes, and ordinary `login` / `host status` runs return through
+// auto-bootstrap's already-ready branch without ever resolving. The service
+// and the host daemon would keep launching the old CLI indefinitely.
+//
+// Three guards keep this cheap and safe:
+//   - packaged runs only, checked FIRST. An interpreter run (dev, tests)
+//     returns before touching the filesystem, so no suite can be tricked
+//     into copying over a developer's real `~/.traycer` slot.
+//   - an ABSENT slot is left absent. Creating it is registration's job;
+//     a machine that never registered a service should not grow one here.
+//   - staleness is two stats, not a hash. `copyFile` does not preserve
+//     mtime, so a freshly staged slot is always newer than its source;
+//     a source that is newer than the slot, or differs in size, is a new
+//     binary. Identical size AND an older-or-equal source is the fresh
+//     case and costs nothing.
+//
+// The size half of that test is deliberate rather than redundant. A
+// package manager that preserves archive timestamps can install NEW bytes
+// carrying an OLD mtime, and mtime alone would never notice - which is the
+// exact bug this exists to close. The cost is that a machine with two
+// co-installed packaged CLIs (say Desktop's bundled one plus a Homebrew
+// one) re-stages when the user alternates between them. That converges
+// after one copy per alternation rather than repeating per invocation, and
+// Desktop already re-stages this slot on every app launch, so the marginal
+// churn is symmetric with behaviour that is already there.
+export async function refreshWellKnownSlotIfStale(opts: {
+  readonly environment: Environment;
+  readonly binaryPath: string;
+}): Promise<WellKnownCliStageOutcome | null> {
+  if (!(await isPackagedRun())) return null;
+  const wellKnownPath = wellKnownCliBinaryPath(opts.environment);
+  const source = resolve(opts.binaryPath);
+  if (resolve(wellKnownPath) === source) return null;
+  let slotStat: Stats;
+  let sourceStat: Stats;
+  try {
+    [slotStat, sourceStat] = await Promise.all([
+      stat(wellKnownPath),
+      stat(source),
+    ]);
+  } catch {
+    // Slot absent (the common case before first registration) or the
+    // running binary vanished mid-flight. Either way, nothing to refresh.
+    return null;
+  }
+  if (
+    slotStat.size === sourceStat.size &&
+    slotStat.mtimeMs >= sourceStat.mtimeMs
+  ) {
+    return null;
+  }
+  return stageWellKnownCliBinary({
+    environment: opts.environment,
+    binaryPath: source,
+  });
 }
 
 export type WellKnownCliStageOutcome =
@@ -116,8 +207,8 @@ export async function stageWellKnownCliBinary(opts: {
   try {
     await mkdir(dirname(wellKnownPath), { recursive: true });
     await copyFile(source, staging);
+    await sweepSlotLeftovers(wellKnownPath, staging);
     if (process.platform === "win32") {
-      await sweepAsideSlotBinaries(wellKnownPath);
       asidePath = await renameSlotBinaryAside(wellKnownPath);
     } else {
       await chmod(staging, 0o755);
@@ -176,22 +267,62 @@ async function renameSlotBinaryAside(
   }
 }
 
-// Best-effort sweep of `<binary>.old-<ts>` leftovers from previous
-// rename-aside stagings. Deletion fails while a renamed image is still
-// executing; those unlock once the old process exits, so each staging pass
-// retries the whole set and the trash never outlives one host generation
-// by much.
-async function sweepAsideSlotBinaries(wellKnownPath: string): Promise<void> {
+// Best-effort sweep of this slot's leftovers:
+//
+//   - `<binary>.old-<ts>-<pid>` from a previous Windows rename-aside.
+//     Deletion fails while a renamed image is still executing; those unlock
+//     once the old process exits, so each staging pass retries the whole
+//     set and the trash never outlives one host generation by much.
+//   - `<binary>.staging-<pid>-<uuid>` from a staging that was killed
+//     between the copy and the publish. The publish is a rename, so an
+//     interrupted attempt can never corrupt the slot itself - but without
+//     this the orphaned copies accumulate, one full binary each.
+//
+// Runs on every platform (the aside files are Windows-only, the staging
+// orphans are not) and never throws.
+//
+// The two prefixes get different treatment, because only one of them can
+// belong to a LIVE writer. An aside file is by definition already
+// superseded, so it is swept on sight - that is what keeps a Windows
+// machine from accumulating one image per upgrade while the old process
+// still holds a delete lock. A `.staging-` file, by contrast, is a copy in
+// flight for whoever created it, and copying a ~100 MB binary takes
+// seconds; sweeping those on sight would let one installer delete another's
+// half-written copy out from under it. So they are removed only once they
+// are far older than any copy could still be running, and this
+// invocation's own staging file is skipped outright.
+const STAGING_ORPHAN_MIN_AGE_MS = 60 * 60 * 1000;
+
+async function sweepSlotLeftovers(
+  wellKnownPath: string,
+  ownStagingPath: string,
+): Promise<void> {
   const dir = dirname(wellKnownPath);
-  const prefix = `${basename(wellKnownPath)}.old-`;
+  const name = basename(wellKnownPath);
+  const asidePrefix = `${name}.old-`;
+  const stagingPrefix = `${name}.staging-`;
   let entries: readonly string[];
   try {
     entries = await readdir(dir);
   } catch {
     return;
   }
+  const ownStagingName = basename(ownStagingPath);
+  const stagingCutoff = Date.now() - STAGING_ORPHAN_MIN_AGE_MS;
   for (const entry of entries) {
-    if (!entry.startsWith(prefix)) continue;
-    await rm(join(dir, entry), { force: true }).catch(() => undefined);
+    const path = join(dir, entry);
+    if (entry.startsWith(asidePrefix)) {
+      await rm(path, { force: true }).catch(() => undefined);
+      continue;
+    }
+    if (!entry.startsWith(stagingPrefix) || entry === ownStagingName) continue;
+    let leftover: Stats;
+    try {
+      leftover = await stat(path);
+    } catch {
+      continue;
+    }
+    if (leftover.mtimeMs > stagingCutoff) continue;
+    await rm(path, { force: true }).catch(() => undefined);
   }
 }
