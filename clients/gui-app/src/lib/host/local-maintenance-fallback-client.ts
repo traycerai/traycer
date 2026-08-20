@@ -303,6 +303,48 @@ export function createLocalMaintenanceFallbackClient(input: {
     return !negotiated.has(method);
   };
 
+  /**
+   * Delegate, and serve instead if THIS CALL'S OWN handshake is what first
+   * revealed the method absent.
+   *
+   * The cold-renderer race: a fresh window's mount-time reads can be issued
+   * before any handshake with this host has completed, so `shouldServe` reads
+   * `null` ("not yet known") and correctly delegates — and the dial those very
+   * calls trigger is the handshake that records the absence, a moment after
+   * the decision was made. Nothing re-runs them on the flip: the query key and
+   * `enabled` value are identical for `null` and `false`, and
+   * `host.update.check` is a condition query with `retry: false`, so a first
+   * paint would sit on the refusal until an error-lane poll or a manual
+   * re-check. Before this lane existed that same failure was replaced by the
+   * `unsupported` notice on the next render; now the card stays live, so the
+   * retry has to live here.
+   *
+   * Narrow by construction: it re-serves only when the registry now answers a
+   * definitive `false` for a pinned method on this decorator's host — the same
+   * predicate the direct path uses. A method the host advertises never
+   * satisfies it, so a genuine transport failure still propagates, and an
+   * absent method could not have performed work before refusing.
+   */
+  const delegateThenServeIfAbsent = async <
+    Method extends keyof HostRpcRegistry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    signal: AbortSignal | undefined,
+    delegate: () => Promise<ResponseOfMethod<HostRpcRegistry, Method>>,
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> => {
+    try {
+      return await delegate();
+    } catch (error) {
+      // A cancelled call is not a refusal — the caller stopped wanting the
+      // answer, so re-issuing it over the bridge would resurrect work the
+      // query layer just abandoned.
+      if (signal?.aborted === true) throw error;
+      if (!shouldServe(method)) throw error;
+      return serveFallbackRequest<Method>(serve, method, params);
+    }
+  };
+
   return new Proxy(client, {
     get: (target, property, receiver) => {
       if (property === "request") {
@@ -312,7 +354,9 @@ export function createLocalMaintenanceFallbackClient(input: {
         ) =>
           shouldServe(method)
             ? serveFallbackRequest<Method>(serve, method, params)
-            : target.request(method, params);
+            : delegateThenServeIfAbsent(method, params, undefined, () =>
+                target.request(method, params),
+              );
       }
       if (property === "requestWithSignal") {
         // The IPC leg has no cancellation to thread, so a served call ignores
@@ -324,7 +368,9 @@ export function createLocalMaintenanceFallbackClient(input: {
         ) =>
           shouldServe(method)
             ? serveFallbackRequest<Method>(serve, method, params)
-            : target.requestWithSignal(method, params, signal);
+            : delegateThenServeIfAbsent(method, params, signal, () =>
+                target.requestWithSignal(method, params, signal),
+              );
       }
       if (property === "requestWithResponseTimeout") {
         // None of the intercepted four is a long-poll method today; this is
@@ -337,10 +383,12 @@ export function createLocalMaintenanceFallbackClient(input: {
         ) =>
           shouldServe(method)
             ? serveFallbackRequest<Method>(serve, method, params)
-            : target.requestWithResponseTimeout(
-                method,
-                params,
-                responseTimeoutMs,
+            : delegateThenServeIfAbsent(method, params, undefined, () =>
+                target.requestWithResponseTimeout(
+                  method,
+                  params,
+                  responseTimeoutMs,
+                ),
               );
       }
       // Same fall-through discipline as `createPinnedRequester`: everything
