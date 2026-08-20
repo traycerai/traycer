@@ -16,6 +16,22 @@ import {
 /** The canvas tile instance a render subtree belongs to. */
 export const TileMinimapContext = createContext<string | null>(null);
 
+function sameOutline(
+  current: ReadonlyArray<MinimapListEntry>,
+  next: ReadonlyArray<MinimapListEntry>,
+): boolean {
+  if (current === next) return true;
+  if (current.length !== next.length) return false;
+  for (let index = 0; index < current.length; index += 1) {
+    const a = current[index];
+    const b = next[index];
+    if (a.key !== b.key || a.label !== b.label || a.level !== b.level) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export interface RegisterTileMinimapInput {
   readonly title: string;
   readonly items: ReadonlyArray<MinimapListEntry>;
@@ -46,7 +62,23 @@ export function useRegisterTileMinimap(input: RegisterTileMinimapInput): void {
     onSelectRef.current = onSelect;
   }, [onSelect]);
 
+  // The bar stays subscribed while its drawer is closed, so a notify is a
+  // re-render of the bar and of whatever the open drawer is showing. It costs
+  // a section boundary, never a stream token - and a publisher above a
+  // streaming transcript derives `items` from an array that IS replaced per
+  // token. So the comparison is by outline, not by array identity: what the
+  // reader would see, not which array it came from. Holding the previous
+  // array when it compares equal is what keeps `getSnapshot` stable for
+  // `useSyncExternalStore`; the entries are value-equal either way, and
+  // `select` reaches the live callback through `onSelectRef`.
   useEffect(() => {
+    const previous = snapshotRef.current;
+    if (
+      previous.currentIndex === currentIndex &&
+      sameOutline(previous.items, items)
+    ) {
+      return;
+    }
     snapshotRef.current = { items, currentIndex };
     for (const listener of listenersRef.current) listener();
   }, [currentIndex, items]);

@@ -66,7 +66,8 @@ function ContentMinimapDrawer(props: {
   const { resolvedTheme, themePreset } = useResolvedTheme();
   // Subscribed while closed too: the button hides itself on empty content, and
   // an unsubscribed bar would never learn that the first turn landed. The
-  // adapter notifies once per section boundary, not per scroll tick.
+  // adapter notifies on an outline or section change, not per scroll tick and
+  // not per streaming token - see `useRegisterTileMinimap`.
   const snapshot = useSyncExternalStore(adapter.subscribe, adapter.getSnapshot);
   const [open, setOpen] = useState(false);
   const [cursorIndex, setCursorIndex] = useState(0);
@@ -116,18 +117,25 @@ function ContentMinimapDrawer(props: {
       >
         {/* The card renders its own visible heading; this is the a11y name. */}
         <DrawerTitle className="sr-only">{adapter.title}</DrawerTitle>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-2 pt-1 pb-safe-bottom-gutter">
-          <MinimapListCard
-            className="max-h-none border-0 bg-transparent shadow-none"
-            currentIndex={currentIndex}
-            cursorIndex={clampIndex(cursorIndex, items.length)}
-            items={items}
-            onCursorIndexChange={setCursorIndex}
-            onSelect={handleSelect}
-            side="right"
-            title={adapter.title}
-          />
-        </div>
+        {/* Mounted with the drawer, not with the bar: the card scrolls its
+            current row into view on every change of it, and a closed drawer
+            still lives in a portal - so leaving it mounted forces a document
+            layout from a surface nobody is looking at, in the frames the
+            content behind it is measuring itself. */}
+        {open ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-2 pt-1 pb-safe-bottom-gutter">
+            <MinimapListCard
+              className="max-h-none border-0 bg-transparent shadow-none"
+              currentIndex={currentIndex}
+              cursorIndex={clampIndex(cursorIndex, items.length)}
+              items={items}
+              onCursorIndexChange={setCursorIndex}
+              onSelect={handleSelect}
+              side="right"
+              title={adapter.title}
+            />
+          </div>
+        ) : null}
       </DrawerContent>
     </Drawer>
   );
