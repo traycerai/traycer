@@ -34,12 +34,14 @@ const durableAuthority = vi.hoisted<{
   capability: "unknown" | "legacy" | "capable";
   canMutate: boolean;
   closePending: boolean;
+  killPending: boolean;
   renamePending: boolean;
   collectionIncludesSession: boolean;
 }>(() => ({
   capability: "legacy",
   canMutate: false,
   closePending: false,
+  killPending: false,
   renamePending: false,
   collectionIncludesSession: false,
 }));
@@ -112,7 +114,10 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
-  useTerminalKillFor: () => ({ mutate: killMutate, isPending: false }),
+  useTerminalKillFor: () => ({
+    mutate: killMutate,
+    isPending: durableAuthority.killPending,
+  }),
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
@@ -208,6 +213,14 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import {
+  recordProviderLoginTerminal,
+  useProviderLoginTerminalsStore,
+} from "@/stores/providers/provider-login-terminals";
+import {
+  recordSetupTerminal,
+  useSetupTerminalsStore,
+} from "@/stores/worktree/setup-terminals";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -241,13 +254,52 @@ function resolveCloseRequest(vars: { readonly terminalId: string }): {
   return { terminalId: vars.terminalId, revision: 2 };
 }
 
-function seedOpenTerminalTab(authority: "legacy" | "host" | "future"): void {
+function seedEmptyTab(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.setState({
     tabsById: {
       [TAB_ID]: { tabId: TAB_ID, epicId: "epic-1", name: "Epic 1" },
     },
   });
+}
+
+/**
+ * Setup and provider-login shells are host-created `terminal.list`
+ * compatibility rows: import-exempt, so their canvas ref stays legacy-shaped
+ * even against a capable host, and absent from the durable collection.
+ */
+function seedOpenCompatibilityTab(origin: "setup" | "provider-login"): void {
+  seedEmptyTab();
+  const base = {
+    id: SESSION_ID,
+    instanceId: "inst-term-1",
+    type: "terminal" as const,
+    name: "New Terminal",
+    titleSource: "default" as const,
+    hostId: "host-1",
+    cwd: "/tmp/work",
+  };
+  const ref: EpicTerminalRef =
+    origin === "setup"
+      ? { ...base, origin: "setup" }
+      : { ...base, origin: "provider-login", originProviderId: "claude-code" };
+  useEpicCanvasStore.getState().openTileInTab(TAB_ID, ref);
+}
+
+function recordCompatibilityOrigin(origin: "setup" | "provider-login"): void {
+  if (origin === "setup") {
+    recordSetupTerminal({ hostId: "host-1", sessionId: SESSION_ID });
+    return;
+  }
+  recordProviderLoginTerminal({
+    hostId: "host-1",
+    sessionId: SESSION_ID,
+    providerId: "claude-code",
+  });
+}
+
+function seedOpenTerminalTab(authority: "legacy" | "host" | "future"): void {
+  seedEmptyTab();
   let ref: EpicTerminalRef = {
     id: SESSION_ID,
     instanceId: "inst-term-1",
@@ -309,9 +361,20 @@ describe("terminal sidebar Close", () => {
     durableAuthority.capability = "legacy";
     durableAuthority.canMutate = false;
     durableAuthority.closePending = false;
+    durableAuthority.killPending = false;
     durableAuthority.renamePending = false;
     durableAuthority.collectionIncludesSession = false;
     terminalSessions.value = [RUNNING_SESSION];
+    // Both origin registries are persisted module-level singletons, so an entry
+    // recorded by one test would otherwise outlive it.
+    useProviderLoginTerminalsStore.setState(
+      useProviderLoginTerminalsStore.getInitialState(),
+      true,
+    );
+    useSetupTerminalsStore.setState(
+      useSetupTerminalsStore.getInitialState(),
+      true,
+    );
     seedOpenTerminalTab("legacy");
   });
 
@@ -459,6 +522,44 @@ describe("terminal sidebar Close", () => {
     expect(killMutate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { origin: "setup", openRef: true },
+    { origin: "setup", openRef: false },
+    { origin: "provider-login", openRef: true },
+    { origin: "provider-login", openRef: false },
+  ] as const)(
+    "closes a capable host's $origin compatibility row through terminal.kill (open canvas ref: $openRef)",
+    ({ origin, openRef }) => {
+      // The durable close resolver needs an authorized persistent record.
+      // Setup and provider-login shells deliberately never enter the durable
+      // collection, so `terminal.plain.close` would answer terminal-not-found
+      // and strand the row behind a generic failure toast.
+      durableAuthority.capability = "capable";
+      durableAuthority.canMutate = true;
+      durableAuthority.collectionIncludesSession = false;
+      recordCompatibilityOrigin(origin);
+      if (openRef) {
+        seedOpenCompatibilityTab(origin);
+        expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
+      } else {
+        seedEmptyTab();
+        expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
+      }
+      const { getByRole } = render(
+        wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+      );
+
+      const close = getByRole("button", { name: "Close" });
+      expect(close.getAttribute("disabled")).toBeNull();
+      fireEvent.click(close);
+
+      expect(killMutate).toHaveBeenCalledWith({ sessionId: SESSION_ID });
+      expect(durableCloseMutateAsync).not.toHaveBeenCalled();
+      // The legacy local canvas close stays synchronous for these rows.
+      expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
+    },
+  );
+
   it("disables close while capable-host support is unknown", () => {
     durableAuthority.capability = "unknown";
     const { getByTestId } = render(
@@ -472,6 +573,73 @@ describe("terminal sidebar Close", () => {
     expect(killMutate).not.toHaveBeenCalled();
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
   });
+
+  it.each([
+    {
+      name: "stale durable authority",
+      canMutate: false,
+      includesSession: true,
+      closePending: false,
+      killPending: false,
+      compatibilityRow: false,
+    },
+    {
+      name: "pending durable close",
+      canMutate: true,
+      includesSession: true,
+      closePending: true,
+      killPending: false,
+      compatibilityRow: false,
+    },
+    {
+      name: "pending compatibility kill",
+      canMutate: true,
+      includesSession: false,
+      closePending: false,
+      killPending: true,
+      compatibilityRow: true,
+    },
+  ] as const)(
+    "disables close for $name",
+    ({
+      canMutate,
+      includesSession,
+      closePending,
+      killPending,
+      compatibilityRow,
+    }) => {
+      durableAuthority.capability = "capable";
+      durableAuthority.canMutate = canMutate;
+      durableAuthority.collectionIncludesSession = includesSession;
+      durableAuthority.closePending = closePending;
+      durableAuthority.killPending = killPending;
+      if (compatibilityRow) {
+        recordCompatibilityOrigin("setup");
+        seedOpenCompatibilityTab("setup");
+      } else {
+        seedOpenTerminalTab("host");
+      }
+      const { getByRole, getByTestId } = render(
+        wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+      );
+
+      const dropdownClose = getByRole("button", { name: "Close" });
+      expect(dropdownClose.getAttribute("disabled")).not.toBeNull();
+      fireEvent.click(dropdownClose);
+
+      fireEvent.contextMenu(
+        getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+      );
+      const contextClose = getByRole("menuitem", { name: "Close" });
+      expect(contextClose.getAttribute("data-disabled")).not.toBeNull();
+      fireEvent.keyDown(contextClose, { key: "Enter" });
+      fireEvent.click(contextClose);
+
+      expect(durableCloseMutateAsync).not.toHaveBeenCalled();
+      expect(killMutate).not.toHaveBeenCalled();
+      expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
+    },
+  );
 
   it.each([
     { capability: "capable", canMutate: true },
