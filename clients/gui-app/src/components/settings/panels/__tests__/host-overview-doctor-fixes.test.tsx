@@ -78,6 +78,37 @@ const OVERVIEW_METHODS = [
   "diagnostics.logs.tail",
 ] as const;
 
+const DOCTOR_WITHOUT_LOGS = [
+  "host.status",
+  "host.identity.get",
+  "host.identity.set",
+  "host.getInstallationInfo",
+  "host.restart",
+  "host.doctor",
+  "host.update.check",
+  "host.update.install",
+] as const;
+
+const RECENT_CRASH_MARKERS: HostDoctorIssue = {
+  code: "RECENT_CRASH_MARKERS",
+  severity: "warning",
+  title: "Recent crash markers",
+  message: "The host log contains recent crash markers.",
+  fixAction: "host-logs",
+  terminalCommand: null,
+  details: null,
+};
+
+const CLI_UPGRADE_PENDING: HostDoctorIssue = {
+  code: "CLI_UPGRADE_PENDING",
+  severity: "warning",
+  title: "CLI upgrade pending (2.0.0)",
+  message: "Restart the host service to finalise the swap.",
+  fixAction: "host-restart",
+  terminalCommand: "traycer host restart --channel prod",
+  details: null,
+};
+
 /**
  * The one doctor fix that ENDS things: it asks the process holding the port to
  * exit, then restarts the host — killing in-flight work on both counts.
@@ -267,5 +298,185 @@ describe("Overview doctor — the three local-only repairs", () => {
     expect(await screen.findByTestId("host-doctor-run-failed")).toBeTruthy();
     expect(screen.queryByText("Running Doctor…")).toBeNull();
     expect(screen.getByTestId("host-doctor-rerun")).toBeTruthy();
+  });
+});
+
+function renderDoctorLogs(options: {
+  readonly isLocalMachine: boolean;
+  readonly withBridge: boolean;
+  readonly advertiseLogs: boolean;
+}): {
+  readonly management: IHostManagement;
+  readonly rpcLogCalls: { count: number };
+} {
+  const hostId = options.isLocalMachine ? "host-local" : "host-remote";
+  const rpcLogCalls = { count: 0 };
+  const fixture = buildOverviewHostFixture({
+    hostId,
+    isLocalMachine: options.isLocalMachine,
+    overrideHandlers: {
+      "host.doctor": () => ({
+        status: "ok" as const,
+        issues: [RECENT_CRASH_MARKERS, CLI_UPGRADE_PENDING],
+        triviallyGreenIssueCodes: [],
+      }),
+      "diagnostics.logs.tail": () => {
+        rpcLogCalls.count += 1;
+        return {
+          status: "available" as const,
+          target: "host" as const,
+          path: "/tmp/host.log",
+          lines: ["rpc-log-line"],
+          truncated: false,
+        };
+      },
+    },
+  });
+  recordNegotiatedHostMethods(
+    hostId,
+    options.advertiseLogs ? OVERVIEW_METHODS : DOCTOR_WITHOUT_LOGS,
+  );
+
+  const management = buildOverviewManagement({
+    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
+    getHostLogs: vi.fn(() =>
+      Promise.resolve({
+        path: "/tmp/host.log",
+        tail: "bridge-line-1\nbridge-line-2",
+      }),
+    ),
+  });
+
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId,
+      isLocalMachine: options.isLocalMachine,
+      connectable: true,
+    }),
+    hostId,
+    status: "ready",
+    client: fixture.client,
+  };
+  hostBindingMock.current = { hostClient: fixture.client };
+
+  const runnerHost: IRunnerHost = new MockRunnerHost({
+    signInUrl: "https://example.invalid/signin",
+    authnBaseUrl: "https://example.invalid",
+    localHost: options.isLocalMachine
+      ? {
+          hostId,
+          availability: "available" as const,
+          websocketUrl: "ws://127.0.0.1:8765",
+          version: "1.5.0",
+          pid: 4821,
+          systemHostName: hostId,
+          displayName: hostId,
+        }
+      : null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+    hostManagement: options.withBridge ? management : null,
+  });
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostSettingsPanel />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+  return { management, rpcLogCalls };
+}
+
+describe("Overview doctor — Show logs stays on an honest source", () => {
+  it("Show logs on a local host with a bridge and no RPC logs reads via getHostLogs", async () => {
+    const { management, rpcLogCalls } = renderDoctorLogs({
+      isLocalMachine: true,
+      withBridge: true,
+      advertiseLogs: false,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-RECENT_CRASH_MARKERS"),
+    );
+
+    await waitFor(() => {
+      expect(management.getHostLogs).toHaveBeenCalledWith({ tailLines: 200 });
+    });
+    expect(rpcLogCalls.count).toBe(0);
+    const tail = await screen.findByTestId("host-doctor-log-tail");
+    expect(tail.textContent).toContain("bridge-line-1");
+    expect(tail.textContent).not.toContain("rpc-log-line");
+  });
+
+  it("withholds Show logs on a remote host that advertises doctor but not diagnostics.logs.tail", async () => {
+    // Discriminator: round 4 routed on `!rpcLogsSupported` alone, so a remote
+    // host's Show logs button read THIS computer's log via the bridge and
+    // rendered it under the remote name. The button must be absent, not
+    // present-and-wrong. Red against 390d05c2^.
+    const { management, rpcLogCalls } = renderDoctorLogs({
+      isLocalMachine: false,
+      withBridge: true,
+      advertiseLogs: false,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    expect(
+      await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("host-doctor-fix-RECENT_CRASH_MARKERS"),
+    ).toBeNull();
+    expect(management.getHostLogs).not.toHaveBeenCalled();
+    expect(rpcLogCalls.count).toBe(0);
+  });
+
+  it("Show logs on a remote host that advertises diagnostics.logs.tail uses the RPC, not the bridge", async () => {
+    const { management, rpcLogCalls } = renderDoctorLogs({
+      isLocalMachine: false,
+      withBridge: true,
+      advertiseLogs: true,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-RECENT_CRASH_MARKERS"),
+    );
+
+    await waitFor(() => {
+      expect(rpcLogCalls.count).toBe(1);
+    });
+    expect(management.getHostLogs).not.toHaveBeenCalled();
+    const tail = await screen.findByTestId("host-doctor-log-tail");
+    expect(tail.textContent).toContain("rpc-log-line");
+    expect(tail.textContent).not.toContain("bridge-line-1");
+  });
+
+  it("withholds Show logs on this computer when there is no CLI bridge and no RPC logs", async () => {
+    const { management, rpcLogCalls } = renderDoctorLogs({
+      isLocalMachine: true,
+      withBridge: false,
+      advertiseLogs: false,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    expect(
+      await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("host-doctor-fix-RECENT_CRASH_MARKERS"),
+    ).toBeNull();
+    expect(management.getHostLogs).not.toHaveBeenCalled();
+    expect(rpcLogCalls.count).toBe(0);
   });
 });
