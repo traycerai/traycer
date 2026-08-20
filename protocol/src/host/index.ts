@@ -4,6 +4,7 @@ export * from "./chat-fork";
 export * from "./comments";
 export * from "./config";
 export * from "./diagnostics";
+export * from "./drafts";
 export * from "./editor";
 export * from "./epic";
 export * from "./git-asset-stream";

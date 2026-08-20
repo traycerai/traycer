@@ -7,7 +7,9 @@ import {
   chatHeadRecordSchema,
   chatShardRecordSchema,
 } from "@traycer/protocol/persistence/_internal/chat-sync-schemas";
+import { draftHeadRecordSchema } from "@traycer/protocol/persistence/_internal/draft-schemas";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
+import { DRAFT_HEAD_SCHEMA_VERSION } from "@traycer/protocol/persistence/draft/version";
 import { epicSchema } from "@traycer/protocol/persistence/_internal/epic-schemas";
 import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room-metadata-schemas";
 
@@ -30,6 +32,10 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
  *   release cadences (cloud renderers, clone targets) assemble them. They share
  *   ONE version line (`chat-sync/version.ts`), because a shard embeds the
  *   sub-schemas the head's core is built from.
+ * - `draft-head` - a published draft / stash / interview in the personal
+ *   `drafts` scope. Same tenant envelope (`parts`) as `chat-head`; the
+ *   payload is the `draft/v1` dialect. Images are blobs, so v1 names no
+ *   shards and the envelope is empty.
  *
  * Cloud-catalog / task-ref / workspace-association caches are owned by
  * the cloud data client (internal, not in this repo) and are NOT versioned
@@ -68,6 +74,12 @@ export const chatShardRecordV110 = defineRecordContract({
   name: "chat-shard",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatShardRecordSchema,
+});
+
+export const draftHeadRecordV100 = defineRecordContract({
+  name: "draft-head",
+  schemaVersion: DRAFT_HEAD_SCHEMA_VERSION,
+  schema: draftHeadRecordSchema,
 });
 
 export const persistenceRecordRegistry = defineVersionedRecordRegistry({
@@ -110,6 +122,15 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
       downgradePathsFromLatest: {},
     },
   },
+  "draft-head": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: draftHeadRecordV100, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 });
 
 export type PersistenceRecordRegistry = typeof persistenceRecordRegistry;
@@ -123,3 +144,4 @@ export type RoomMetadata = RecordValue<
 >;
 export type ChatHead = RecordValue<PersistenceRecordRegistry, "chat-head">;
 export type ChatShard = RecordValue<PersistenceRecordRegistry, "chat-shard">;
+export type DraftHead = RecordValue<PersistenceRecordRegistry, "draft-head">;

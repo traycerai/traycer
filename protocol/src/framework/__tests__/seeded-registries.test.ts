@@ -32,10 +32,11 @@ describe("seeded protocol registries", () => {
     ).not.toThrow();
   });
 
-  it("persistence owns the epic, room-metadata and chat-sync records", () => {
+  it("persistence owns the epic, room-metadata, chat-sync and draft-head records", () => {
     expect(Object.keys(persistenceRecordRegistry).sort()).toEqual([
       "chat-head",
       "chat-shard",
+      "draft-head",
       "epic",
       "room-metadata",
     ]);
@@ -47,6 +48,9 @@ describe("seeded protocol registries", () => {
       "1",
     ]);
     expect(Object.keys(persistenceRecordRegistry["chat-shard"]).sort()).toEqual([
+      "1",
+    ]);
+    expect(Object.keys(persistenceRecordRegistry["draft-head"]).sort()).toEqual([
       "1",
     ]);
   });

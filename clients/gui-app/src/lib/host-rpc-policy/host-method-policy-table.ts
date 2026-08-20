@@ -1041,6 +1041,14 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 45_000 },
   },
+  // Drafts live-sync rides `drafts.subscribe`. These unaries are the snapshot
+  // + mutation surface; an older host degrades them as unsupported and the
+  // client keeps device-local drafts. No poll: subscribe is the freshness
+  // channel, and a host missing the stream also misses these methods.
+  "drafts.list": { ...LATEST_SCHEDULING, poll: null },
+  "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.claim": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected
   // after this query first cached would never surface. 45s sits between the
