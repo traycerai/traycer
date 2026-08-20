@@ -299,10 +299,7 @@ class FakeRelayHost {
   }
 
   /** Relay control frame: the peer/session was killed for a relay reason. */
-  sendRelayKill(
-    type: "peer_gone" | "killed",
-    reason: string,
-  ): void {
+  sendRelayKill(type: "peer_gone" | "killed", reason: string): void {
     const connection = this.liveConnection();
     connection.socket.onmessage?.({
       type: "text",
