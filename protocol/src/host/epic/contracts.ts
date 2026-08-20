@@ -104,6 +104,7 @@ import {
   epicSubscribeV10,
   epicSubscribeV11,
   epicSubscribeV12,
+  epicSubscribeV13,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -839,4 +840,9 @@ export const epicGetChatRunSettingsV10 = defineRpcContract({
   responseSchema: getChatRunSettingsResponseSchema,
 });
 
-export { epicSubscribeV10, epicSubscribeV11, epicSubscribeV12 };
+export {
+  epicSubscribeV10,
+  epicSubscribeV11,
+  epicSubscribeV12,
+  epicSubscribeV13,
+};

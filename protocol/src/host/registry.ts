@@ -344,6 +344,7 @@ import {
   epicSubscribeV10,
   epicSubscribeV11,
   epicSubscribeV12,
+  epicSubscribeV13,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
@@ -7600,7 +7601,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // minor parses with its own frozen schema and strips the unknown key
       // (see the @1.2 note in `epic/subscribe.ts` for the full asymmetry).
       // @1.0 and @1.1 keep the pre-roomId meta shape.
-      latestMinor: 2,
+      // @1.3 adds the optional `seedOffer` to the OPEN REQUEST (a reattaching
+      // client's root-doc state vector) and `seededFromOffer` to the snapshot
+      // frame's `meta`, so a reattach transfers what changed instead of the
+      // whole document. Like @1.2 - and unlike @1.1's frame kinds - neither
+      // needs an emission gate: both are new PROPERTIES on existing shapes.
+      // The request half additionally self-gates, because the dispatcher
+      // validates params against the NEGOTIATED contract and passes the parsed
+      // value on, so a sub-@1.3 peer's offer is stripped before any resolver
+      // runs.
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicSubscribeV10,
@@ -7610,6 +7620,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: epicSubscribeV12,
+        },
+        3: {
+          contract: epicSubscribeV13,
         },
       },
     },

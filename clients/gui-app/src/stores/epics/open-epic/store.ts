@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { EpicSubscribeClientSeedOffer } from "@traycer/protocol/host/epic/subscribe";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   StreamCloseReason,
@@ -83,6 +84,13 @@ import { appLogger } from "@/lib/logger";
 export type EpicStreamClientFactory = (
   epicId: string,
   callbacks: EpicStreamCallbacks,
+  /**
+   * Reports the host-originated root state this store already holds, so a
+   * reattach is served as a delta instead of the whole document. Passed
+   * straight through to `EpicStreamClient`, which re-reads it before every
+   * wire subscribe — so it must stay a live read, never a captured value.
+   */
+  seedOfferProvider: () => EpicSubscribeClientSeedOffer | null,
 ) => Pick<
   EpicStreamClient,
   | "applyUpdate"
@@ -827,6 +835,63 @@ export function createOpenEpicStore(
   let doc = new Y.Doc();
   let awareness = new Awareness(doc);
   let hostCoverageDoc = new Y.Doc();
+  /**
+   * The room {@link hostCoverageDoc}'s contents came from, or `null` when it
+   * holds nothing attributable to a room — a fresh store, a replica reset, or
+   * state seeded by a pre-`@1.2` host that never reported a `roomId`.
+   *
+   * Gates the reattach seed offer: without a room name there is nothing safe
+   * to offer, because a major migration mints a NEW room for the same
+   * `epicId` and a host diffing against the wrong room's state would omit
+   * bytes this client genuinely lacks.
+   */
+  let hostCoverageRoomId: string | null = null;
+  /**
+   * Bumped every time {@link hostCoverageDoc} is REPLACED (never when it is
+   * merged into). Identifies the doc instance a seed offer was taken from, so
+   * a delta can be checked against the doc it was actually diffed against
+   * rather than against whatever `hostCoverageDoc` happens to name when the
+   * reply lands.
+   *
+   * Needed because doc identity is not carried on the wire: the offer says
+   * "here is my state vector" and the reply says "this is a delta", and
+   * nothing in that pair names the doc. Between the two lies a network round
+   * trip in which the store may have thrown the doc away.
+   *
+   * DO NOT MAKE THIS BUMP ON EVERY UPDATE. A counter sitting beside a Y.Doc
+   * looks like it should track every change, and tightening it that way would
+   * silently disable delta-seed for any actively-syncing epic — every offer
+   * would be invalidated by the next inbound update before its reply landed,
+   * every reattach would fall back to the full document, and every test would
+   * stay green. `applyRootSeedToHostCoverage`'s "forward movement still
+   * merges" test exists to catch exactly that edit.
+   *
+   * The reason only replacement counts is an asymmetry in Yjs itself: a delta
+   * computed against an OLDER state vector is a SUPERSET of what the doc still
+   * needs, and applying it is idempotent. So coverage moving FORWARD under an
+   * in-flight offer is harmless — ordinary updates, and even a resolver
+   * re-emitting a second delta against the original offer (`retryMigration`
+   * re-runs the host's `initialize()` without re-reading params), all converge.
+   * REPLACEMENT is the only thing that destroys the basis the host diffed
+   * against, so replacement is the only thing that invalidates an offer.
+   *
+   * This guard is the WHOLE protection, deliberately. Two of the three paths
+   * that replace coverage happen to be safe without it — `requestFreshSnapshot`
+   * runs synchronously and ends by bumping `streamGeneration`, so its stale
+   * frames are dropped; a room migration cannot produce a delta at all, since
+   * the host rejects an offer naming a different room. Neither of those is a
+   * declared property: the first survives only until someone makes a step in
+   * that block async, and nothing anywhere pins it. Do not restore either as
+   * the reason this is safe. The third path — `onPermissionChanged(null)`,
+   * which clears coverage WITHOUT ending the stream cycle — was never covered
+   * by them at all.
+   */
+  let hostCoverageGeneration = 0;
+  /**
+   * The value of {@link hostCoverageGeneration} at the moment the live seed
+   * offer was read, or `null` when no offer is outstanding.
+   */
+  let offeredCoverageGeneration: number | null = null;
 
   // In-flight `readAttachmentBytes` waits. Held here (not per call) so a replica
   // swap can re-point each one at the live doc's attachments map instead of
@@ -1829,7 +1894,121 @@ export function createOpenEpicStore(
     if (snapshotBytes !== null) {
       Y.applyUpdate(hostCoverageDoc, snapshotBytes);
     }
+    // Whatever room the discarded doc represented, the replacement does not
+    // represent it: callers either reset coverage to empty or rebase it onto a
+    // full snapshot whose room only `applyRootSeedToHostCoverage` knows. Left
+    // stale, this would offer a new room's state under the old room's name.
+    hostCoverageRoomId = null;
+    // The doc any outstanding offer was taken from no longer exists, so a
+    // delta computed against it can no longer be applied anywhere.
+    hostCoverageGeneration += 1;
     previous.destroy();
+  };
+
+  /**
+   * Folds this cycle's root payload into {@link hostCoverageDoc} and records
+   * the room it came from.
+   *
+   * THE SEAM THE `seededFromOffer` FLAG EXISTS FOR. A full snapshot is
+   * self-sufficient, so coverage is rebuilt from it — that is what
+   * {@link replaceHostCoverageDoc} does and what every pre-`@1.3` cycle did. A
+   * DELTA is not self-sufficient: it deliberately omits everything the host
+   * knew this client already had, so rebuilding a fresh doc from it would
+   * discard exactly the state the delta was computed to leave out, silently
+   * collapsing coverage to the handful of bytes that changed. It must be
+   * merged into the existing doc instead.
+   *
+   * WHY THE REBUILD ARM STILL EXISTS — and it is NOT to bound growth.
+   *
+   * Merging deltas forever does not make this doc grow. Yjs integrates
+   * operations into a struct store keyed by client and clock; it does not
+   * append the update messages that delivered them. So the encoded size is a
+   * function of the document's operation set, not of how many merges built it.
+   * Measured: 50 reattach cycles merging deltas produce a byte-IDENTICAL doc
+   * to rebuilding from a full snapshot each cycle (ratio 1.000000), and with
+   * deletions, in-place edits and redundant full-snapshot re-delivery mixed in,
+   * 1.000108 — 78 bytes on 722 KB of fragmentation noise, with identical
+   * content and identical state vectors. A client that reattaches fifty times
+   * on a flaky link therefore needs no periodic re-baseline, and none is
+   * armed.
+   *
+   * The rebuild arm earns its place on CORRECTNESS instead: a full snapshot
+   * may come from a DIFFERENT ROOM. A major migration mints a new room for the
+   * same `epicId`, and merging its snapshot into coverage built from the old
+   * room would union two logically different documents. Discarding the old doc
+   * is the only correct handling, and the arms line up with that by
+   * construction — a room change makes the host reject the offer
+   * (`offer.roomId !== storage.getRoomId()`), so it answers with a full
+   * snapshot and no `seededFromOffer`, which lands here on exactly the rebuild
+   * arm that drops the stale room.
+   */
+  const applyRootSeedToHostCoverage = (
+    meta: SnapshotMetaEpic,
+    snapshotBytes: Uint8Array,
+  ): void => {
+    if (meta.seededFromOffer !== true) {
+      replaceHostCoverageDoc(snapshotBytes);
+      hostCoverageRoomId = meta.roomId ?? null;
+      offeredCoverageGeneration = null;
+      return;
+    }
+    // A delta, so it is only meaningful against the doc whose state vector was
+    // offered. If that doc has been replaced since (permission loss clears
+    // coverage without ending the stream cycle), merging here would fold a
+    // diff into a doc it was never computed against, and the result would
+    // silently hold only the bytes that changed.
+    //
+    // Leave coverage untouched in that case, and take no room id — so no
+    // further offer is made until a full snapshot re-establishes a basis. The
+    // replica still receives these bytes at the call site, so the user's view
+    // is unaffected; only host-coverage precision degrades, and it degrades by
+    // UNDER-stating what the host has. That is the safe direction: coverage is
+    // read to decide whether local work is durable, and over-reporting dirty
+    // work costs a redundant reconcile, while under-reporting it would claim
+    // unsynced edits are safe.
+    if (offeredCoverageGeneration !== hostCoverageGeneration) {
+      offeredCoverageGeneration = null;
+      return;
+    }
+    Y.applyUpdate(hostCoverageDoc, snapshotBytes);
+    hostCoverageRoomId = meta.roomId ?? null;
+    offeredCoverageGeneration = null;
+  };
+
+  /**
+   * The reattach offer: what this client has already received from the host,
+   * so the host can answer a resubscribe with only what changed.
+   *
+   * Read live at every wire subscribe, including reconnects — never cached.
+   *
+   * Offers {@link hostCoverageDoc}'s state vector rather than the local
+   * replica's, and the distinction is load-bearing rather than stylistic.
+   * `doc` additionally holds local edits the host may not have accepted yet;
+   * naming those in the offer would tell the host "I already have this", and
+   * the delta it computed would omit the host's own copy of anything it had
+   * in fact accepted and not echoed back. The replica would still converge —
+   * it holds those bytes locally — but `hostCoverageDoc` would not, leaving
+   * host coverage understated and the sync pill claiming unsynced work that
+   * is actually durable. Coverage is precisely "what the host has sent me",
+   * which is exactly the question a seed offer asks.
+   *
+   * `doc ⊇ hostCoverageDoc` always (both receive every snapshot and update;
+   * only `doc` also receives local edits), so a delta computed against
+   * coverage is a superset of what the replica needs and applying it to both
+   * converges.
+   */
+  const readSeedOffer = (): EpicSubscribeClientSeedOffer | null => {
+    if (hostCoverageRoomId === null) {
+      offeredCoverageGeneration = null;
+      return null;
+    }
+    // Record WHICH doc this vector describes, so the reply can be checked
+    // against it rather than against whatever `hostCoverageDoc` names by then.
+    offeredCoverageGeneration = hostCoverageGeneration;
+    return {
+      stateVectorBase64: encodeDocStateVectorBase64(hostCoverageDoc),
+      roomId: hostCoverageRoomId,
+    };
   };
 
   bindCurrentReplica();
@@ -2006,8 +2185,13 @@ export function createOpenEpicStore(
               // deterministic full re-project below.
               projector.suspend();
               try {
+                // The replica merges either way: a delta and a full snapshot
+                // are both just updates to apply here, and `doc` is never
+                // rebuilt on this path. It is host COVERAGE that has a
+                // rebuild-vs-merge decision, and it is the one that would lose
+                // state if a delta reached the rebuild arm.
                 Y.applyUpdate(doc, snapshotBytes, STREAM_ORIGIN);
-                replaceHostCoverageDoc(snapshotBytes);
+                applyRootSeedToHostCoverage(meta, snapshotBytes);
               } finally {
                 projector.resume();
               }
@@ -2600,7 +2784,7 @@ export function createOpenEpicStore(
               if (nextStatus !== "open") return;
               emitCurrentAwareness(awareness, doc, client);
             },
-          });
+          }, readSeedOffer);
           streamClient = client;
         };
 
