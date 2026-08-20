@@ -8,7 +8,10 @@ import type {
   MutationLaneStatus,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { LifecycleAdmissionBlock } from "../../host/host-controller-types";
+import type {
+  LifecycleAdmissionBlock,
+  ReprovisionIntent,
+} from "../../host/host-controller-types";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { TraycerCliError } from "../../cli/traycer-cli";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
@@ -233,8 +236,13 @@ interface HandlerBridge {
         force: boolean,
       ) => Promise<MutationOutcome<InstallVersionOk>>;
       respawn: () => Promise<MutationOutcome<{ readonly activated: boolean }>>;
-      convergeReady: (force: boolean) => Promise<MutationOutcome<null>>;
-      registerService: () => Promise<MutationOutcome<null>>;
+      convergeReady: (
+        force: boolean,
+        intent: ReprovisionIntent,
+      ) => Promise<MutationOutcome<null>>;
+      registerService: (
+        intent: ReprovisionIntent,
+      ) => Promise<MutationOutcome<null>>;
       freePortAndRestart: (
         pid: number | undefined,
         port: number | undefined,
@@ -1850,11 +1858,13 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     expect(freePortAndRestart).not.toHaveBeenCalled();
   });
 
-  it("queued converge-ready on a removed host clears the sentinel before the controller runs", async () => {
-    // Discriminator: without `clearHostRemovalIfSet()`, convergeReady is
-    // still invoked and the handler still returns `applied` — the real
-    // controller then short-circuits to ok/{running:false}. The pin is
-    // that the sentinel is already false WHEN the controller is called.
+  it("queued converge-ready hands the controller a user-repair intent", async () => {
+    // The sentinel clear and the identity re-ask BOTH moved into the
+    // controller (`admitReprovision`), because this route queues: doing
+    // either one here would prove something about a moment minutes before
+    // the mutation runs. What the HANDLER still owes is a correctly built
+    // intent, so that is what this pins — and, below, that its guard really
+    // answers the identity question rather than being a stub.
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
     const bridge = makeBridge();
@@ -1862,22 +1872,14 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       bridge,
       invoke.traycerDoctorRepairQueued,
     );
-    const removal = await import("../../host/host-removal-state");
-    await removal.markHostRemovedByUser();
-    expect(await removal.isHostRemovedByUser()).toBe(true);
-
-    const convergeReady = vi.fn(async () => {
-      expect(await removal.isHostRemovedByUser()).toBe(false);
-      return { kind: "ok" as const, value: null };
-    });
-    const registerService = vi.fn(() =>
+    const convergeReady = vi.fn((_force: boolean, _intent: ReprovisionIntent) =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const registerService = vi.fn((_intent: ReprovisionIntent) =>
       Promise.resolve({ kind: "ok" as const, value: null }),
     );
     const respawn = vi.fn(() =>
-      Promise.resolve({
-        kind: "ok" as const,
-        value: { activated: true },
-      }),
+      Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
     );
     bridge.options.hostController.convergeReady = convergeReady;
     bridge.options.hostController.registerService = registerService;
@@ -1892,10 +1894,25 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     expect(convergeReady).toHaveBeenCalledTimes(1);
     expect(registerService).not.toHaveBeenCalled();
     expect(respawn).not.toHaveBeenCalled();
-    expect(await removal.isHostRemovedByUser()).toBe(false);
+
+    const [force, intent] = convergeReady.mock.calls[0] ?? [];
+    expect(force).toBe(false);
+    if (intent?.kind !== "user-repair") {
+      throw new Error("expected a user-repair intent");
+    }
+    // The guard is the whole point of the intent, so exercise it rather than
+    // trusting its shape: matching identity proceeds...
+    await expect(intent.guard()).resolves.toEqual({ kind: "proceed" });
+    // ...and a host swapped underneath it abandons, which is the case the
+    // pre-enqueue check structurally cannot see.
+    writeEnrollment("some-other-host");
+    await expect(intent.guard()).resolves.toEqual({
+      kind: "abandon",
+      message: expect.stringContaining("host changed"),
+    });
   });
 
-  it("queued register-service on a removed host clears the sentinel before the controller runs", async () => {
+  it("queued register-service hands the controller a user-repair intent", async () => {
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
     const bridge = makeBridge();
@@ -1903,15 +1920,10 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       bridge,
       invoke.traycerDoctorRepairQueued,
     );
-    const removal = await import("../../host/host-removal-state");
-    await removal.markHostRemovedByUser();
-    expect(await removal.isHostRemovedByUser()).toBe(true);
-
-    const registerService = vi.fn(async () => {
-      expect(await removal.isHostRemovedByUser()).toBe(false);
-      return { kind: "ok" as const, value: null };
-    });
-    const convergeReady = vi.fn(() =>
+    const registerService = vi.fn((_intent: ReprovisionIntent) =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const convergeReady = vi.fn((_force: boolean, _intent: ReprovisionIntent) =>
       Promise.resolve({ kind: "ok" as const, value: null }),
     );
     bridge.options.hostController.registerService = registerService;
@@ -1925,7 +1937,46 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     ).resolves.toEqual({ kind: "applied" });
     expect(registerService).toHaveBeenCalledTimes(1);
     expect(convergeReady).not.toHaveBeenCalled();
-    expect(await removal.isHostRemovedByUser()).toBe(false);
+
+    const [intent] = registerService.mock.calls[0] ?? [];
+    if (intent?.kind !== "user-repair") {
+      throw new Error("expected a user-repair intent");
+    }
+    await expect(intent.guard()).resolves.toEqual({ kind: "proceed" });
+  });
+
+  it("watched repair hands the controller a user-repair intent too", async () => {
+    // The twin. `traycerDoctorRepairIfIdle` cannot clear the sentinel itself
+    // without putting an await between its lane test and its submit, so it
+    // routes the same intent — which is what stops the two arms from drifting
+    // apart again.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairIfIdle,
+    );
+    const convergeReady = vi.fn((_force: boolean, _intent: ReprovisionIntent) =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    bridge.options.hostController.convergeReady = convergeReady;
+
+    await expect(
+      handler(null, {
+        repair: "converge-ready",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({
+      kind: "dispatched",
+      outcome: { kind: "ok", value: null },
+    });
+    const [force, intent] = convergeReady.mock.calls[0] ?? [];
+    expect(force).toBe(false);
+    if (intent?.kind !== "user-repair") {
+      throw new Error("expected a user-repair intent");
+    }
+    await expect(intent.guard()).resolves.toEqual({ kind: "proceed" });
   });
 
   it("queued restart does not clear the removal sentinel", async () => {

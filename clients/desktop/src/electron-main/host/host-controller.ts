@@ -71,6 +71,7 @@ import {
   type MutationProgress,
   type PendingRevisionCaller,
   type RemoveTraycerOk,
+  type ReprovisionIntent,
   type ServiceRegistrationOk,
   type UninstallOk,
 } from "./host-controller-types";
@@ -2102,12 +2103,23 @@ export class HostController {
 
   async convergeReady(
     force: boolean,
+    intent: ReprovisionIntent,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     return this.enqueueMutation<ConvergeReadyOk>(
       "ensure",
-      `ensure:${force}`,
+      // The intent is part of the coalesce key, not decoration. A repair that
+      // coalesced onto a background converge would inherit that job's policy
+      // and silently skip both its guard and its sentinel clear - the same
+      // shape as the pending-revision coalescing bug, where the joiner's
+      // policy was discarded in favour of the occupant's.
+      `ensure:${force}:${intent.kind}`,
       async () => {
-        if (await isHostRemovedByUser()) {
+        const abandoned = await this.admitReprovision(intent);
+        if (abandoned !== null) return abandoned;
+        // Only a BACKGROUND converge obeys the sentinel. `admitReprovision`
+        // has already cleared it for a user repair, so this cannot swallow
+        // the click that asked for the host back.
+        if (intent.kind === "background" && (await isHostRemovedByUser())) {
           return { kind: "ok", value: { running: false, version: null } };
         }
         if (await this.isPackagedMacOwned()) {
@@ -2116,6 +2128,31 @@ export class HostController {
         return this.convergeReadyCliOwned(force);
       },
     );
+  }
+
+  /**
+   * The head-of-lane half of a user-driven reprovision: re-ask the identity
+   * question the IPC handler asked before enqueueing, then clear the removal
+   * sentinel so the reprovision is not swallowed by it.
+   *
+   * Returns a `failed` outcome to ABANDON the job, or `null` to proceed. A
+   * background intent is always `null` and touches nothing - the background
+   * paths are byte-for-byte what they were.
+   */
+  private async admitReprovision(
+    intent: ReprovisionIntent,
+  ): Promise<{ readonly kind: "failed"; readonly message: string } | null> {
+    if (intent.kind === "background") return null;
+    const verdict = await intent.guard();
+    if (verdict.kind === "abandon") {
+      return { kind: "failed", message: verdict.message };
+    }
+    // Same rule as `installVersion`: an explicit reprovision means the person
+    // wants the host back on this device, so the sentinel goes.
+    if (await isHostRemovedByUser()) {
+      await clearHostRemovedByUser();
+    }
+    return null;
   }
 
   private async convergeReadyCliOwned(
@@ -2988,11 +3025,16 @@ export class HostController {
 
   // ---- registerService / deregisterService --------------------------------
 
-  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+  async registerService(
+    intent: ReprovisionIntent,
+  ): Promise<MutationOutcome<ServiceRegistrationOk>> {
     return this.enqueueMutation<ServiceRegistrationOk>(
       "register",
-      "register",
+      // Intent-discriminated for the same reason `convergeReady`'s key is.
+      `register:${intent.kind}`,
       async () => {
+        const abandoned = await this.admitReprovision(intent);
+        if (abandoned !== null) return abandoned;
         if (await this.isPackagedMacOwned()) {
           const outcome = await withDesktopCliLock(
             {

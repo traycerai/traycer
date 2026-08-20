@@ -40,6 +40,7 @@ import {
 import type {
   LifecycleAdmissionBlock,
   MutationOutcome,
+  ReprovisionIntent,
 } from "../host/host-controller-types";
 import {
   clearHostRemovedByUser,
@@ -564,6 +565,64 @@ async function checkLocalHostIsStill(
   }
 }
 
+/**
+ * Run a host-scoped READ under an identity fence that spans the whole read,
+ * not just its start.
+ *
+ * Every one of these shells out to the CLI, so seconds pass between the
+ * question and the answer. Checking only beforehand proves the host was A
+ * when we asked - it says nothing about whose bytes came back, and the caller
+ * renders those bytes under A's name. So the same question is asked again
+ * after the read and a mismatch discards the result rather than attributing
+ * another machine's log, report or install record to the scope that froze A.
+ *
+ * Throwing on the second check is the same contract as the first: callers
+ * already surface a failed read as an error, whereas returning empty content
+ * would read as "this host has nothing to show".
+ */
+async function fencedLocalHostRead<T>(
+  bridge: RunnerIpcBridge,
+  expectedHostId: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  const before = await checkLocalHostIsStill(bridge, expectedHostId);
+  if (!before.ok) {
+    throw new Error(before.message);
+  }
+  const value = await read();
+  const after = await checkLocalHostIsStill(bridge, expectedHostId);
+  if (!after.ok) {
+    throw new Error(after.message);
+  }
+  return value;
+}
+
+/**
+ * The `user-repair` reprovision intent for a Doctor lifecycle fix.
+ *
+ * The closure is the SAME identity question `checkLocalHostIsStill` answers
+ * at the handler, deferred to the head of the mutation lane. Both repair
+ * routes build it: the queued one because its wait is unbounded, and the
+ * watched one because its lane test must stay atomic and so cannot afford the
+ * sentinel read inline. Asking twice is deliberate - the handler's check
+ * refuses cheaply and immediately, and this one refuses a job whose target
+ * moved while it waited.
+ */
+function userRepairIntent(
+  bridge: RunnerIpcBridge,
+  expectedHostId: string,
+): ReprovisionIntent {
+  return {
+    kind: "user-repair",
+    guard: async () => {
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      return identity.ok
+        ? { kind: "proceed" }
+        : { kind: "abandon", message: identity.message };
+    },
+  };
+}
+
 const HOST_CHANGED_MESSAGE =
   "This computer's host changed while that was open. Reopen Settings and try again.";
 
@@ -787,7 +846,15 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostConvergeReady,
     async (_event, raw: unknown) => {
       const force = optionalBoolean(raw, "force");
-      return bridge.options.hostController.convergeReady(force);
+      // `background`, which keeps this channel byte-identical: it carries no
+      // `expectedHostId` to guard with and has never cleared the removal
+      // sentinel, so it still short-circuits on a removed host. That is the
+      // right contract for its caller - the provisioning controller, which
+      // converges on behalf of the app rather than of a click. The Doctor
+      // repairs that DO mean "give me the host back" pass `user-repair`.
+      return bridge.options.hostController.convergeReady(force, {
+        kind: "background",
+      });
     },
   );
 
@@ -963,26 +1030,24 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // Fenced like the maintenance projections, and for the same reason: this
       // reads THIS machine's log, so a scope frozen on host A that has since
       // been replaced would render B's log — its paths, ports and workspace
-      // names — under A's name. Throwing matches the other projections; the
-      // callers surface it as a failed read rather than empty content, which
-      // would read as "this host has no log".
+      // names — under A's name. The fence SPANS the CLI call: `traycer host
+      // logs` takes long enough for A to be replaced while it runs, and the
+      // tail that comes back would be B's.
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
-      if (!identity.ok) {
-        throw new Error(identity.message);
-      }
-      const tail = optionalNumber(raw, "tailLines") ?? 200;
-      const args = ["host", "logs", "--tail", String(tail)];
-      const data = await runTraycerCliJson<unknown>([...args, "--json"]);
-      if (!isPlainObject(data)) {
-        const result: HostLogsTailResult = { path: null, tail: "" };
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        const tail = optionalNumber(raw, "tailLines") ?? 200;
+        const args = ["host", "logs", "--tail", String(tail)];
+        const data = await runTraycerCliJson<unknown>([...args, "--json"]);
+        if (!isPlainObject(data)) {
+          const empty: HostLogsTailResult = { path: null, tail: "" };
+          return empty;
+        }
+        const result: HostLogsTailResult = {
+          path: typeof data.path === "string" ? data.path : null,
+          tail: typeof data.tail === "string" ? data.tail : "",
+        };
         return result;
-      }
-      const result: HostLogsTailResult = {
-        path: typeof data.path === "string" ? data.path : null,
-        tail: typeof data.tail === "string" ? data.tail : "",
-      };
-      return result;
+      });
     },
   );
 
@@ -994,16 +1059,14 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // replacement host's report to the scope that froze its predecessor
       // hands out another machine's repair inputs.
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
-      if (!identity.ok) {
-        throw new Error(identity.message);
-      }
-      const json = await runTraycerCliJson<unknown>([
-        "host",
-        "doctor",
-        "--json",
-      ]);
-      return projectDoctorReport(json);
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        const json = await runTraycerCliJson<unknown>([
+          "host",
+          "doctor",
+          "--json",
+        ]);
+        return projectDoctorReport(json);
+      });
     },
   );
 
@@ -1056,43 +1119,44 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerMaintenanceUpdateCheck,
     async (_event, raw: unknown): Promise<HostUpdateCheckResponse> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
-      if (!identity.ok) {
-        throw new Error(identity.message);
-      }
-      const includePreReleases = optionalBoolean(raw, "includePreReleases");
-      const args = [
-        "host",
-        "available",
-        "--json",
-        ...(includePreReleases ? ["--include-pre-releases"] : []),
-      ];
-      let payload: unknown;
-      try {
-        payload = await runBundledTraycerCliJson<unknown>(args);
-      } catch (err) {
-        // Every failure classifies, including a build without trusted registry
-        // keys. Deliberately NOT `traycerHostAvailable`'s
-        // `emptyAvailableSnapshot()` normalisation: that lane's consumer reads
-        // an empty snapshot as "nothing to install", while a protocol manifest
-        // with `latest: ""` reaches a consumer that reads `latest` as a real
-        // version — it renders `v is available, but <host> can't install it.`
-        // whenever the installed version is unknown. The host's own
-        // `host.update.check` resolver returns the classified outcome for any
-        // non-ok CLI result and never synthesises a manifest, and this lane
-        // answers the same wire contract, so it classifies too.
-        return { outcome: classifyCliShellError(err) };
-      }
-      const manifest = hostAvailableManifestSchema.safeParse(
-        isPlainObject(payload) ? payload.manifest : undefined,
-      );
-      if (!manifest.success) {
-        log.warn("[host-management] maintenance update-check payload invalid", {
-          issues: manifest.error.issues.slice(0, 3),
-        });
-        return { outcome: "invalid-output" };
-      }
-      return { outcome: "ok", manifest: manifest.data };
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        const includePreReleases = optionalBoolean(raw, "includePreReleases");
+        const args = [
+          "host",
+          "available",
+          "--json",
+          ...(includePreReleases ? ["--include-pre-releases"] : []),
+        ];
+        let payload: unknown;
+        try {
+          payload = await runBundledTraycerCliJson<unknown>(args);
+        } catch (err) {
+          // Every failure classifies, including a build without trusted registry
+          // keys. Deliberately NOT `traycerHostAvailable`'s
+          // `emptyAvailableSnapshot()` normalisation: that lane's consumer reads
+          // an empty snapshot as "nothing to install", while a protocol manifest
+          // with `latest: ""` reaches a consumer that reads `latest` as a real
+          // version — it renders `v is available, but <host> can't install it.`
+          // whenever the installed version is unknown. The host's own
+          // `host.update.check` resolver returns the classified outcome for any
+          // non-ok CLI result and never synthesises a manifest, and this lane
+          // answers the same wire contract, so it classifies too.
+          return { outcome: classifyCliShellError(err) };
+        }
+        const manifest = hostAvailableManifestSchema.safeParse(
+          isPlainObject(payload) ? payload.manifest : undefined,
+        );
+        if (!manifest.success) {
+          log.warn(
+            "[host-management] maintenance update-check payload invalid",
+            {
+              issues: manifest.error.issues.slice(0, 3),
+            },
+          );
+          return { outcome: "invalid-output" };
+        }
+        return { outcome: "ok", manifest: manifest.data };
+      });
     },
   );
 
@@ -1100,35 +1164,33 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerMaintenanceDoctor,
     async (_event, raw: unknown): Promise<MaintenanceDoctorProjection> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
-      if (!identity.ok) {
-        throw new Error(identity.message);
-      }
-      let payload: unknown;
-      try {
-        payload = await runBundledTraycerCliJson<unknown>([
-          "host",
-          "doctor",
-          "--json",
-        ]);
-      } catch (err) {
-        return { status: classifyCliShellError(err) };
-      }
-      // Schema-strict, unlike `projectDoctorReport` above, whose tolerant
-      // coercions make a malformed payload indistinguishable from a clean
-      // bill of health. On this lane a report the protocol cannot parse IS
-      // the `invalid-output` arm — the same answer the host's resolver gives
-      // for the same bytes.
-      const issues = hostDoctorIssueSchema
-        .array()
-        .safeParse(isPlainObject(payload) ? payload.issues : undefined);
-      if (!issues.success) {
-        log.warn("[host-management] maintenance doctor payload invalid", {
-          issues: issues.error.issues.slice(0, 3),
-        });
-        return { status: "invalid-output" };
-      }
-      return { status: "ok", issues: issues.data };
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        let payload: unknown;
+        try {
+          payload = await runBundledTraycerCliJson<unknown>([
+            "host",
+            "doctor",
+            "--json",
+          ]);
+        } catch (err) {
+          return { status: classifyCliShellError(err) };
+        }
+        // Schema-strict, unlike `projectDoctorReport` above, whose tolerant
+        // coercions make a malformed payload indistinguishable from a clean
+        // bill of health. On this lane a report the protocol cannot parse IS
+        // the `invalid-output` arm — the same answer the host's resolver gives
+        // for the same bytes.
+        const issues = hostDoctorIssueSchema
+          .array()
+          .safeParse(isPlainObject(payload) ? payload.issues : undefined);
+        if (!issues.success) {
+          log.warn("[host-management] maintenance doctor payload invalid", {
+            issues: issues.error.issues.slice(0, 3),
+          });
+          return { status: "invalid-output" };
+        }
+        return { status: "ok", issues: issues.data };
+      });
     },
   );
 
@@ -1136,29 +1198,27 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerMaintenanceInstallationInfo,
     async (_event, raw: unknown): Promise<HostGetInstallationInfoResponse> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
-      if (!identity.ok) {
-        throw new Error(identity.message);
-      }
-      // Byte-for-byte the host resolver's `readInstallationInfo`, pointed at
-      // the desktop's own path authority for the same files: a missing
-      // install record IS the unmanaged/tree-run state, a corrupt one throws
-      // (never mistaken for "not installed"), and the staged sidecar stays
-      // best-effort tolerant. `readInstalledHostRecord` above is deliberately
-      // NOT reused: its lossy defaults (`archiveSha256: ""`,
-      // `installedAt` from mtime) would fabricate wire fields.
-      const layout = activeLayout();
-      const installRecord = await readHostInstallRecordAtPath(
-        layout.installRecordFile,
-      );
-      if (installRecord === null) return { status: "unmanaged" };
-      const [stagedRecord, cliManifest] = await Promise.all([
-        readHostStagedRecordAt(layout.stagedDir),
-        readStoredCliInstallManifestAtPath(
-          join(cliSlotRootForEnvironment(activeEnvironment), "manifest.json"),
-        ),
-      ]);
-      return { status: "managed", installRecord, stagedRecord, cliManifest };
+      return fencedLocalHostRead(bridge, expectedHostId, async () => {
+        // Byte-for-byte the host resolver's `readInstallationInfo`, pointed at
+        // the desktop's own path authority for the same files: a missing
+        // install record IS the unmanaged/tree-run state, a corrupt one throws
+        // (never mistaken for "not installed"), and the staged sidecar stays
+        // best-effort tolerant. `readInstalledHostRecord` above is deliberately
+        // NOT reused: its lossy defaults (`archiveSha256: ""`,
+        // `installedAt` from mtime) would fabricate wire fields.
+        const layout = activeLayout();
+        const installRecord = await readHostInstallRecordAtPath(
+          layout.installRecordFile,
+        );
+        if (installRecord === null) return { status: "unmanaged" };
+        const [stagedRecord, cliManifest] = await Promise.all([
+          readHostStagedRecordAt(layout.stagedDir),
+          readStoredCliInstallManifestAtPath(
+            join(cliSlotRootForEnvironment(activeEnvironment), "manifest.json"),
+          ),
+        ]);
+        return { status: "managed", installRecord, stagedRecord, cliManifest };
+      });
     },
   );
 
@@ -1230,25 +1290,30 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           ? { kind: "declined", message: result.message }
           : { kind: "applied" };
       }
-      // Clicking Install host or Register service on a Doctor report IS the
-      // explicit user-driven reprovision this helper exists for - the same
-      // gesture as the Updates row's own install - so the removal sentinel
-      // has to come off first. `traycerServiceRegister` already did this and
-      // routing through here dropped it; `traycerHostConvergeReady` never did,
-      // which is why an "Install host" on a removed host reported success
-      // having done nothing: `convergeReady` short-circuits to
-      // `ok {running: false}` while the sentinel is set, and `okOrThrow`
-      // accepts it. Restart is deliberately NOT a reprovision and keeps its
-      // own removed-by-user deferral.
-      await clearHostRemovalIfSet();
-      // Anything else that stopped this repair is a genuine failure and
-      // rejects, matching what the renderer did when it called the unfenced
-      // methods directly. Branched rather than sharing one `okOrThrow` call:
-      // the two intents resolve DIFFERENT ok-value types.
+      // Clicking Install host or Register service on a Doctor report IS an
+      // explicit user-driven reprovision - the same gesture as the Updates
+      // row's own install - so the removal sentinel has to come off, and the
+      // identity has to still hold when the job actually runs.
+      //
+      // Both now happen at the HEAD OF THE LANE rather than here. This route
+      // queues, so "here" can be minutes before the mutation: the host can be
+      // replaced or re-enrolled while the repair waits behind an install, and
+      // the check above would have proved nothing about the host that
+      // ultimately gets written. `user-repair` carries the same identity
+      // question as a closure and the controller asks it again once admitted.
+      // Restart is deliberately NOT a reprovision and keeps its own
+      // removed-by-user deferral.
+      const intent = userRepairIntent(bridge, expectedHostId);
+      // Anything that stopped this repair is a genuine failure and rejects,
+      // matching what the renderer did when it called the unfenced methods
+      // directly. Branched rather than sharing one `okOrThrow` call: the two
+      // intents resolve DIFFERENT ok-value types.
       if (repair === "converge-ready") {
-        okOrThrow(await bridge.options.hostController.convergeReady(false));
+        okOrThrow(
+          await bridge.options.hostController.convergeReady(false, intent),
+        );
       } else {
-        okOrThrow(await bridge.options.hostController.registerService());
+        okOrThrow(await bridge.options.hostController.registerService(intent));
       }
       return { kind: "applied" };
     },
@@ -1274,6 +1339,12 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // state cannot see a lane the background reconciler armed.
       //
       // Atomic: the lane test and the submission have no await between them.
+      // The sentinel clear that this repair also needs is NOT done here for
+      // exactly that reason - it reads disk, and an await between the test
+      // and the submit reopens the window the test exists to close. It rides
+      // the `user-repair` intent into the controller instead, which runs it
+      // once admitted. `traycerHostInstallVersion` documents the same rule
+      // one handler up.
       const block = bridge.options.hostController.lifecycleAdmissionBlock;
       if (block !== null) {
         return {
@@ -1281,10 +1352,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           message: admissionBlockRestartMessage(block),
         };
       }
+      const intent = userRepairIntent(bridge, expectedHostId);
       const outcome =
         repair === "converge-ready"
-          ? await bridge.options.hostController.convergeReady(false)
-          : await bridge.options.hostController.registerService();
+          ? await bridge.options.hostController.convergeReady(false, intent)
+          : await bridge.options.hostController.registerService(intent);
       return {
         kind: "dispatched",
         outcome: outcome.kind === "ok" ? { kind: "ok", value: null } : outcome,
@@ -1297,7 +1369,14 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     // Dev-slot CLI argv (the staged wrapper / self-invocation flags, Ticket
     // f0ae4530) is owned by `HostController.registerService()` itself,
     // environment-aware since the controller already carries `environment`.
-    return bridge.options.hostController.registerService();
+    //
+    // `background` even though this IS user-driven: the clear it needs
+    // already happened on the line above, and this channel carries no
+    // `expectedHostId` to build a guard from. Passing the intent would change
+    // an unfenced legacy route this PR does not otherwise touch.
+    return bridge.options.hostController.registerService({
+      kind: "background",
+    });
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerServiceDeregister, async () => {

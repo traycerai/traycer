@@ -337,7 +337,9 @@ export function armLocalHostBootOnSignIn(
           log.info("[host-controller] local host boot deferred to a sign-in");
           return;
         }
-        const outcome = await hostController.convergeReady(false);
+        const outcome = await hostController.convergeReady(false, {
+          kind: "background",
+        });
         if (outcome.kind === "ok") {
           settle();
           log.info("[host-controller] local host boot complete", {
@@ -458,7 +460,7 @@ export async function runLaunchHostConvergeReconcile(
   // controller coalesces the two onto one job.
   const recovery =
     !initialStatus.updateReady && isUnavailableInstalledHost(initialStatus)
-      ? await hostController.convergeReady(false)
+      ? await hostController.convergeReady(false, { kind: "background" })
       : null;
   if (recovery !== null) {
     log.info("[host-controller] launch converge recovered an absent service", {
@@ -494,7 +496,7 @@ export async function runLaunchHostConvergeReconcile(
     // `recovery === null` keeps this from re-running a recovery the pre-stage
     // pass already attempted, since repeating a failure seconds later helps
     // nobody.
-    outcome = await hostController.convergeReady(false);
+    outcome = await hostController.convergeReady(false, { kind: "background" });
   }
 
   const effectiveOutcome = outcome ?? recovery;
@@ -574,5 +576,5 @@ async function recoverAfterFailedApply(
     "[host-controller] launch converge recovering an absent service after a failed apply",
     { applyKind: applied.kind },
   );
-  return hostController.convergeReady(false);
+  return hostController.convergeReady(false, { kind: "background" });
 }

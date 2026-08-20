@@ -483,10 +483,12 @@ describe("headline: convergeReady during an in-flight mutation resolves, never r
     await flushMicrotasks();
 
     let convergeSettled = false;
-    const convergePromise = controller.convergeReady(false).then((outcome) => {
-      convergeSettled = true;
-      return outcome;
-    });
+    const convergePromise = controller
+      .convergeReady(false, { kind: "background" })
+      .then((outcome) => {
+        convergeSettled = true;
+        return outcome;
+      });
     await flushMicrotasks();
 
     // Both calls are still pending - `convergeReady` is queued, not rejected.
@@ -1352,7 +1354,9 @@ describe("two lanes: mutation vs download independence", () => {
     const applyPromise = controller.applyStaged("manual", false);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false);
+    const convergePromise = controller.convergeReady(false, {
+      kind: "background",
+    });
     // The download is still gated (unresolved) while convergeReady reaches
     // its own CLI call - real fs reads (readRunningHostIdentity et al.) are
     // in the path first, so poll rather than assume a fixed number of
@@ -1417,7 +1421,9 @@ describe("two lanes: mutation vs download independence", () => {
     const activatePromise = controller.activateInstalled(false);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false);
+    const convergePromise = controller.convergeReady(false, {
+      kind: "background",
+    });
     await vi.waitFor(() => {
       if (!ensureCalled) throw new Error("ensure not reached yet");
     });
@@ -1575,7 +1581,7 @@ describe("desktop-held cli-lock: two-process test", () => {
     // avoids a scheduler race where a cold `bun run` has not reached its
     // first lock attempt before Desktop's own retry timer wakes.
     await waitForFile(join(barrierDir, "cli-lock-acquired"));
-    const registerPromise = controller.registerService();
+    const registerPromise = controller.registerService({ kind: "background" });
     await waitForFile(join(barrierDir, "cli-exit"));
     const cliExit = JSON.parse(
       readFileSync(join(barrierDir, "cli-exit"), "utf8"),
@@ -1741,7 +1747,9 @@ describe("lock-contention terminal contract: convergeReady defers like every oth
     // force: true - skips the "noop && !force" early return (same as B6's
     // force test above) so this genuinely reaches the locked activation
     // cycle's desktop-lock acquisition instead of short-circuiting first.
-    const outcome = await controller.convergeReady(true);
+    const outcome = await controller.convergeReady(true, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("deferred");
     await held.handle.release();
@@ -2913,7 +2921,7 @@ describe("platform matrix", () => {
       data: { action: "installed", version: "1.8.0", runtimeVersion: null },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -2932,7 +2940,7 @@ describe("platform matrix", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    await controller.convergeReady(true);
+    await controller.convergeReady(true, { kind: "background" });
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -2944,7 +2952,7 @@ describe("platform matrix", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
-    await cliController.registerService();
+    await cliController.registerService({ kind: "background" });
     expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2958,11 +2966,159 @@ describe("platform matrix", () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
     const macController = newController("production");
-    await macController.registerService();
+    await macController.registerService({ kind: "background" });
     expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
+  });
+
+  // ---- user-repair reprovision intent -------------------------------------
+  //
+  // These pin the half of a Doctor lifecycle repair that the IPC handler
+  // deliberately does NOT do. Both repair routes hand the controller a
+  // `user-repair` intent instead of clearing the sentinel and checking
+  // identity themselves — the queued one because its wait is unbounded, the
+  // watched one because an await between its lane test and its submit would
+  // reopen the window the test exists to close.
+
+  it("a user-repair converge clears the removal sentinel at the head of the lane", async () => {
+    // The bug this closes: `convergeReady` short-circuits to
+    // ok/{running:false} while the sentinel is set, so "Install host" on a
+    // removed host reported "Fix applied" having installed nothing.
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+    expect(await isHostRemovedByUser()).toBe(true);
+
+    const outcome = await controller.convergeReady(false, {
+      kind: "user-repair",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    // Not merely "the sentinel is gone afterwards" — the converge must have
+    // actually RUN. A short-circuit would also leave kind "ok".
+    expect(await isHostRemovedByUser()).toBe(false);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+    expect(outcome.kind).toBe("ok");
+  });
+
+  it("a BACKGROUND converge still obeys the removal sentinel", async () => {
+    // The other half of the same contract, and the reason the intent exists
+    // rather than an unconditional clear: the reconciler and launch
+    // convergence must leave a removed host removed.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
+
+    expect(await isHostRemovedByUser()).toBe(true);
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: false, version: null },
+    });
+  });
+
+  it("a user-repair whose guard abandons mutates nothing", async () => {
+    // The host was replaced while the repair waited in the lane. Nothing may
+    // run — and critically the sentinel must NOT be cleared, since clearing
+    // it is itself a write against whichever host is now current.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const outcome = await controller.convergeReady(false, {
+      kind: "user-repair",
+      guard: () =>
+        Promise.resolve({ kind: "abandon", message: "host changed" }),
+    });
+
+    expect(outcome).toEqual({ kind: "failed", message: "host changed" });
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  it("the guard is asked at the head of the lane, not when the repair is submitted", async () => {
+    // The whole point of moving the check into the controller. The repair is
+    // submitted while an install holds the lane; the guard must not run until
+    // that install has finished and this job reaches the head.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const installGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await installGate.promise;
+      return { data: { action: "noop", version: "1.7.0" } };
+    });
+    const occupy = controller.convergeReady(false, { kind: "background" });
+
+    let guardAsked = false;
+    const repair = controller.registerService({
+      kind: "user-repair",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "proceed" });
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+    });
+    expect(guardAsked).toBe(false);
+
+    installGate.resolve();
+    await occupy;
+    await repair;
+    expect(guardAsked).toBe(true);
+  });
+
+  it("a user-repair does not coalesce onto a background job of the same shape", async () => {
+    // Coalescing is keyed on the intent for this reason: a repair that joined
+    // a background converge would inherit its policy and silently skip both
+    // the guard and the sentinel clear — the same shape as the pending-login-
+    // item bug where the joiner's policy was discarded.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const background = controller.convergeReady(false, { kind: "background" });
+    let guardAsked = false;
+    const repair = controller.convergeReady(false, {
+      kind: "user-repair",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "proceed" });
+      },
+    });
+
+    expect(await background).toEqual({
+      kind: "ok",
+      value: { running: false, version: null },
+    });
+    await repair;
+    // Had they coalesced, the repair would have resolved the background
+    // job's short-circuit and never asked.
+    expect(guardAsked).toBe(true);
+    expect(await isHostRemovedByUser()).toBe(false);
   });
 
   it("F8b: CLI registerService treats a readiness timeout as non-converged and never reports registration success", async () => {
@@ -2979,7 +3135,7 @@ describe("platform matrix", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -3008,7 +3164,7 @@ describe("platform matrix", () => {
       return {};
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -3026,7 +3182,7 @@ describe("platform matrix", () => {
       runtimeVersion: "1.7.0",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toMatchObject({
       kind: "failed",
@@ -3049,7 +3205,7 @@ describe("platform matrix", () => {
       return {};
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -3069,7 +3225,7 @@ describe("platform matrix", () => {
     // Deliberately no `writeInstallRecord` - simulates a concurrent
     // terminal uninstall winning the lock first.
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toEqual({ kind: "failed", message: "No host installed." });
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -3078,7 +3234,7 @@ describe("platform matrix", () => {
   it("dev environment threads --allow-self-invocation into the CLI-owned service install", async () => {
     const controller = newController("dev");
     writeInstallRecord("dev", { version: "1.7.0", runtimeVersion: "1.7.0" });
-    await controller.registerService();
+    await controller.registerService({ kind: "background" });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
         args: ["host", "service", "install", "--allow-self-invocation"],
@@ -3491,7 +3647,9 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       },
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("ok");
     expect(stampCalls).toHaveLength(1);
@@ -3762,7 +3920,9 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       },
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("failed");
   });
@@ -3793,7 +3953,9 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("failed");
   });
@@ -3822,7 +3984,9 @@ describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
       new TraycerCliError("E_HOST_BUSY", "host busy"),
     );
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome).toEqual({
       kind: "busy",
@@ -3888,7 +4052,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3917,7 +4081,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3940,7 +4104,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure"] }),
@@ -3965,7 +4129,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure"] }),
@@ -3989,7 +4153,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure"] }),
@@ -4452,7 +4616,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
     expect(outcome).toEqual({
       kind: "ok",
       value: { running: true, version: "1.7.0" },
@@ -4637,7 +4803,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("revision cycle did not start");
     });
-    const convergence = controller.convergeReady(false);
+    const convergence = controller.convergeReady(false, { kind: "background" });
     await vi.waitFor(() => {
       // A reachability probe is only an earlier asynchronous prerequisite.
       // Wait for the real production join edge: the reentrant caller has
@@ -4791,7 +4957,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("ok");
     expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
@@ -4883,7 +5051,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    await expect(controller.convergeReady(false)).resolves.toMatchObject({
+    await expect(
+      controller.convergeReady(false, { kind: "background" }),
+    ).resolves.toMatchObject({
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
     });
@@ -4914,7 +5084,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       reason: "ready",
     });
 
-    await expect(controller.convergeReady(false)).resolves.toMatchObject({
+    await expect(
+      controller.convergeReady(false, { kind: "background" }),
+    ).resolves.toMatchObject({
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
     });
@@ -5139,7 +5311,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(outcome).toEqual({
       kind: "ok",
@@ -5670,7 +5844,9 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.registerService()).kind).toBe("ok");
+    expect(
+      (await controller.registerService({ kind: "background" })).kind,
+    ).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 
@@ -5694,7 +5870,9 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "ready",
     });
 
-    expect((await controller.registerService()).kind).toBe("ok");
+    expect(
+      (await controller.registerService({ kind: "background" })).kind,
+    ).toBe("ok");
     expect(waitForHostReady).toHaveBeenCalledWith(
       expect.any(Number),
       getHostFsLayout("production").pidMetadataFile,
@@ -5760,7 +5938,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toMatchObject({
       kind: "failed",
@@ -5795,7 +5973,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toMatchObject({
       kind: "failed",
@@ -5832,7 +6010,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
@@ -5851,7 +6029,10 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       new Error("ensure failed after side effects"),
     );
 
-    expect((await convergeController.convergeReady(false)).kind).toBe("failed");
+    expect(
+      (await convergeController.convergeReady(false, { kind: "background" }))
+        .kind,
+    ).toBe("failed");
     expect(convergeLifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
 
     const applyLifecycle = fakeHostLifecycle();
@@ -6239,7 +6420,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -6268,7 +6449,9 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     );
 
     const respawnOutcome = await controller.respawn();
-    const registerOutcome = await controller.registerService();
+    const registerOutcome = await controller.registerService({
+      kind: "background",
+    });
 
     expect(respawnOutcome.kind).toBe("failed");
     expect(registerOutcome.kind).toBe("failed");

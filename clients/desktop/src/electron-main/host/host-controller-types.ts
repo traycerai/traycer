@@ -106,6 +106,35 @@ export type BusyContinuation = "retry-with-force" | "activate";
 // one definition rather than risk wording drift.
 export const HOST_REMOVED_BY_USER_MESSAGE = "Host was removed by the user.";
 
+// Why a (re)provision was asked for. `convergeReady` and `registerService`
+// serve two callers with genuinely different contracts, and conflating them
+// is what let "Install host" report success having installed nothing:
+//
+//   - `background` is the reconciler, launch convergence and selection
+//     ports. The removal sentinel MEANS something to them: a removed host
+//     must stay removed, so `convergeReady` short-circuits on it.
+//   - `user-repair` is a person clicking Install host or Register service in
+//     Doctor. That IS an explicit request to have the host back, so the
+//     sentinel must be cleared rather than obeyed - the same contract
+//     `installVersion` has always had, applied to its two siblings.
+//
+// `guard` runs at the HEAD of the lane, not at the call site. A repair can
+// wait minutes behind an install, and the host it was aimed at can be
+// replaced or re-enrolled in that window; a check performed before
+// enqueueing proves nothing about the host the job will actually mutate.
+// The IPC layer owns identity policy and supplies it as this closure, so the
+// controller decides only WHEN the question is asked.
+export type ReprovisionIntent =
+  | { readonly kind: "background" }
+  | {
+      readonly kind: "user-repair";
+      readonly guard: () => Promise<ReprovisionGuardVerdict>;
+    };
+
+export type ReprovisionGuardVerdict =
+  | { readonly kind: "proceed" }
+  | { readonly kind: "abandon"; readonly message: string };
+
 // Per-intent result. Every mutation intent resolves ONE of these - the
 // lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
 // outcome is a normal resolved value the calling surface renders.

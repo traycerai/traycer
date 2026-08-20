@@ -102,6 +102,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  ReprovisionIntent,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
@@ -371,7 +372,10 @@ export interface IpcHostController {
    */
   readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
   getStatus(): Promise<HostControllerStatus>;
-  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  convergeReady(
+    force: boolean,
+    intent: ReprovisionIntent,
+  ): Promise<MutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
     trigger: ApplyStagedTrigger,
@@ -384,7 +388,9 @@ export interface IpcHostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>>;
-  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  registerService(
+    intent: ReprovisionIntent,
+  ): Promise<MutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
   respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
   recoverIfDown(): Promise<
