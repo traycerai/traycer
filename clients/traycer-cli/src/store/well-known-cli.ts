@@ -437,8 +437,8 @@ async function slotRefreshPlan(
   // runs a CLI that itself refreshes before printing a version, and only a
   // regular-file slot makes that child stop at the
   // `resolve(wellKnownPath) === source` check above instead of re-entering
-  // the planner. The symlink arm below therefore answers the same question
-  // without asking it - see there.
+  // the planner. The symlink arm below asks the same question of the link's
+  // TARGET for that reason - see there.
   const guardedStage = async (): Promise<SlotRefreshPlan> => {
     if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
       return { kind: "current" };
@@ -464,35 +464,41 @@ async function slotRefreshPlan(
     // over a link that points at a NEWER CLI demotes the registered
     // service, which is the very downgrade the guard exists to prevent.
     //
-    // It does NOT resolve that by asking the version question, and the
-    // reason is that this arm cannot ask it safely. `slotOutranksRunning`
-    // spawns the slot, and every packaged CLI runs this refresh before it
-    // parses `--version`: through a REGULAR-FILE slot the child
-    // self-nominates the slot it was launched from and stops at the
-    // `resolve(wellKnownPath) === source` check above, but through a
-    // SYMLINK the child's `process.execPath` resolves to the TARGET, that
-    // lexical check misses, and the child arrives right back here and
-    // spawns its own probe. Each level a fresh ~100 MB process, until the
-    // probe deadlines unwind - and the original process then stages its
-    // own older bytes anyway.
+    // The question is asked of the link's TARGET, never of the slot, and
+    // the difference is what keeps the probe from re-entering this planner.
+    // `slotOutranksRunning` spawns what it is given, and every packaged CLI
+    // runs this refresh before it parses `--version`. Spawned through a
+    // REGULAR-FILE slot the child self-nominates the slot it was launched
+    // from and stops at the `resolve(wellKnownPath) === source` check
+    // above; spawned through a SYMLINK its `process.execPath` resolves to
+    // the target, that lexical check misses, and it arrives right back here
+    // to spawn a probe of its own - a fresh ~100 MB process per level until
+    // the deadlines unwind. Spawned AS the target it is the ordinary case
+    // again: it sees the same symlinked slot, stages the slot from that
+    // same target, and answers. One copy, no recursion.
     //
-    // The question does not have to be asked. Staging from the link's own
-    // TARGET preserves whatever the slot already resolved to while making
-    // it a real file, so it cannot downgrade anything by construction:
-    // same bytes, no link left to dangle. Whether those bytes are actually
-    // newer than this process is then settled on the NEXT invocation by
-    // the regular-file arm below, where the probe is safe (that arm's slot
-    // is a real file, so its child short-circuits) and cheap.
+    // Preserving the target only on a version answer, rather than on
+    // `realpath` succeeding, is the other half. Bytes that resolve are not
+    // therefore a CLI: a link may point at a shim, another tool, or
+    // anything else that survived the years since some installer wrote it,
+    // and copying that into the slot hands the registered service and the
+    // host a program that will never repair itself - the repair path here
+    // runs only when a real CLI is invoked, and after this the thing being
+    // invoked is not one. So a target that cannot say what it is loses to
+    // the running packaged CLI, which demonstrably can. (What "usable"
+    // means is exactly what it means one branch below: it answered
+    // `--version` with something parseable. No stronger signal exists
+    // without running more of it.)
     //
-    // A DANGLING link resolves to nothing and falls through to the
-    // ordinary stage from `source`, self-healing exactly as it did before
-    // this guard existed - the case that made copy-not-symlink the rule.
-    // So does a link pointing at something that cannot answer for itself:
-    // the next invocation's regular-file probe fails and re-stages from
-    // the running binary.
+    // Not strictly newer - older, equal, unreadable, dangling - all fall
+    // through to the ordinary stage from `source`, which de-symlinks and
+    // refreshes in one step. That is also what made copy-not-symlink the
+    // rule: a link nobody can vouch for must not survive as one.
     if (!anchored) {
       const target = await realpath(wellKnownPath).catch(() => null);
-      if (target !== null) return { kind: "stage", source: target };
+      if (target !== null && (await slotOutranksRunning(target))) {
+        return { kind: "stage", source: target };
+      }
     }
     return { kind: "stage", source };
   }
