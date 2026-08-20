@@ -2755,22 +2755,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       listsFailed={hostOptions.listsFailed}
       onRetryLists={hostOptions.retryLists}
       surface="inline"
+      keepFocusableWhenDisabled={surface.kind === "terminal-agent"}
     />
   );
-  const hostSwitcherSlot =
-    surface.kind === "terminal-agent" ? (
-      <span
-        className="flex w-full min-w-0"
-        role="button"
-        tabIndex={0}
-        aria-label="Terminal host is fixed"
-        aria-disabled="true"
-      >
-        {hostSwitcher}
-      </span>
-    ) : (
-      <span className="flex w-full min-w-0">{hostSwitcher}</span>
-    );
+  const hostSwitcherSlot = (
+    <span className="flex w-full min-w-0">{hostSwitcher}</span>
+  );
 
   return (
     <>

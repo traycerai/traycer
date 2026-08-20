@@ -56,6 +56,7 @@ interface HostSectionProps {
 
 interface WorkspaceHostSwitcherProps extends HostSectionProps {
   readonly surface: Extract<HostSwitcherSurface, "field" | "inline">;
+  readonly keepFocusableWhenDisabled?: boolean;
 }
 
 export function WorkspaceHostSwitcher(
@@ -88,6 +89,7 @@ export function WorkspaceHostSwitcher(
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists}
       disabled={props.disabled}
+      keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
     />
   );
 }

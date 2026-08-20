@@ -330,7 +330,9 @@ it("explains why a terminal agent's host selector is locked", async () => {
   renderBoundSurface("terminal-agent", true);
 
   const switcher = screen.getByRole("button", { name: "Host: Test host" });
-  expect(switcher instanceof HTMLButtonElement && switcher.disabled).toBe(true);
+  expect(switcher.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(switcher);
+  expect(screen.queryByTestId("settings-host-switcher-list")).toBeNull();
   await userEvent.setup().tab();
   expect((await screen.findByRole("tooltip")).textContent).toContain(
     "Terminal host is fixed",
