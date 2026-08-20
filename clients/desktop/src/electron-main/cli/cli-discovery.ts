@@ -685,11 +685,13 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
  * Returns the stable path and whether THIS call published to it, or throws if
  * the bundled CLI isn't present (a packaging bug worth surfacing loudly).
  *
- * `published: false` means the CLI lock was held past the wait and a usable
- * slot already existed, so nothing was written. The path is still returned and
- * still usable - it is the CLI the machine already had. Callers must not
- * report an install or an upgrade on a deferral; route it to a retryable
- * outcome instead.
+ * `published: false` means the CLI lock was held past the wait, so nothing
+ * was written. The path is the slot's EVENTUAL stable location, not a
+ * promise anything is there yet: the lock holder may still be mid-copy on a
+ * first install, in which case the path is momentarily absent or incomplete.
+ * Callers must check `published` before treating the path as an installed
+ * CLI, must not report an install or an upgrade on a deferral, and route it
+ * to a retryable outcome instead.
  */
 export async function installBundledCli(opts: {
   readonly bundledCliPath: string;
@@ -708,8 +710,9 @@ export async function installBundledCli(opts: {
   //
   // Best-effort rather than a gate: installing the bundled CLI is part of
   // app launch and must not fail because another process held a lock. On
-  // contention past the wait it proceeds anyway, which is exactly today's
-  // behaviour, so this is strictly an improvement and never a new failure.
+  // contention past the wait it DEFERS - returns without writing - and the
+  // caller routes that into a retryable outcome, so a held lock can delay a
+  // publish but never turn app launch into an error.
   // The lock file lives IN the slot home, so that directory has to exist
   // before it can be opened - `open(path, "wx")` on a missing parent is
   // ENOENT, not contention. The CLI's own `withCliLock` wrapper ensures the

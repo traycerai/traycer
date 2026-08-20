@@ -1675,36 +1675,46 @@ describe("refreshWellKnownSlotIfStale", () => {
   // actual error never reaches a log. EACCES here stands in for the family
   // (EROFS on a read-only mount, EIO on failing storage); what matters is
   // that it is not `CLI_LOCK_BUSY`.
-  it("packaged: a lock I/O fault is reported as failed with the real error, not as deferred-busy", async () => {
-    seaState.current = true;
-    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
-      await import("../well-known-cli");
-    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-    mkdirSync(dirname(wellKnownPath), { recursive: true });
-    writeFileSync(wellKnownPath, "AAAAAAAAAA");
-    const running = join(workHome, "running-binary");
-    writeFileSync(running, "BBBBBBBBBBBB");
-    // The lock lives in the CLI install home; making that directory
-    // unwritable makes `open(lockPath, "wx")` fail with EACCES rather than
-    // with the module's own busy signal.
-    const { cliInstallHomeDir } = await import("../paths");
-    const installHome = cliInstallHomeDir(ENVIRONMENT);
-    mkdirSync(installHome, { recursive: true });
-    chmodSync(installHome, 0o500);
-    try {
-      const result = await withExecPath(running, () =>
-        refreshWellKnownSlotIfStale(ENVIRONMENT),
-      );
+  // Skipped as root, where the fault cannot be manufactured: the mode bits
+  // this test removes do not bind root, so the lock open SUCCEEDS and the
+  // refresh stages - a green run would be reporting on the environment, and
+  // a red one blaming code that behaved correctly. CI runs unprivileged;
+  // containerized local runs commonly do not.
+  it.skipIf(process.getuid?.() === 0)(
+    "packaged: a lock I/O fault is reported as failed with the real error, not as deferred-busy",
+    async () => {
+      seaState.current = true;
+      const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+        await import("../well-known-cli");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      mkdirSync(dirname(wellKnownPath), { recursive: true });
+      writeFileSync(wellKnownPath, "AAAAAAAAAA");
+      const running = join(workHome, "running-binary");
+      writeFileSync(running, "BBBBBBBBBBBB");
+      // The lock lives in the CLI install home; making that directory
+      // unwritable makes `open(lockPath, "wx")` fail with EACCES rather than
+      // with the module's own busy signal.
+      const { cliInstallHomeDir } = await import("../paths");
+      const installHome = cliInstallHomeDir(ENVIRONMENT);
+      mkdirSync(installHome, { recursive: true });
+      chmodSync(installHome, 0o500);
+      try {
+        const result = await withExecPath(running, () =>
+          refreshWellKnownSlotIfStale(ENVIRONMENT),
+        );
 
-      expect(result?.staged).toBe("failed");
-      if (result?.staged === "failed") {
-        expect(result.errorMessage).not.toMatch(/another traycer CLI mutation/);
+        expect(result?.staged).toBe("failed");
+        if (result?.staged === "failed") {
+          expect(result.errorMessage).not.toMatch(
+            /another traycer CLI mutation/,
+          );
+        }
+        expect(readFileSync(wellKnownPath, "utf8")).toBe("AAAAAAAAAA");
+      } finally {
+        chmodSync(installHome, 0o700);
       }
-      expect(readFileSync(wellKnownPath, "utf8")).toBe("AAAAAAAAAA");
-    } finally {
-      chmodSync(installHome, 0o700);
-    }
-  });
+    },
+  );
 
   // The supervised entry (`traycer host start`) waits for the lock where an
   // ordinary command does not, because the cost of losing this race is not
@@ -1915,8 +1925,14 @@ describe("canonicalBinaryPath", () => {
   it("falls back to a resolved path when the file cannot be realpath-ed", async () => {
     const missing = [workHome, "never-existed", "..", "traycer"].join(sep);
 
+    // The expectation folds case on win32 exactly as the production code
+    // does - `canonicalBinaryPath` lowercases there, and comparing against
+    // an unfolded `join()` would fail every local Windows run for a platform
+    // reason rather than a code defect. Folded by hand rather than through
+    // `canonicalBinaryPathOf`, which would compare the function to itself.
+    const resolved = join(workHome, "traycer");
     expect(await canonicalBinaryPathOf(missing)).toBe(
-      join(workHome, "traycer"),
+      process.platform === "win32" ? resolved.toLowerCase() : resolved,
     );
   });
 

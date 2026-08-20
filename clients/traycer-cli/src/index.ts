@@ -2391,9 +2391,20 @@ if (isTraycerCliEntrypoint(entryArgv)) {
   // install costs a small manifest read and two stats. Awaited rather than
   // fired and forgotten - a copy racing process exit would be interrupted on
   // every short command and never complete.
+  // Straight-line awaits inside ONE async function, not a floating promise
+  // chain: the sequencing IS the point (nothing may parse until the slot is
+  // settled), and a `void ...then()` spelling of the same order has already
+  // been misread once as parsing racing the refresh. Not top-level await,
+  // although the source is ESM - the npm distribution bundles this entry to
+  // CJS, where TLA cannot compile. So exactly one `void` remains, on the
+  // whole entry: the `catch` below is terminal for every expected failure,
+  // and `installProcessFailureHandlers` above is the backstop for anything
+  // that escapes it.
   const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
-  void refreshCliSlotBeforeCommand(supervisedStart)
-    .then((replacedRunningBinary) => {
+  const runEntry = async (): Promise<void> => {
+    try {
+      const replacedRunningBinary =
+        await refreshCliSlotBeforeCommand(supervisedStart);
       // The refresh repaired the slot for everything that launches from it
       // NEXT, but this process is still executing the bytes it started with:
       // a rename leaves the running image on its old inode. For a short
@@ -2417,9 +2428,8 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         });
         process.exit(EXIT_RESTART_INTO_REFRESHED_SLOT);
       }
-      return program.parseAsync(process.argv);
-    })
-    .catch(async (err) => {
+      await program.parseAsync(process.argv);
+    } catch (err) {
       if (err instanceof CommanderError) {
         const jsonMode = argvRequestsJson(program);
         // Help (`--help`) and version (`--version`) flow through exitOverride
@@ -2445,62 +2455,64 @@ if (isTraycerCliEntrypoint(entryArgv)) {
           // `--help` under `--json` wraps the whole help text in one line;
           // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
           await finishAndExit(0);
-          return;
+        } else {
+          // Parse failure. In --json mode emit the runner's NDJSON error
+          // envelope so downstream consumers see a coded `result/error`;
+          // in human mode commander already wrote the message to stderr
+          // (via the configureOutput passthrough above).
+          entryLogger.warn("Commander parse failed", {
+            json: jsonMode,
+            commanderCode: err.code,
+            exitCode: err.exitCode || 1,
+          });
+          if (jsonMode) {
+            const event = {
+              type: "result",
+              status: "error",
+              error: {
+                code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+                // Commander prefixes its messages with "error: "; strip it so
+                // the envelope's `message` is clean (the `error` wrapper and
+                // `code` already convey severity).
+                message: err.message.replace(/^error:\s*/i, ""),
+                details: { commanderCode: err.code },
+              },
+              timestamp: new Date().toISOString(),
+            };
+            writeStdout(`${JSON.stringify(event)}\n`);
+          }
+          await finishAndExit(err.exitCode || 1);
         }
-        // Parse failure. In --json mode emit the runner's NDJSON error
-        // envelope so downstream consumers see a coded `result/error`;
-        // in human mode commander already wrote the message to stderr
-        // (via the configureOutput passthrough above).
-        entryLogger.warn("Commander parse failed", {
-          json: jsonMode,
-          commanderCode: err.code,
-          exitCode: err.exitCode || 1,
-        });
-        if (jsonMode) {
+      } else {
+        const error = errorFromUnknown(err);
+        entryLogger.error(
+          "CLI entrypoint failed outside Commander",
+          { exitCode: 1 },
+          error,
+        );
+        Sentry.captureException(err);
+        if (argvRequestsJson(program)) {
           const event = {
             type: "result",
             status: "error",
             error: {
-              code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-              // Commander prefixes its messages with "error: "; strip it so
-              // the envelope's `message` is clean (the `error` wrapper and
-              // `code` already convey severity).
-              message: err.message.replace(/^error:\s*/i, ""),
-              details: { commanderCode: err.code },
+              code: CLI_ERROR_CODES.UNEXPECTED,
+              message: "Unexpected CLI failure. See the CLI log for details.",
+              details: null,
             },
             timestamp: new Date().toISOString(),
           };
           writeStdout(`${JSON.stringify(event)}\n`);
+        } else {
+          writeStderr(
+            `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
+          );
         }
-        await finishAndExit(err.exitCode || 1);
-        return;
+        await finishAndExit(1);
       }
-      const error = errorFromUnknown(err);
-      entryLogger.error(
-        "CLI entrypoint failed outside Commander",
-        { exitCode: 1 },
-        error,
-      );
-      Sentry.captureException(err);
-      if (argvRequestsJson(program)) {
-        const event = {
-          type: "result",
-          status: "error",
-          error: {
-            code: CLI_ERROR_CODES.UNEXPECTED,
-            message: "Unexpected CLI failure. See the CLI log for details.",
-            details: null,
-          },
-          timestamp: new Date().toISOString(),
-        };
-        writeStdout(`${JSON.stringify(event)}\n`);
-      } else {
-        writeStderr(
-          `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
-        );
-      }
-      await finishAndExit(1);
-    });
+    }
+  };
+  void runEntry();
 }
 
 let fatalExitInProgress = false;

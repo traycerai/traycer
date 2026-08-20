@@ -48,7 +48,17 @@ function makeDeps(overrides: {
   cliBinariesDiffer?: (installedPath: string, bundledPath: string) => boolean;
   now?: () => Date;
 }) {
-  const install = overrides.installBundledCli ?? vi.fn(() => "/stable/traycer");
+  // Typed to the OVERRIDE's union rather than to the deps contract, so the
+  // adapter below is forced to narrow `string` results into the full
+  // `BundledCliInstallResult` - a cast here would let the two drift apart
+  // silently.
+  const install = vi.fn<
+    (opts: {
+      bundledCliPath: string;
+      version: string;
+      source: CliInstallManifest["source"];
+    }) => string | BundledCliInstallResult
+  >(overrides.installBundledCli ?? (() => "/stable/traycer"));
   const writePending = vi.fn(
     overrides.writeCliManifestPendingUpgrade ??
       ((_pending: NonNullable<CliInstallManifest["pendingUpgrade"]>) =>
@@ -77,16 +87,16 @@ function makeDeps(overrides: {
         overrides.discovery ?? ({ kind: "none" } as const),
       probeCliVersion: async (binaryPath: string) =>
         overrides.probeCliVersion?.(binaryPath) ?? null,
-      installBundledCli: (async (opts: {
+      installBundledCli: async (opts: {
         bundledCliPath: string;
         version: string;
         source: CliInstallManifest["source"];
-      }) => {
-        const result: unknown = await install(opts);
+      }): Promise<BundledCliInstallResult> => {
+        const result = install(opts);
         return typeof result === "string"
           ? { path: result, published: true }
           : result;
-      }) as never,
+      },
       stableCliBinaryPath:
         overrides.stableCliBinaryPath ?? (() => "/stable/traycer"),
       stageBundledCliForUpgrade: (async (opts: {

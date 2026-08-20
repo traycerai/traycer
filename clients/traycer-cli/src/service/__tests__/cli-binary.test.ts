@@ -37,6 +37,12 @@ vi.mock("node:sea", () => ({ isSea: () => seaState.current }));
 // about WHICH candidate is chosen keeps expressing exactly that.
 const execControl = vi.hoisted(() => ({
   refuseWithEaccesForPaths: [] as string[],
+  // A failure that is NOT a spawn refusal - ETIMEDOUT here, standing in for
+  // the whole family (a loaded machine, a non-zero exit). `canExecute`'s
+  // conservative arm answers "yes" for these, and that arm needs its own
+  // control: without one, only the EACCES side of the errno split is ever
+  // exercised, and a `catch { return false }` rewrite would stay green.
+  failWithEtimedoutForPaths: [] as string[],
   versionForPath: new Map<string, string>(),
   defaultVersion: "v22.11.0\n",
 }));
@@ -51,6 +57,15 @@ vi.mock("node:child_process", async (importOriginal) => {
         error: Object.assign(new Error(`simulated EACCES executing ${file}`), {
           code: "EACCES",
         }),
+        stdout: "",
+      };
+    }
+    if (execControl.failWithEtimedoutForPaths.includes(file)) {
+      return {
+        error: Object.assign(
+          new Error(`simulated ETIMEDOUT executing ${file}`),
+          { code: "ETIMEDOUT" },
+        ),
         stdout: "",
       };
     }
@@ -165,6 +180,7 @@ beforeEach(() => {
   renameControl.callCount = 0;
   renameControl.failOnCallNumber = null;
   execControl.refuseWithEaccesForPaths = [];
+  execControl.failWithEtimedoutForPaths = [];
   execControl.versionForPath = new Map();
   mocks.cliLoggerWarnMock.mockClear();
   vi.resetModules();
@@ -1175,6 +1191,43 @@ describe("resolveServiceCliInvocation", () => {
     expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
       "staged CLI slot cannot be executed - registering the source binary instead",
       expect.objectContaining({ binaryPath, wellKnownPath }),
+    );
+  });
+
+  // The conservative arm of the same probe, which the two EACCES tests around
+  // this one cannot see: an error that is NOT a spawn refusal must keep the
+  // slot registered. A timeout on a loaded machine (or a non-zero exit from a
+  // binary that ran fine and disliked `--version`) is not evidence the
+  // supervisor cannot start the slot, and demoting on it would trade the one
+  // upgrade-stable path away over an unrelated hiccup. Without this case a
+  // `catch { return false }` rewrite of `canExecute` would stay green.
+  it("keeps the slot registered when the probe fails with a NON-refusal error (ETIMEDOUT)", async () => {
+    const binaryPath = join(workHome, "system-binary");
+    writeFileSync(binaryPath, "the package manager's runnable binary");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "apt",
+      pendingUpgrade: null,
+    });
+    const { wellKnownCliBinaryPath } =
+      await import("../../store/well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    execControl.failWithEtimedoutForPaths = [wellKnownPath];
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+    const result = await resolveServiceCliInvocation({
+      environment: ENVIRONMENT,
+      override: null,
+      allowSelfInvocation: false,
+    });
+
+    expect(result).toEqual({ command: wellKnownPath, args: [] });
+    expect(mocks.cliLoggerWarnMock).not.toHaveBeenCalledWith(
+      "staged CLI slot cannot be executed - registering the source binary instead",
+      expect.anything(),
     );
   });
 
