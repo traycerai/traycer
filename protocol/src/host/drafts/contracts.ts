@@ -40,7 +40,10 @@ export const draftsDeleteV10 = defineRpcContract({
 
 /**
  * Snapshot of the host draft store. `snapshotSeq` is captured under the
- * same serialized frontier as the rows (see `draftsListResponseSchema`).
+ * same serialized frontier as the live rows AND `tombstones` (see
+ * `draftsListResponseSchema`). Tombstones are how a reconnecting client
+ * learns deletes it missed while disconnected; absence from `drafts`
+ * is not a delete.
  */
 export const draftsListV10 = defineRpcContract({
   method: "drafts.list",

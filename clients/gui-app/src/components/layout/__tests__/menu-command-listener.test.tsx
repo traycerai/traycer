@@ -32,6 +32,7 @@ import {
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
+  freshLandingMirrorState,
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
@@ -91,7 +92,8 @@ vi.mock("@tanstack/react-router", () => ({
   }) => options.select({ location: { pathname: routerState.pathname } }),
 }));
 
-vi.mock("@/lib/host", () => ({
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => null,
   useAuthService: () => authMock,
 }));
@@ -777,6 +779,7 @@ describe("<MenuCommandListener />", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
       ],
       activeDraftId: "draft-a",

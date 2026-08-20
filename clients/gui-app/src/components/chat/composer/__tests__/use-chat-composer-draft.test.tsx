@@ -61,15 +61,23 @@ function fakeHandle(ready: boolean) {
 }
 
 interface BridgeHookProps {
-  readonly taskId: string;
+  readonly chatId: string;
   readonly editorRef: { current: ComposerPromptEditorHandle | null };
   readonly editorReadyTick: number;
 }
 
 function renderBridgeHook(initial: BridgeHookProps) {
-  return renderHook((props: BridgeHookProps) => useChatComposerDraft(props), {
-    initialProps: initial,
-  });
+  return renderHook(
+    (props: BridgeHookProps) =>
+      useChatComposerDraft({
+        chatId: props.chatId,
+        epicId: "epic-1",
+        hostId: "host-1",
+        editorRef: props.editorRef,
+        editorReadyTick: props.editorReadyTick,
+      }),
+    { initialProps: initial },
+  );
 }
 
 describe("useChatComposerDraft bridge", () => {
@@ -78,7 +86,7 @@ describe("useChatComposerDraft bridge", () => {
     const { handle, syncContent } = fakeHandle(true);
     const editorRef = { current: handle as ComposerPromptEditorHandle | null };
 
-    renderBridgeHook({ taskId, editorRef, editorReadyTick: 1 });
+    renderBridgeHook({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     act(() => {
       useComposerDraftStore
@@ -97,7 +105,7 @@ describe("useChatComposerDraft bridge", () => {
     };
 
     const { rerender } = renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef,
       editorReadyTick: 0,
     });
@@ -114,13 +122,13 @@ describe("useChatComposerDraft bridge", () => {
     // The editor finishes construction: ComposerPromptEditor fires
     // onEditorReady, which the owner turns into an editorReadyTick bump.
     editorRef.current = handle;
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     expect(syncContent).toHaveBeenCalledTimes(1);
     expect(syncContent).toHaveBeenCalledWith(doc("quoted"), null);
 
     // A further rerender with nothing new must not replay the same epoch.
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
     expect(syncContent).toHaveBeenCalledTimes(1);
   });
 
@@ -133,7 +141,7 @@ describe("useChatComposerDraft bridge", () => {
     const editorRef = { current: handle as ComposerPromptEditorHandle | null };
 
     const { rerender } = renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef,
       editorReadyTick: 0,
     });
@@ -146,7 +154,7 @@ describe("useChatComposerDraft bridge", () => {
     expect(syncContent).not.toHaveBeenCalled();
 
     markReady();
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     expect(syncContent).toHaveBeenCalledTimes(1);
     expect(syncContent).toHaveBeenCalledWith(doc("quoted"), null);
@@ -157,7 +165,7 @@ describe("useChatComposerDraft bridge", () => {
     const { handle, syncContent } = fakeHandle(true);
     const editorRef = { current: handle as ComposerPromptEditorHandle | null };
 
-    renderBridgeHook({ taskId, editorRef, editorReadyTick: 1 });
+    renderBridgeHook({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     act(() => {
       useComposerDraftStore
@@ -199,12 +207,12 @@ describe("useChatComposerDraft bridge", () => {
     });
 
     renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef: editorRefA,
       editorReadyTick: 1,
     });
     renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef: editorRefB,
       editorReadyTick: 1,
     });
@@ -231,7 +239,7 @@ describe("useChatComposerDraft bridge", () => {
     });
 
     const { rerender } = renderBridgeHook({
-      taskId,
+      chatId: taskId,
       editorRef,
       editorReadyTick: 0,
     });
@@ -244,7 +252,7 @@ describe("useChatComposerDraft bridge", () => {
     expect(syncContent).not.toHaveBeenCalled();
 
     markReady();
-    rerender({ taskId, editorRef, editorReadyTick: 1 });
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
 
     expect(syncContent).toHaveBeenCalledTimes(1);
     expect(syncContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
@@ -265,7 +273,9 @@ function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
   // keys its handle-ready catch-up on.
   const [editorReadyTick, setEditorReadyTick] = useState(0);
   const { initialContent, initialSelection } = useChatComposerDraft({
-    taskId,
+    chatId: taskId,
+    epicId: "epic-1",
+    hostId: "host-1",
     editorRef,
     editorReadyTick,
   });

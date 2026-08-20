@@ -4,6 +4,7 @@ import { draftTabModule } from "@/stores/tabs/kinds/draft";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   EMPTY_LANDING_DRAFT_CONTENT,
+  freshLandingMirrorState,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 
@@ -16,6 +17,7 @@ function draft(content: JsonContent): LandingDraftTab {
     settings: null,
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
+    ...freshLandingMirrorState(),
   };
 }
 

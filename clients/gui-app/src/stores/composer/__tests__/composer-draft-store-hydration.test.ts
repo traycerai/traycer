@@ -37,6 +37,12 @@ const MENTION_DRAFT: DraftState = {
   selection: null,
   resetEpoch: 0,
   revision: 0,
+  draftId: null,
+  hostRevision: 0,
+  targetEpicId: null,
+  lastTouchedAt: 0,
+  generation: 0,
+  syncedGeneration: 0,
 };
 
 beforeEach(() => {
@@ -101,11 +107,24 @@ describe("composer draft store hydration", () => {
 
     await useComposerDraftStore.persist.rehydrate();
 
-    expect(useComposerDraftStore.getState().drafts).toEqual({
-      legacy: {
-        ...legacyDraft,
-        resetEpoch: 1,
-      },
+    const hydrated = useComposerDraftStore.getState().drafts.legacy;
+    expect(hydrated).toBeDefined();
+    if (hydrated === undefined) return;
+    if (hydrated.draftId === null) {
+      throw new Error("legacy hydration must mint a draftId");
+    }
+    expect(hydrated.draftId.length).toBeGreaterThan(0);
+    expect(hydrated).toEqual({
+      content: MENTION_DRAFT.content,
+      selection: null,
+      revision: 3,
+      resetEpoch: 1,
+      draftId: hydrated.draftId,
+      hostRevision: 0,
+      targetEpicId: null,
+      lastTouchedAt: 0,
+      generation: 1,
+      syncedGeneration: 0,
     });
   });
 });

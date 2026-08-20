@@ -48,6 +48,7 @@ import { settingsTabModule } from "@/stores/tabs/kinds/settings";
 import {
   EMPTY_LANDING_DRAFT_CONTENT,
   emptyLandingDraftWorkspaceSnapshot,
+  freshLandingMirrorState,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
@@ -93,6 +94,7 @@ const DRAFT_SOURCE: LandingDraftTab = {
   settings: null,
   composerMode: "chat",
   workspace: emptyLandingDraftWorkspaceSnapshot(),
+  ...freshLandingMirrorState(),
 };
 const HISTORY_SOURCE: SystemTab = {
   id: "history",

@@ -279,7 +279,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     handleDocumentChange,
     handleSelectionChange,
   } = useChatComposerDraft({
-    taskId,
+    chatId: taskId,
+    epicId: currentEpicId,
+    hostId: tabHostId,
     editorRef,
     editorReadyTick,
   });

@@ -7,7 +7,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import { useChatStore } from "@/stores/composer/chat-store";
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { submitComposerDraft } from "@/lib/drafts/draft-mirror-coordinator";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import {
   buildAttachmentsFromJSONContent,
@@ -143,7 +143,6 @@ export function useChatComposerSubmit(
     onSubmitMessage,
   } = args;
   const appendMessage = useChatStore((state) => state.appendMessage);
-  const clearDraftInStore = useComposerDraftStore((state) => state.clearDraft);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
 
@@ -161,19 +160,12 @@ export function useChatComposerSubmit(
             }),
             true);
       if (!accepted) return false;
-      clearDraftInStore(taskId);
+      void submitComposerDraft(taskId);
       pickerStore.getState().reset();
       editorRef.current?.clear();
       return true;
     },
-    [
-      appendMessage,
-      clearDraftInStore,
-      editorRef,
-      onSubmitMessage,
-      pickerStore,
-      taskId,
-    ],
+    [appendMessage, editorRef, onSubmitMessage, pickerStore, taskId],
   );
 
   // The conditions that block a live submit, shared verbatim between the live

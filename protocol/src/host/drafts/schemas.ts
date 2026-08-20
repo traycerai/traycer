@@ -199,8 +199,29 @@ export type DraftsDeleteResponse = z.infer<typeof draftsDeleteResponseSchema>;
 export const draftsListRequestSchema = z.object({});
 export type DraftsListRequest = z.infer<typeof draftsListRequestSchema>;
 
+/**
+ * A retained `deleted = 1` row. `drafts.list` returns these beside live
+ * rows so a reconnecting client can apply an authoritative delete it
+ * missed while disconnected (submit on A, B offline, B reconnects).
+ * `revision` is the tombstone's revision: hold
+ * `{ kind: "tombstone", revision }` so a later higher-revision upsert
+ * still revives.
+ */
+export const draftListTombstoneSchema = z.object({
+  draftId: z.string().min(1),
+  revision: z.number().int().positive(),
+});
+export type DraftListTombstone = z.infer<typeof draftListTombstoneSchema>;
+
 export const draftsListResponseSchema = z.object({
   drafts: z.array(draftDocumentSchema),
+  /**
+   * Every retained tombstone at this snapshot. Always present (empty
+   * when none). Live `drafts` never include these ids; a reconnecting
+   * client must treat each as an authoritative delete rather than
+   * inferring deletion from absence.
+   */
+  tombstones: z.array(draftListTombstoneSchema),
   /**
    * Store-wide sequence the listing reflects. Host bumps `storeSeq` on
    * every draft-store mutation (upsert and delete). A subscribe frame
@@ -208,11 +229,11 @@ export const draftsListResponseSchema = z.object({
    *
    * MUST (frontier atomicity): sequence allocation commits atomically
    * with its mutation, and `snapshotSeq` is captured under the same
-   * serialized frontier. The response reflects EVERY mutation with
-   * `storeSeq <= snapshotSeq` and NONE with `storeSeq > snapshotSeq`.
-   * Forbidden: read rows, then let a create commit at 21, then stamp
-   * `snapshotSeq = 21` — the buffered create frame is equal-seq and
-   * dropped forever.
+   * serialized frontier as BOTH the live rows and `tombstones`. The
+   * response reflects EVERY mutation with `storeSeq <= snapshotSeq`
+   * and NONE with `storeSeq > snapshotSeq`. Forbidden: read rows, then
+   * let a create commit at 21, then stamp `snapshotSeq = 21` — the
+   * buffered create frame is equal-seq and dropped forever.
    */
   snapshotSeq: z.number().int().nonnegative(),
 });
@@ -286,8 +307,9 @@ const storeSeqField = {
 } as const;
 
 /**
- * Host-scoped draft change frames. `drafts.list` is the snapshot;
- * (re)connect means re-read the list, then apply what arrives.
+ * Host-scoped draft change frames. `drafts.list` is the snapshot
+ * (live rows + `tombstones`); (re)connect means re-read the list,
+ * apply tombstones as held deletes, then apply what arrives.
  *
  * Merge rule (`draftSubscribeFrameApplies` is the executable form):
  * - held **present** (row or tombstone): apply iff
@@ -402,8 +424,9 @@ export function draftSubscribeFrameApplies(
 
 /**
  * `flush` is the publication trigger on draft close / client blur
- * (decision log #10). `draftIds` empty means "every dirty draft this
- * client knows about".
+ * (decision log #10). `draftIds` names the drafts to publish now.
+ * Empty is a no-op on both sides — a client with nothing pending must
+ * not be read as "every dirty draft this host knows about".
  */
 export const draftsSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
   "kind",

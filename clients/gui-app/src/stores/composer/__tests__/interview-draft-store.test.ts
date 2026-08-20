@@ -45,13 +45,15 @@ describe("interview draft store", () => {
     const persisted = window.localStorage.getItem(perKey);
     expect(persisted).not.toBeNull();
     expect(window.localStorage.getItem(LEGACY_SINGLE_KEY)).toBeNull();
-    expect(JSON.parse(persisted ?? "null")).toEqual(sampleDraft);
+    expect(JSON.parse(persisted ?? "null")).toEqual(
+      expect.objectContaining(sampleDraft),
+    );
 
     useInterviewDraftStore.setState({ draftsByChat: {} });
     rehydrateInterviewDraftsFromStorage();
 
     expect(readInterviewDraftSnapshot("chat-1", "block-1")).toEqual(
-      sampleDraft,
+      expect.objectContaining(sampleDraft),
     );
   });
 
@@ -113,13 +115,13 @@ describe("interview draft store", () => {
         window.localStorage.getItem(interviewDraftKey("chatA", "block")) ??
           "null",
       ),
-    ).toEqual(draftA);
+    ).toMatchObject(draftA);
     expect(
       JSON.parse(
         window.localStorage.getItem(interviewDraftKey("chatB", "block")) ??
           "null",
       ),
-    ).toEqual(draftB);
+    ).toMatchObject(draftB);
   });
 
   it("rehydrates from a storage event when another window seeds a per-key entry", () => {
@@ -134,13 +136,19 @@ describe("interview draft store", () => {
 
     expect(
       useInterviewDraftStore.getState().draftsByChat["chatX"]?.["blockX"],
-    ).toEqual(draft);
+    ).toMatchObject(draft);
   });
 
   it("ignores storage events for unrelated keys without wiping in-memory drafts", () => {
     const draft = {
       pageIndex: 0,
       answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
+      draftId: "draft-keep",
+      hostRevision: 0,
+      targetEpicId: null,
+      lastTouchedAt: 0,
+      generation: 0,
+      syncedGeneration: 0,
     };
     // Memory-only row: if rehydrate ran against empty storage it would wipe.
     useInterviewDraftStore.setState({
@@ -158,7 +166,7 @@ describe("interview draft store", () => {
 
     expect(
       useInterviewDraftStore.getState().draftsByChat["chat-keep"]?.block,
-    ).toEqual(draft);
+    ).toMatchObject(draft);
   });
 
   it("pruneChatDrafts removes non-kept blocks from memory and localStorage", () => {
@@ -176,7 +184,9 @@ describe("interview draft store", () => {
 
     store.pruneChatDrafts("chat-1", new Set(["blockA"]));
 
-    expect(readInterviewDraftSnapshot("chat-1", "blockA")).toEqual(draftA);
+    expect(readInterviewDraftSnapshot("chat-1", "blockA")).toMatchObject(
+      draftA,
+    );
     expect(readInterviewDraftSnapshot("chat-1", "blockB")).toBeNull();
     expect(
       window.localStorage.getItem(interviewDraftKey("chat-1", "blockA")),
@@ -220,7 +230,7 @@ describe("interview draft store", () => {
     store.pruneChatDrafts("chat-1", new Set(["blockA"]));
 
     expect(useInterviewDraftStore.getState().draftsByChat).toBe(before);
-    expect(readInterviewDraftSnapshot("chat-1", "blockA")).toEqual(draft);
+    expect(readInterviewDraftSnapshot("chat-1", "blockA")).toMatchObject(draft);
   });
 
   it("does not pollute Object.prototype when chatId or blockId is __proto__", () => {
@@ -233,14 +243,14 @@ describe("interview draft store", () => {
     expect(Object.hasOwn(Object.prototype, "b")).toBe(false);
     const probe: Record<string, unknown> = {};
     expect(probe.b).toBeUndefined();
-    expect(readInterviewDraftSnapshot("__proto__", "b")).toEqual(draft);
+    expect(readInterviewDraftSnapshot("__proto__", "b")).toMatchObject(draft);
     expect(
       selectInterviewDraft(
         useInterviewDraftStore.getState().draftsByChat,
         "__proto__",
         "b",
       ),
-    ).toEqual(draft);
+    ).toMatchObject(draft);
     expect(readInterviewDraftSnapshot("normal-chat", "b")).toBeNull();
     expect(
       window.localStorage.getItem(interviewDraftKey("__proto__", "b")),
@@ -262,7 +272,9 @@ describe("interview draft store", () => {
     useInterviewDraftStore.getState().saveDraft("constructor", "block", draft);
 
     expect(Object.hasOwn(Object.prototype, "block")).toBe(false);
-    expect(readInterviewDraftSnapshot("constructor", "block")).toEqual(draft);
+    expect(readInterviewDraftSnapshot("constructor", "block")).toMatchObject(
+      draft,
+    );
     expect(readInterviewDraftSnapshot("other", "block")).toBeNull();
   });
 
@@ -286,14 +298,16 @@ describe("interview draft store", () => {
     const probe: Record<string, unknown> = {};
     expect(Object.hasOwn(probe, "__proto__")).toBe(false);
     expect(probe["__proto__"]).not.toEqual(draft);
-    expect(readInterviewDraftSnapshot("__proto__", "__proto__")).toEqual(draft);
+    expect(readInterviewDraftSnapshot("__proto__", "__proto__")).toMatchObject(
+      draft,
+    );
     expect(
       selectInterviewDraft(
         useInterviewDraftStore.getState().draftsByChat,
         "__proto__",
         "__proto__",
       ),
-    ).toEqual(draft);
+    ).toMatchObject(draft);
     expect(
       Object.hasOwn(
         useInterviewDraftStore.getState().draftsByChat,

@@ -43,6 +43,7 @@ import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
+import { LandingDraftMirrorMount } from "@/hooks/drafts/use-landing-draft-mirror";
 import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
@@ -227,6 +228,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />
                                 <ChatRecordsStreamMount />
+                                <LandingDraftMirrorMount />
                               </HostScopeReady>
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>

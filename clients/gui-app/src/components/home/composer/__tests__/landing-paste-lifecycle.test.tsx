@@ -42,6 +42,7 @@ import {
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
   emptyLandingDraftWorkspaceSnapshot,
+  freshLandingMirrorState,
   LANDING_DRAFT_PERSIST_KEY,
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
@@ -997,6 +998,7 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
       ],
       activeDraftId: null,

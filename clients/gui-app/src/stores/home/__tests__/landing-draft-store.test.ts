@@ -9,6 +9,7 @@ import {
   setLandingDraftDesktopProjectionBridge,
   setLandingDraftWorkspacePrimary,
   useLandingDraftStore,
+  freshLandingMirrorState,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
@@ -768,6 +769,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
         {
           id: "draft-old",
@@ -777,6 +779,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
       ],
       activeDraftId: "draft-old",
@@ -822,6 +825,7 @@ describe("useLandingDraftStore", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
       ],
       activeDraftId: "draft-a",
@@ -883,6 +887,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
   });
@@ -929,6 +934,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
   });
@@ -981,6 +987,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
       {
         id: "draft-window-b",
@@ -989,6 +996,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
     expect(useLandingDraftStore.getState().activeDraftId).toBe(
@@ -1123,6 +1131,7 @@ describe("useLandingDraftStore", () => {
         settings: null,
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
+        ...freshLandingMirrorState(),
       },
     ]);
   });

@@ -202,15 +202,23 @@ describe("drafts wire documents", () => {
     expect(
       draftsListResponseSchema.parse({
         drafts: [LANDING_DOCUMENT],
+        tombstones: [{ draftId: "gone", revision: 2 }],
         snapshotSeq: 10,
       }),
     ).toEqual({
       drafts: [LANDING_DOCUMENT],
+      tombstones: [{ draftId: "gone", revision: 2 }],
       snapshotSeq: 10,
     });
     expect(
       draftsListResponseSchema.safeParse({ drafts: [LANDING_DOCUMENT] })
         .success,
+    ).toBe(false);
+    expect(
+      draftsListResponseSchema.safeParse({
+        drafts: [LANDING_DOCUMENT],
+        snapshotSeq: 10,
+      }).success,
     ).toBe(false);
   });
 
@@ -494,6 +502,17 @@ describe("drafts.subscribe@1.0 frames", () => {
     ).toEqual({
       kind: "ping",
       hasBinaryPayload: false,
+    });
+    expect(
+      draftsSubscribeClientFrameSchemaV10.parse({
+        kind: "flush",
+        hasBinaryPayload: false,
+        draftIds: [],
+      }),
+    ).toEqual({
+      kind: "flush",
+      hasBinaryPayload: false,
+      draftIds: [],
     });
   });
 });

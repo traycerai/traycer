@@ -142,6 +142,7 @@ function makeDraft(
     settings: null,
     composerMode: "chat",
     workspace: m.draft.emptyLandingDraftWorkspaceSnapshot(),
+    ...m.draft.freshLandingMirrorState(),
   };
 }
 
