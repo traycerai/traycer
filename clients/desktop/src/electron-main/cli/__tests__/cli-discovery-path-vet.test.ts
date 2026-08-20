@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CLI_INVOCATION_PROBE_TIMEOUT_MS,
+  CLI_RECONCILE_PROBE_TIMEOUT_MS,
   resetCliProbeCacheForTests,
   vetPathCliCandidate,
 } from "../cli-discovery";
@@ -42,7 +44,10 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     const dir = await makeTempDir();
     const candidate = join(dir, "traycer");
     await writeScript(candidate, "printf '1.2.3\\n'");
-    const vetted = await vetPathCliCandidate(candidate);
+    const vetted = await vetPathCliCandidate(
+      candidate,
+      CLI_INVOCATION_PROBE_TIMEOUT_MS,
+    );
     expect(vetted).toEqual({ version: "1.2.3" });
   });
 
@@ -55,14 +60,18 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
       candidate,
       "printf '[desktop] logger initialised\\n[desktop] single-instance lock unavailable - quitting\\n'",
     );
-    expect(await vetPathCliCandidate(candidate)).toBeNull();
+    expect(
+      await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS),
+    ).toBeNull();
   });
 
   it("rejects a candidate that exits non-zero", async () => {
     const dir = await makeTempDir();
     const candidate = join(dir, "traycer");
     await writeScript(candidate, "exit 1");
-    expect(await vetPathCliCandidate(candidate)).toBeNull();
+    expect(
+      await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS),
+    ).toBeNull();
   });
 
   it("caches the probe verdict per binary path for the process lifetime", async () => {
@@ -75,12 +84,12 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
         return line.length > 0;
       }).length;
 
-    await vetPathCliCandidate(candidate);
-    await vetPathCliCandidate(candidate);
+    await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS);
+    await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS);
     expect(await execCount()).toBe(1);
 
     resetCliProbeCacheForTests();
-    await vetPathCliCandidate(candidate);
+    await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS);
     expect(await execCount()).toBe(2);
   });
 
@@ -90,8 +99,12 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     const countFile = join(dir, "exec-count");
     await writeScript(candidate, `echo x >> '${countFile}'\nexit 1`);
 
-    expect(await vetPathCliCandidate(candidate)).toBeNull();
-    expect(await vetPathCliCandidate(candidate)).toBeNull();
+    expect(
+      await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS),
+    ).toBeNull();
+    expect(
+      await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS),
+    ).toBeNull();
     const count = (await readFile(countFile, "utf8"))
       .split("\n")
       .filter((line) => line.length > 0).length;
@@ -104,7 +117,10 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     await mkdir(packageDir, { recursive: true });
     const candidate = join(packageDir, "traycer");
     await writeScript(candidate, "printf '1.2.3\\n'");
-    const vetted = await vetPathCliCandidate(candidate);
+    const vetted = await vetPathCliCandidate(
+      candidate,
+      CLI_INVOCATION_PROBE_TIMEOUT_MS,
+    );
     expect(vetted).toEqual({ version: "1.2.3", source: "npm" });
   });
 
@@ -126,7 +142,10 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
       `echo x >> '${countFile}'\nsleep 3\nprintf '1.2.3\\n'`,
     );
 
-    const first = await vetPathCliCandidate(candidate);
+    const first = await vetPathCliCandidate(
+      candidate,
+      CLI_INVOCATION_PROBE_TIMEOUT_MS,
+    );
     expect(first).toBeNull();
 
     // A cached `timeout` verdict would answer this SECOND call from the
@@ -134,7 +153,10 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     // just the (identical, null) verdict - is what actually pins the
     // non-caching: a same-verdict-twice check alone cannot distinguish
     // "re-probed and timed out again" from "returned the cached one".
-    const second = await vetPathCliCandidate(candidate);
+    const second = await vetPathCliCandidate(
+      candidate,
+      CLI_INVOCATION_PROBE_TIMEOUT_MS,
+    );
     expect(second).toBeNull();
     const count = (await readFile(countFile, "utf8"))
       .split("\n")
@@ -148,4 +170,94 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
   // verdict) and asserts exactly one exec across two `vetPathCliCandidate`
   // calls, which is this same property under a different name. Not
   // duplicated here.
+
+  // The deadline belongs to the CALLER. Not caching a timeout was only half
+  // the fix: the launch reconcile's fall-through installs the bundled CLI
+  // and writes a Desktop-owned manifest, and a manifest outranks PATH in
+  // every later discovery - so for the one prober that can hand ownership
+  // away there is no "next time" to retry into. The same fixture that the
+  // impatient deadline condemns must vet CLEAN at the reconcile's.
+  it("the patient deadline vets a slow-but-real CLI the impatient one drops", async () => {
+    const dir = await makeTempDir();
+    const candidate = join(dir, "traycer");
+    await writeScript(candidate, "sleep 3\nprintf '1.2.3\\n'");
+
+    // Positive control: the same binary, the same code path, 2s deadline.
+    // Without it a green below could equally mean "the fixture is fast now".
+    expect(
+      await vetPathCliCandidate(candidate, CLI_INVOCATION_PROBE_TIMEOUT_MS),
+    ).toBeNull();
+
+    expect(
+      await vetPathCliCandidate(candidate, CLI_RECONCILE_PROBE_TIMEOUT_MS),
+    ).toEqual({ version: "1.2.3" });
+  }, 20_000);
+
+  // The same join, the other way round, and the direction that actually
+  // costs something. A status poll's 2s probe can be in flight when the
+  // detached reconcile arrives - on the very machine this matters for
+  // there is no manifest, so both paths walk PATH - and joining it would
+  // hand the reconcile a verdict about someone else's patience. Its
+  // verdicts are not recoverable: a dropped PATH candidate becomes a
+  // Desktop-owned manifest that outranks PATH from then on. It must get a
+  // probe that can actually run for 15s.
+  it("a patient caller does not inherit a shorter in-flight deadline", async () => {
+    const dir = await makeTempDir();
+    const candidate = join(dir, "traycer");
+    const countFile = join(dir, "exec-count");
+    await writeScript(
+      candidate,
+      `echo x >> '${countFile}'\nsleep 3\nprintf '1.2.3\\n'`,
+    );
+
+    const impatient = vetPathCliCandidate(
+      candidate,
+      CLI_INVOCATION_PROBE_TIMEOUT_MS,
+    );
+    const patient = await vetPathCliCandidate(
+      candidate,
+      CLI_RECONCILE_PROBE_TIMEOUT_MS,
+    );
+
+    // Inheriting the 2s probe would make this null - the fixture needs 3s.
+    expect(patient).toEqual({ version: "1.2.3" });
+    // The impatient caller still gets its own (correct, impatient) answer.
+    expect(await impatient).toBeNull();
+    // Two spawns, necessarily: the deadlines cannot share one process.
+    const count = (await readFile(countFile, "utf8"))
+      .split("\n")
+      .filter((line) => line.length > 0).length;
+    expect(count).toBe(2);
+  }, 20_000);
+
+  // Patience must not leak onto the impatient path. The cache shares the
+  // in-flight PROMISE, so a status poll landing mid-reconcile would inherit
+  // the reconcile's 15s deadline and stall the invocation path for the
+  // whole of it unless it races its own. Started patient, joined impatient:
+  // the joiner must give up on its own schedule, well before the fixture
+  // answers.
+  it("an impatient joiner does not inherit an in-flight patient deadline", async () => {
+    const dir = await makeTempDir();
+    const candidate = join(dir, "traycer");
+    // Six seconds, not three: the margin between "raced at its own 2s" and
+    // "waited for the patient probe" has to survive a loaded CI runner
+    // without the assertion below going flaky in either direction.
+    await writeScript(candidate, "sleep 6\nprintf '1.2.3\\n'");
+
+    const patient = vetPathCliCandidate(
+      candidate,
+      CLI_RECONCILE_PROBE_TIMEOUT_MS,
+    );
+    const startedAt = Date.now();
+    const joined = await vetPathCliCandidate(
+      candidate,
+      CLI_INVOCATION_PROBE_TIMEOUT_MS,
+    );
+    const waitedMs = Date.now() - startedAt;
+
+    expect(joined).toBeNull();
+    expect(waitedMs).toBeLessThan(4_000);
+    // ...and the patient probe it joined still lands its real verdict.
+    expect(await patient).toEqual({ version: "1.2.3" });
+  }, 20_000);
 });

@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import {
+  CLI_RECONCILE_PROBE_TIMEOUT_MS,
   cliBinariesDiffer,
   compareSemver,
   discoverCli,
@@ -189,14 +190,23 @@ export function defaultReconcileCliDeps(): ReconcileCliDeps {
     readCliManifest,
     resolveBundledCliPath,
     readBundledCliVersion,
-    discoverCli,
+    // The PATIENT deadline on both probing deps, and the reason is the same
+    // for each: this pass is detached, runs once per launch, and is the
+    // only prober whose verdict decides who OWNS the slot. A real CLI busy
+    // copying ~100 MB into the well-known slot is precisely the binary this
+    // pass must not misread, and each killed probe abandons that copy for
+    // the next one to start over. See `CLI_RECONCILE_PROBE_TIMEOUT_MS`.
+    discoverCli: () => discoverCli(CLI_RECONCILE_PROBE_TIMEOUT_MS),
     // The reconcile's contract is version-or-null; the probe's third state
     // (timeout) collapses to null here on purpose. Both reconcile call
     // sites treat null as "could not determine", never as "not a CLI" -
     // the adopt/condemn distinction that made the timeout worth a state of
     // its own lives in `vetPathCliCandidate`.
     probeCliVersion: async (binaryPath: string): Promise<string | null> => {
-      const probed = await probeCliVersion(binaryPath);
+      const probed = await probeCliVersion(
+        binaryPath,
+        CLI_RECONCILE_PROBE_TIMEOUT_MS,
+      );
       return probed.kind === "version" ? probed.version : null;
     },
     installBundledCli,
@@ -299,10 +309,30 @@ export async function reconcileCli(
     ) {
       // Fresh install: no manifest, and either no `traycer` on PATH or only
       // a probe-failed imposter under that name, but the app ships a bundled
-      // CLI. Stage it into the Desktop-owned slot (a symlink on
-      // POSIX) so the bundle-blind host has a deterministic, space-free
-      // `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for the monitor /
-      // title hooks / terminal agents. Nothing else self-heals this slot.
+      // CLI.
+      //
+      // "Probe-failed" here includes a candidate that answered nothing at
+      // all within `CLI_RECONCILE_PROBE_TIMEOUT_MS`, and that arm is a
+      // deliberate policy call rather than an oversight: staging writes a
+      // Desktop-owned manifest that outranks PATH from then on, so it is
+      // the expensive direction - but deferring instead would re-open oss
+      // #872, where a `traycer` that never answers left the slot unstaged
+      // and first launch bricked. A binary that cannot say what it is
+      // inside fifteen seconds is not serving the host either. Patience is
+      // where this is fought; refusal is not.
+      //
+      // Stage it into the Desktop-owned slot - a COPY on every platform, see
+      // `installBundledCli` - so the bundle-blind host has a deterministic,
+      // space-free `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for
+      // the monitor / title hooks / terminal agents. Nothing else self-heals
+      // this slot.
+      //
+      // Said "a symlink on POSIX" until now, which is what it was before the
+      // pre-copy era ended and is no longer true of any platform. Left
+      // uncorrected it reads as a live design note rather than history, and
+      // it has already been cited that way in review - the link is exactly
+      // what was removed, because a bundle remove/replace left it DANGLING
+      // with no healer but the next successful app launch.
       const installed = await deps.installBundledCli({
         bundledCliPath: bundledPath,
         version: bundledVersion,

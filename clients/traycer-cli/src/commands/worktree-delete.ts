@@ -147,7 +147,13 @@ async function runWorktreeDelete(
       // rotation during the delete must not leave the mint on a dead bearer.
       bearer: () => readLeaseBearer(lease),
       diag: (message) => relayStatus(ctx, message),
+      signal: null,
+      unavailableNote:
+        "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
     }),
+    // Provisioning here is opportunistic; adoption is never verified.
+    onHostCredentialState: null,
     // The CLI has no selection authority to feed: it holds no lease
     // state and never fails a window over.
     evidence: NO_TRANSPORT_EVIDENCE,

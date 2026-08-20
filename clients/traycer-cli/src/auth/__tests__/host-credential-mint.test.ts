@@ -33,6 +33,9 @@ describe("createCliHostCredentialMintFlow", () => {
       authnBaseUrl: "https://authn.example.test",
       bearer: () => "user-jwt",
       diag: () => undefined,
+      signal: null,
+      unavailableNote: "continuing without a host credential.",
+      onUnauthorized: null,
     });
 
     await expect(
@@ -50,6 +53,7 @@ describe("createCliHostCredentialMintFlow", () => {
       "https://authn.example.test",
       "user-jwt",
       { hostId: "host-1", hostLabel: expect.any(String), platform: null },
+      null,
     );
   });
 
@@ -58,6 +62,9 @@ describe("createCliHostCredentialMintFlow", () => {
       authnBaseUrl: "https://authn.example.test",
       bearer: () => null,
       diag: () => undefined,
+      signal: null,
+      unavailableNote: "continuing without a host credential.",
+      onUnauthorized: null,
     });
 
     await expect(
@@ -71,6 +78,9 @@ describe("createCliHostCredentialMintFlow", () => {
       authnBaseUrl: "https://authn.example.test",
       bearer: () => "",
       diag: () => undefined,
+      signal: null,
+      unavailableNote: "continuing without a host credential.",
+      onUnauthorized: null,
     });
 
     await expect(
@@ -92,12 +102,61 @@ describe("createCliHostCredentialMintFlow", () => {
         authnBaseUrl: "https://authn.example.test",
         bearer: () => "user-jwt",
         diag,
+        signal: null,
+        unavailableNote: "continuing without a host credential.",
+        onUnauthorized: null,
       });
 
       await expect(
         flow({ hostId: "host-1", reason: "missing" }),
       ).resolves.toEqual({ kind: "unavailable" });
       expect(diag).toHaveBeenCalled();
+    },
+  );
+
+  it("invokes onUnauthorized exactly once when the server responds unauthorized", async () => {
+    // 401/403 from authn is NOT like the other mint failures: the same
+    // stored bearer fails for every client, so a caller with a follow-up
+    // (the host install probe) needs to know, even though the flow itself
+    // still returns the same `unavailable` the stream contract has room for.
+    mintMock.mockResolvedValue({ kind: "unauthorized" });
+    const onUnauthorized = vi.fn();
+    const flow = createCliHostCredentialMintFlow({
+      authnBaseUrl: "https://authn.example.test",
+      bearer: () => "user-jwt",
+      diag: () => undefined,
+      signal: null,
+      unavailableNote: "continuing without a host credential.",
+      onUnauthorized,
+    });
+
+    await expect(
+      flow({ hostId: "host-1", reason: "missing" }),
+    ).resolves.toEqual({ kind: "unavailable" });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { kind: "superseded" as const },
+    { kind: "network-error" as const },
+  ])(
+    "does not invoke onUnauthorized when the server responds $kind",
+    async ({ kind }) => {
+      mintMock.mockResolvedValue({ kind });
+      const onUnauthorized = vi.fn();
+      const flow = createCliHostCredentialMintFlow({
+        authnBaseUrl: "https://authn.example.test",
+        bearer: () => "user-jwt",
+        diag: () => undefined,
+        signal: null,
+        unavailableNote: "continuing without a host credential.",
+        onUnauthorized,
+      });
+
+      await expect(
+        flow({ hostId: "host-1", reason: "missing" }),
+      ).resolves.toEqual({ kind: "unavailable" });
+      expect(onUnauthorized).not.toHaveBeenCalled();
     },
   );
 });
