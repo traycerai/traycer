@@ -23,7 +23,7 @@ export function usePickAndAddWorkspaceFolders(
 ): () => Promise<boolean> {
   const folderActions = useWorkspaceFolderActionsForClient(client);
   return useCallback(async (): Promise<boolean> => {
-    const result = await folderActions.pickAndPrepareFolders();
+    const result = await folderActions.pickAndPrepareFolders(true);
     if (result === null) return false;
     // Stamp with dispatch-time hostId from the prepare result — never re-read
     // the mutable client after the await (B6 host-switch race).
@@ -48,7 +48,7 @@ export function useLocateAndReplaceWorkspaceFolder(
   const folderActions = useWorkspaceFolderActionsForClient(client);
   return useCallback(
     async (absentPath: string): Promise<boolean> => {
-      const result = await folderActions.pickAndPrepareFolders();
+      const result = await folderActions.pickAndPrepareFolders(true);
       if (result === null) return false;
       const folders = result.folders.map((folder) =>
         preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
