@@ -14,6 +14,15 @@ Electron shell around `@traycer-clients/gui-app`. Read with repo-root
 Transport-agnostic: do **not** proxy host RPC. `gui-app` talks to the host's
 localhost HTTP/WS after `LocalHostSnapshot`.
 
+One scoped, sunsetted exception: the v1.2.0 `host.*` maintenance projections
+in `host-management-ipc.ts` ("The maintenance-RPC projections") answer four
+protocol response shapes from main for a LOCAL host too old to serve them
+(negotiated away at handshake). Nothing is proxied — there is no host wire
+surface to forward to; main is the _origin_, because only main can shell the
+bundled CLI and read the on-disk install records the answers come from. The
+block comment there carries the full rationale; delete the lane when the
+fleet floor reaches 1.2.0.
+
 ## Commands
 
 ```bash

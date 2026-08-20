@@ -551,7 +551,30 @@ function buildFakeBridge(
         includePreReleases: false,
       }),
       freePortAndRestart: async (input) => input,
+      runDoctorRepairQueued: async () => ({ kind: "applied" as const }),
+      freePortAndRestartIfIdle: async () => ({
+        kind: "dispatched",
+        outcome: { kind: "ok", value: null },
+      }),
       cliManifest: async () => null,
+      maintenanceUpdateCheck: async () => {
+        throw new Error("maintenanceUpdateCheck not used in test");
+      },
+      maintenanceDoctor: async () => {
+        throw new Error("maintenanceDoctor not used in test");
+      },
+      maintenanceInstallationInfo: async () => {
+        throw new Error("maintenanceInstallationInfo not used in test");
+      },
+      maintenanceInstallVersion: async () => {
+        throw new Error("maintenanceInstallVersion not used in test");
+      },
+      restartHostIfIdle: async () => {
+        throw new Error("restartHostIfIdle not used in test");
+      },
+      runDoctorRepairIfIdle: async () => {
+        throw new Error("runDoctorRepairIfIdle not used in test");
+      },
       getHostName: async () => ({
         systemName: "desktop-1",
         customName: null,

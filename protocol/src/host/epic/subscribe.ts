@@ -556,16 +556,25 @@ export const epicSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
 //
 // Both halves are the SAME kind of additive growth as `@1.2`'s `roomId` - a
 // new PROPERTY on an existing shape, not a new frame KIND - so neither needs
-// an emission gate, for the asymmetry spelled out in the `@1.2` note above.
-// The version fact lives entirely in the schema:
+// an emission gate. But they are safe for DIFFERENT reasons, and the two are
+// chained rather than parallel:
 //
-//   - Request: the dispatcher parses params with the NEGOTIATED contract's
-//     `openRequestSchema` and hands the PARSED value to the resolver, so a
-//     sub-`@1.3` peer's `seedOffer` is stripped before the resolver exists.
-//     Nothing has to ask what was negotiated.
-//   - Response: `seededFromOffer` can only be set when an offer arrived, which
-//     can only happen at `@1.3`; and a sub-`@1.3` peer parsing with its own
-//     frozen meta would strip the key regardless.
+//   - Response: `seededFromOffer` is @1.2's argument exactly - consumer
+//     tolerance. A peer below `@1.3` parses the meta with its own frozen
+//     schema and strips a key it does not know, so the host may publish
+//     unconditionally.
+//   - Request: STRONGER than tolerance. The dispatcher validates params
+//     against the NEGOTIATED contract and hands the resolver the PARSED
+//     value, so an offer arriving on a connection that settled below `@1.3`
+//     is dropped before any resolver sees it. Not "no harm if it arrives" -
+//     it does not arrive. Note the party: the offer comes from a
+//     `@1.3`-CAPABLE client, which offers unconditionally because it cannot
+//     know the negotiated minor when it builds its first open request. A peer
+//     that predates the field has no `seedOffer` to strip.
+//
+// The chain: the response claim ("can only be set when an offer arrived")
+// holds BECAUSE the request-side gate does. Lose that gate and the response
+// half goes with it.
 //
 // So there is no `supportsDeltaSeed()` sibling to `supportsDirtyFrames()`, and
 // deliberately so: the gate that does not exist has no degraded path to get

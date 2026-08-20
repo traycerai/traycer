@@ -14,6 +14,7 @@ function fakeControllerWithRecoverOutcome(
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" },
 ): IpcHostController {
   return {
+    lifecycleAdmissionBlock: null,
     async recoverIfDown() {
       return outcome;
     },
