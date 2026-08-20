@@ -3,7 +3,11 @@ import { homedir } from "node:os";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { log } from "../app/logger";
-import { runTraycerCliJson, TraycerCliError } from "../cli/traycer-cli";
+import {
+  runBundledTraycerCliJson,
+  runTraycerCliJson,
+  TraycerCliError,
+} from "../cli/traycer-cli";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type {
   HostAvailableSnapshot,
@@ -477,14 +481,15 @@ function isVerifyDisabledForBuild(err: unknown): boolean {
 }
 
 /**
- * Classify a `runTraycerCliJson` rejection into the wire taxonomy the host's
- * own maintenance resolvers produce from the same CLI, so the GUI's local
- * fallback renders the same words for the same fault on either lane.
+ * Classify a `runBundledTraycerCliJson` rejection into the wire taxonomy the
+ * host's own maintenance resolvers produce from the same CLI, so the GUI's
+ * local fallback renders the same words for the same fault on either lane.
  *
  * The mapping leans on `cli/traycer-cli.ts`'s throw shapes:
- *  - a PLAIN `Error` is thrown in exactly one place — `resolveTraycerCliInvocation`
- *    found no CLI via manifest, PATH, or bundled resources — which is the
- *    host taxonomy's `cli-unavailable` (no CLI on this machine to shell);
+ *  - a PLAIN `Error` is thrown only by invocation resolution — for this lane,
+ *    `resolveBundledTraycerCliInvocation` found no bundled CLI under app
+ *    resources — which is the host taxonomy's `cli-unavailable` (no CLI on
+ *    this machine to shell);
  *  - `exitCode === 0 && code === null` is the "ran to a clean exit but emitted
  *    no terminal result line" arm: a CLI speaking a shape this build cannot
  *    read, the taxonomy's `invalid-output`;
@@ -870,7 +875,12 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   // host's own resolvers over the same producers: the bundled CLI's JSON and
   // the shared on-disk install records (read with the protocol's own
   // schema-strict readers, so a field the wire contract requires can never
-  // be silently dropped or fabricated in between).
+  // be silently dropped or fabricated in between). "Bundled" is load-bearing:
+  // these shell `runBundledTraycerCliJson`, never the discovered
+  // manifest/PATH CLI the general-purpose handlers above resolve — a stale or
+  // keyless manual install would otherwise stay authoritative and disable
+  // this repair lane while a healthy version-matched CLI sits in resources
+  // (the same D7 rule `HostController` follows for host mutations).
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerMaintenanceUpdateCheck,
@@ -884,7 +894,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       ];
       let payload: unknown;
       try {
-        payload = await runTraycerCliJson<unknown>(args);
+        payload = await runBundledTraycerCliJson<unknown>(args);
       } catch (err) {
         // Same normalisation as `traycerHostAvailable` above: a build without
         // trusted registry keys answers "nothing to install" rather than an
@@ -921,7 +931,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     async (): Promise<MaintenanceDoctorProjection> => {
       let payload: unknown;
       try {
-        payload = await runTraycerCliJson<unknown>([
+        payload = await runBundledTraycerCliJson<unknown>([
           "host",
           "doctor",
           "--json",

@@ -536,8 +536,13 @@ export function HostOverviewPanel(props: {
   // force leg (`restartViaForceFallback`). The dialog's spinner, its stale-open
   // close below, and the header item's pending state must all read the same
   // answer, or a fallback confirm would close itself the moment it dispatched.
+  // OBSERVER-derived on both legs, unlike the page-wide gate above: this
+  // panel's `forceRestart.mutate` is the only dispatch that is OURS, while the
+  // cache-wide `forceRestartInFlight` also counts a menu/tray respawn — which
+  // must close this confirm like any competing write, not impersonate its
+  // spinner and hand back an answerable dialog when the external settle lands.
   const restartDialogOwnDispatch = restartViaForceFallback
-    ? forceRestartInFlight
+    ? forceRestart.isPending
     : restart.isPending;
   // The restart confirmation has the same stale-open window the OS-service
   // confirms do (`host-overview-advanced.tsx`): opened while idle, it stays

@@ -121,7 +121,7 @@ function installFakeCli(runResult: unknown): void {
     >("../../cli/traycer-cli");
     return {
       ...actual,
-      runTraycerCliJson: vi.fn(() => Promise.resolve(runResult)),
+      runBundledTraycerCliJson: vi.fn(() => Promise.resolve(runResult)),
     };
   });
 }
