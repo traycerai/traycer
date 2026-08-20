@@ -48,6 +48,30 @@ const renameControl = vi.hoisted(() => ({
   callCount: 0,
   failOnCallNumber: null as number | null,
 }));
+// A deliberately far-future, arbitrary timestamp the copyFile race mock
+// below stamps onto its replacement file. The race test tells "mirrored"
+// from "not mirrored" by comparing the slot's mtime against this fixed
+// value rather than against a second live `Date.now()` read - two
+// independent "now" timestamps taken milliseconds apart can otherwise round
+// to the exact same millisecond and make the assertion flaky regardless of
+// which way the production code behaves.
+const RACE_REPLACEMENT_MTIME = vi.hoisted(
+  () => new Date("2099-06-15T12:00:00.000Z"),
+);
+// Lets the mtime-mirroring race test (Fix 2: `stageWellKnownCliBinary` stats
+// `source` on BOTH sides of the copy) intercept exactly one `copyFile` call
+// by its `src` path. After performing the REAL copy - so the staged file
+// gets the ORIGINAL bytes, exactly like a copy that started just before an
+// installer landed - it atomically replaces the source out from under it
+// (write to a sibling temp path, stamp it with the distinctive mtime above,
+// then `rename` over the source), which changes ino/dev/mtimeMs the same
+// way a package manager's atomic install would. Cleared after it fires once
+// so it never fires for any OTHER `copyFile` call in the same or a later
+// test. Every other test in this file leaves `raceSourcePath` null, so
+// every `copyFile` call is a plain passthrough.
+const copyFileControl = vi.hoisted(() => ({
+  raceSourcePath: null as string | null,
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -58,6 +82,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         throw new Error("simulated publish rename failure");
       }
       await actual.rename(oldPath, newPath);
+    },
+    copyFile: async (src: PathLike, dest: PathLike): Promise<void> => {
+      await actual.copyFile(src, dest);
+      if (src !== copyFileControl.raceSourcePath) return;
+      const racedPath = copyFileControl.raceSourcePath;
+      copyFileControl.raceSourcePath = null;
+      const replacement = `${racedPath}.race-replacement`;
+      await actual.writeFile(
+        replacement,
+        "bytes from a racing installer that replaced the source mid-copy",
+      );
+      await actual.utimes(
+        replacement,
+        RACE_REPLACEMENT_MTIME,
+        RACE_REPLACEMENT_MTIME,
+      );
+      await actual.rename(replacement, racedPath);
     },
   };
 });
@@ -75,6 +116,7 @@ beforeEach(() => {
   seaState.current = false;
   renameControl.callCount = 0;
   renameControl.failOnCallNumber = null;
+  copyFileControl.raceSourcePath = null;
   vi.resetModules();
 });
 
@@ -656,6 +698,116 @@ describe("refreshWellKnownSlotIfStale", () => {
     );
   });
 
+  // The P1 this fix exists for: `process.execPath` IS the well-known slot
+  // (the Desktop / already-registered-service case), which used to be an
+  // unconditional "nothing to do" returned BEFORE the manifest was ever
+  // read. If a manifest has since been anchored to a DIFFERENT executable
+  // (e.g. `cli re-anchor`, or a homebrew upgrade whose formula writes a new
+  // keg path), the slot must follow the manifest - otherwise the machine
+  // stays pinned to the stale binary under the slot forever, because the
+  // "running IS slot" fast path never lets the manifest disagree.
+  it("packaged, running binary IS the slot, but the manifest names a different existing binary: re-stages from the manifest's binary", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(
+      wellKnownPath,
+      "stale bytes pinned forever under the old code",
+    );
+    const anchoredElsewhere = join(workHome, "anchored-binary-b");
+    writeFileSync(anchoredElsewhere, "binary B - the manifest's real anchor");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "2.0.0",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: anchoredElsewhere,
+      source: "homebrew",
+      pendingUpgrade: null,
+    });
+
+    // process.execPath IS the well-known slot itself - the fast path that
+    // used to short-circuit BEFORE the manifest was ever consulted.
+    const result = await withExecPath(wellKnownPath, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(
+      "binary B - the manifest's real anchor",
+    );
+  });
+
+  // Sibling P1 case: the slot is not the running binary itself, but a
+  // faithful COPY of it (an ordinary staged install). That copy used to be
+  // enough to short-circuit before the manifest was consulted too - so a
+  // manifest anchored to yet another binary was silently ignored for as
+  // long as the running process kept matching what it had last staged.
+  it("packaged, slot mirrors the running binary, but the manifest names a different existing binary: re-stages from the manifest's binary", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    const running = join(workHome, "running-binary-a");
+    writeFileSync(running, "binary A - the running process");
+    seedMirroredSlot(wellKnownPath, running);
+    const anchoredElsewhere = join(workHome, "anchored-binary-b");
+    writeFileSync(
+      anchoredElsewhere,
+      "binary B - the manifest's real anchor, a different length than A",
+    );
+    await writeCliManifest(ENVIRONMENT, {
+      version: "2.0.0",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: anchoredElsewhere,
+      source: "homebrew",
+      pendingUpgrade: null,
+    });
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(
+      "binary B - the manifest's real anchor, a different length than A",
+    );
+  });
+
+  // Still-null case that specifically exercises the guard via the MANIFEST
+  // (rather than via the no-manifest fallback that other tests above already
+  // cover): the manifest itself names the well-known slot as the anchor, so
+  // there is nothing to re-stage even though the running process is a third,
+  // unrelated binary.
+  it("packaged, manifest's binaryPath resolves to the well-known slot itself: returns null", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const bytes = "the slot, anchored by its own manifest entry";
+    writeFileSync(wellKnownPath, bytes);
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: wellKnownPath,
+      source: "desktop",
+      pendingUpgrade: null,
+    });
+    const running = join(workHome, "some-other-running-binary");
+    writeFileSync(running, "a totally different running process");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result).toBeNull();
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(bytes);
+  });
+
   it("staging mirrors the source's mtime onto the slot, which is what makes freshness decidable", async () => {
     const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
       await import("../well-known-cli");
@@ -675,5 +827,57 @@ describe("refreshWellKnownSlotIfStale", () => {
     // `mirrors()` actually compares.
     const slotStat = statSync(wellKnownCliBinaryPath(ENVIRONMENT));
     expect(slotStat.mtime.getTime()).toBe(statSync(source).mtime.getTime());
+  });
+
+  // Fix 2's negative direction: `stageWellKnownCliBinary` now stats `source`
+  // on BOTH sides of the copy, and only mirrors the source's mtime onto the
+  // staged file when the two stats say the source did NOT change. Simulate a
+  // package manager atomically replacing the source mid-copy (real copy,
+  // then a sibling-temp-file `rename` over the source, which changes
+  // ino/dev/mtimeMs) and confirm the slot's mtime does NOT end up equal to
+  // the (new) source's mtime - without this the staged copy would wear a
+  // stale bytes/fresh-looking-mtime combination that `refreshWellKnownSlotIfStale`
+  // could never detect again.
+  it("does not mirror the source's mtime onto the slot when the source is atomically replaced between the copy and the post-copy stat", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const source = join(workHome, "real-binary-race");
+    const originalBytes = "original binary bytes before the race";
+    writeFileSync(source, originalBytes);
+    const past = new Date(Date.now() - 300_000);
+    utimesSync(source, past, past);
+    copyFileControl.raceSourcePath = source;
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result.staged).toBe("staged");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    // The copy captured the ORIGINAL bytes - it ran before the replace.
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(originalBytes);
+    const replacedSourceStat = statSync(source);
+    // Sanity check that the race actually fired: the source now carries the
+    // mock's distinctive far-future mtime, not the "past" one this test
+    // originally set on it.
+    expect(replacedSourceStat.mtime.getTime()).toBe(
+      RACE_REPLACEMENT_MTIME.getTime(),
+    );
+    const slotStat = statSync(wellKnownPath);
+    // The slot must NOT have been mirrored onto that distinctive value - it
+    // keeps its own fresh "staged just now" mtime instead. Comparing against
+    // a fixed far-future value (rather than a second live `Date.now()` read)
+    // means this can never coincidentally pass just because two independent
+    // clock reads landed in the same millisecond.
+    expect(slotStat.mtime.getTime()).not.toBe(RACE_REPLACEMENT_MTIME.getTime());
+    // Nor may it have been mirrored onto the PRE-copy "past" mtime either -
+    // that would mean staging re-used its before-the-copy stat instead of
+    // re-statting `source` afterward, which is precisely the single-stat bug
+    // Fix 2 replaces (a `sourceAfter` that silently reuses `sourceBefore`
+    // would pass the `isSameFile` check trivially and mirror this "past"
+    // value, even though the bytes it actually copied were the source's
+    // ORIGINAL ones and the source has since moved on to the replacement).
+    expect(slotStat.mtime.getTime()).not.toBe(past.getTime());
   });
 });

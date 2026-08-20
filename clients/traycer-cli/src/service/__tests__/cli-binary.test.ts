@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -6,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import type { PathLike } from "node:fs";
 import { lstat, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,9 +32,56 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
 
+// Lets the win32 slot-exists-after-a-failed-publish test (Fix 3's "stale
+// slot survives a failed staging attempt" branch) intercept exactly ONE
+// `rename()` call by its 1-based call number - the identical technique
+// `store/__tests__/well-known-cli.test.ts` uses for the same underlying
+// `stageWellKnownCliBinary` win32 rename-aside/restore path. Every other
+// test in this file leaves `failOnCallNumber` null, so every `rename()`
+// call is a plain passthrough.
+const renameControl = vi.hoisted(() => ({
+  callCount: 0,
+  failOnCallNumber: null as number | null,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: async (oldPath: PathLike, newPath: PathLike): Promise<void> => {
+      renameControl.callCount += 1;
+      if (renameControl.callCount === renameControl.failOnCallNumber) {
+        throw new Error("simulated publish rename failure");
+      }
+      await actual.rename(oldPath, newPath);
+    },
+  };
+});
+
+// `stagedSlotInvocation`'s "staging failed and nothing is staged" branch
+// reports through the real CLI logger, which appends to the invoking user's
+// `~/.traycer` log file. Stub it so the suite stays hermetic and that
+// warning is assertable - mirrors
+// `service/__tests__/install-lifecycle.test.ts`'s identical stub.
+const mocks = vi.hoisted(() => ({
+  cliLoggerWarnMock: vi.fn(),
+}));
+vi.mock("../../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logger")>();
+  return {
+    ...actual,
+    createCliLogger: () => ({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: mocks.cliLoggerWarnMock,
+      error: vi.fn(),
+    }),
+  };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 const ORIGINAL_DISTRIBUTION = process.env.TRAYCER_CLI_DISTRIBUTION;
+const ORIGINAL_PATH = process.env.PATH;
 const ORIGINAL_ARGV = process.argv;
 const ENVIRONMENT: Environment = "production";
 let workHome: string;
@@ -45,6 +94,9 @@ beforeEach(() => {
   delete process.env.TRAYCER_CLI_DISTRIBUTION;
   seaState.current = false;
   process.argv = [...ORIGINAL_ARGV];
+  renameControl.callCount = 0;
+  renameControl.failOnCallNumber = null;
+  mocks.cliLoggerWarnMock.mockClear();
   vi.resetModules();
 });
 
@@ -64,9 +116,43 @@ afterEach(() => {
   } else {
     process.env.TRAYCER_CLI_DISTRIBUTION = ORIGINAL_DISTRIBUTION;
   }
+  if (ORIGINAL_PATH === undefined) {
+    delete process.env.PATH;
+  } else {
+    process.env.PATH = ORIGINAL_PATH;
+  }
   process.argv = ORIGINAL_ARGV;
   rmSync(workHome, { recursive: true, force: true });
 });
+
+// `npmInterpreterInvocation`'s PATH fallback (Fix 4) resolves an absolute
+// `node` off `process.env.PATH` - tests that want a deterministic answer
+// point PATH at a directory they fully control rather than trusting
+// whatever the host machine happens to have installed.
+function withPath<T>(pathValue: string, run: () => Promise<T>): Promise<T> {
+  const original = process.env.PATH;
+  process.env.PATH = pathValue;
+  return run().finally(() => {
+    if (original === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = original;
+    }
+  });
+}
+
+// A minimal stand-in `node`/`node.exe` on PATH: `resolveNodeOnPath` only
+// checks that the candidate exists and is executable
+// (`access(candidate, X_OK)`), so the file's actual contents never run.
+function writeFakeExecutableNode(dir: string): string {
+  const name = process.platform === "win32" ? "node.exe" : "node";
+  const path = join(dir, name);
+  writeFileSync(path, "#!/bin/sh\necho fake-node\n");
+  if (process.platform !== "win32") {
+    chmodSync(path, 0o755);
+  }
+  return path;
+}
 
 describe("resolveServiceCliInvocation", () => {
   it("uses an override that exists on disk verbatim, with empty args", async () => {
@@ -350,7 +436,15 @@ describe("resolveServiceCliInvocation", () => {
     expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
   });
 
-  it("uses the manifest binaryPath directly when source is npm but the distribution shim env is unset", async () => {
+  // Fix 4 (`npmInterpreterInvocation`'s PATH fallback): a PERSISTED npm
+  // manifest resolved by a DIFFERENT process than the one that wrote it (no
+  // distribution shim env) no longer falls back to the raw bundle path
+  // directly - it pins the first executable `node` it finds on the
+  // resolving user's PATH, so the eventual service unit never depends on the
+  // SERVICE MANAGER's PATH containing `node` (false for nvm/asdf under
+  // systemd). PATH is pointed at a directory this test fully controls so the
+  // answer does not depend on whatever the host machine has installed.
+  it("pins the first executable node found on PATH when source is npm and the distribution shim env is unset", async () => {
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
     const { writeCliManifest } = await import("../../manifest/cli-manifest");
@@ -361,21 +455,34 @@ describe("resolveServiceCliInvocation", () => {
       source: "npm",
       pendingUpgrade: null,
     });
-    const { resolveServiceCliInvocation } = await import("../cli-binary");
+    const pathDir = mkdtempSync(join(tmpdir(), "traycer-cli-fake-node-"));
+    const fakeNode = writeFakeExecutableNode(pathDir);
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-    const result = await resolveServiceCliInvocation({
-      environment: ENVIRONMENT,
-      override: null,
-      allowSelfInvocation: false,
-    });
+      const result = await withPath(pathDir, () =>
+        resolveServiceCliInvocation({
+          environment: ENVIRONMENT,
+          override: null,
+          allowSelfInvocation: false,
+        }),
+      );
 
-    expect(result).toEqual({ command: binaryPath, args: [] });
-    const { wellKnownCliBinaryPath } =
-      await import("../../store/well-known-cli");
-    expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
+      expect(result).toEqual({ command: fakeNode, args: [binaryPath] });
+      const { wellKnownCliBinaryPath } =
+        await import("../../store/well-known-cli");
+      expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
+    } finally {
+      rmSync(pathDir, { recursive: true, force: true });
+    }
   });
 
-  it("uses the manifest binaryPath directly when source is npm and the shim env is set but the resolving run is packaged (execPath is not an interpreter)", async () => {
+  // Same PATH fallback, but for a resolving process that IS packaged (a SEA
+  // binary sharing the machine with an npm install). The shim env being set
+  // is irrelevant once `isPackagedRun()` is true - `process.execPath` is the
+  // SEA binary's own bytes, not a node interpreter, so this must still go
+  // through the PATH scan rather than pin `process.execPath`.
+  it("pins the first executable node found on PATH when source is npm, the shim env is set, but the resolving run is packaged", async () => {
     seaState.current = true;
     const binaryPath = join(workHome, "npm-bundle.js");
     writeFileSync(binaryPath, "#!/usr/bin/env node\n");
@@ -388,21 +495,63 @@ describe("resolveServiceCliInvocation", () => {
       pendingUpgrade: null,
     });
     process.env.TRAYCER_CLI_DISTRIBUTION = "npm";
-    const { resolveServiceCliInvocation } = await import("../cli-binary");
+    const pathDir = mkdtempSync(join(tmpdir(), "traycer-cli-fake-node-"));
+    const fakeNode = writeFakeExecutableNode(pathDir);
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-    const result = await resolveServiceCliInvocation({
-      environment: ENVIRONMENT,
-      override: null,
-      allowSelfInvocation: false,
+      const result = await withPath(pathDir, () =>
+        resolveServiceCliInvocation({
+          environment: ENVIRONMENT,
+          override: null,
+          allowSelfInvocation: false,
+        }),
+      );
+
+      expect(result).toEqual({ command: fakeNode, args: [binaryPath] });
+      // Even a PACKAGED run must never stage the slot on the npm source
+      // branch - that branch returns before the packaged self-invocation
+      // path is ever reached.
+      const { wellKnownCliBinaryPath } =
+        await import("../../store/well-known-cli");
+      expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
+    } finally {
+      rmSync(pathDir, { recursive: true, force: true });
+    }
+  });
+
+  // No `node` reachable anywhere on PATH: the PATH scan comes back empty,
+  // `npmInterpreterInvocation` returns null, and the CALLER's own fallback
+  // (not a second helper) registers the bare bundle path with empty args -
+  // exactly as functional (or as broken) as running over a shell whose PATH
+  // has no `node` on it at all.
+  it("falls back to the bundle path with empty args when source is npm and no node executable exists anywhere on PATH", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
     });
+    const emptyPathDir = mkdtempSync(join(tmpdir(), "traycer-cli-empty-path-"));
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-    expect(result).toEqual({ command: binaryPath, args: [] });
-    // Even a PACKAGED run must never stage the slot on the npm source
-    // branch - that branch returns before the packaged self-invocation
-    // path is ever reached.
-    const { wellKnownCliBinaryPath } =
-      await import("../../store/well-known-cli");
-    expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
+      const result = await withPath(emptyPathDir, () =>
+        resolveServiceCliInvocation({
+          environment: ENVIRONMENT,
+          override: null,
+          allowSelfInvocation: false,
+        }),
+      );
+
+      expect(result).toEqual({ command: binaryPath, args: [] });
+    } finally {
+      rmSync(emptyPathDir, { recursive: true, force: true });
+    }
   });
 
   it("synthesizes an npm manifest end-to-end from the distribution shim (no manifest file, no well-known slot) and pins the interpreter", async () => {
@@ -551,14 +700,20 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
-  it("falls back to process.execPath with empty args when packaged but staging the well-known slot fails", async () => {
+  // Fix 3's "slot absent" branch: staging failed AND no slot binary exists
+  // to fall back to, so the real (unstable, version-scoped) binary path gets
+  // registered instead - and that degradation is logged, so the eventual
+  // breakage has a recorded cause rather than presenting as a service that
+  // mysteriously stopped launching.
+  it("falls back to process.execPath with empty args and logs a warning when packaged but staging the well-known slot fails and no slot exists", async () => {
     seaState.current = true;
     const { cliInstallHomeDir } = await import("../../store/paths");
     const parentDir = cliInstallHomeDir(ENVIRONMENT);
     const binDirPath = join(parentDir, "bin");
     // A REGULAR FILE at the parent dir path makes `stageWellKnownCliBinary`'s
     // `mkdir(dirname(wellKnownPath), { recursive: true })` fail, so staging
-    // returns "failed".
+    // returns "failed" - and the well-known path itself can never exist
+    // either, since its parent directory is a file, not a directory.
     mkdirSync(parentDir, { recursive: true });
     writeFileSync(binDirPath, "not a directory");
     const { resolveServiceCliInvocation } = await import("../cli-binary");
@@ -570,5 +725,61 @@ describe("resolveServiceCliInvocation", () => {
     });
 
     expect(result).toEqual({ command: process.execPath, args: [] });
+    expect(mocks.cliLoggerWarnMock).toHaveBeenCalledTimes(1);
+    expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
+      "service CLI registered against an unstaged binary path",
+      expect.objectContaining({ binaryPath: process.execPath }),
+    );
+  });
+
+  // Fix 3's "slot exists" branch: staging fails on the PUBLISH step (the
+  // win32 rename-aside/restore path - the identical technique used in
+  // `store/__tests__/well-known-cli.test.ts`), but the restore leaves a
+  // functional slot binary in place. That slot must be registered directly
+  // (stale-but-functional, stable, host-visible) rather than falling back to
+  // `process.execPath`'s own path, and WITHOUT logging the "unstaged"
+  // warning - the slot IS staged, just with older bytes.
+  it("registers the existing slot path without warning when staging fails but a slot binary is already present", async () => {
+    seaState.current = true;
+    const platformDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    if (platformDescriptor === undefined) {
+      throw new Error("process.platform descriptor missing");
+    }
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+    // Call #1 is the rename-aside (real move); call #2 is the publish,
+    // which must fail here; call #3 is the failure-path restore, left
+    // un-intercepted so the module's real recovery actually runs.
+    renameControl.failOnCallNumber = 2;
+    try {
+      const { wellKnownCliBinaryPath } =
+        await import("../../store/well-known-cli");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      mkdirSync(join(wellKnownPath, ".."), { recursive: true });
+      const staleBytes = "stale-but-functional slot bytes";
+      writeFileSync(wellKnownPath, staleBytes);
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+      const result = await resolveServiceCliInvocation({
+        environment: ENVIRONMENT,
+        override: null,
+        allowSelfInvocation: false,
+      });
+
+      expect(result).toEqual({ command: wellKnownPath, args: [] });
+      // The restore put the ORIGINAL bytes back - process.execPath's copy
+      // never got to publish over them.
+      expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
+      expect(mocks.cliLoggerWarnMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+      renameControl.callCount = 0;
+      renameControl.failOnCallNumber = null;
+    }
   });
 });
