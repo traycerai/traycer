@@ -9,6 +9,11 @@ import {
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
+import {
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+  runSignInPreflight,
+} from "../host/install-auth";
 
 // `traycer host service install [--no-linger] [--takeover]` - register the
 // OS service for the current environment. `--no-linger` skips `loginctl
@@ -16,6 +21,13 @@ import { attestInstallRuntime } from "../host/attested-install-runtime";
 // the Traycer Desktop app to the CLI: the Desktop-managed host is stopped
 // cooperatively, its agent registration booted out, and the CLI-owned
 // service registered in its place.
+//
+// This command STARTS a host (systemd `enable --now`, launchd bootstrap), so
+// it owns the same sign-in pre-flight and post-start credential provisioning
+// as `host install` - it is the deferred half of the documented
+// `host install --no-service-register` split flow, whose bytes-only first
+// half deliberately skipped both on the promise that "the actor that later
+// starts the service owns the sign-in question". That actor is this command.
 export interface ServiceInstallArgs {
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
@@ -31,6 +43,10 @@ export function buildServiceInstallCommand(
       enableLinger: args.enableLinger,
       allowSelfInvocation: args.allowSelfInvocation,
     });
+    // Before the lock: the inline device-flow sign-in can take as long as a
+    // human takes, and nothing it touches (the credentials file) is guarded
+    // by the CLI lock.
+    const authPreflight = await runSignInPreflight(ctx, false);
     return withCliLock(
       {
         environment: ctx.runtime.environment,
@@ -92,6 +108,30 @@ export function buildServiceInstallCommand(
           platform,
           enableLinger: args.enableLinger,
         });
+        // The registration above started the host, so this command owns the
+        // credential handoff too - "install" mirrors host-install's
+        // register+start path. Best-effort: failures are notes, never a
+        // failed registration.
+        const credentialProvision = await maybeProvisionCredential(
+          ctx,
+          "install",
+          authPreflight,
+        );
+        let human =
+          takeover !== null && takeover.kind === "took-over"
+            ? `service '${label.id}' registered (environment=${label.environment}); host management taken over from Traycer Desktop (agent '${takeover.agentLabelId}' deregistered, host ${takeover.cooperativeStop === "stopped" ? "stopped cooperatively" : takeover.cooperativeStop === "no-host" ? "was not running" : "was unreachable and booted out"})`
+            : `service '${label.id}' registered (environment=${label.environment})`;
+        // Restate the unauthenticated warning on the terminal line - the
+        // pre-flight's copy printed before the registration output and may
+        // have scrolled away.
+        if (authPreflight.state === "unauthenticated") {
+          human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
+        }
+        const provisionNote =
+          formatCredentialProvisionNote(credentialProvision);
+        if (provisionNote !== null) {
+          human = `${human}; ${provisionNote}`;
+        }
         return {
           data: {
             label: label.id,
@@ -101,11 +141,10 @@ export function buildServiceInstallCommand(
             cli: { command: cli.command, args: cli.args },
             ...(takeover === null ? {} : { takeover }),
             ...(await attestInstallRuntime(ctx.runtime.environment)),
+            authPreflight,
+            credentialProvision,
           },
-          human:
-            takeover !== null && takeover.kind === "took-over"
-              ? `service '${label.id}' registered (environment=${label.environment}); host management taken over from Traycer Desktop (agent '${takeover.agentLabelId}' deregistered, host ${takeover.cooperativeStop === "stopped" ? "stopped cooperatively" : takeover.cooperativeStop === "no-host" ? "was not running" : "was unreachable and booted out"})`
-              : `service '${label.id}' registered (environment=${label.environment})`,
+          human,
           exitCode: 0,
         };
       },

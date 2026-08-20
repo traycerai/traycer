@@ -150,6 +150,7 @@ async function runWorktreeDelete(
       signal: null,
       unavailableNote:
         "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
     }),
     // Provisioning here is opportunistic; adoption is never verified.
     onHostCredentialState: null,

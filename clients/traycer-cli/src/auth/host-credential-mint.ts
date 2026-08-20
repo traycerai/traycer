@@ -25,6 +25,15 @@ export interface CliHostCredentialMintOptions {
    * host unprovisioned for a later client to heal.
    */
   readonly unavailableNote: string;
+  /**
+   * Fired when authn answered the mint with 401/403 - the flow still returns
+   * `unavailable` (the stream contract has no richer kind), but that result
+   * is NOT like the others: the same stored bearer fails for every client,
+   * so "a later client will provision it" may be false. The install probe
+   * uses this to confirm via a rotation and report a dead sign-in honestly;
+   * callers with no such follow-up pass null.
+   */
+  readonly onUnauthorized: (() => void) | null;
 }
 
 /**
@@ -56,6 +65,9 @@ export function createCliHostCredentialMintFlow(
     );
     if (result.kind === "ok") {
       return provisionedFrom(result.response);
+    }
+    if (result.kind === "unauthorized" && options.onUnauthorized !== null) {
+      options.onUnauthorized();
     }
     // Includes the 409 supersede: another client already provisioned this host
     // and its credential is on the way, so there is nothing to hand over and

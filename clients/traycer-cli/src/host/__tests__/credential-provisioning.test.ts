@@ -123,12 +123,16 @@ const mocks = vi.hoisted(() => {
     (_request: HostCredentialMintRequest): Promise<HostCredentialMintOutcome> =>
       Promise.resolve({ kind: "unavailable" }),
   );
-  // Typed with just the field tests need (`signal`) rather than the mint
-  // flow's full options shape - the real call site (source, not this mock)
-  // is still checked against the real signature, so this only needs to be
-  // wide enough for `.mock.calls` to expose what the probe actually wired.
+  // Typed with just the fields tests need (`signal`, `onUnauthorized`)
+  // rather than the mint flow's full options shape - the real call site
+  // (source, not this mock) is still checked against the real signature, so
+  // this only needs to be wide enough for `.mock.calls` to expose what the
+  // probe actually wired.
   const createMintFlowMock = vi.fn(
-    (_options: { readonly signal: AbortSignal | null }) => mintFlowMock,
+    (_options: {
+      readonly signal: AbortSignal | null;
+      readonly onUnauthorized: (() => void) | null;
+    }) => mintFlowMock,
   );
 
   const readHostPidMetadataMock = vi.fn(async () => null);
@@ -235,6 +239,20 @@ function capturedClientOptions(): CapturedStreamClientOptions {
     throw new Error("WsStreamClient was never constructed");
   }
   return options;
+}
+
+// The onUnauthorized hook the probe wires into
+// `createCliHostCredentialMintFlow` - captured from the mock factory's own
+// call args, distinct from `capturedClientOptions` (the stream client).
+function capturedMintFlowOptions(): {
+  readonly signal: AbortSignal | null;
+  readonly onUnauthorized: (() => void) | null;
+} {
+  const call = mocks.createMintFlowMock.mock.calls[0];
+  if (call === undefined) {
+    throw new Error("createCliHostCredentialMintFlow was never called");
+  }
+  return call[0];
 }
 
 function makeOptions(
@@ -502,14 +520,17 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  it("bounds the mint WAIT by the remaining deadline, but never fabricates an outcome the mint never gave", async () => {
+  it("bounds the mint await by the remaining deadline instead of the mint's own timeout", async () => {
     // The regression this guards: an unbounded `await` on the mint let a host
     // that acked `missing` near the end of the budget push `host install`
     // roughly the mint's full HTTP timeout past the advertised deadline.
     // `settleMint` is a pure pacing bound now - it abandons the WAIT, never
     // the bookkeeping - so a mint that is still unsettled when the deadline
-    // fires reports `not-adopted` (invoked, outcome unknown), never the
-    // `mint-unavailable` the old code fabricated from the timeout itself.
+    // fires is neither provisioned nor definitively failed: `settledOutcome`
+    // only claims `not-adopted` for a mint that definitively PROVISIONED
+    // (`mintProvisioned`), so an invoked-but-unsettled mint reports
+    // `mint-unavailable` instead - "the handoff did not complete" is all
+    // that is known, not an adoption failure the host can be blamed for.
     const hostId = "host-1";
     // Never settles - only the deadline can end this.
     mocks.mintFlowMock.mockReturnValueOnce(
@@ -534,7 +555,7 @@ describe("provisionInstalledHostCredential", () => {
     // all, plus the single lap the exhausted budget allows. Under the old
     // code this test does not fail an assertion, it times out.
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
-      kind: "not-adopted",
+      kind: "mint-unavailable",
     });
     expect(mocks.sessions).toHaveLength(1);
     expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
@@ -894,6 +915,78 @@ describe("provisionInstalledHostCredential", () => {
       kind: "unauthorized",
     });
     expect(mocks.mintFlowMock).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  });
+
+  it("a mint that 401s, confirmed by a terminally rejected rotation, reports unauthorized", async () => {
+    // `createCliHostCredentialMintFlow` fires `onUnauthorized` synchronously
+    // before its own promise resolves (mirroring the real flow: the flag is
+    // settled whenever the mint is), then still returns `{ kind:
+    // "unavailable" }` - the stream contract has no richer kind. This probe
+    // treats that specific failure as NOT client-local (the host accepted the
+    // very same bearer to open this stream) and confirms via one rotation
+    // before deciding: a terminal rejection means the sign-in is dead.
+    const hostId = "host-1";
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.mintFlowMock.mockImplementationOnce(
+      async (): Promise<HostCredentialMintOutcome> => {
+        const options = capturedMintFlowOptions();
+        if (options.onUnauthorized !== null) {
+          options.onUnauthorized();
+        }
+        return { kind: "unavailable" };
+      },
+    );
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        void options.hostCredentialMint({ hostId, reason: "missing" });
+        options.onHostCredentialState(hostId, "missing");
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unauthorized",
+    });
+    expectCleanTeardown();
+  });
+
+  it("a mint that 401s, confirmed by a successful rotation, stays mint-unavailable - a later client can still mint", async () => {
+    // The other half of the same confirmation: a successful rotation proves
+    // the stored sign-in is alive, so the 401 was this run's own problem (an
+    // expired access token this probe had not refreshed yet) rather than a
+    // dead credential - the self-heal promise in `mint-unavailable` stays
+    // true.
+    const hostId = "host-1";
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rotated");
+    mocks.mintFlowMock.mockImplementationOnce(
+      async (): Promise<HostCredentialMintOutcome> => {
+        const options = capturedMintFlowOptions();
+        if (options.onUnauthorized !== null) {
+          options.onUnauthorized();
+        }
+        return { kind: "unavailable" };
+      },
+    );
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        void options.hostCredentialMint({ hostId, reason: "missing" });
+        options.onHostCredentialState(hostId, "missing");
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
     expectCleanTeardown();
   });
 

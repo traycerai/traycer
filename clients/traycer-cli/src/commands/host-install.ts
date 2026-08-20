@@ -5,15 +5,13 @@ import {
   stageHostInstallSource,
   type InstallSourceArg,
 } from "../installer";
-import { runDeviceAuthFlow } from "../auth/login-flow";
 import { assertHostNotBusy } from "../host/busy-check";
 import {
-  provisionInstalledHostCredential,
-  type HostCredentialProvisionOutcome,
-} from "../host/credential-provisioning";
-import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
-import { errorFromUnknown } from "../logger";
-import { CLI_ERROR_CODES, cliError, toCliError } from "../runner/errors";
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+  runSignInPreflight,
+} from "../host/install-auth";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
   CommandContext,
   CommandFn,
@@ -113,242 +111,6 @@ export interface HostInstallArgs {
   readonly force: boolean;
 }
 
-// Outcome of the sign-in pre-flight, surfaced verbatim as `authPreflight`
-// in the result payload so NDJSON consumers can tell an authorized install
-// from one whose host will boot unprovisioned. The desktop's `result.data`
-// parsers are tolerant of added fields.
-export type HostInstallAuthPreflight =
-  | { readonly state: "signed-in"; readonly reason: null }
-  | { readonly state: "signed-in-inline"; readonly reason: null }
-  | {
-      readonly state: "unauthenticated";
-      // Deliberately NOT split into declined-vs-failed: the device flow raises
-      // `AUTH_REJECTED` for a user denial, an expired device code, a rejected
-      // request, AND a post-auth token rejection alike (see `login-flow.ts`),
-      // so any such split would report "declined" for four different outcomes.
-      // The distinguishing detail lives where it is accurate - the human
-      // warning line and the structured log below both carry the flow's own
-      // message.
-      readonly reason: "noninteractive-cannot-prompt" | "sign-in-incomplete";
-    }
-  | { readonly state: "not-checked"; readonly reason: "bytes-only" };
-
-const SIGN_IN_LATER_HINT =
-  "Run `traycer login` to authorize it - no reinstall needed.";
-
-/**
- * `resolveHostAuth` returns `null` for "not signed in", but the credentials
- * read underneath it only maps ENOENT to `null` and rethrows every other fs
- * error - an unreadable file (EACCES on a foreign-owned credentials file,
- * EISDIR, EIO) throws.
- *
- * Neither caller here can act on that. The pre-flight's whole contract is
- * warn-and-continue, and the post-install probe runs after the bytes are
- * already swapped and the service started - letting a throw escape there would
- * report a successful install as a failure. Both read credentials
- * opportunistically, so an unreadable file is "no usable auth", logged and
- * carried on from.
- */
-async function resolveHostAuthOrNull(
-  ctx: CommandContext,
-  stage: "preflight" | "provision",
-): Promise<HostAuth | null> {
-  try {
-    return await resolveHostAuth();
-  } catch (err) {
-    const error = errorFromUnknown(err);
-    ctx.runtime.logger.warn(
-      "Host install could not read the stored credentials; treating as signed out",
-      {
-        environment: ctx.runtime.environment,
-        stage,
-        errorName: error.name,
-        errorMessage: error.message,
-      },
-    );
-    return null;
-  }
-}
-
-async function runSignInPreflight(
-  ctx: CommandContext,
-  args: HostInstallArgs,
-): Promise<HostInstallAuthPreflight> {
-  // Bytes-only installs start nothing, so there is no unauthenticated host
-  // to prevent here.
-  if (args.noServiceRegister) {
-    return { state: "not-checked", reason: "bytes-only" };
-  }
-  const auth = await resolveHostAuthOrNull(ctx, "preflight");
-  if (auth !== null) {
-    return { state: "signed-in", reason: null };
-  }
-  // Prompting is only possible where a human can see the device-flow code
-  // and act on it: human output mode, on a TTY, outside CI. The device-flow
-  // instructions print via `humanRequired`, which is a no-op in JSON mode -
-  // prompting there would silently block on a code nobody can read.
-  const canPrompt =
-    !ctx.runtime.nonInteractive &&
-    !ctx.runtime.json &&
-    process.stdout.isTTY === true;
-  if (!canPrompt) {
-    ctx.runtime.logger.warn(
-      "Host install proceeding unauthenticated; cannot prompt for sign-in",
-      {
-        environment: ctx.runtime.environment,
-        nonInteractive: ctx.runtime.nonInteractive,
-        json: ctx.runtime.json,
-      },
-    );
-    ctx.output.humanRequired(
-      `warning: not signed in - the installed host will start unprovisioned and serve no work until you sign in. ${SIGN_IN_LATER_HINT}`,
-    );
-    return { state: "unauthenticated", reason: "noninteractive-cannot-prompt" };
-  }
-  ctx.output.humanRequired(
-    "You are not signed in. The host this command installs starts unprovisioned\n" +
-      "and serves no work until you sign in, so let's sign in first\n" +
-      "(Ctrl+C cancels the install; a declined sign-in continues it unauthenticated).",
-  );
-  try {
-    const login = await runDeviceAuthFlow(ctx);
-    ctx.output.humanRequired(
-      `Signed in as ${login.user.email || login.user.name || login.user.id}.`,
-    );
-    return { state: "signed-in-inline", reason: null };
-  } catch (err) {
-    const cliErr = toCliError(err);
-    ctx.runtime.logger.warn(
-      "Host install inline sign-in did not complete; continuing unauthenticated",
-      {
-        environment: ctx.runtime.environment,
-        code: cliErr.code,
-        message: cliErr.message,
-      },
-    );
-    ctx.output.humanRequired(
-      `warning: sign-in did not complete (${cliErr.message})\n` +
-        `Continuing the install - the host will start unprovisioned. ${SIGN_IN_LATER_HINT}`,
-    );
-    return { state: "unauthenticated", reason: "sign-in-incomplete" };
-  }
-}
-
-// Overall budget for the post-install provisioning probe: host boot, mint,
-// and adoption verification together. Typical success is a few seconds; the
-// ceiling only binds when the host never comes up - where the install has a
-// bigger problem than its credential.
-const CREDENTIAL_PROVISION_DEADLINE_MS = 30_000;
-
-async function maybeProvisionCredential(
-  ctx: CommandContext,
-  postSwapAction: "start" | "install" | "none",
-  authPreflight: HostInstallAuthPreflight,
-): Promise<HostCredentialProvisionOutcome | null> {
-  const signedIn =
-    authPreflight.state === "signed-in" ||
-    authPreflight.state === "signed-in-inline";
-  // Deliberately NOT gated on `--json`. That flag means "emit NDJSON for
-  // automation" (README, "Scripting"), and a headless provisioning script is
-  // the caller that most needs its host credentialed - it is the one with no
-  // GUI arriving later to mint. The gate used to exist to keep this probe from
-  // racing a Desktop shellout's own mint; that race is now handled where it
-  // belongs, in the probe (a superseded mint verifies rather than failing), so
-  // gating on output format only denied automation the credential.
-  //
-  // Safe for Desktop's shellouts too: its stream runner bounds on an IDLE
-  // timeout of 10 minutes, not a total one, so a probe bounded at 30s cannot
-  // trip it, and `parseInstallResult` reads named fields only.
-  if (postSwapAction === "none" || !signedIn) {
-    return null;
-  }
-  // Re-read rather than reusing the pre-flight's read: an inline sign-in
-  // rewrote the credentials file after it.
-  const auth = await resolveHostAuthOrNull(ctx, "provision");
-  if (auth === null) {
-    // The pre-flight said signed-in, but the credentials are gone or
-    // unreadable NOW - a concurrent sign-out during the install, or a
-    // corrupted file. Silently returning null here would print a summary
-    // claiming a signed-in user with no provisioning attempt at all, while
-    // the just-started host cannot serve work. Report the one outcome whose
-    // human line says the only thing that helps: sign in again.
-    return { kind: "unauthorized" };
-  }
-  const progress = (message: string): void => {
-    ctx.progress({
-      stage: "host-credential",
-      message,
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-      workUnits: null,
-    });
-  };
-  progress("authorizing the installed host (waiting for it to come up)...");
-  // Belt and braces on the advisory contract. The probe maps its own failures
-  // to an outcome and should never throw - but it runs AFTER the bytes are
-  // swapped and the service started, so "should never" is not good enough
-  // here: an escape would report a completed install as a failed one.
-  let outcome: HostCredentialProvisionOutcome;
-  try {
-    outcome = await provisionInstalledHostCredential({
-      environment: ctx.runtime.environment,
-      auth,
-      deadlineMs: CREDENTIAL_PROVISION_DEADLINE_MS,
-      progress,
-      logger: ctx.runtime.logger,
-    });
-  } catch (err) {
-    const error = errorFromUnknown(err);
-    ctx.runtime.logger.warn(
-      "Host install credential provisioning threw; the install itself was unaffected",
-      {
-        environment: ctx.runtime.environment,
-        errorName: error.name,
-        errorMessage: error.message,
-      },
-    );
-    outcome = { kind: "error", message: error.message };
-  }
-  ctx.runtime.logger.info("Host install credential provisioning settled", {
-    environment: ctx.runtime.environment,
-    outcome: outcome.kind,
-  });
-  return outcome;
-}
-
-// Terminal-line rendering of the provisioning outcome. `null` (not attempted)
-// and "already credentialed" stay quiet; a fresh mint is confirmed; every
-// failure is a warning that names the self-heal, because none of them makes
-// the install itself less successful.
-function formatCredentialProvisionNote(
-  outcome: HostCredentialProvisionOutcome | null,
-): string | null {
-  if (outcome === null) {
-    return null;
-  }
-  const selfHeal = "it will be provisioned when a Traycer client next connects";
-  switch (outcome.kind) {
-    case "active":
-      return outcome.minted ? "host credential provisioned" : null;
-    case "unreachable":
-      return `host credential not provisioned (the host did not come up in time) - ${selfHeal}`;
-    case "unsupported":
-      return "host credential not provisioned (this host cannot accept a delegated credential from this client)";
-    case "mint-unavailable":
-      return `host credential not provisioned (the credential handoff did not complete) - ${selfHeal}`;
-    case "not-adopted":
-      return `host credential not provisioned (the host did not adopt it in time) - ${selfHeal}`;
-    // The one outcome that must NOT promise the self-heal: a dead sign-in
-    // stops every other client from minting too, so the install leaves an
-    // unusable host until the user actually signs in again.
-    case "unauthorized":
-      return `host credential not provisioned - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
-    case "error":
-      return `host credential not provisioned (${outcome.message}) - ${selfHeal}`;
-  }
-}
-
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     if (args.noServiceRegister && currentInstallPlatform() === "win32") {
@@ -380,7 +142,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       ifIdle: args.ifIdle,
       force: args.force,
     });
-    const authPreflight = await runSignInPreflight(ctx, args);
+    const authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
     ctx.runtime.logger.info("Host install sign-in pre-flight resolved", {
       environment: ctx.runtime.environment,
       state: authPreflight.state,

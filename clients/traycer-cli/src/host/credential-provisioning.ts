@@ -87,13 +87,15 @@ export type HostCredentialProvisionOutcome =
   // host's id predates the UUID format authn requires - no client can mint
   // for that last one.
   | { readonly kind: "unsupported" }
-  // The host asked, this run did not hand it a credential (authn unreachable,
-  // mint rejected, or another client superseded us), AND no later ack
-  // reported `active`. A supersede alone does not land here - the winner's
-  // credential usually verifies on the next lap and reports `active`.
+  // The host asked, this run did not hand it a credential - authn
+  // unreachable, mint rejected, another client superseded us, or the mint
+  // simply never settled inside the budget - AND no later ack reported
+  // `active`. A supersede alone does not land here: the winner's credential
+  // usually verifies on the next lap and reports `active`.
   | { readonly kind: "mint-unavailable" }
-  // A credential was minted and pushed, but no subsequent ack reported
-  // `active` inside the deadline.
+  // A credential definitively WAS minted (and pushed, or held for delivery),
+  // but no subsequent ack reported `active` inside the deadline. Never
+  // claimed for a mint whose outcome is unknown - that is `mint-unavailable`.
   | { readonly kind: "not-adopted" }
   // The stored sign-in is dead: the host rejected the bearer and refreshing
   // it was terminally rejected too (revoked or expired refresh family).
@@ -229,6 +231,11 @@ export async function provisionInstalledHostCredential(
   // it decided it cannot deliver (version-incompatible ack, or a non-UUID
   // host id). Deterministic per client - ends the laps.
   let mintWithheld = false;
+  // Authn answered the mint with 401/403. Unlike every other mint failure
+  // this one is NOT client-local - the same stored bearer fails for every
+  // client - so it is confirmed via a rotation below before the probe
+  // decides between "a later client will heal this" and "sign in again".
+  let mintUnauthorized = false;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
 
@@ -249,6 +256,9 @@ export async function provisionInstalledHostCredential(
       // The install's consequence, not the connection-lease one: this probe
       // closes its connection on purpose, and the install already succeeded.
       unavailableNote: "continuing - the host stays unprovisioned for now.",
+      onUnauthorized: () => {
+        mintUnauthorized = true;
+      },
     });
     // The stored access token has a ~4h TTL, so an ordinary "already signed
     // in" install routinely starts this probe on an EXPIRED bearer - the
@@ -360,8 +370,16 @@ export async function provisionInstalledHostCredential(
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };
       }
-      if (mintInvoked) {
+      // `not-adopted` claims a credential existed and was pushed (or held for
+      // delivery), so it needs the mint to have definitively PROVISIONED. A
+      // mint still pending at the deadline proved neither - "the handoff did
+      // not complete" is all that is known, which is `mint-unavailable`'s
+      // line, not an adoption failure the host can be blamed for.
+      if (mintProvisioned) {
         return { kind: "not-adopted" };
+      }
+      if (mintInvoked) {
+        return { kind: "mint-unavailable" };
       }
       // Both mean the host WAS reached and cannot be credentialed by this
       // client: it opened without ever reporting a state, or it reported a
@@ -439,6 +457,36 @@ export async function provisionInstalledHostCredential(
               // tight bound can neither manufacture a `mint-unavailable`
               // report nor suppress a truthful `minted`.
               await settleMint(pendingMint, options.logger, mintBoundMs);
+            }
+          }
+          // A 401 from AUTHN on the mint (fired synchronously before the
+          // flow resolved, so the flag is settled here whenever the mint is)
+          // reaches this probe as a plain `unavailable` - but it is the one
+          // mint failure that is not client-local: the host still accepted
+          // the very same bearer to open this stream, which is the shape of
+          // a token authn has revoked out from under an unexpired JWS. The
+          // stream's own revalidator never fires in that shape (the host
+          // keeps saying yes), so confirm here with one rotation: a terminal
+          // rejection means the sign-in is dead and every client's mint
+          // would 401 the same way - report `unauthorized`, because the
+          // self-heal promise would be false - while a successful rotation
+          // means a later client CAN mint, and `mint-unavailable` stands.
+          if (mintUnauthorized && !credentialRejected && remaining() > 0) {
+            const confirm = revalidator.revalidateCurrentContext();
+            inFlightRevalidation = confirm;
+            const confirmBound = cancelableDelay(remaining());
+            try {
+              const outcome = await Promise.race([
+                confirm,
+                confirmBound.promise.then(
+                  (): RevalidateOutcome => "network-error",
+                ),
+              ]);
+              if (outcome === "rejected") {
+                credentialRejected = true;
+              }
+            } finally {
+              confirmBound.cancel();
             }
           }
           await sleep(Math.min(PUSH_DRAIN_MS, remaining()));

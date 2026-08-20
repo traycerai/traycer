@@ -223,6 +223,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       signal: null,
       unavailableNote:
         "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
     }),
     // The monitor provisions opportunistically and never verifies adoption -
     // the next connection's ack settles it.
