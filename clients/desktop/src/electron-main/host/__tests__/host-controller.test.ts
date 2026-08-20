@@ -107,6 +107,7 @@ import {
   runBundledTraycerCliJson,
   streamBundledTraycerCliJson,
   TraycerCliError,
+  type NdjsonEvent,
 } from "../../cli/traycer-cli";
 import { prereleaseUpdatesEnabled } from "../../app/update-preferences";
 import {
@@ -2943,9 +2944,11 @@ describe("platform matrix", () => {
       runtimeVersion: "1.7.0",
     });
     await cliController.registerService();
-    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.arrayContaining(["host", "service", "install"]),
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["host", "service", "install"]),
+      }),
     );
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -2956,6 +2959,7 @@ describe("platform matrix", () => {
     const macController = newController("production");
     await macController.registerService();
     expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
   });
@@ -2977,8 +2981,10 @@ describe("platform matrix", () => {
     const outcome = await controller.registerService();
 
     expect(outcome.kind).toBe("failed");
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.arrayContaining(["host", "service", "install"]),
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["host", "service", "install"]),
+      }),
     );
   });
 
@@ -2989,13 +2995,16 @@ describe("platform matrix", () => {
       runtimeVersion: null,
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
-      return {
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
         installGeneration: "service-install-command-generation",
         runtimeVersion: null,
         runtimeWasNull: true,
-      };
+      },
+    });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
+      return {};
     });
 
     const outcome = await controller.registerService();
@@ -3069,12 +3078,11 @@ describe("platform matrix", () => {
     const controller = newController("dev");
     writeInstallRecord("dev", { version: "1.7.0", runtimeVersion: "1.7.0" });
     await controller.registerService();
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
-      "host",
-      "service",
-      "install",
-      "--allow-self-invocation",
-    ]);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["host", "service", "install", "--allow-self-invocation"],
+      }),
+    );
   });
 
   it("removeTraycer ordering: sentinel is persisted before the login-item unregister and the CLI uninstall run", async () => {
@@ -4123,12 +4131,11 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       kind: "ok",
       value: { running: true, version: "1.7.0" },
     });
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
-      "host",
-      "service",
-      "install",
-      "--takeover",
-    ]);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["host", "service", "install", "--takeover"],
+      }),
+    );
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
 
@@ -4151,7 +4158,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
-    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
       new Error("takeover exploded"),
     );
 
@@ -5414,10 +5421,12 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
-      installGeneration: "already-stamped-generation",
-      runtimeVersion: "1.7.0",
-      runtimeWasNull: false,
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        installGeneration: "already-stamped-generation",
+        runtimeVersion: "1.7.0",
+        runtimeWasNull: false,
+      },
     });
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
@@ -5819,7 +5828,9 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const outcome = await controller.respawn();
 
     expect(outcome.kind).toBe("ok");
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(TAKEOVER_ARGV);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: TAKEOVER_ARGV }),
+    );
     // The futile-retry pin: `not-found` is sticky for this SMAppService
     // session, so neither the S8 wrapper nor the fallback may re-run the
     // register cycle.
@@ -5833,7 +5844,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
   it("activation cycle: a failing takeover surfaces one terminal message naming the status and the manual escape hatch", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
-    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
       new Error("takeover exploded"),
     );
 
@@ -5857,7 +5868,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
   it("activation cycle: a takeover denied by a busy host is deferred - retry-later information, not a reportable failure", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
-    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
       new TraycerCliError(
         "E_HOST_BUSY",
         "service install --takeover: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
@@ -5907,7 +5918,9 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const outcome = await controller.registerService();
 
     expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(TAKEOVER_ARGV);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: TAKEOVER_ARGV }),
+    );
   });
 
   it("requires-approval NEVER escalates to the takeover - the toggle is the user's alone", async () => {
@@ -5957,5 +5970,140 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       expect(outcome.message).toBe(HOST_REMOVED_BY_USER_MESSAGE);
     }
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
+  });
+});
+
+// Fixup E: `mutationEpoch` ownership. `streamBundled` captures
+// `(mutationEpoch, mutationStatus !== null)` at spawn time, and only
+// publishes a progress event through `setMutationProgress` when BOTH the
+// spawning call was inside the mutation lane AND the epoch is still the one
+// captured at spawn. `enqueueMutation` bumps the epoch at mutation start and
+// end. Two things must hold:
+//   (1) a `streamBundled` call made while NO mutation is active (e.g. the
+//       `applyPendingLoginItemRevisionIfIdle` takeover recovery path, which
+//       deliberately runs outside `enqueueMutation`) must never alter an
+//       unrelated mutation's published progress, even if that mutation
+//       starts and is still active when the out-of-lane call's progress
+//       events arrive.
+//   (2) a normal in-lane call still publishes its progress exactly as
+//       before.
+describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
+  it("a streamBundled call spawned OUTSIDE the mutation lane never publishes progress into an unrelated mutation that starts while it is still running", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-registered");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const takeoverGate = deferred<{ data: unknown }>();
+    const restartGate = deferred<{ data: unknown }>();
+    // A plain `let` reassigned only inside the mock's closure loses its
+    // narrowed (non-null) type at every read in this outer scope - TS's
+    // control-flow analysis does not trace assignments made from inside a
+    // nested function expression. Holding it as an object property sidesteps
+    // that: property narrowing is re-evaluated from each guard, not frozen
+    // to the variable's initializer.
+    const takeoverEvents: { onEvent: ((event: NdjsonEvent) => void) | null } = {
+      onEvent: null,
+    };
+
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("--takeover")) {
+        takeoverEvents.onEvent = opts.onEvent;
+        return takeoverGate.promise;
+      }
+      if (opts.args.includes("restart")) {
+        return restartGate.promise;
+      }
+      return { data: {} };
+    });
+
+    const progresses: MutationProgress[] = [];
+    const unsubscribe = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+
+    // `applyPendingLoginItemRevisionIfIdle` runs OUTSIDE `enqueueMutation` -
+    // no mutation is active when its takeover call spawns, so `streamBundled`
+    // captures `spawnedInLane = false`.
+    const refreshPromise = controller.applyPendingLoginItemRevisionIfIdle();
+    await vi.waitFor(() => {
+      if (takeoverEvents.onEvent === null) {
+        throw new Error("takeover streamBundled call not reached yet");
+      }
+    });
+
+    // A completely unrelated mutation starts while the out-of-lane takeover
+    // call above is still in flight - `respawn`'s own restart call is gated
+    // too, so its mutation stays active for the assertion below.
+    const respawnPromise = controller.respawn();
+    await flushMicrotasks();
+
+    if (takeoverEvents.onEvent === null) {
+      throw new Error("takeoverEvents.onEvent was never captured");
+    }
+    takeoverEvents.onEvent({
+      type: "progress",
+      stage: "register",
+      percent: 50,
+      bytes: null,
+      totalBytes: null,
+      message: "registering host-credential",
+      workUnits: null,
+    });
+    await flushMicrotasks();
+
+    // The active mutation is `respawn`'s, not the out-of-lane takeover's -
+    // the progress event must not have landed anywhere.
+    expect(progresses).toHaveLength(0);
+
+    restartGate.resolve({ data: { activated: true } });
+    await respawnPromise;
+    takeoverGate.resolve({ data: {} });
+    await refreshPromise;
+    unsubscribe();
+  });
+
+  it("a normal in-lane streamBundled call still publishes its progress events", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const progresses: MutationProgress[] = [];
+    const unsubscribe = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      opts.onEvent({
+        type: "progress",
+        stage: "restart",
+        percent: 10,
+        bytes: null,
+        totalBytes: null,
+        message: "restarting",
+        workUnits: null,
+      });
+      return { data: { activated: true } };
+    });
+
+    const outcome = await controller.respawn();
+    unsubscribe();
+
+    expect(outcome.kind).toBe("ok");
+    expect(progresses).toEqual([
+      expect.objectContaining({ stage: "restart", percent: 10 }),
+    ]);
   });
 });

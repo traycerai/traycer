@@ -68,9 +68,15 @@ vi.mock("../../service", async (importOriginal) => {
 });
 
 // Reads the real install manifest off disk otherwise - same filesystem
-// hazard as the mocks above.
+// hazard as the mocks above. Records into `callOrder`: the attestation's
+// placement is load-bearing (see the ordering test below).
 vi.mock("../../host/attested-install-runtime", () => ({
-  attestInstallRuntime: mocks.attestInstallRuntimeMock,
+  attestInstallRuntime: (
+    ...callArgs: Parameters<typeof mocks.attestInstallRuntimeMock>
+  ) => {
+    mocks.callOrder.push("attest");
+    return mocks.attestInstallRuntimeMock(...callArgs);
+  },
 }));
 
 vi.mock("../../store/cli-lock", () => ({
@@ -179,22 +185,43 @@ describe("buildServiceInstallCommand", () => {
     mocks.callOrder = [];
   });
 
-  it("runs the sign-in pre-flight before the lock is acquired, and provisions after install inside it", async () => {
+  it("runs the sign-in pre-flight before the lock is acquired, attests inside it, and provisions only after it releases", async () => {
+    // Every position here is deliberate. The pre-flight can block on a human
+    // (device-flow sign-in) and the probe can wait up to 30s for the host -
+    // neither touches lock-guarded state, so neither may extend the shared
+    // cli-lock's critical section (mirrors `host install`). The attestation
+    // is the opposite: it must read the install record INSIDE the lock, or a
+    // concurrent bytes-only install committing after release gets its record
+    // attested as this cycle's - and Desktop then stamps the new record with
+    // the runtime version of a host still running the old bytes.
     mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
     mocks.maybeProvisionCredentialMock.mockResolvedValue({
       kind: "active",
       minted: false,
     });
+    mocks.attestInstallRuntimeMock.mockResolvedValue({
+      installGeneration: "gen-7",
+      runtimeVersion: "1.2.3",
+      runtimeWasNull: false,
+    });
 
     const command = buildServiceInstallCommand(baseArgs({}));
-    await command(fakeCtx());
+    const result = await command(fakeCtx());
 
     expect(mocks.callOrder).toEqual([
       "preflight",
       "lock-enter",
-      "credential-provision",
+      "attest",
       "lock-exit",
+      "credential-provision",
     ]);
+    // The lock-scoped attestation is what the payload carries - Desktop's
+    // stamp-runtime CAS consumes exactly these fields.
+    expect(result.data).toMatchObject({
+      installGeneration: "gen-7",
+      runtimeVersion: "1.2.3",
+      runtimeWasNull: false,
+    });
   });
 
   it("a signed-out, non-interactive run still completes registration; credentialProvision is null and the human line names the unprovisioned host", async () => {
