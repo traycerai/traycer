@@ -212,6 +212,66 @@ describe("deriveWindowNarration", () => {
       });
     });
 
+    it("P2 FIX - yields to an ACTIONABLE verdict even while the target is restarting: an incompatible other host still gets update-host", () => {
+      // The restarting-target arm has no clock, and the lease it reads can
+      // stay `restarting-expected` for the outage signal's ceiling - fifteen
+      // minutes, far past the authority's twenty-second hold. So whatever it
+      // hides, it can hide for the whole outage. Hiding `offline` costs
+      // nothing (the startup card carries the same Retry), but hiding a fix
+      // the user could walk right now is a lockout with a spinner on it.
+      const detail = {
+        code: "protocol-major-behind",
+        hostVersion: "1.2.3",
+        minSupportedVersion: "1.3.0",
+      } as const;
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            deadLease("host-remote", { reason: "incompatible", detail }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-remote",
+          isTargetHost: false,
+          detail,
+        },
+      });
+    });
+
+    it("P2 FIX - and still holds it for a merely-offline fleet: the gate is the VERDICT, not the presence of a dead lease", () => {
+      // The other side of the same rule, and the reason it is stated over the
+      // scan's answer rather than over deadness: a retired laptop still
+      // resolves to `offline`, so the launch story survives it. Losing this
+      // would restore the flash the arm above was added to remove.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            deadLease("host-retired", { reason: "removed" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
     it("does not extend that exception past the first service - a restarting target after serving is the ∅ verdict", () => {
       // The grace is a LAUNCH statement in both of its arms. Once the window
       // has been served, ∅ is always the verdict, whatever the target's lease

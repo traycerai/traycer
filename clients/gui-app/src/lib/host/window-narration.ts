@@ -279,16 +279,38 @@ export function deriveWindowNarration(
     // declining a usable fallback so the app does not hop and hop back - so
     // during that hold ∅ does NOT mean "nothing can serve this window", and
     // the scan below would say so anyway the moment the account contains one
-    // dead machine (a retired laptop, an incompatible one). That is the same
-    // reasoning the non-∅ cold-start arm already applies further down:
-    // whatever else is wrong out there belongs to the surface chip or the
-    // tile, not to the window's launch story. Bounded by construction - the
-    // authority's hold lapses, and with it this lease state - so `update-host`
-    // and `plan-restricted` stay reachable, just not mid-restart.
+    // dead machine (a retired laptop). That is the same reasoning the non-∅
+    // cold-start arm already applies further down: whatever else is wrong out
+    // there belongs to the surface chip or the tile, not to the window's
+    // launch story.
+    //
+    // ⚠ ONLY WHERE THE SCAN WOULD HAVE SAID `offline` ANYWAY, and that gate is
+    // the difference between softening a verdict and SUPPRESSING one. This arm
+    // has no clock: it reads a lease status the outage signal can hold for
+    // `LOCAL_EXPECTED_OUTAGE_CEILING_MS` (15 minutes), far past the authority's
+    // 20-second hold, so anything it hides it can hide for the whole outage. On
+    // `offline` there is nothing to hide - the startup card carries the same
+    // recovery, promoting to Retry + Open settings at
+    // `LOCAL_HOST_SLOW_START_THRESHOLD_MS` and adding Report issue once the
+    // install settles in failure - and "Starting Traycer…" is the truer
+    // sentence while the boot is genuinely running. `update-host` is the
+    // opposite: a version fix the user could walk NOW (arm 3 of the scan - an
+    // incompatible OTHER host while the target cycles), and a local restart is
+    // not a reason to withhold it for a quarter of an hour.
+    //
+    // Asking `deriveNoHostVariant` rather than enumerating dead reasons is
+    // deliberate. `plan-restricted` happens to be unreachable in this
+    // population today (its arm needs EVERY lease dead, and a
+    // `restarting-expected` target is not), so an enumeration written against
+    // what is reachable now would be a rule that quietly stops matching when
+    // that precedence moves. Deferring to the scan itself makes a new variant
+    // actionable by default, which is the safe direction to be wrong in.
     const targetLease = findLease(input.leases, input.targetHostId);
+    const noHostVariant = deriveNoHostVariant(input.leases, input.targetHostId);
     if (
       !input.hasBeenServed &&
       input.localHostExpected &&
+      noHostVariant.kind === "offline" &&
       (targetLease?.status === "restarting-expected" ||
         input.leases.every((lease) => lease.status !== "dead"))
     ) {
@@ -301,7 +323,7 @@ export function deriveWindowNarration(
     return {
       kind: "narrating",
       cause: "no-usable-host",
-      variant: deriveNoHostVariant(input.leases, input.targetHostId),
+      variant: noHostVariant,
     };
   }
   if (input.hasBeenServed) return { kind: "silent" };

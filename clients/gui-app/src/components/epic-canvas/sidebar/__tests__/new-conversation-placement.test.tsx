@@ -565,6 +565,46 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
 
+  it("P2 FIX - and keeps it retired across a round trip back to the refused host", () => {
+    // The per-Epic pin is as sticky as the landing composer's, so B -> C -> B
+    // happens on its own. Retiring the refusal on the FIRST move is what makes
+    // the return quiet; comparing it against the host it was raised for would
+    // bring the alert back with no submit behind it.
+    const resolveTo = (hostId: string, hostLabel: string): void => {
+      testState.placement.current = {
+        resolvedHostId: hostId,
+        client: { getActiveHostId: () => hostId },
+        hostLabel,
+        isPinned: true,
+        namedHostDead: false,
+      };
+    };
+    testState.placement.current = {
+      resolvedHostId: "host-b",
+      client: { getActiveHostId: () => "host-a" },
+      hostLabel: "Build Box",
+      isPinned: true,
+      namedHostDead: false,
+    };
+    const view = renderModal();
+    act(() => {
+      testState.bodySubmit?.();
+    });
+    expect(noticeText()).toContain("Build Box");
+
+    resolveTo("host-c", "Home Mac");
+    act(() => {
+      view.rerender(<Harness />);
+    });
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+
+    resolveTo("host-b", "Build Box");
+    act(() => {
+      view.rerender(<Harness />);
+    });
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+
   it("refuses the TERMINAL path on the same verdict, creating nothing", () => {
     useNewConversationModalStore
       .getState()

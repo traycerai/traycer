@@ -572,4 +572,74 @@ describe("landing composer clears a refused §54 notice on host change", () => {
 
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
+
+  it("P2 FIX - does not resurrect it on the way back: a sticky pin's A -> B -> A round trip leaves the refusal retired", () => {
+    // A pin is a preference, not a binding: a surface whose pinned host dies
+    // auto-follows and RETURNS when the host is usable again, so A -> B -> A
+    // is an ordinary Tuesday rather than a corner case. Holding the refusal
+    // beside the host it was raised for and rendering it whenever they match
+    // would make that return re-open a stale alert with no submit in between -
+    // hiding the notice instead of retiring it.
+    landingTarget = {
+      resolvedHostId: "host-b",
+      client: null,
+      hostLabel: "Build Box",
+      isPinned: true,
+      namedHostDead: false,
+    };
+    testState.submitRefusal = { message: "Build Box is not reachable." };
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    testState.snapshot?.();
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    act(() => {
+      testState.bodySubmit?.();
+    });
+    expect(screen.getByTestId("composer-host-notice").textContent).toContain(
+      "Build Box is not reachable.",
+    );
+
+    const resolveTo = (hostId: string, hostLabel: string): void => {
+      landingTarget = {
+        resolvedHostId: hostId,
+        client: null,
+        hostLabel,
+        isPinned: true,
+        namedHostDead: false,
+      };
+      act(() => {
+        view.rerender(
+          <LandingComposer
+            draftId={null}
+            pendingCreateId="pending-1"
+            initialSettings={null}
+            workspaceControls={() => null}
+          />,
+        );
+      });
+    };
+
+    // The pinned host goes away and the surface follows `effective`...
+    resolveTo("host-c", "Home Mac");
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+
+    // ...and then comes back, which is what the pin's stickiness is FOR. The
+    // refusal was retired on the first move, so there is nothing left to
+    // resurrect.
+    resolveTo("host-b", "Build Box");
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
 });

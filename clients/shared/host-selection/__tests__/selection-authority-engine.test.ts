@@ -5741,6 +5741,65 @@ describe("SelectionAuthorityEngineImpl - cold-start hold does not apply once the
 
     authority.dispose();
   });
+
+  it("P1 FIX - A SERVING FALLBACK IS NEVER DROPPED: with the local host as the TARGET, a later restart intent for it leaves the failed-over R serving instead of holding ∅", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("R", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // NO PREFERENCE, so the target IS the local host (M5). That is the whole
+    // difference from the case above - there R was preferred and L was never
+    // the target, so `targetHostId === localHostId` was false and the
+    // target-side arm could not fire whatever it did. Here it is true, which
+    // is the population this pin is about.
+    expect(engine.snapshot().targetHostId).toBe("L");
+
+    // L is unprovisionable (the harness default port answers "unavailable")
+    // and then refuses its dials outright, so the app fails over to R exactly
+    // as D8 says. Settle the construction-time ensure first: its in-flight arm
+    // outranks the expected-outage arm, so a restart intent landing while it
+    // is outstanding would read `connecting` and prove nothing.
+    await Promise.resolve();
+    await Promise.resolve();
+    killHostWithRefusals(engine, "A", incarnation, "L");
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // THE REGRESSION. A restart intent for L - the user relaunching their own
+    // machine's host, or the launch lane reconciling - flips its lease from
+    // `dead` to `restarting-expected`. `restartingIncumbentHostId` is null (R
+    // is the incumbent and R is not restarting), so before the ∅ gate the
+    // target-side arm fired and answered null: a cold-start optimization
+    // taking a WORKING remote away from a user who was mid-sentence on it, for
+    // the whole ceiling. The hold exists to prevent a hop, not to cause an
+    // outage.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      restartIntent("L", "tomb-relaunch", null, clock.now()),
+    );
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // And it stays R across the span the hold would have covered - the hold
+    // was never armed, rather than armed and immediately lapsed.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS / 2);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
 });
 
 describe("SelectionAuthorityEngineImpl - cold-start hold is LOCAL-target-only", () => {

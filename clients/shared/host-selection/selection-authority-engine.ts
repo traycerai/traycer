@@ -2135,9 +2135,21 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // LOCAL target only on the second arm, on purpose: the grace card exists
     // only where a local host is expected, so holding ∅ for a cycling REMOTE
     // target would show "no usable host" over a working fallback.
+    //
+    // AND ONLY FROM ∅, which is the whole of what the second arm optimizes: a
+    // window that has nothing, deciding whether to grab a fallback it will
+    // hand straight back. Once something IS effective there is no flick left
+    // to prevent, and holding anyway would CAUSE the outage it exists to
+    // avoid - dial refusals move the app to remote R, a restart intent later
+    // flips local L's lease from `dead` to `restarting-expected`, and a
+    // target-side hold would drop a working R to ∅ for the ceiling. The
+    // incumbent arm above is the one that speaks for a serving host, and it
+    // asks about the INCUMBENT's lease precisely so a target that is not
+    // serving anyone cannot answer for it.
     const awaitedHostId =
       restartingIncumbentHostId ??
-      (targetHostId !== null &&
+      (effectiveHostId === null &&
+      targetHostId !== null &&
       targetHostId === localHostId &&
       this.leaseFor(targetHostId, leases)?.status === "restarting-expected"
         ? targetHostId
@@ -2145,8 +2157,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     if (awaitedHostId === null) {
       this.coldStartHold = null;
     } else if (this.holdsForColdStart(awaitedHostId, now)) {
-      // An incumbent keeps serving as itself; a target that is not effective
-      // yet answers ∅ so the startup card narrates the boot.
+      // An incumbent keeps serving as itself; the target arm can only have
+      // been reached from ∅, so its null STAYS at ∅ rather than taking
+      // anything away, and the startup card narrates the boot.
       return restartingIncumbentHostId !== null ? awaitedHostId : null;
     }
     // Ceiling lapsed: the boot is no longer something to wait for, and the
