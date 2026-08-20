@@ -121,7 +121,7 @@ export function useCommGraphJump(
   }, [agents, events]);
   // Dialability now depends on the pull-only session cache, so the directory
   // subscription alone cannot see a session dying or appearing under an
-  // `offline`/`local-only` origin. This second subscription re-renders on a
+  // `offline`/plan-restricted origin. This second subscription re-renders on a
   // readiness flip; the snapshot read below then re-runs with the new answer,
   // so jump affordances follow the route's real state instead of freezing at
   // whatever was true on the last directory emit.

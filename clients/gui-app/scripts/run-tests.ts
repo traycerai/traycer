@@ -127,6 +127,14 @@ if (runsFirstShard) {
     // check nobody enables is a coverage gap wearing a test's name.
     runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs");
     runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs");
+    // Same gate again, and the strongest case for it in this list: the boot
+    // card's escape hatch is lost to an INPUT-DISPATCH rule - a press whose
+    // element is removed before release emits no click at all - and jsdom
+    // dispatches `click` directly, so every jsdom test of that button passes
+    // on the broken build. Ablated before wiring: reverting the button to
+    // `onClick` turns this red (0 activations) while its ordinary-click
+    // premise stays green.
+    runBrowserRegression("scripts/boot-escape-hatch-press-browser.mjs");
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design

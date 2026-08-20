@@ -9,6 +9,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { getClientAppVersion } from "@/lib/app-version";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { usePressStartActivation } from "@/lib/host/press-start-activation";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateSkew,
@@ -290,6 +291,7 @@ function NarrationActions(
     readonly align: "center" | "end";
   },
 ): ReactNode {
+  const settingsActivation = usePressStartActivation(props.onOpenSettings);
   return (
     <div
       className={cn(
@@ -336,12 +338,19 @@ function NarrationActions(
           bypasses the readiness gate - the shell page edits host
           config without a running host, so this is the escape hatch
           for a host that cannot start. Gating it behind the failure
-          it exists to fix is the lockout this whole surface prevents. */}
+          it exists to fix is the lockout this whole surface prevents.
+
+          It activates on PRESS (`usePressStartActivation`), unlike its
+          neighbours in this row, and the asymmetry is deliberate: this card
+          can be replaced by the next boot surface between a press and its
+          release, which produces no click at all. Retry / Update host are
+          MUTATIONS and keep click semantics, so a press the user drags away
+          from does not fire them. */}
       <Button
         type="button"
         size="sm"
         variant={props.settingsEmphasis === "button" ? "outline" : "link"}
-        onClick={props.onOpenSettings}
+        {...settingsActivation}
         data-testid="window-host-modal-open-settings"
         data-emphasis={props.settingsEmphasis}
       >

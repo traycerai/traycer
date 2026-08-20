@@ -50,6 +50,7 @@ import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
 import { ResourceTelemetryBridge } from "@/providers/resource-telemetry-bridge";
+import { STARTUP_NAVIGATION_INTENT_KEY } from "@/lib/host/startup-navigation-intent";
 import { createAppRouter, type AppRouter } from "@/router";
 // Side-effect import: installs the WCO → `.wco` class bridge at module
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
@@ -120,15 +121,33 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
     () => createAppRouter(props.initialRoute ?? null, desktopWindowId),
     [desktopWindowId, props.initialRoute],
   );
+  // Both escape hatches DECLARE themselves as user intent in history state.
+  // They can be taken on a boot surface, before the app or the route bridge
+  // exists, and the marker is what stops the desktop's restored-route replay
+  // from overwriting them - without it that replay cannot tell a user's
+  // navigation from the transient `/` a cold launch redirects to on its own.
+  // See `startup-navigation-intent.ts`.
   const configureShell = useCallback(() => {
-    void router.navigate({ to: "/settings/shell" });
+    void router.navigate({
+      to: "/settings/shell",
+      state: (previous) => ({
+        ...previous,
+        [STARTUP_NAVIGATION_INTENT_KEY]: true,
+      }),
+    });
   }, [router]);
   // The host-unavailable card's escape hatch. `/settings/host` rather than the
   // settings index: the card is shown when no host can be reached, and that is
   // the page that manages them. Settings bypasses the readiness gate, so this
   // stays reachable from inside a full-screen block.
   const openSettings = useCallback(() => {
-    void router.navigate({ to: "/settings/host" });
+    void router.navigate({
+      to: "/settings/host",
+      state: (previous) => ({
+        ...previous,
+        [STARTUP_NAVIGATION_INTENT_KEY]: true,
+      }),
+    });
   }, [router]);
   // THE FIRST of a launch's three boot surfaces - see
   // `HostRuntimeBootFallback` for why it is the same card as the other two and

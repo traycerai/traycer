@@ -22,6 +22,8 @@ import {
 import { lastLocalHostIdKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
+const PLAN_ALLOWS_REMOTE = true;
+
 // Matches the production constant of the same name in `host-directory-service.ts`
 // — the app's ONE background cadence for `GET /api/v3/hosts`, moved from 15s to
 // 60s to actually match the Settings observer's poll (see that file's comment).
@@ -736,7 +738,11 @@ describe("HostDirectoryService", () => {
       updatePolicy: "manual",
     } as const;
     const relayUrl = "wss://relay.example.test/attach";
-    const beforeRotation = hostListItemToDirectoryEntry(item, relayUrl);
+    const beforeRotation = hostListItemToDirectoryEntry(
+      item,
+      relayUrl,
+      PLAN_ALLOWS_REMOTE,
+    );
     // Same row in every other respect - `connectable`, so the derived
     // unavailability verdict and the relay-fuse-grace flag (always `false`
     // off `offline`) cannot be what moves the comparison. Only `publicKey`
@@ -744,6 +750,7 @@ describe("HostDirectoryService", () => {
     const afterRotation = hostListItemToDirectoryEntry(
       { ...item, publicKey: "pk-generation-2" },
       relayUrl,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(
       isRemoteHostDirectoryEntry(beforeRotation) &&
@@ -889,11 +896,13 @@ describe("HostDirectoryService", () => {
     const inGrace = hostListItemToDirectoryEntry(
       item,
       "wss://relay.example.test/attach",
+      PLAN_ALLOWS_REMOTE,
     );
     nowSpy.mockReturnValue(lastSeenMs + RELAY_FUSE_MAX_ATTACH_MS + 1);
     const aged = hostListItemToDirectoryEntry(
       item,
       "wss://relay.example.test/attach",
+      PLAN_ALLOWS_REMOTE,
     );
     nowSpy.mockRestore();
     expect(inGrace.relayFuseGrace).toBe(true);

@@ -31,8 +31,26 @@ function statusDto(overrides: Partial<HostStatusDTO>): HostStatusDTO {
  * Wraps `deriveHostPresence` for the "core DTO-driven logic" tests below — no
  * live session, so every answer comes from the DTO itself.
  */
+const PLAN_ALLOWS_REMOTE = true;
+const PLAN_GATED = false;
+const NOW_MS = Date.parse("2026-07-03T12:00:00.000Z");
+
 function deriveLocal(status: HostStatusDTO): DtoPresenceView {
-  return deriveHostPresence({ status, hasLiveSession: false });
+  return deriveHostPresence({
+    status,
+    hasLiveSession: false,
+    planAllowsRemote: PLAN_ALLOWS_REMOTE,
+    nowMs: NOW_MS,
+  });
+}
+
+function derivePlanGated(status: HostStatusDTO): DtoPresenceView {
+  return deriveHostPresence({
+    status,
+    hasLiveSession: false,
+    planAllowsRemote: PLAN_GATED,
+    nowMs: NOW_MS,
+  });
 }
 
 describe("deriveHostPresence", () => {
@@ -93,8 +111,8 @@ describe("deriveHostPresence", () => {
       const values: HostConnectivity[] = [
         "connectable",
         "offline",
-        "local-only",
         "unknown",
+        "local-only",
       ];
       for (const connectivity of values) {
         const view = deriveLocal(statusDto({ connectivity }));
@@ -102,11 +120,43 @@ describe("deriveHostPresence", () => {
       }
     });
 
-    it("renders local-only as its own tone, labelled Local only, and NEVER Offline", () => {
-      const view = deriveLocal(statusDto({ connectivity: "local-only" }));
+    it("renders Local only for a plan-gated host the cloud reports connectable, and NEVER Offline", () => {
+      const view = derivePlanGated(statusDto({ connectivity: "connectable" }));
       expect(view.reading).toBe("local-only");
       expect(view.label).toBe("Local only");
       expect(view.reading).not.toBe("offline");
+    });
+
+    it("renders Local only for a plan-gated host the cloud cannot read (unknown)", () => {
+      const view = derivePlanGated(statusDto({ connectivity: "unknown" }));
+      expect(view.reading).toBe("local-only");
+    });
+
+    it("renders Local only for a plan-gated offline host with a recent credential check-in", () => {
+      const view = derivePlanGated(
+        statusDto({
+          connectivity: "offline",
+          lastSeenAt: "2026-07-03T11:40:00.000Z",
+        }),
+      );
+      expect(view.reading).toBe("local-only");
+      expect(view.label).toBe("Local only");
+    });
+
+    it("renders Offline for a plan-gated offline host whose credential check-in is stale", () => {
+      const view = derivePlanGated(
+        statusDto({
+          connectivity: "offline",
+          lastSeenAt: "2026-07-03T11:29:59.999Z",
+        }),
+      );
+      expect(view.reading).toBe("offline");
+      expect(view.label).toBe("Offline");
+    });
+
+    it("keeps accepting the transitional local-only wire value", () => {
+      const view = deriveLocal(statusDto({ connectivity: "local-only" }));
+      expect(view.reading).toBe("local-only");
     });
 
     it("NEVER renders a false Offline when coordination is blind (moved from the envelope's presenceHealth to connectivity: 'unknown')", () => {
@@ -137,26 +187,37 @@ describe("deriveHostPresence", () => {
       const view = deriveHostPresence({
         status: statusDto({ connectivity: "offline" }),
         hasLiveSession: true,
+        planAllowsRemote: PLAN_ALLOWS_REMOTE,
+        nowMs: NOW_MS,
       });
       expect(view.reading).toBe("online");
       expect(view.label).toBe("Online");
       expect(view.showLiveDot).toBe(true);
     });
 
-    it("beats local-only and unknown too — firsthand proof outranks every cloud read", () => {
-      for (const connectivity of ["local-only", "unknown"] as const) {
-        const view = deriveHostPresence({
-          status: statusDto({ connectivity }),
-          hasLiveSession: true,
-        });
-        expect(view.reading).toBe("online");
-      }
+    it("beats unknown and a plan-gated connectable too — firsthand proof outranks every cloud read", () => {
+      const viewUnknown = deriveHostPresence({
+        status: statusDto({ connectivity: "unknown" }),
+        hasLiveSession: true,
+        planAllowsRemote: PLAN_ALLOWS_REMOTE,
+        nowMs: NOW_MS,
+      });
+      expect(viewUnknown.reading).toBe("online");
+      const viewGated = deriveHostPresence({
+        status: statusDto({ connectivity: "connectable" }),
+        hasLiveSession: true,
+        planAllowsRemote: PLAN_GATED,
+        nowMs: NOW_MS,
+      });
+      expect(viewGated.reading).toBe("online");
     });
 
     it("does not override You're offline (the client itself has no path to claim anything)", () => {
       const view = deriveHostPresence({
         status: statusDto({ connectivity: "connectable", clientCloud: "down" }),
         hasLiveSession: true,
+        planAllowsRemote: PLAN_ALLOWS_REMOTE,
+        nowMs: NOW_MS,
       });
       expect(view.reading).toBe("client-offline");
     });

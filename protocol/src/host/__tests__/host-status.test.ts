@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  hostListItemSchema,
-  hostListResponseSchema,
-} from "../host-status";
+import { hostListItemSchema, hostListResponseSchema } from "../host-status";
 import { HOST_LIST_ITEM_GOLDEN_FIXTURE } from "../__fixtures__/host-status-golden-fixture";
 
 /**
@@ -60,16 +57,33 @@ describe("host-status.ts strict parsing", () => {
         connectivity: "reconnecting",
       },
     };
-    expect(
-      hostListItemSchema.safeParse(withInvalidConnectivity).success,
-    ).toBe(false);
+    expect(hostListItemSchema.safeParse(withInvalidConnectivity).success).toBe(
+      false,
+    );
+  });
+
+  it("parses every current liveness word and the transitional local-only value", () => {
+    for (const connectivity of [
+      "connectable",
+      "offline",
+      "unknown",
+      "local-only",
+    ]) {
+      expect(
+        hostListItemSchema.safeParse({
+          ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+          status: { ...HOST_LIST_ITEM_GOLDEN_FIXTURE.status, connectivity },
+        }).success,
+      ).toBe(true);
+    }
   });
 
   it("rejects a payload still carrying the removed presenceLease / busySessionCount fields — the hard cutover has no dual-parse", () => {
     const legacyShapedStatus = {
       presenceLease: "fresh",
       hostRelayAttached: true,
-      viewerReachability: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.viewerReachability,
+      viewerReachability:
+        HOST_LIST_ITEM_GOLDEN_FIXTURE.status.viewerReachability,
       clientCloud: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.clientCloud,
       busy: false,
       busySessionCount: 0,
