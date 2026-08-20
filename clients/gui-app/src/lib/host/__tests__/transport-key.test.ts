@@ -68,6 +68,7 @@ function remoteEntry(
     transportDialability: "dialable",
     publicKey: "pubkey-a",
     relayFuseGrace: false,
+    recentHostCheckIn: false,
     planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",

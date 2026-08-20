@@ -398,6 +398,7 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
     status: item.status,
     hasLiveSession,
     planAllowsRemote: options.planAllowsRemote,
+    nowMs,
   });
   switch (presence.reading) {
     case "online":

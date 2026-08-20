@@ -113,6 +113,7 @@ describe("useHostDirectoryEntry", () => {
       transportDialability: "dialable",
       publicKey: "pubkey-a",
       relayFuseGrace: false,
+      recentHostCheckIn: false,
       planAllowsRemote: true,
       remoteStatus: {
         connectivity: "connectable",
@@ -160,6 +161,7 @@ describe("useHostDirectoryEntry", () => {
       transportDialability: "not-dialable",
       publicKey: "pubkey-fuse",
       relayFuseGrace: true,
+      recentHostCheckIn: false,
       planAllowsRemote: true,
       remoteStatus: {
         connectivity: "offline",
@@ -209,6 +211,7 @@ describe("useHostDirectoryEntry", () => {
           connectivity === "connectable" ? "dialable" : "not-dialable",
         publicKey: "pubkey-plan",
         relayFuseGrace: false,
+        recentHostCheckIn: false,
         planAllowsRemote: true,
         remoteStatus: {
           connectivity,
@@ -256,7 +259,7 @@ describe("useHostDirectoryEntry", () => {
       expect(result.current).not.toBe(first);
     });
 
-    it("does NOT thrash an aged OFFLINE row: dead is dead, so nothing observable changed", () => {
+    it("does NOT thrash an aged OFFLINE row: the stale check-in keeps the verdict unchanged", () => {
       const directory = new ChurningDirectory(remote("offline", {}));
       directoryRef.value = directory;
       const { result } = renderHook(() =>

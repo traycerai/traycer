@@ -62,8 +62,13 @@ describe("host-status.ts strict parsing", () => {
     );
   });
 
-  it("parses every liveness word the server may still emit", () => {
-    for (const connectivity of ["connectable", "offline", "unknown"]) {
+  it("parses every current liveness word and the transitional local-only value", () => {
+    for (const connectivity of [
+      "connectable",
+      "offline",
+      "unknown",
+      "local-only",
+    ]) {
       expect(
         hostListItemSchema.safeParse({
           ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
@@ -71,23 +76,6 @@ describe("host-status.ts strict parsing", () => {
         }).success,
       ).toBe(true);
     }
-  });
-
-  it("rejects the removed plan word `local-only` — connectivity is pure liveness now", () => {
-    // The plan is an ACCOUNT fact the client combines at projection time (see
-    // `hostConnectivitySchema`'s doc). This rejection is also the deploy-order
-    // constraint made executable: a client that parses this file must not meet
-    // a server still emitting the word, so authn-v3 stops emitting it BEFORE a
-    // desktop release ships this enum.
-    expect(
-      hostListItemSchema.safeParse({
-        ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
-        status: {
-          ...HOST_LIST_ITEM_GOLDEN_FIXTURE.status,
-          connectivity: "local-only",
-        },
-      }).success,
-    ).toBe(false);
   });
 
   it("rejects a payload still carrying the removed presenceLease / busySessionCount fields — the hard cutover has no dual-parse", () => {

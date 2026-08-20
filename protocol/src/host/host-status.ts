@@ -67,9 +67,10 @@ export type HostRegistryKind = "personal" | "sandbox";
  *    Offline: blind is not the same as absent, and the durable `lastSeenAt` is
  *    the only honest thing left to show.
  *
- * This enum is PURE LIVENESS — one fact about one host — and deliberately says
- * nothing about the account's plan. It used to carry a fourth value,
- * `local-only`, which meant "the owner's plan has no remote hosts". That
+ * The server's current values are PURE LIVENESS — one fact about one host —
+ * and deliberately say nothing about the account's plan. `local-only` remains
+ * accepted temporarily as a rollout-compatibility input from older servers;
+ * it meant "the owner's plan has no remote hosts". That legacy value
  * collapsed two independent facts (is this host alive? does this account's plan
  * include remote hosts?) into one word, with the plan word outranking liveness:
  * on a free plan every remote host read `local-only` whether it was alive,
@@ -81,16 +82,19 @@ export type HostRegistryKind = "personal" | "sandbox";
  * alive or unreadable, and a plain `offline` for a plan-gated host that is
  * genuinely dead).
  *
- * ⚠️ DEPLOY ORDER: a released client whose vocabulary lacks `local-only` must
- * never receive it — the strict parse below fails closed, which blanks the
- * hosts panel. The authn-v3 change that stops emitting it deploys BEFORE any
- * desktop release carrying this enum.
+ * ⚠️ ROLLOUT: ship this tolerant client before authn-v3 stops emitting
+ * `local-only`. Remove the compatibility value only after that server change
+ * is verified live and the supported client floor has advanced.
  *
  * Detach latency is asymmetric and the UI copy should not over-promise: a clean
  * teardown is pushed in seconds, while a dirty death (lid close, cable pull)
  * waits out the lease TTL — on the order of 15 minutes.
  */
-export type HostConnectivity = "connectable" | "offline" | "unknown";
+export type HostConnectivity =
+  | "connectable"
+  | "offline"
+  | "unknown"
+  | "local-only";
 
 /**
  * TOMBSTONED (redesign P3.4). Was "this client's own probe result at
@@ -189,6 +193,7 @@ export const hostConnectivitySchema = z.enum([
   "connectable",
   "offline",
   "unknown",
+  "local-only",
 ]);
 
 export const hostViewerReachabilitySchema = z.enum([

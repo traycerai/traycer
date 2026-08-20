@@ -1398,6 +1398,9 @@ export class AuthService {
       // below is synchronous, and this projection path rotates just as often
       // as the local ones.
       this.commitLiveCredential(session.token, session.profile);
+      this.commitSubscriptionStatus(
+        session.user.userSubscription.subscriptionStatus,
+      );
       this.contextProvider.rotateCurrentBearer({
         userId: currentUserId,
         bearerToken: session.token,
@@ -1412,9 +1415,6 @@ export class AuthService {
           contextMetadata,
           projectShareableTeams(session.user),
         );
-      this.commitSubscriptionStatus(
-        session.user.userSubscription.subscriptionStatus,
-      );
       this.emitSessionSnapshot();
       this.refreshScheduler.start();
       return;
@@ -2815,6 +2815,7 @@ export class AuthService {
     // The rotate branch needs it just as much: `rotateCurrentBearer` notifies
     // its own listeners, and they are entitled to the same guarantee.
     this.commitLiveCredential(bearerToken, profile);
+    this.commitSubscriptionStatus(user.userSubscription.subscriptionStatus);
     let rotatedInPlace = false;
     if (liveUserId !== undefined && liveUserId === user.user.id) {
       try {
@@ -2845,7 +2846,6 @@ export class AuthService {
     useAuthStore
       .getState()
       .setSignedIn(profile, contextMetadata, projectShareableTeams(user));
-    this.commitSubscriptionStatus(user.userSubscription.subscriptionStatus);
     this.emitSessionSnapshot();
     this.refreshScheduler.start();
   }

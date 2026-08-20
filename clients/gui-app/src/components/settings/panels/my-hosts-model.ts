@@ -2,6 +2,7 @@ import type {
   HostStatusDTO,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
+import { hasRecentHostCheckIn } from "@traycer-clients/shared/host-client/remote-fetcher";
 
 /**
  * The DTO's own reading of a host — **evidence, not a vocabulary**.
@@ -62,10 +63,10 @@ import type {
  *     violated here — see the `connectable` arm.
  *   - NEVER a false "Offline" when the cloud is blind. `unknown` is its own
  *     rendering, and "Local only" is not an outage at all.
- *   - A plan-gated host the cloud reports `offline` reads **Offline**, not
- *     "Local only": dead is dead, whoever is paying. The wire used to say
- *     `local-only` for every host on an unpaid plan, which meant a free-tier
- *     user's long-dead laptop was rendered as a billing state forever.
+ *   - For a plan-gated host, relay `offline` is expected even while healthy:
+ *     the attach-grant gate suppresses the host leg. A recent plan-agnostic
+ *     credential check-in therefore reads "Local only"; stale or missing
+ *     check-in evidence reads Offline.
  */
 
 export type DtoPresenceReading =
@@ -92,12 +93,14 @@ export interface DeriveHostPresenceOptions {
    * `true` (allowed) at the source, never as a restriction.
    */
   readonly planAllowsRemote: boolean;
+  /** Explicit clock for the credential-check-in freshness decision. */
+  readonly nowMs: number;
 }
 
 export function deriveHostPresence(
   options: DeriveHostPresenceOptions,
 ): DtoPresenceView {
-  const { status, hasLiveSession, planAllowsRemote } = options;
+  const { status, hasLiveSession, planAllowsRemote, nowMs } = options;
   // This client is offline: we cannot claim anything about the host's liveness.
   if (status.clientCloud === "down") {
     return {
@@ -111,13 +114,19 @@ export function deriveHostPresence(
   if (hasLiveSession) {
     return { reading: "online", label: "Online", showLiveDot: true };
   }
+  if (status.connectivity === "local-only") {
+    // Transitional value from a pre-cutover server. It carries the plan fact
+    // but no liveness evidence, so never turn it into a death claim.
+    return { reading: "local-only", label: "Local only", showLiveDot: false };
+  }
   if (status.connectivity === "offline") {
-    // Liveness outranks the plan gate here, and only here: a host that is
-    // positively not attached is Offline whatever the account pays. Rendering
-    // it "Local only" would offer an upgrade as the remedy for a machine that
-    // is switched off — and it is what the old wire did for every host on an
-    // unpaid plan, which is how a free-tier user's dead host stayed invisible
-    // to every death-aware surface.
+    if (!planAllowsRemote && hasRecentHostCheckIn(status, nowMs)) {
+      return {
+        reading: "local-only",
+        label: "Local only",
+        showLiveDot: false,
+      };
+    }
     return { reading: "offline", label: "Offline", showLiveDot: false };
   }
   if (!planAllowsRemote) {

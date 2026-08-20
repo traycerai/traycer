@@ -8,11 +8,13 @@ import type { AuthEra } from "../../auth/request-context-provider";
 import {
   createRemoteHostFetcher,
   fetchRegisteredHostsViaHttp,
+  hasRecentHostCheckIn,
   hostListItemToDirectoryEntry,
   hostUnavailability,
   isConfirmedHostDeath,
   isConfirmedTransportRefusal,
   isWithinRelayFuseGrace,
+  PLAN_GATED_HOST_FRESHNESS_MS,
   RELAY_FUSE_MAX_ATTACH_MS,
   RELAY_FUSE_MAX_CLOCK_SKEW_MS,
   type HostListFetchResult,
@@ -371,6 +373,45 @@ describe("isWithinRelayFuseGrace", () => {
   });
 });
 
+describe("hasRecentHostCheckIn", () => {
+  it("accepts a check-in just inside the three-refresh freshness window", () => {
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(isoBefore(PLAN_GATED_HOST_FRESHNESS_MS - 1)),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects the exact freshness boundary, null, and malformed stamps", () => {
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(isoBefore(PLAN_GATED_HOST_FRESHNESS_MS)),
+        NOW,
+      ),
+    ).toBe(false);
+    expect(hasRecentHostCheckIn(offlineStatus(null), NOW)).toBe(false);
+    expect(hasRecentHostCheckIn(offlineStatus("not-a-date"), NOW)).toBe(false);
+  });
+
+  it("allows plausible future skew but rejects a corrupt future stamp", () => {
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(new Date(NOW + 60_000).toISOString()),
+        NOW,
+      ),
+    ).toBe(true);
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(
+          new Date(NOW + RELAY_FUSE_MAX_CLOCK_SKEW_MS + 1).toISOString(),
+        ),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+});
+
 // The rest of this block builds entries through the real
 // `hostListItemToDirectoryEntry` constructor (matching the "real mapped
 // connectivity" style above), controlling grace via `lastSeenAt` relative to
@@ -518,6 +559,7 @@ type MatrixRow = {
   readonly dialability: "dialable" | "not-dialable";
   readonly unavailability:
     "offline" | "plan-restricted" | "indeterminate" | null;
+  readonly lastSeenAt: string;
   readonly why: string;
 };
 
@@ -527,6 +569,7 @@ const MATRIX: readonly MatrixRow[] = [
     connectivity: "connectable",
     dialability: "dialable",
     unavailability: null,
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
     why: "alive and paid for — the only dialable cell",
   },
   {
@@ -534,6 +577,7 @@ const MATRIX: readonly MatrixRow[] = [
     connectivity: "offline",
     dialability: "not-dialable",
     unavailability: "offline",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
     why: "positively not attached",
   },
   {
@@ -541,6 +585,7 @@ const MATRIX: readonly MatrixRow[] = [
     connectivity: "unknown",
     dialability: "not-dialable",
     unavailability: "indeterminate",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
     why: "the liveness read failed — we learned nothing",
   },
   {
@@ -548,20 +593,31 @@ const MATRIX: readonly MatrixRow[] = [
     connectivity: "connectable",
     dialability: "not-dialable",
     unavailability: "plan-restricted",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
     why: "alive, but the attach grant 403s — the remedy is an upgrade",
   },
   {
     planAllowsRemote: false,
     connectivity: "offline",
     dialability: "not-dialable",
+    unavailability: "plan-restricted",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
+    why: "the gated relay is absent by design, while a fresh credential check-in proves the process is running",
+  },
+  {
+    planAllowsRemote: false,
+    connectivity: "offline",
+    dialability: "not-dialable",
     unavailability: "offline",
-    why: "dead is dead: an unpaid account's switched-off host is OFFLINE, not a billing state",
+    lastSeenAt: GENUINE_OFFLINE_LAST_SEEN,
+    why: "the gated relay is uninformative and the plan-agnostic process check-in is stale",
   },
   {
     planAllowsRemote: false,
     connectivity: "unknown",
     dialability: "not-dialable",
     unavailability: "plan-restricted",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
     why: "the refusal is deterministic whatever the read would have said, and claims nothing about the process",
   },
 ];
@@ -576,9 +632,7 @@ describe("hostUnavailability - the plan × liveness matrix", () => {
         status: {
           ...onlineItem().status,
           connectivity: row.connectivity,
-          // Recent enough to be inside the fuse window, so the `offline` rows
-          // exercise the harder case rather than a trivially aged one.
-          lastSeenAt: FUSE_GRACE_LAST_SEEN,
+          lastSeenAt: row.lastSeenAt,
         },
       };
       const entry = hostListItemToDirectoryEntry(
@@ -607,7 +661,7 @@ describe("the plan gate and the death gates", () => {
     };
   }
 
-  it("an unpaid account's OFFLINE host is confirmed death - the gate the old wire could never reach", () => {
+  it("an unpaid account's stale OFFLINE host is confirmed death", () => {
     // Under `local-only` this host reported a plan word, `hostUnavailability`
     // read `plan-restricted`, and failover / re-homing / the clone CTA /
     // "permanently closed" were all silently disabled by a billing state.
@@ -617,6 +671,17 @@ describe("the plan gate and the death gates", () => {
       PLAN_GATED,
     );
     expect(isConfirmedHostDeath(entry, false)).toBe(true);
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
+  });
+
+  it("an unpaid account's recently checked-in OFFLINE host is plan-restricted, not dead", () => {
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("offline", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(hostUnavailability(entry)).toBe("plan-restricted");
+    expect(isConfirmedHostDeath(entry, false)).toBe(false);
     expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
   });
 
@@ -667,10 +732,21 @@ describe("the plan gate and the death gates", () => {
     );
     expect(paid.relayFuseGrace).toBe(true);
     expect(gated.relayFuseGrace).toBe(false);
-    // Same `offline` verdict either way; only the dial affordance differs.
-    expect(hostUnavailability(gated)).toBe("offline");
+    // The paid row may attempt recovery. The gated row cannot dial, but its
+    // fresh credential check-in keeps it out of the death gates.
+    expect(hostUnavailability(gated)).toBe("plan-restricted");
     expect(isConfirmedTransportRefusal(paid, false)).toBe(false);
     expect(isConfirmedTransportRefusal(gated, false)).toBe(true);
+  });
+
+  it("maps the transitional local-only wire value to plan-restricted without claiming death", () => {
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("local-only", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(hostUnavailability(entry)).toBe("plan-restricted");
+    expect(isConfirmedHostDeath(entry, false)).toBe(false);
   });
 });
 

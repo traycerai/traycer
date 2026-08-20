@@ -417,6 +417,7 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
+            recentHostCheckIn: false,
             // Same reason `transportDialability` is written coarsely above:
             // the plan gate ran upstream against the real directory entry, and
             // re-asserting a refusal here would contradict a dial this effect

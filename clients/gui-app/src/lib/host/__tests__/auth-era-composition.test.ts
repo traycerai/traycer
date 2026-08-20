@@ -682,12 +682,16 @@ describe("auth-era composition — auth state is committed before the transition
     const endpoint = hostsEndpoint();
     restoreFetch = installFetch(endpoint.handler);
     const composition = buildComposition();
-    await startSignedInAs(composition, TOKEN_A, "user-a");
+    // Start paid, transition to FREE: if subscription status is committed
+    // after the synchronous provider emission, the listener observes the
+    // outgoing paid entitlement alongside the incoming identity and bearer.
+    await startSignedInAs(composition, TOKEN_B, "user-b");
 
     const observed: Array<{
       readonly emitted: string | null;
       readonly ambientIdentity: string | null;
       readonly ambientToken: string | null;
+      readonly ambientPlanAllowsRemote: boolean;
     }> = [];
     const unsubscribe = composition.auth
       .getRequestContextProvider()
@@ -700,12 +704,13 @@ describe("auth-era composition — auth state is committed before the transition
           emitted: ctx?.identity.userId ?? null,
           ambientIdentity: snapshot.profile?.userId ?? null,
           ambientToken: snapshot.token,
+          ambientPlanAllowsRemote: composition.auth.planAllowsRemoteHosts(),
         });
       });
 
     await composition.runnerHost.tokenStore.signIn(
-      { token: TOKEN_B, refreshToken: `${TOKEN_B}-refresh` },
-      { id: "user-b", email: "user-b@example.com", name: "User user-b" },
+      { token: TOKEN_A, refreshToken: `${TOKEN_A}-refresh` },
+      { id: "user-a", email: "user-a@example.com", name: "User user-a" },
     );
     await vi.waitFor(() => {
       expect(observed).toHaveLength(1);
@@ -718,11 +723,17 @@ describe("auth-era composition — auth state is committed before the transition
 
     expect(observed).toEqual([
       {
-        emitted: "user-b",
-        ambientIdentity: "user-b",
-        ambientToken: TOKEN_B,
+        emitted: "user-a",
+        ambientIdentity: "user-a",
+        ambientToken: TOKEN_A,
+        ambientPlanAllowsRemote: false,
       },
-      { emitted: null, ambientIdentity: null, ambientToken: null },
+      {
+        emitted: null,
+        ambientIdentity: null,
+        ambientToken: null,
+        ambientPlanAllowsRemote: true,
+      },
     ]);
   });
 });

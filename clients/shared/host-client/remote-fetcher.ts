@@ -133,6 +133,14 @@ export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
    */
   readonly relayFuseGrace: boolean;
   /**
+   * Whether the durable host credential check-in is recent enough to be
+   * positive process-liveness evidence for a plan-gated account. Free-plan
+   * hosts never hold the relay leg, so their `offline` connectivity value is
+   * structurally guaranteed and cannot distinguish a running host from a dead
+   * one. This independently refreshed signal makes that distinction.
+   */
+  readonly recentHostCheckIn: boolean;
+  /**
    * Whether the ACCOUNT's plan includes remote hosts, as of the fetch that
    * produced this entry.
    *
@@ -186,12 +194,12 @@ export function isRemoteHostDirectoryEntry(
  *                        what the host is doing. The remedy is an upgrade, not
  *                        a retry, and calling it "offline" sends a person to
  *                        restart a machine that may well be running fine.
- *                        NOT a claim that the host is alive: it is a claim that
- *                        the refusal is deterministic. A plan-gated host the
- *                        cloud reports as `offline` is reported as `offline`
- *                        here instead — dead is dead, and the death gates below
- *                        must fire for an unpaid account exactly as they do for
- *                        a paid one.
+ *                        NOT by itself a claim that the host is alive: it is a
+ *                        claim that the refusal is deterministic. Because a
+ *                        free-plan host never holds the relay leg, its
+ *                        `offline` value needs plan-agnostic check-in evidence:
+ *                        fresh means plan-restricted; stale or absent means
+ *                        offline.
  *  - `indeterminate`   — the cloud could not read liveness. We learned NOTHING.
  *                        Rendering it as dead is the false-Offline-when-blind
  *                        bug, one layer below where that rule is usually
@@ -232,6 +240,32 @@ export const RELAY_FUSE_MAX_ATTACH_MS = 4 * 60 * 60 * 1000;
  * NTP drift while staying tiny next to the 4h window it guards.
  */
 export const RELAY_FUSE_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/** Three plan-agnostic host credential refreshes at the normal ~10m cadence. */
+export const PLAN_GATED_HOST_FRESHNESS_MS = 30 * 60 * 1000;
+
+/**
+ * Whether the durable credential check-in is fresh enough to establish that a
+ * plan-gated host process is still running. A small future stamp is tolerated
+ * for client/server clock skew; a corrupt far-future stamp is not.
+ */
+export function hasRecentHostCheckIn(
+  status: HostStatusDTO,
+  nowMs: number,
+): boolean {
+  if (status.lastSeenAt === null) {
+    return false;
+  }
+  const lastSeenMs = Date.parse(status.lastSeenAt);
+  if (Number.isNaN(lastSeenMs)) {
+    return false;
+  }
+  const ageMs = nowMs - lastSeenMs;
+  return (
+    ageMs >= -RELAY_FUSE_MAX_CLOCK_SKEW_MS &&
+    ageMs < PLAN_GATED_HOST_FRESHNESS_MS
+  );
+}
 
 /**
  * Whether an `offline` verdict is recent enough that the relay's host-leg fuse
@@ -290,7 +324,9 @@ export function isWithinRelayFuseGrace(
  * relay verdict to consult and reports `offline`, which is correct for it:
  * locality is decided by a direct read of the process, never by this.
  *
- * The two axes are independent, and the six-cell matrix is the whole contract:
+ * The two axes are independent, except that plan gating suppresses the relay
+ * leg itself. A recent plan-agnostic credential check-in therefore refines the
+ * otherwise-ambiguous gated + offline cell:
  *
  * | plan | liveness      | verdict            |
  * | ---- | ------------- | ------------------ |
@@ -298,18 +334,14 @@ export function isWithinRelayFuseGrace(
  * | yes  | `offline`     | `offline`          |
  * | yes  | `unknown`     | `indeterminate`    |
  * | no   | `connectable` | `plan-restricted`  |
- * | no   | `offline`     | `offline`          |
+ * | no   | `offline`, recent check-in | `plan-restricted` |
+ * | no   | `offline`, stale/null check-in | `offline` |
  * | no   | `unknown`     | `plan-restricted`  |
  *
- * The two plan-gated rows that are NOT `plan-restricted`-shaped are the point
- * of the split:
- *
- *  - gated + `offline` — **dead is dead**. The wire used to say `local-only`
- *    for every host on an unpaid plan, which hid liveness entirely, so
- *    {@link isConfirmedHostDeath} could never fire for those accounts: failover,
- *    re-homing, the clone CTA and "permanently closed" were all silently
- *    disabled by a billing state. Now liveness arrives intact and a dead host
- *    reads dead whoever owns it.
+ * For a gated account `offline` alone is not death evidence: the attach-grant
+ * gate prevents the host leg from existing even while the process is healthy.
+ * A fresh credential check-in therefore reads `plan-restricted`; only a stale
+ * or absent one reaches {@link isConfirmedHostDeath}.
  *  - gated + `unknown` — `plan-restricted`, not `indeterminate`. The refusal is
  *    deterministic here in a way it is not for a paid account: whatever the
  *    liveness read would have said, the attach grant 403s. And unlike `offline`
@@ -325,19 +357,18 @@ export function hostUnavailability(
   if (!isRemoteHostDirectoryEntry(entry)) {
     return "offline";
   }
+  if (entry.remoteStatus.connectivity === "local-only") {
+    // Transitional response from a pre-cutover server. It carries only the
+    // plan fact, not liveness, so it must never become a death claim.
+    return "plan-restricted";
+  }
   if (entry.remoteStatus.connectivity === "offline") {
-    // `offline` outranks the plan gate AND the fuse window (cold review P1,
-    // and decision 1 of the connectivity/plan split). An earlier F7 shape
-    // rewrote a fuse-window `offline` to `indeterminate` here, which let a
-    // recent `lastSeenAt` - equally consistent with a clean detach or a crash
-    // one minute ago - suppress failover, the dead surface, and
-    // notification-action refusal for up to four hours on a genuinely dead
-    // host. Recency buys exactly one thing, the recovery dial
-    // (`isConfirmedTransportRefusal`); death is only ever overridden by that
-    // dial actually succeeding (the live-session evidence every destructive
-    // gate already honours). The plan buys nothing at all: an unpaid account's
-    // host that is off is off, and hiding that behind an upgrade prompt is the
-    // bug this split exists to fix.
+    if (!entry.planAllowsRemote && entry.recentHostCheckIn) {
+      // Free-plan hosts never hold the relay leg, so `offline` is guaranteed
+      // even while healthy. The credential refresh is plan-agnostic and is the
+      // positive liveness evidence in this cell.
+      return "plan-restricted";
+    }
     return "offline";
   }
   if (!entry.planAllowsRemote) {
@@ -453,9 +484,9 @@ export function isRelayFuseRecoveryCandidate(
  * That exclusion used to be much broader than it reads, and silently: while the
  * wire collapsed the plan into `connectivity`, EVERY host on an unpaid plan was
  * `plan-restricted`, so this gate could not fire for those accounts even when
- * the host was long dead. It now sees pure liveness, and a plan-gated host the
- * cloud reports `offline` reaches this gate exactly like a paid one
- * ({@link hostUnavailability}, decision 1: dead is dead).
+ * the host was long dead. It now sees relay connectivity plus the plan-agnostic
+ * credential check-in: a plan-gated host reaches this gate only once that
+ * check-in is stale or absent ({@link hostUnavailability}).
  *
  * `hasLiveSession` outranks everything: a client holding an open E2E session
  * has firsthand proof the host is up, which beats any verdict the cloud
@@ -521,6 +552,7 @@ export function hostListItemToDirectoryEntry(
   relayBaseUrl: string,
   planAllowsRemote: boolean,
 ): RemoteHostDirectoryEntry {
+  const nowMs = Date.now();
   return {
     hostId: item.hostId,
     label: item.displayName === null ? item.hostId : item.displayName,
@@ -542,7 +574,8 @@ export function hostListItemToDirectoryEntry(
     // has already dropped, and for a plan-gated account that dial meets a 403
     // at the attach grant however attached the leg is.
     relayFuseGrace:
-      planAllowsRemote && isWithinRelayFuseGrace(item.status, Date.now()),
+      planAllowsRemote && isWithinRelayFuseGrace(item.status, nowMs),
+    recentHostCheckIn: hasRecentHostCheckIn(item.status, nowMs),
     planAllowsRemote,
   };
 }

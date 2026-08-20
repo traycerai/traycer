@@ -221,6 +221,26 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     expect(health.tone).toBe("idle");
   });
 
+  it("maps a plan-gated offline host with a recent credential check-in to Local only", () => {
+    const item = registryItem("offline");
+    const health = deriveHostHealth({
+      ...BASE,
+      item: {
+        ...item,
+        status: {
+          ...item.status,
+          lastSeenAt: new Date(NOW_MS - 20 * 60 * 1000).toISOString(),
+        },
+      },
+      planAllowsRemote: false,
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("local-only");
+    expect(health.label).toBe("Local only");
+  });
+
   it("maps unknown to Status unknown, and never Offline", () => {
     const health = deriveHostHealth({
       ...BASE,
