@@ -26,6 +26,12 @@ const LINK_DOWN_ESCALATION_MS = 60_000;
  * local and a remote (multiplexed) session, and the alternative - publishing
  * the transport's private attempt counter - would have widened the status
  * contract of every stream client for a copy change.
+ *
+ * Takes the RAW derived pill state, never the settled display state: the
+ * display settle (`useSyncPillDisplayState`) renames a genuine `synced` to
+ * `syncing` until the claim has earned its interval, and this clock treats
+ * `syncing` as no-evidence - so the settled state would mask a real recovery
+ * that lands (and drops again) inside the hold window.
  */
 export function useLinkDownTooLong(state: EpicSyncPillState): boolean {
   const isLinkDown = state === "connecting" || state === "reconnecting";

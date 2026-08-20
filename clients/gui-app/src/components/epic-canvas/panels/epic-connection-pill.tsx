@@ -36,7 +36,12 @@ export interface EpicConnectionPillProps {
 export function EpicConnectionPill(props: EpicConnectionPillProps) {
   const derived = useEpicSyncPillState();
   const state = useSyncPillDisplayState(derived);
-  const linkDownTooLong = useLinkDownTooLong(state);
+  // The escalation clock reads the RAW verdict, not the settled display
+  // state: the settle hold renames a genuine `synced` to `syncing` until the
+  // claim has earned its interval, and the clock deliberately ignores
+  // `syncing` (it is handshake-reachable with no evidence). Fed the settled
+  // state, a real recovery inside the hold window would be invisible to it.
+  const linkDownTooLong = useLinkDownTooLong(derived);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
