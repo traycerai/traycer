@@ -2988,6 +2988,18 @@ export class RemoteSession<
       if (connection === null || this.phase !== "ready") {
         return;
       }
+      // Lift the tombstone the FATAL handler set for this id, or
+      // `handleRelayFrame` discards every frame the re-subscribe earns and the
+      // stream sits `reconnecting` forever - a silent failure a test that only
+      // watches for an outgoing SUBSCRIBE cannot see.
+      //
+      // Lifted HERE rather than at schedule time on purpose: for the whole
+      // backoff the id stays tombstoned, so a relay-delayed chunk from before
+      // the fatal is still discarded instead of seeding a fresh accumulator.
+      // That quarantine is the tombstone's actual job, and re-opening this id
+      // means accepting frames for it from this point on regardless.
+      this.terminalStreamIds.delete(streamId);
+      connection.reassembler.forget(streamId);
       this.openSubscription(connection, stream);
     }, delay);
     this.streamReopenTimers.set(streamId, timer);

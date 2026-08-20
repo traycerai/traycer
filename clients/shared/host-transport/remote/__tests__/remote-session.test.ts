@@ -3281,6 +3281,10 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
       stream.onStatusChange((status) => {
         statuses.push(status);
       });
+      let framesDelivered = 0;
+      stream.onServerFrame(() => {
+        framesDelivered += 1;
+      });
       try {
         await vi.waitFor(
           () => expect(relay.subscribeStreamIds).toHaveLength(1),
@@ -3304,6 +3308,21 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         );
         expect(statuses).toContain("reconnecting");
         expect(statuses).not.toContain("closed");
+
+        // The assertion that actually matters, and the one an earlier draft
+        // of this test was missing: a re-subscribe is worthless if the id is
+        // still tombstoned, because `handleRelayFrame` then discards every
+        // frame it earns and the stream sits `reconnecting` forever while
+        // looking, on the wire, exactly like a successful recovery.
+        await relay.sendStreamFrame(
+          relay.subscribeStreamIds[relay.subscribeStreamIds.length - 1],
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(framesDelivered).toBe(1), WAIT);
+        // Delivering a frame transitions the stream back to open.
+        expect(statuses[statuses.length - 1]).toBe("open");
       } finally {
         session.close();
       }
