@@ -18,7 +18,7 @@ import { cliChatPartCacheDir } from "../store/paths";
 export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   const { hadSession, signOut } = await runWithCliStore(async (store) => {
     const before = await store.read();
-    const outcome = await withCommitRetry(() => store.signOut(null));
+    const outcome = await withCommitRetry(() => store.signOut(null), null);
     return { hadSession: before !== null, signOut: outcome };
   });
   if (signOut.outcome !== "deleted") {

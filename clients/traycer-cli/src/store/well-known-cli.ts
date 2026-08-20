@@ -1,11 +1,14 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { constants } from "node:fs";
 import type { Stats } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import {
   chmod,
   copyFile,
   lstat,
+  open,
   readFile,
   readdir,
   realpath,
@@ -426,11 +429,17 @@ async function slotRefreshPlan(
   // runs one command on a machine whose slot holds a newer CLI. The manifest
   // normally arbitrates exactly this; with none, the only remaining witness
   // is the slot binary itself, so before an unanchored stage over an
-  // existing regular file the slot is asked its version once and left alone
+  // existing slot binary the slot is asked its version once and left alone
   // when it reports itself STRICTLY newer than this process. An unreadable
   // or unparseable answer stages: the hookless-upgrade cohort this fallback
   // exists for must keep converging, and a slot that cannot say what it is
   // has no seniority to assert.
+  //
+  // Only ever reached with a REGULAR-FILE slot, since the symlink arm below
+  // returns first. That ordering is no longer load-bearing for recursion
+  // safety, though it once was argued to be: `slotOutranksRunning` refuses to
+  // spawn this process's own image whatever spelling names it, and that is
+  // the single place the rule is now stated.
   const guardedStage = async (): Promise<SlotRefreshPlan> => {
     if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
       return { kind: "current" };
@@ -447,7 +456,50 @@ async function slotRefreshPlan(
   // therefore never "already fresh"; it is always restaged into a real
   // file.
   const slotStat = await lstatOrNull(wellKnownPath);
-  if (slotStat === null || slotStat.isSymbolicLink()) {
+  if (slotStat === null) return { kind: "stage", source };
+  if (slotStat.isSymbolicLink()) {
+    // De-symlinking must not double as a downgrade. This arm decides what
+    // `guardedStage` decides for a regular-file slot - which bytes replace
+    // the slot - so it owes the same rule: an unanchored nomination may
+    // fill or refresh a slot, never demote one. Copying the running binary
+    // over a link that points at a NEWER CLI demotes the registered
+    // service, which is the very downgrade the guard exists to prevent.
+    //
+    // The question is asked of the link's TARGET rather than of the slot
+    // because the target is what the bytes ARE - not as a recursion
+    // defence, which it never was. Probing either spelling re-enters this
+    // planner in the child, since the lexical `resolve(wellKnownPath) ===
+    // source` check above cannot see that a symlinked slot and its target
+    // name one file. What ends the recursion is `slotOutranksRunning`
+    // declining to spawn this process's own image: the child launched as
+    // the target asks nothing, stages the slot from itself, de-symlinks it,
+    // and answers. Stated once, there.
+    //
+    // Preserving the target only on a version answer, rather than on
+    // `realpath` succeeding, is the other half. Bytes that resolve are not
+    // therefore a CLI: a link may point at a shim, another tool, or
+    // anything else that survived the years since some installer wrote it,
+    // and copying that into the slot hands the registered service and the
+    // host a program that will never repair itself - the repair path here
+    // runs only when a real CLI is invoked, and after this the thing being
+    // invoked is not one. So a target that cannot say what it is loses to
+    // the running packaged CLI, which demonstrably can. (What "usable"
+    // means is exactly what it means one branch below, and both halves are
+    // decided in `slotOutranksRunning`: it answered `--version` with
+    // something parseable, AND it is a binary the slot may hold at all -
+    // an npm install answers that question perfectly well and still must
+    // never be copied here.)
+    //
+    // Not strictly newer - older, equal, unreadable, dangling - all fall
+    // through to the ordinary stage from `source`, which de-symlinks and
+    // refreshes in one step. That is also what made copy-not-symlink the
+    // rule: a link nobody can vouch for must not survive as one.
+    if (!anchored) {
+      const target = await realpath(wellKnownPath).catch(() => null);
+      if (target !== null && (await slotOutranksRunning(target))) {
+        return { kind: "stage", source: target };
+      }
+    }
     return { kind: "stage", source };
   }
   // The staging record is the authority whenever it applies, because it is
@@ -491,19 +543,62 @@ async function slotRefreshPlan(
   return { kind: "adopt", source, sourceStat: mirroredSource };
 }
 
-// Ask the slot binary its version and answer whether it outranks the running
-// process. `true` is the ONLY answer that suppresses an unanchored stage, so
-// every failure - a slot that will not execute, prints garbage, or hangs
-// past the timeout - is `false`: refusing to converge on an unprovable
-// seniority claim would strand the hookless cohort the fallback serves.
+// Ask a candidate binary its version and answer whether it outranks the
+// running process. `true` is the ONLY answer that suppresses an unanchored
+// stage, so every failure - a candidate that will not execute, prints
+// garbage, or hangs past the timeout - is `false`: refusing to converge on an
+// unprovable seniority claim would strand the hookless cohort the fallback
+// serves.
 //
-// The spawned slot runs its own startup refresh first, which cannot recurse:
-// launched FROM the slot it self-nominates, the slot IS the source, and its
-// plan is `current` before any spawn.
-async function slotOutranksRunning(wellKnownPath: string): Promise<boolean> {
+// NEVER spawns this process's own image, and that check lives here rather
+// than at the call sites because it is the whole reason this function is safe
+// to call. What gets spawned is a packaged CLI, and a packaged CLI runs this
+// same refresh before commander parses `--version` - so a probe of ourselves
+// is a probe that re-enters this planner in the child, reaches this line
+// again, and spawns another ~100 MB process per level until the timeouts
+// unwind, orphaning every descendant deeper than the one `execFile` can kill.
+//
+// Two call sites have now been written believing a PATH comparison upstream
+// made that impossible, and both were wrong in the same way: recursion is a
+// question about binary IDENTITY, `resolve` compares SPELLING, and a symlink
+// is precisely where one file has two of them. `resolve(wellKnownPath) ===
+// source` is only accidentally an identity test - true for a regular-file
+// slot, false for a symlinked one naming the very same bytes. So the identity
+// test belongs in front of the spawn, once, where no third call site can
+// reintroduce it, and `canonicalBinaryPath` is what collapses the spellings.
+//
+// `false` is not a bail-out here but the exact answer: nothing is strictly
+// newer than itself. Its effect - stage - is also right, since bytes
+// identical to the running image cannot demote anything, and for the symlink
+// arm it is what finally turns a legacy link into the regular file the
+// copy-not-symlink rule wants.
+async function slotOutranksRunning(candidatePath: string): Promise<boolean> {
+  if (
+    (await canonicalBinaryPath(candidatePath)) ===
+    (await canonicalBinaryPath(process.execPath))
+  ) {
+    return false;
+  }
+  // Answering `--version` proves a program runs, not that it may HOLD the
+  // slot, and the difference has a rule already: `isInterpreterDistribution`
+  // refuses to nominate an npm install at all, because the slot is spawned by
+  // the host daemon and the registered service, where a `#!/usr/bin/env node`
+  // shebang resolves `node` off the SERVICE manager's PATH rather than a
+  // login shell's. That rule is keyed on the MANIFEST, and every caller here
+  // is unanchored - no manifest, by definition - so the file has to be asked
+  // directly.
+  //
+  // A version answer is exactly what an npm CLI gives (the shebang runs it),
+  // so without this an old Desktop symlink pointing at a newer npm install
+  // puts a Node script behind `bin/traycer`, and nothing repairs it: the next
+  // packaged run probes that slot, the script answers newer again, and the
+  // guard leaves it there forever while the service cannot start. Refusing
+  // here is also what makes that state RECOVERABLE if it is ever reached by
+  // hand - `false` stages the running SEA over it.
+  if (!(await isSlotEligibleBinary(candidatePath))) return false;
   let reported: string;
   try {
-    const { stdout } = await execFileAsync(wellKnownPath, ["--version"], {
+    const { stdout } = await execFileAsync(candidatePath, ["--version"], {
       timeout: SLOT_VERSION_PROBE_TIMEOUT_MS,
       windowsHide: true,
     });
@@ -516,6 +611,71 @@ async function slotOutranksRunning(wellKnownPath: string): Promise<boolean> {
 
 const SLOT_VERSION_PROBE_TIMEOUT_MS = 10_000;
 const execFileAsync = promisify(execFile);
+
+// Whether a binary may OCCUPY the slot, as opposed to merely being able to
+// run. See `isInterpreterDistribution` for the rule this enforces without a
+// manifest to read it from.
+//
+// Deliberately a NEGATIVE test. Proving a file IS a packaged executable means
+// recognising Mach-O, ELF and PE magic on every platform this ships to, and
+// being wrong there REFUSES a legitimate newer CLI - the silent downgrade
+// this whole guard exists to prevent. Being wrong the other way only stages
+// the running SEA, which is always a working CLI, and always converges. So
+// the question asked is the narrow one the failure is actually about: does
+// this file start with a shebang.
+//
+// Two bytes, not `readFile`: the candidate is a ~100 MB binary in the case
+// this runs for.
+//
+// On Windows the slot is `traycer.exe` and Scheduled Tasks spawns it as an
+// image, so a non-`.exe` target - npm's `.cmd`/`.ps1` shims, a bare shell
+// script - cannot serve there whatever its first bytes are. Unreadable
+// counts as ineligible for the same fail-safe reason.
+async function isSlotEligibleBinary(binaryPath: string): Promise<boolean> {
+  if (
+    process.platform === "win32" &&
+    !binaryPath.toLowerCase().endsWith(".exe")
+  ) {
+    return false;
+  }
+  // REGULAR FILE first, and this ordering is the load-bearing part. Opening a
+  // FIFO for reading BLOCKS until a writer appears - forever, with no
+  // deadline of its own, and upstream of the `execFile` timeout that bounds
+  // everything else here. Every packaged command awaits this refresh before
+  // commander parses argv, so a FIFO at the slot (or a legacy link resolving
+  // to one) would hang every CLI invocation on the machine, including the
+  // ones that exist to repair it. A wedge with no recovery path is the one
+  // outcome this module is under orders never to create.
+  //
+  // It is also the honest question: the slot must hold an executable image,
+  // and a directory, socket, device or FIFO is not one whatever its first
+  // bytes would say.
+  const candidateStat = await statOrNull(binaryPath);
+  if (candidateStat === null || !candidateStat.isFile()) return false;
+  let handle: FileHandle;
+  try {
+    // O_NONBLOCK closes the window between the stat above and this open, in
+    // which the candidate could become a FIFO. A no-op for the regular file
+    // this is reached with; absent on Windows, which has no FIFO to open
+    // this way.
+    handle = await open(
+      binaryPath,
+      process.platform === "win32"
+        ? constants.O_RDONLY
+        : constants.O_RDONLY | constants.O_NONBLOCK,
+    );
+  } catch {
+    return false;
+  }
+  try {
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(2), 0, 2, 0);
+    return !(bytesRead === 2 && buffer[0] === 0x23 && buffer[1] === 0x21);
+  } catch {
+    return false;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
 
 // A nominated slot source, and whether an install AUTHORITY vouches for it.
 // `anchored: false` marks the two self-nominations - no manifest at all, and

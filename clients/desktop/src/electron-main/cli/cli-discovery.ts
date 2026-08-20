@@ -527,21 +527,51 @@ async function inferNpmPathSource(
 // REAL slow CLI can produce: a packaged `traycer --version` runs its slot
 // refresh before commander parses, and on a first launch with a stale slot
 // that is a ~100 MB copy - killing it at 2s and calling the binary
-// not-a-CLI would stage the bundled CLI over a working package-manager
-// install and pin that misclassification for the whole desktop session.
+// not-a-CLI stages the bundled CLI over a working package-manager install,
+// which writes a Desktop-owned manifest that outranks PATH in every later
+// discovery. That consequence is permanent, not per-session, which is why
+// the caller's deadline (below) matters more than the verdict's cache.
 type CliVersionProbe =
   | { readonly kind: "version"; readonly version: string }
   | { readonly kind: "not-a-cli" }
   | { readonly kind: "timeout" };
 
+/**
+ * How long a `--version` probe waits, chosen by what the CALLER can afford
+ * rather than by what the binary deserves.
+ *
+ * Impatient (`CLI_INVOCATION_PROBE_TIMEOUT_MS`): discovery on the invocation path runs
+ * on every status poll, and an uncached `timeout` verdict costs the full
+ * deadline every time. Two seconds is what that path can spend.
+ *
+ * Patient (`CLI_RECONCILE_PROBE_TIMEOUT_MS`): the launch reconcile runs
+ * once, detached (`void timed("deferred", "cli-reconcile", ...)`), and is
+ * the only prober whose verdict can hand slot OWNERSHIP to Desktop - a
+ * timed-out vet drops the PATH candidate, discovery falls through to the
+ * bundled CLI, and installing that writes a Desktop-owned manifest which
+ * wins every later discovery. Nothing re-probes PATH after that, so
+ * dropping the timeout from the cache buys the retry no chance to happen;
+ * the misclassification is permanent, not per-session. The one binary shape
+ * that legitimately blows a 2s deadline is a REAL packaged CLI refreshing
+ * its ~100 MB slot before commander parses - and it needs to be given the
+ * time to finish exactly once, because each killed probe abandons the copy
+ * and the next one starts over. Fifteen seconds covers that copy on a slow
+ * volume; past it the candidate is treated as unusable and the bundled CLI
+ * is staged, because refusing to stage on an unanswerable probe is how the
+ * oss #872 squatter bricked first launch.
+ */
+export const CLI_INVOCATION_PROBE_TIMEOUT_MS = 2_000;
+export const CLI_RECONCILE_PROBE_TIMEOUT_MS = 15_000;
+
 export async function probeCliVersion(
   binaryPath: string,
+  timeoutMs: number,
 ): Promise<CliVersionProbe> {
   return new Promise((resolve) => {
     execFile(
       binaryPath,
       ["--version"],
-      { timeout: 2_000, windowsHide: true },
+      { timeout: timeoutMs, windowsHide: true },
       (error, stdout) => {
         if (error) {
           resolve(error.killed ? { kind: "timeout" } : { kind: "not-a-cli" });
@@ -572,17 +602,88 @@ export async function probeCliVersion(
 // patience, not the binary, and the very refresh that made the first probe
 // slow repairs the slot so the next one is fast. Pinning it would hold the
 // misclassification for the whole session.
-const pathProbeCache = new Map<string, Promise<CliVersionProbe>>();
+//
+// The two verdicts that ARE cached (`version`, `not-a-cli`) are facts about
+// the binary, so once settled they answer every caller whatever its
+// patience. A probe still RUNNING is not that: it carries the deadline it
+// was started with, and that deadline is only good enough for a caller
+// willing to wait no longer. The entry therefore says which of the two it
+// is rather than leaving the distinction to a sentinel value.
+type PathProbeEntry =
+  | { readonly kind: "settled"; readonly probe: Promise<CliVersionProbe> }
+  | {
+      readonly kind: "in-flight";
+      readonly deadlineMs: number;
+      readonly probe: Promise<CliVersionProbe>;
+    };
 
-function cachedProbeCliVersion(binaryPath: string): Promise<CliVersionProbe> {
+const pathProbeCache = new Map<string, PathProbeEntry>();
+
+// Every (entry state x caller deadline) pair, stated once so none of them
+// is decided by accident:
+//
+//   settled                  -> answer from it, whatever the deadline.
+//   in-flight, D === T       -> join it.
+//   in-flight, D  >  T       -> join, but stop waiting at T. Otherwise a
+//                               status poll landing inside the reconcile's
+//                               15s probe would stall the invocation path
+//                               for all of it.
+//   in-flight, D  <  T       -> do NOT join: that probe gets killed at D
+//                               and hands back a `timeout` describing
+//                               someone else's patience. For the reconcile
+//                               that verdict is not recoverable - it drops
+//                               the PATH candidate and installs a
+//                               Desktop-owned manifest that outranks PATH
+//                               from then on. Start a probe that can
+//                               actually run for T and let it supersede.
+function cachedProbeCliVersion(
+  binaryPath: string,
+  timeoutMs: number,
+): Promise<CliVersionProbe> {
   const cached = pathProbeCache.get(binaryPath);
-  if (cached !== undefined) return cached;
-  const probe = probeCliVersion(binaryPath);
-  pathProbeCache.set(binaryPath, probe);
+  if (cached !== undefined) {
+    if (cached.kind === "settled") return cached.probe;
+    if (cached.deadlineMs === timeoutMs) return cached.probe;
+    if (cached.deadlineMs > timeoutMs) {
+      return raceProbeDeadline(cached.probe, timeoutMs);
+    }
+  }
+  const probe = probeCliVersion(binaryPath, timeoutMs);
+  const entry: PathProbeEntry = {
+    kind: "in-flight",
+    deadlineMs: timeoutMs,
+    probe,
+  };
+  pathProbeCache.set(binaryPath, entry);
   void probe.then((verdict) => {
-    if (verdict.kind === "timeout") pathProbeCache.delete(binaryPath);
+    // Only ever replaces its OWN entry. A more patient probe may have
+    // superseded this one while it ran, and neither of this probe's
+    // outcomes may disturb that: a `timeout` deleting the entry would
+    // discard a probe that is still running, and a verdict overwriting it
+    // would put the shorter deadline's answer back in front of it.
+    if (pathProbeCache.get(binaryPath) !== entry) return;
+    if (verdict.kind === "timeout") {
+      pathProbeCache.delete(binaryPath);
+      return;
+    }
+    pathProbeCache.set(binaryPath, { kind: "settled", probe });
   });
   return probe;
+}
+
+async function raceProbeDeadline(
+  probe: Promise<CliVersionProbe>,
+  timeoutMs: number,
+): Promise<CliVersionProbe> {
+  let timer: NodeJS.Timeout | null = null;
+  const ownDeadline = new Promise<CliVersionProbe>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+  });
+  try {
+    return await Promise.race([probe, ownDeadline]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 export function resetCliProbeCacheForTests(): void {
@@ -601,8 +702,9 @@ export function resetCliProbeCacheForTests(): void {
  */
 export async function vetPathCliCandidate(
   binaryPath: string,
+  probeTimeoutMs: number,
 ): Promise<{ readonly version: string; readonly source?: "npm" } | null> {
-  const probed = await cachedProbeCliVersion(binaryPath);
+  const probed = await cachedProbeCliVersion(binaryPath, probeTimeoutMs);
   if (probed.kind !== "version") {
     // Both non-answers ignore the candidate for THIS discovery - adopting
     // an unvetted binary is the oss #872 failure either way - but only
@@ -688,8 +790,15 @@ function devCliWrapperPath(): string {
  * that cannot answer falls through to the bundled CLI instead of being
  * adopted (oss #872). Version-trust policy beyond that ("PATH CLI newer
  * than bundled, trust it") stays with the caller (cli-reconcile).
+ *
+ * `probeTimeoutMs` is that vet's deadline, and it is the caller's to choose
+ * rather than this function's: falling through to the bundled CLI costs a
+ * status poll nothing and costs the launch reconcile the slot's ownership.
+ * See `CLI_INVOCATION_PROBE_TIMEOUT_MS` / `CLI_RECONCILE_PROBE_TIMEOUT_MS`.
  */
-export async function discoverCli(): Promise<CliDiscoveryResult> {
+export async function discoverCli(
+  probeTimeoutMs: number,
+): Promise<CliDiscoveryResult> {
   const manifest = await readCliManifest();
   if (manifest !== null && (await isExecutable(manifest.binaryPath))) {
     return {
@@ -718,7 +827,7 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
     // squatter earlier in PATH hide a real CLI behind it (and report
     // "no CLI anywhere" when the app ships no bundled binary).
     for (const candidate of await findCliCandidatesOnPath()) {
-      const vetted = await vetPathCliCandidate(candidate);
+      const vetted = await vetPathCliCandidate(candidate, probeTimeoutMs);
       if (vetted !== null) {
         return { kind: "path", binaryPath: candidate, ...vetted };
       }

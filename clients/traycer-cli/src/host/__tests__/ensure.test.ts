@@ -118,6 +118,7 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
     noServiceRegister: false,
     force: false,
     onProgress: null,
+    beforeMutate: null,
     ...overrides,
   };
 }

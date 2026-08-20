@@ -186,6 +186,7 @@ describe("devices/sessions authn fetcher", () => {
         AUTHN,
         "step-up-jwt",
         request,
+        null,
       );
 
       expect(result).toEqual({ kind: "ok", response: okBody });
@@ -206,7 +207,12 @@ describe("devices/sessions authn fetcher", () => {
         vi.fn(async () => jsonResponse(409, { error: "superseded" })),
       );
 
-      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+      const result = await mintHostCredentialViaHttp(
+        AUTHN,
+        "jwt",
+        request,
+        null,
+      );
 
       expect(result).toEqual({ kind: "superseded" });
     });
@@ -217,7 +223,12 @@ describe("devices/sessions authn fetcher", () => {
         vi.fn(async () => jsonResponse(401, { reason: "step_up_required" })),
       );
 
-      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+      const result = await mintHostCredentialViaHttp(
+        AUTHN,
+        "jwt",
+        request,
+        null,
+      );
 
       expect(result).toEqual({ kind: "step-up-required" });
     });
@@ -233,7 +244,12 @@ describe("devices/sessions authn fetcher", () => {
         ),
       );
 
-      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+      const result = await mintHostCredentialViaHttp(
+        AUTHN,
+        "jwt",
+        request,
+        null,
+      );
 
       expect(result).toEqual({ kind: "network-error" });
     });
@@ -244,7 +260,12 @@ describe("devices/sessions authn fetcher", () => {
         vi.fn(async () => jsonResponse(400, { error: "invalid hostId" })),
       );
 
-      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+      const result = await mintHostCredentialViaHttp(
+        AUTHN,
+        "jwt",
+        request,
+        null,
+      );
 
       expect(result).toEqual({ kind: "rejected" });
     });

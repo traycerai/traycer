@@ -150,7 +150,7 @@ function loginWithToken(rawToken: string): CommandFn {
     // (aside from the refresh-token preservation above) and clears any
     // tombstone - the interactive re-seed semantics.
     const persisted = await runWithCliStore((store) =>
-      withCommitRetry(() => store.signIn(credentials, true, null)),
+      withCommitRetry(() => store.signIn(credentials, true, null), null),
     );
     if (persisted.outcome !== "applied") {
       ctx.runtime.logger.warn("Token login credentials persist failed", {

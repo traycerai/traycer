@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -158,16 +159,61 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 // `execFile` is pointed at one of this suite's plain-text fixture binaries -
 // so every EXISTING test in this file (none of which populate the map) keeps
 // staging after a failed probe exactly as it did before this guard existed.
+//
+// `spawnedPaths` records every probe the planner actually issues. Some
+// properties here are about a spawn NOT happening - probing a slot that is
+// a symlink re-enters this planner in the child and recurses - and a
+// verdict assertion cannot see that: the recursive and the non-recursive
+// plan agree on the bytes, and differ only in what they spawned.
+//
+// `onSpawn` is what a path assertion still cannot reach: WHAT THE CHILD DOES.
+// A probe launches a packaged CLI, and a packaged CLI runs this same refresh
+// before commander parses `--version` - so "which path was spawned" and "does
+// spawning it recurse" are different questions, and a mock that only prints a
+// canned version answers the first while silently passing the second. A test
+// that cares installs a child here that re-enters the real entry point under
+// the spawned binary's identity, which is the only shape that can fail on
+// recursion. Default `null` - a process that merely prints - keeps every
+// other test in this file at one level.
 const slotProbeControl = vi.hoisted(() => ({
   versionForPath: new Map<string, string>(),
+  spawnedPaths: [] as string[],
+  onSpawn: null as ((file: string) => Promise<void>) | null,
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   const { promisify } = await import("node:util");
+  const { readFileSync } = await import("node:fs");
+  // A version belongs to BYTES, not to a path, and the difference is only
+  // invisible while nothing copies. Staging copies: a probe of a slot that
+  // was just staged from a mapped fixture is a probe of that fixture's
+  // image, and it reports that fixture's version - so a path-keyed lookup
+  // alone would answer "not executable" for a binary the map describes,
+  // which reads as a downgrade the production code did not commit. The
+  // mapped path stays the fast path; identical content is how a copy is
+  // recognised as the same program.
+  const versionOf = (file: string): string | undefined => {
+    const direct = slotProbeControl.versionForPath.get(file);
+    if (direct !== undefined) return direct;
+    let bytes: string;
+    try {
+      bytes = readFileSync(file, "utf8");
+    } catch {
+      return undefined;
+    }
+    for (const [path, version] of slotProbeControl.versionForPath) {
+      try {
+        if (readFileSync(path, "utf8") === bytes) return version;
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  };
   const run = (
     file: string,
   ): { readonly error: Error | null; readonly stdout: string } => {
-    const mapped = slotProbeControl.versionForPath.get(file);
+    const mapped = versionOf(file);
     if (mapped === undefined) {
       return {
         error: Object.assign(
@@ -185,19 +231,24 @@ vi.mock("node:child_process", async (importOriginal) => {
     _options: unknown,
     callback: (error: Error | null, stdout: string, stderr: string) => void,
   ): unknown => {
+    slotProbeControl.spawnedPaths.push(file);
     const { error, stdout } = run(file);
     callback(error, stdout, "");
     return {};
   };
   Object.defineProperty(mockExecFile, promisify.custom, {
-    value: (file: string) =>
-      new Promise<{ stdout: string; stderr: string }>(
-        (resolvePromise, reject) => {
-          const { error, stdout } = run(file);
-          if (error !== null) reject(error);
-          else resolvePromise({ stdout, stderr: "" });
-        },
-      ),
+    value: async (
+      file: string,
+    ): Promise<{ stdout: string; stderr: string }> => {
+      // Recorded at LAUNCH, before the child runs, so a re-entrant child's
+      // own spawns land after its parent's in `spawnedPaths`.
+      slotProbeControl.spawnedPaths.push(file);
+      const child = slotProbeControl.onSpawn;
+      if (child !== null) await child(file);
+      const { error, stdout } = run(file);
+      if (error !== null) throw error;
+      return { stdout, stderr: "" };
+    },
   });
   return { ...actual, execFile: mockExecFile };
 });
@@ -219,6 +270,8 @@ beforeEach(() => {
   utimesControl.noop = false;
   statControl.failEaccesForPath = null;
   slotProbeControl.versionForPath = new Map();
+  slotProbeControl.spawnedPaths = [];
+  slotProbeControl.onSpawn = null;
   vi.resetModules();
 });
 
@@ -1986,6 +2039,118 @@ it("packaged, no manifest, slot version probe fails: stages (seniority unprovabl
   expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
 });
 
+// Answering `--version` proves a program RUNS, not that it may hold the
+// slot. `isInterpreterDistribution` already refuses to nominate an npm
+// install for exactly one reason - the slot is spawned by the host daemon
+// and the registered service, where `#!/usr/bin/env node` resolves `node`
+// off the service manager's PATH - but that rule reads the MANIFEST, and
+// this guard only ever runs unanchored, where there is none.
+//
+// So the seniority contest must ask the file. An npm CLI answers a version
+// perfectly well, and this is the direction that matters: without the
+// check the slot keeps a Node script that reports itself newer on every
+// later probe, so the guard protects it forever while the service cannot
+// start. Staging over it is the recovery path.
+it("packaged, no manifest, a slot that is an INTERPRETER SCRIPT loses however new it claims to be", async () => {
+  seaState.current = true;
+  const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+    await import("../well-known-cli");
+  const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+  mkdirSync(dirname(wellKnownPath), { recursive: true });
+  const scriptBytes = '#!/usr/bin/env node\nconsole.log("1.9.9");\n';
+  writeFileSync(wellKnownPath, scriptBytes);
+  const running = join(workHome, "running-binary");
+  const runningBytes = "binary A - the running packaged CLI";
+  writeFileSync(running, runningBytes);
+  // Mapped, so the probe would answer STRICTLY NEWER and the guard would
+  // preserve it - this test is about eligibility, not about a failed spawn.
+  slotProbeControl.versionForPath.set(wellKnownPath, "9.9.9\n");
+
+  const result = await withExecPath(running, () =>
+    refreshWellKnownSlotIfStale(ENVIRONMENT),
+  );
+
+  expect(result?.staged).toBe("staged");
+  expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+  expect(readFileSync(wellKnownPath, "utf8")).not.toBe(scriptBytes);
+});
+
+// The same rule on the other call site, which is how it is actually
+// reachable in the field: an old Desktop left a symlink, and it points at an
+// npm install that is genuinely NEWER. Copying those bytes is what puts a
+// Node script behind `bin/traycer`.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to a newer INTERPRETER SCRIPT: stages the running binary",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "npm-installed-cli");
+    const scriptBytes = '#!/usr/bin/env node\nconsole.log("9.9.9");\n';
+    writeFileSync(linkTarget, scriptBytes);
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - the running packaged SEA";
+    writeFileSync(running, runningBytes);
+    const resolvedTarget = realpathSync(linkTarget);
+    slotProbeControl.versionForPath.set(resolvedTarget, "9.9.9\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    // A real file holding the SEA - not the script, and not a surviving link.
+    expect(lstatSync(wellKnownPath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+    expect(readFileSync(wellKnownPath, "utf8")).not.toBe(scriptBytes);
+  },
+);
+
+// Reading a candidate's first bytes must never be able to BLOCK. Opening a
+// FIFO for reading waits for a writer that may never come, with no deadline
+// of its own and upstream of the `execFile` timeout that bounds every other
+// wait here - and since each packaged command awaits this refresh before
+// commander parses argv, a FIFO at the slot would hang every CLI invocation
+// on the machine, including the ones run to repair it.
+//
+// So the assertion is simply that the refresh RETURNS, and the mutation
+// signature is a timeout rather than a wrong value. A real FIFO, because
+// that is the whole point - `mkfifo` through the unmocked `execFileSync`
+// (this suite replaces `execFile` only).
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, a FIFO at the slot cannot hang the refresh",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { execFileSync } = await import("node:child_process");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    execFileSync("mkfifo", [wellKnownPath]);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - the running packaged CLI";
+    writeFileSync(running, runningBytes);
+    // Mapped so that a probe, if one were reached, would report the slot
+    // strictly newer - the test must fail on the BLOCK, not on a verdict.
+    slotProbeControl.versionForPath.set(wellKnownPath, "9.9.9\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    // Returned at all is the property. Repairing the slot is the bonus: a
+    // FIFO cannot serve the host or the registered service, so staging over
+    // it is the recovery path.
+    expect(result?.staged).toBe("staged");
+    expect(statSync(wellKnownPath).isFIFO()).toBe(false);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+  },
+  10_000,
+);
+
 // An ANCHORED nomination - the manifest names a different existing binary
 // - is trusted outright: the guard only ever applies to the two
 // self-nominated (unanchored) cases, so a manifest-driven stage must
@@ -2021,6 +2186,224 @@ it("packaged, a MANIFEST-anchored stage ignores the slot's claimed version", asy
   expect(result?.staged).toBe("staged");
   expect(readFileSync(wellKnownPath, "utf8")).toBe(anchoredBytes);
 });
+
+// The LEGACY-SYMLINK arm owes the same rule as `guardedStage` - an
+// unanchored nomination may fill or refresh a slot, never demote one -
+// because it decides the same thing: which bytes replace the slot. Copying
+// the running binary over a link that points at a NEWER CLI demotes the
+// registered service.
+//
+// It asks that of the link's TARGET, never of the slot, and the three
+// tests below are the whole truth table: target newer, target older, target
+// unable to answer. Which path is probed is itself load-bearing - a probe
+// SPAWNS what it is given, every packaged CLI refreshes before it parses
+// `--version`, and spawned THROUGH the symlink the child's
+// `process.execPath` resolves to the target, missing the
+// `resolve(wellKnownPath) === source` short-circuit that protects the
+// regular-file case, so it re-enters this planner and spawns again. Every
+// case therefore asserts on what was spawned as well as on the bytes: a
+// recursive planner reaches the same staging decision, so the bytes alone
+// cannot see it.
+//
+// Windows symlink creation needs Developer Mode, which CI runners do not
+// grant - `symlinkSync` throws before the behavior under test runs.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to a NEWER binary: de-symlinks from the link's target",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "newer-cli-the-link-points-at");
+    const targetBytes = "binary B - the newer CLI the legacy link points at";
+    writeFileSync(linkTarget, targetBytes);
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - an older stray SEA run once";
+    writeFileSync(running, runningBytes);
+    // `realpath`, because that is what the planner resolves the link to:
+    // on macOS the temp dir's /var canonicalises to /private/var, and a
+    // mapping under the other spelling would silently never be found.
+    const resolvedTarget = realpathSync(linkTarget);
+    slotProbeControl.versionForPath.set(resolvedTarget, "9.9.9\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    const stat = lstatSync(wellKnownPath);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    // Both halves matter: the target's bytes (no downgrade) in a real file
+    // (no dangling link). Asserting only the first would pass on an
+    // untouched symlink.
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(targetBytes);
+    expect(readFileSync(wellKnownPath, "utf8")).not.toBe(runningBytes);
+    // The recursion pin: every spawn was the TARGET, never the slot.
+    // Asserted as a set - the planner evaluates once unlocked and once
+    // under the lock, and that count is not what this is about.
+    expect(new Set(slotProbeControl.spawnedPaths)).toEqual(
+      new Set([resolvedTarget]),
+    );
+    expect(slotProbeControl.spawnedPaths).not.toContain(wellKnownPath);
+  },
+);
+
+// A target that reports itself OLDER has no seniority to assert, so the
+// ordinary stage from the running binary de-symlinks and refreshes in one
+// step. "0.0.0-alpha.1" vs the vitest-resolved "0.0.0-local": SemVer
+// compares pre-release identifiers alphabetically, 'a' < 'l'.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to an OLDER binary: stages the running binary over the link",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "older-cli-the-link-points-at");
+    writeFileSync(linkTarget, "binary B - an older CLI");
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - the running, newer CLI";
+    writeFileSync(running, runningBytes);
+    const resolvedTarget = realpathSync(linkTarget);
+    slotProbeControl.versionForPath.set(resolvedTarget, "0.0.0-alpha.1\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    expect(lstatSync(wellKnownPath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+    expect(new Set(slotProbeControl.spawnedPaths)).toEqual(
+      new Set([resolvedTarget]),
+    );
+    expect(slotProbeControl.spawnedPaths).not.toContain(wellKnownPath);
+  },
+);
+
+// The third cell, and the one that decides whether `realpath` succeeding is
+// enough on its own: a link resolving to something that is NOT a CLI -
+// another tool, anything an old installer left behind. Copying those bytes
+// in would hand the registered service and the host a program that never
+// runs this refresh, so nothing would ever repair the slot; only a separate,
+// by-hand invocation of a real CLI could. The running packaged CLI
+// demonstrably can answer, so it wins. Driven by the mock's default spawn
+// failure for an unmapped path - what pointing `execFile` at a
+// non-executable actually does.
+//
+// Deliberately NOT a shebang script, which is the neighbouring cell: that
+// one is refused for being ineligible for the slot before anything spawns,
+// and a fixture carrying both properties could not tell the two apart.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to something that cannot answer: stages the running binary",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "not-a-traycer-cli-at-all");
+    const targetBytes = "binary C - some other tool an installer left behind";
+    writeFileSync(linkTarget, targetBytes);
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - the running packaged CLI";
+    writeFileSync(running, runningBytes);
+    // No `versionForPath` entry for the target: it cannot say what it is.
+    const resolvedTarget = realpathSync(linkTarget);
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    expect(lstatSync(wellKnownPath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+    expect(readFileSync(wellKnownPath, "utf8")).not.toBe(targetBytes);
+    expect(new Set(slotProbeControl.spawnedPaths)).toEqual(
+      new Set([resolvedTarget]),
+    );
+    expect(slotProbeControl.spawnedPaths).not.toContain(wellKnownPath);
+  },
+);
+
+// The three cases above pin WHICH path is probed. None of them can fail on
+// the thing that actually costs users a machine, because their spawned child
+// only prints: a probe launches a packaged CLI, that CLI runs this refresh
+// before commander parses `--version`, and whether IT probes in turn is a
+// question no canned answer is asked.
+//
+// So this one runs the real child. `onSpawn` re-enters the real entry point
+// under the spawned binary's identity - exactly what the operating system
+// would do - and the assertion is on nesting DEPTH, because that is what
+// distinguishes the two outcomes. A planner that lets a child probe does not
+// merely repeat work: each level is a fresh ~100 MB process, `execFile`'s
+// timeout can only kill the level it launched, and every deeper descendant
+// is orphaned. The depth cap is what keeps a regression from hanging this
+// suite instead of failing it; the recursion is otherwise unbounded.
+//
+// A child that spawns nothing is the fix stated as a measurement: maximum
+// depth 1 means every probe in the run was issued by the top-level process.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to a REAL CLI: the spawned child probes nothing",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "newer-cli-the-link-points-at");
+    const targetBytes = "binary B - the newer CLI the legacy link points at";
+    writeFileSync(linkTarget, targetBytes);
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "binary A - an older stray SEA run once");
+    const resolvedTarget = realpathSync(linkTarget);
+    slotProbeControl.versionForPath.set(resolvedTarget, "9.9.9\n");
+
+    let liveDepth = 0;
+    let maxDepth = 0;
+    slotProbeControl.onSpawn = async (file: string): Promise<void> => {
+      liveDepth += 1;
+      maxDepth = Math.max(maxDepth, liveDepth);
+      try {
+        // Past this the run is already a fork bomb and the only question
+        // left is whether the suite reports it or hangs. Thrown rather than
+        // returned because the production catch turns any spawn failure into
+        // `false`, which would otherwise let an unfixed planner unwind
+        // quietly - `maxDepth` is what fails the test either way.
+        if (liveDepth <= 3) {
+          await withExecPath(file, () =>
+            refreshWellKnownSlotIfStale(ENVIRONMENT),
+          );
+        }
+      } finally {
+        liveDepth -= 1;
+      }
+    };
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(maxDepth).toBe(1);
+    // And the end state is still the one the arm exists to produce: the
+    // newer bytes, in a real file. The child de-symlinks the slot from its
+    // own image on the way past, so this run converges rather than staging
+    // again - `current` and `staged` are both correct here, a downgrade is
+    // not.
+    expect(result?.staged).not.toBe("failed");
+    const stat = lstatSync(wellKnownPath);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(targetBytes);
+  },
+);
 
 // `wellKnownSlotRefreshHasConverged` answers whether a refresh right now
 // would find nothing to copy - the convergence probe behind the supervised
