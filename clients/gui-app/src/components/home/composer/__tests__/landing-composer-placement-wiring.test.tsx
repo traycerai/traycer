@@ -55,6 +55,18 @@ const STAGED_INTENT: WorktreeIntent = {
   ],
 };
 
+// The composer's mutable READ target, for the §54-notice suite below: the
+// `useComposerPlacement` mock reads this on every call, so mutating it and
+// forcing a re-render is how a test presents a DIFFERENT resolved host to an
+// already-mounted composer. A plain top-level `let` (not `vi.hoisted`, unlike
+// `testState`) because it is assigned from `READ_TARGET`, itself a `const`
+// declared below the imports - referencing it from a `vi.hoisted` factory
+// (which runs hoisted above every other module-level statement) would hit the
+// TDZ. Safe here because `vi.mock` factories are only ever CALLED lazily, at
+// the point React first invokes the mocked hook - long after this module's
+// top-level code, including this assignment, has finished running.
+let landingTarget: LandingPlacementTarget = READ_TARGET;
+
 const testState = vi.hoisted(() => ({
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
@@ -78,6 +90,14 @@ const testState = vi.hoisted(() => ({
   // default so the deposed-pin arm below is the realistic shape, not a case
   // `isPinned` would never actually take.
   composerIsPinned: true,
+  /**
+   * The §54 refusal `useLandingComposerActions().submit` hands back - `null`
+   * for a create that goes through, `{message}` for a submit-time refusal.
+   * Real refusal DERIVATION (`resolveLandingPlacement`) has its own unit
+   * suite; this file only needs to pin that the composer's `hostNotice` slot
+   * reacts correctly to whatever `actions.submit` returns.
+   */
+  submitRefusal: null as { readonly message: string } | null,
 }));
 
 // `.clear`/`.migrateKeyForAllHosts` are the only members the G4 effect and
@@ -121,6 +141,12 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
+      // Drives `handleDocumentChange` so a §54-notice test can make
+      // `hasSubmittableContent` true without a real editor mount - the same
+      // seam `landing-composer-submit-gate.test.tsx` uses.
+      testState.snapshot = () => {
+        props.onDocumentChange(DIRTY_CONTENT, { from: 1, to: 1 });
+      };
       // Renders `topBanner` for real (unlike every other prop here) so the
       // G4 tests below can assert on `ComposerHostNotice`'s actual DOM output
       // instead of reaching into component-internal state.
@@ -134,11 +160,14 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
     pin: {
       selection: null,
       setSelection: () => undefined,
-      resolvedHostId: "host-a",
+      resolvedHostId: landingTarget.resolvedHostId,
       isPinned: testState.composerIsPinned,
       latchOnFirstUse: () => undefined,
     },
-    target: READ_TARGET,
+    // Read fresh on every call (not captured once) so a test can mutate
+    // `landingTarget` and force a re-render to present a different resolved
+    // host to an already-mounted composer - see the §54-notice suite below.
+    target: landingTarget,
     submitTarget: SUBMIT_TARGET,
     hostLabelFor: () => "Studio Mac",
     followsEffective: testState.composerFollowsEffective,
@@ -148,7 +177,10 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: (target: { readonly hostLabel: string }) => {
     testState.actionsTarget = target;
-    return { submit: () => null, selectTerminalAgent: () => null };
+    return {
+      submit: () => testState.submitRefusal,
+      selectTerminalAgent: () => null,
+    };
   },
 }));
 
@@ -185,6 +217,11 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
   const state = {
     globalLastRunSettings: null,
     setGlobalRunSettings: vi.fn(),
+    // The imperative draft-mint path (`handleDocumentChange`) reads this
+    // directly off `getState()`, not through the selector hook below - the
+    // §54-notice suite exercises that path (it types content), which
+    // `landing-composer-submit-gate.test.tsx` already required this for.
+    getGlobalRunSettings: () => null,
   };
   const selectGlobalLastRunSettings = () => null;
   const useComposerRunSettingsStore = Object.assign(
@@ -334,8 +371,11 @@ afterEach(() => {
   testState.actionsTarget = null;
   testState.bodySubmit = null;
   testState.installEditor = null;
+  testState.snapshot = null;
   testState.composerFollowsEffective = true;
   testState.composerIsPinned = true;
+  testState.submitRefusal = null;
+  landingTarget = READ_TARGET;
   stagingStoreMocks.clear.mockReset();
   stagingStoreMocks.migrateKeyForAllHosts.mockReset();
   stagingStoreMocks.readStagedWorktreeIntent.mockReset();
@@ -462,5 +502,74 @@ describe("landing composer G4 re-point", () => {
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
     expect(stagingStoreMocks.clear).not.toHaveBeenCalled();
     expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
+  });
+});
+
+// Codex review finding: a §54 refusal names the placement it refused, so ANY
+// change of the RESOLVED host retires it - a derivation move, or the picker
+// writing a new pin. Real refusal DERIVATION has its own unit suite
+// (`resolveLandingPlacement`); this only pins that the composer's own
+// `hostNotice` slot reacts to a resolved-host change, whatever produced the
+// refusal it is currently showing.
+describe("landing composer clears a refused §54 notice on host change", () => {
+  it("clears the notice once the resolved host moves, even to a placement that is itself usable", () => {
+    landingTarget = {
+      resolvedHostId: "host-b",
+      client: null,
+      hostLabel: "Build Box",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    testState.submitRefusal = { message: "Build Box is not reachable." };
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    // Make the content submittable so `handleSubmit` actually reaches
+    // `actions.submit` instead of being gated out beforehand.
+    testState.snapshot?.();
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    act(() => {
+      testState.bodySubmit?.();
+    });
+
+    expect(screen.getByTestId("composer-host-notice").textContent).toContain(
+      "Build Box is not reachable.",
+    );
+
+    // The resolved host moves to a DIFFERENT, itself-usable placement - the
+    // point is that the notice clears on the move alone, not on whether the
+    // new placement would also refuse.
+    landingTarget = {
+      resolvedHostId: "host-c",
+      client: null,
+      hostLabel: "Home Mac",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    act(() => {
+      view.rerender(
+        <LandingComposer
+          draftId={null}
+          pendingCreateId="pending-1"
+          initialSettings={null}
+          workspaceControls={() => null}
+        />,
+      );
+    });
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
 });

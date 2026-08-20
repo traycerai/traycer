@@ -523,6 +523,21 @@ interface HostEvidence {
   /** Authority-local deadline of the current tombstone episode, if any. */
   restartEpisodeEndsAt: number | null;
   /**
+   * Whether this host has EVER answered this process - any of the four proof
+   * kinds that funnel through {@link
+   * SelectionAuthorityEngineImpl.onHostProvedAlive} (a dial success, a session
+   * appearing, an announcement, a successful ensure).
+   *
+   * Unlike every other field here it is a LATCH, never cleared by later
+   * evidence: it records that the host was reachable once, which is what
+   * separates "deliberately cycling machine that works" from "machine this
+   * process has never reached". The D5/M6 restart hold is unbounded only for
+   * the former; see `deriveDesiredEffective`. A host leaving the fleet prunes
+   * the record, and an identity transition clears it, so neither carries a
+   * stale claim.
+   */
+  provedAliveAtLeastOnce: boolean;
+  /**
    * When this host's last live session ended WHILE IT WAS THE EFFECTIVE HOST,
    * or null (B1/C6). Only armed for the host the app is actually pointed at:
    * an idle host nobody is talking to produces no evidence either, and
@@ -540,6 +555,7 @@ function emptyHostEvidence(): HostEvidence {
     lastCountedRefusalDetail: null,
     compat: null,
     restartEpisodeEndsAt: null,
+    provedAliveAtLeastOnce: false,
     effectiveSessionLostAt: null,
   };
 }
@@ -793,13 +809,17 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    */
   private pendingDampingDeadline: number | null = null;
   /**
-   * When the cold-start hold first answered ∅ for a restarting local target,
-   * or null while the hold is not engaged (see `deriveDesiredEffective`).
-   * Cleared whenever the hold's premise stops holding, so a later episode
-   * measures its own window; kept across a lapsed ceiling, so a boot that
-   * outlived it cannot re-arm a fresh one.
+   * The host the cold-start hold is waiting on and when that wait began, or
+   * null while the hold is not engaged (see `deriveDesiredEffective`).
+   *
+   * Keyed by host because the local identity can be REPLACED mid-hold - the
+   * desktop fleet port republishes when its local host id changes - and the
+   * new host deserves its own bounded window rather than the remainder of the
+   * old one's. Cleared whenever the premise stops holding, so a later episode
+   * measures its own window; kept across a lapsed ceiling, so the same boot
+   * cannot re-arm a fresh one.
    */
-  private coldStartHoldStartedAt: number | null = null;
+  private coldStartHold: { hostId: string; startedAt: number } | null = null;
   /**
    * The in-flight local `ensure`, or null (D14).
    *
@@ -1411,6 +1431,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    */
   private onHostProvedAlive(hostId: string): void {
     const evidence = this.hostEvidence(hostId);
+    // The latch, set at the one funnel every proof kind already passes
+    // through, so no producer has to remember it separately.
+    evidence.provedAliveAtLeastOnce = true;
     evidence.refusalStreak = 0;
     evidence.lastCountedRefusalDetail = null;
     evidence.restartEpisodeEndsAt = null;
@@ -1892,9 +1915,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     this.options.preferredStore.save(outgoingIdentityKey, null);
     this.preferredHostId = this.options.preferredStore.load(this.identityKey);
     this.mruEffectiveHostIds.length = 0;
-    // The cold-start hold's window belongs to the identity that armed it;
-    // the incoming account's first boot measures its own.
-    this.coldStartHoldStartedAt = null;
+    // The cold-start hold's window belongs to the identity that armed it; the
+    // incoming account's first boot measures its own. (The per-host
+    // proved-alive latch that exempts a restart from it rides `this.evidence`,
+    // which this transition clears a few lines below.)
+    this.coldStartHold = null;
     for (const record of this.reporters.values()) {
       // Generation high-waters survive (rule 4); only the attachment dies -
       // and with it any handover ceiling that was waiting to retire it. Plain
@@ -2057,53 +2082,75 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // third machine and dragged back 15-30s later. The exemption is a property
     // of the CURRENT EFFECTIVE lease, not of the preferred host - that is
     // exactly what M6 corrected.
+    //
+    // AT FULL (UNBOUNDED) STRENGTH ONLY FOR A HOST THIS PROCESS HAS ACTUALLY
+    // REACHED. That is what the hold is for: a working machine the user would
+    // otherwise be thrown off of, and dragged back to 15-30s later. A host
+    // that has never once answered is not that - it is a boot that may never
+    // finish - so it falls to the bounded hold below.
     const effectiveHostId = this.selection.effectiveHostId;
-    if (
+    const restartingIncumbentHostId =
       effectiveHostId !== null &&
       this.leaseFor(effectiveHostId, leases)?.status === "restarting-expected"
-    ) {
-      return effectiveHostId;
-    }
-    // THE COLD-START HOLD, the D5 hold's mirror for a process that has not
-    // served yet. `mruEffectiveHostIds` is empty until the first non-null
-    // effective of this identity epoch, so this arm can only fire before
-    // anything has served - it can never strand a working session on ∅.
-    // When the LOCAL host is the target and its lease says
-    // `restarting-expected` (the launch reconcile cycling it, a deliberate
-    // restart racing app boot), adopting a usable remote buys a guaranteed
-    // second move: the return-to-target window drags every window back
-    // ~20s later, and each hop re-points every following surface. Answering
-    // ∅ instead lets the window narrator's pre-serve grace render the boot
-    // as a start in progress (`deriveWindowNarration`'s cold-start arm).
-    //
-    // Bounded by ITS OWN ceiling, not the episode's: the lease can sit
-    // `restarting-expected` for the mutation lane's full 15-minute ceiling
-    // when a converge hangs, and a user with a working remote in the fleet
-    // must not stare at the startup card for that. The stamp starts when
-    // the hold first answers and `nextDeadline` wakes derivation at the
-    // ceiling, so a boot that outlives it falls through to the fallback
-    // arms below exactly as before this hold existed - and the shorter
-    // tombstone/outage lapses still end the hold early via their own
-    // deadline arms. LOCAL target only, on purpose: the grace card exists
-    // only where a local host is expected, so holding ∅ for a cycling
-    // REMOTE target would show "no usable host" over a working fallback.
+        ? effectiveHostId
+        : null;
     if (
-      this.mruEffectiveHostIds.length === 0 &&
-      targetHostId !== null &&
+      restartingIncumbentHostId !== null &&
+      this.hasProvedAliveAtLeastOnce(restartingIncumbentHostId)
+    ) {
+      this.coldStartHold = null;
+      return restartingIncumbentHostId;
+    }
+    // THE COLD-START HOLD: a restarting host worth waiting for, but only for
+    // a bounded window, because nothing has proved it can serve anyone.
+    //
+    // Two shapes reach it - the same situation seen from either side of the
+    // first derivation, which is why one rule covers both:
+    //
+    //  - the local TARGET is cycling and nothing is effective yet: answer ∅,
+    //    which the window narrator's pre-serve grace renders as a start in
+    //    progress (`deriveWindowNarration`'s cold-start arm) rather than as a
+    //    verdict. Adopting a usable remote instead buys a guaranteed second
+    //    move - the return-to-target window drags every window back ~20s
+    //    later, re-pointing every following surface twice.
+    //  - the UNPROVEN INCUMBENT is cycling: keep it, for the same reason and
+    //    the same bounded span. It narrates as cold-start too (an effective
+    //    host that has never served this window).
+    //
+    // Why proof of life and not "has anything been effective": `noteEffective`
+    // records a host the moment derivation picks it, and the local host is
+    // picked while it reads `connecting` under the engine's OWN in-flight
+    // ensure - i.e. while nothing has reached it. Gating on that would let a
+    // launch that hangs AFTER the fleet resolved take the unbounded arm above
+    // and pin the startup card for the outage ceiling's 15 minutes, with a
+    // usable remote sitting in the fleet. `onHostProvedAlive` is the one
+    // funnel all four proof kinds pass through, so the latch it sets is the
+    // honest form of the question.
+    //
+    // Keyed by the awaited host, so a fleet update that replaces the local
+    // identity gives the NEW host its own window instead of inheriting the
+    // old one's elapsed time; kept across a lapse, so the same host cannot
+    // re-arm a fresh window; cleared the moment the premise stops holding.
+    //
+    // LOCAL target only on the second arm, on purpose: the grace card exists
+    // only where a local host is expected, so holding ∅ for a cycling REMOTE
+    // target would show "no usable host" over a working fallback.
+    const awaitedHostId =
+      restartingIncumbentHostId ??
+      (targetHostId !== null &&
       targetHostId === localHostId &&
       this.leaseFor(targetHostId, leases)?.status === "restarting-expected"
-    ) {
-      const holdStartedAt = this.coldStartHoldStartedAt ?? now;
-      this.coldStartHoldStartedAt = holdStartedAt;
-      if (now < holdStartedAt + COLD_START_LOCAL_RESTART_HOLD_CEILING_MS) {
-        return null;
-      }
-      // Ceiling lapsed: the boot is no longer something to wait for. Fall
-      // through with the stamp kept, so a still-restarting target cannot
-      // re-arm a fresh window on the next pass.
-    } else {
-      this.coldStartHoldStartedAt = null;
+        ? targetHostId
+        : null);
+    if (awaitedHostId === null) {
+      this.coldStartHold = null;
+    } else if (this.holdsForColdStart(awaitedHostId, now)) {
+      // An incumbent keeps serving as itself; a target that is not effective
+      // yet answers ∅ so the startup card narrates the boot.
+      return restartingIncumbentHostId !== null ? awaitedHostId : null;
     }
+    // Ceiling lapsed: the boot is no longer something to wait for, and the
+    // arms below pick a fallback exactly as they did before this hold existed.
     if (targetHostId !== null && this.isUsable(targetHostId, leases)) {
       return targetHostId;
     }
@@ -2200,6 +2247,32 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // quiet would never be returned to.
     this.pendingDampingDeadline = admissibleAt;
     return effectiveHostId;
+  }
+
+  /**
+   * Whether this host has ever answered this process. See
+   * {@link HostEvidence.provedAliveAtLeastOnce}; absence of a record means
+   * nothing was ever reported for the host, which is not proof of anything.
+   */
+  private hasProvedAliveAtLeastOnce(hostId: string): boolean {
+    return this.evidence.get(hostId)?.provedAliveAtLeastOnce === true;
+  }
+
+  /**
+   * Whether the cold-start hold may still wait on `hostId`, arming or
+   * re-keying its window as a side effect.
+   *
+   * Re-keying on a different host is what stops a replacement local identity
+   * from inheriting the old host's elapsed time; keeping the stamp once the
+   * ceiling has lapsed is what stops the same host from re-arming a fresh
+   * window on the very next pass.
+   */
+  private holdsForColdStart(hostId: string, now: number): boolean {
+    const hold = this.coldStartHold;
+    const startedAt =
+      hold !== null && hold.hostId === hostId ? hold.startedAt : now;
+    this.coldStartHold = { hostId, startedAt };
+    return now < startedAt + COLD_START_LOCAL_RESTART_HOLD_CEILING_MS;
   }
 
   private leaseFor(
@@ -2864,9 +2937,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // startup screen when the boot outlives the wait, and on a quiet engine
     // no report is coming to re-derive it - the same shape as the damping
     // deadline above.
-    const coldStartHold = this.coldStartHoldStartedAt;
+    const coldStartHold = this.coldStartHold;
     if (coldStartHold !== null) {
-      consider(coldStartHold + COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+      consider(
+        coldStartHold.startedAt + COLD_START_LOCAL_RESTART_HOLD_CEILING_MS,
+      );
     }
     // A failed ensure holds the local lease dead for a cooldown; the lapse is
     // a lease change with no new evidence behind it, and it is what lets the

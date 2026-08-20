@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
+  anyHostHasStagedWorktreeIntent,
   forkChatStagingKeysForEpic,
   newConversationModalStagingKey,
   pendingChildTerminalAgentStagingKey,
@@ -628,5 +629,73 @@ describe("worktree-intent-staging-store", () => {
     await useWorktreeIntentStagingStore.persist.rehydrate();
 
     expect(useWorktreeIntentStagingStore.getState().intentByKey).toEqual({});
+  });
+
+  // Pairs with `clearForAllHosts`'s reach: a caller that clears every bucket
+  // must ask about every bucket, or it silently drops an intent staged while
+  // the surface was pinned to another host (Codex review finding).
+  describe("anyHostHasStagedWorktreeIntent", () => {
+    const draftA: WorktreeStagingKey = {
+      surface: "landing",
+      hostId: HOST_A,
+      draftId: "draft-9",
+    };
+    const draftB: WorktreeStagingKey = { ...draftA, hostId: HOST_B };
+
+    it("is true when an intent is staged under the SAME host bucket", () => {
+      useWorktreeIntentStagingStore
+        .getState()
+        .stageEntry(draftA, localEntry("/a", true));
+
+      expect(anyHostHasStagedWorktreeIntent(draftA)).toBe(true);
+    });
+
+    it("is true when an intent is staged under a DIFFERENT host bucket for the same slot", () => {
+      // Staged while the surface was pinned to host B; asked at host A's
+      // bucket for the identical slot.
+      useWorktreeIntentStagingStore
+        .getState()
+        .stageEntry(draftB, localEntry("/b", true));
+
+      expect(anyHostHasStagedWorktreeIntent(draftA)).toBe(true);
+      expect(readStagedWorktreeIntent(draftA)).toBeNull();
+    });
+
+    it("is false when the slot is empty across every host", () => {
+      expect(anyHostHasStagedWorktreeIntent(draftA)).toBe(false);
+    });
+
+    it("does not conflate a DIFFERENT slot (draftId, epicId, parentId, surface)", () => {
+      useWorktreeIntentStagingStore
+        .getState()
+        .stageEntry(draftA, localEntry("/a", true));
+      // A different draftId, same host - a different `landing` slot.
+      const otherDraft: WorktreeStagingKey = {
+        ...draftA,
+        draftId: "draft-other",
+      };
+      expect(anyHostHasStagedWorktreeIntent(otherDraft)).toBe(false);
+
+      // A modal slot staged for one epic/parent must not answer for another
+      // epic, another parent, or the sibling `owner` surface.
+      const modalSlot = newConversationModalStagingKey(HOST_A, "epic-1", null);
+      useWorktreeIntentStagingStore
+        .getState()
+        .stageEntry(modalSlot, localEntry("/modal", true));
+
+      expect(
+        anyHostHasStagedWorktreeIntent(
+          newConversationModalStagingKey(HOST_A, "epic-2", null),
+        ),
+      ).toBe(false);
+      expect(
+        anyHostHasStagedWorktreeIntent(
+          newConversationModalStagingKey(HOST_A, "epic-1", "parent-1"),
+        ),
+      ).toBe(false);
+      expect(anyHostHasStagedWorktreeIntent(OWNER_KEY)).toBe(false);
+      // The staged slot itself still answers true.
+      expect(anyHostHasStagedWorktreeIntent(modalSlot)).toBe(true);
+    });
   });
 });

@@ -1,5 +1,11 @@
 import { isValidElement, useRef, useState } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -393,11 +399,12 @@ function workspaceControlsHostScope(element: unknown): unknown {
   return element.props.hostScope;
 }
 
-function renderModal(): void {
-  render(<Harness />);
+function renderModal(): RenderResult {
+  const view = render(<Harness />);
   act(() => {
     testState.installEditor?.();
   });
+  return view;
 }
 
 function noticeText(): string {
@@ -519,6 +526,43 @@ describe("new-conversation modal shares the composer's placement semantics", () 
 
     expect(testState.createChat).not.toHaveBeenCalled();
     expect(noticeText()).toContain("Build Box");
+  });
+
+  // Codex review finding: a §54 refusal names the placement it refused, so
+  // ANY change of the RESOLVED host retires it - a derivation move or the
+  // picker writing a new pin. A surviving alert would keep naming a placement
+  // this modal has already left.
+  it("clears a refused notice when the resolved host changes", () => {
+    testState.placement.current = {
+      resolvedHostId: "host-b",
+      // The chip renders host-b; this client would send to host-a - refused.
+      client: { getActiveHostId: () => "host-a" },
+      hostLabel: "Build Box",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    const view = renderModal();
+    act(() => {
+      testState.bodySubmit?.();
+    });
+
+    expect(noticeText()).toContain("Build Box");
+
+    // The resolved host moves - to a placement that would itself be usable,
+    // which is the point: the notice must clear on the move alone, not on
+    // whether the new placement also refuses.
+    testState.placement.current = {
+      resolvedHostId: "host-c",
+      client: { getActiveHostId: () => "host-c" },
+      hostLabel: "Home Mac",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    act(() => {
+      view.rerender(<Harness />);
+    });
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
 
   it("refuses the TERMINAL path on the same verdict, creating nothing", () => {
@@ -691,6 +735,37 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
     expect(testState.createChat).toHaveBeenCalledTimes(1);
     expect(testState.recordPlacement).toHaveBeenCalledWith("host-a");
+  });
+
+  // Codex review finding: `clearForAllHosts` reaches every host's copy of the
+  // slot, so the "was anything staged" check that decides whether to toast
+  // must reach just as far. The narrower `readStagedWorktreeIntent` (scoped to
+  // the RESOLVED bucket) reported "nothing staged" here even though the clear
+  // below deleted the host-b copy - silently dropping the toast.
+  it("G4: toasts when the staged intent lives under a DIFFERENT host bucket than the resolved one", () => {
+    const otherHostKey = newConversationModalStagingKey(
+      "host-b",
+      "epic-1",
+      null,
+    );
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(otherHostKey, STAGED_INTENT);
+    renderModal();
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledTimes(1);
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledWith(
+      testState.placement.current.hostLabel,
+    );
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(otherHostKey)
+      ],
+    ).toBeUndefined();
   });
 
   it("does NOT record a placement on a refused submit - nothing was created", () => {

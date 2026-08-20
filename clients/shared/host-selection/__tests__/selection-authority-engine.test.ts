@@ -188,6 +188,24 @@ function readyLocalHostEnsurePort(): LocalHostEnsurePort {
   return { ensureReady: () => Promise.resolve({ ok: true }) };
 }
 
+/**
+ * A local `ensure` port whose promise NEVER settles - a hung provisioning
+ * lane (the same shape the B2 suite drives via `createDeferredEnsure()` with
+ * its `resolve` never called, made a named one-liner here because the P1 fix
+ * pins need it at the point a host FIRST becomes effective, not only at its
+ * own B2 ceiling).
+ *
+ * This is the exact mechanism behind the P1 regression: `deriveLease`'s
+ * in-flight-ensure arm reports the local host `connecting` - usable - for as
+ * long as this promise is outstanding, which is proof of NOTHING (no dial,
+ * no session, no announcement has ever reached the host). Only the engine's
+ * own {@link LOCAL_EXPECTED_OUTAGE_CEILING_MS}-equal B2 ceiling ever moves a
+ * lease held by a port like this one; the port itself never will.
+ */
+function neverResolvingLocalHostEnsurePort(): LocalHostEnsurePort {
+  return { ensureReady: () => new Promise(() => undefined) };
+}
+
 // -------------------------------------------------------------------- tests
 
 describe("SelectionAuthorityEngineImpl - attach fence", () => {
@@ -5260,19 +5278,35 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
    * Builds an engine with a CONTROLLABLE {@link LocalHostOutageSignal}, seeded
    * on an EMPTY fleet (`localHostId: null, hosts: []`). `createTestAuthority`
    * cannot be used here: it hardcodes `inertLocalHostOutageSignal`, and this
-   * suite's whole premise is a signal already `true` before the fleet ever
-   * names a local host.
+   * suite drives the signal itself - sometimes already `true` before the
+   * fleet ever names a local host (the TARGET-side hold: L is never usable,
+   * never effective, and the hold answers ∅), sometimes flipped `true` only
+   * AFTER a local host has already become effective some other way (the
+   * INCUMBENT-side hold, P1 fix: the per-host proof-of-life gate is what
+   * decides whether that incumbent's restart is bounded or not).
+   *
+   * `initialOutage` and `localHostEnsure` are REQUIRED, not defaulted (this
+   * repo's type-safety rules: no optional/defaulted params) - every caller
+   * states its own premise rather than inheriting one silently. A caller
+   * proving the TARGET-side hold passes `true` (matching the original
+   * fixture); a caller proving the INCUMBENT-side P1 fix passes `false` and
+   * flips it after the incumbent already exists.
    *
    * The empty seed matters as much as the signal: the constructor's own
    * fleet-seed commit runs with `localHostId: null` (no target, no local
-   * host), so it can never touch `mruEffectiveHostIds` - only the later
-   * `fleet.publish` the test drives is this process's FIRST look at L or R.
-   * Publishing L from construction instead would let the auto-ensure's
-   * transient `connecting` (usable, before the outage signal is even read)
-   * serve L on that very first commit and falsify the cold-start premise
-   * before a single assertion runs.
+   * host), so it can never touch `mruEffectiveHostIds` or any host's
+   * proof-of-life latch - only the later `fleet.publish` the test drives is
+   * this process's FIRST look at L or R. Publishing L from construction
+   * instead would let the auto-ensure's transient `connecting` (usable,
+   * before the outage signal is even read) serve L on that very first
+   * commit and falsify the cold-start premise before a single assertion
+   * runs.
    */
-  function coldBootAuthorityWithOutageSignal(clock: FakeAuthorityClock): {
+  function coldBootAuthorityWithOutageSignal(
+    clock: FakeAuthorityClock,
+    initialOutage: boolean,
+    localHostEnsure: LocalHostEnsurePort,
+  ): {
     readonly engine: SelectionAuthorityEngineImpl;
     readonly fleet: InMemoryHostFleetSource;
     readonly events: RecordedEngineEvent[];
@@ -5289,7 +5323,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       current: () => ({ identityKey: "acct-1", generation: 0 }),
       onChanged: () => ({ dispose: () => undefined }),
     };
-    let outageState = true;
+    let outageState = initialOutage;
     const outageListeners = new Set<(inExpectedOutage: boolean) => void>();
     const outage: LocalHostOutageSignal = {
       inExpectedOutage: () => outageState,
@@ -5301,10 +5335,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
     const engine = new SelectionAuthorityEngineImpl({
       fleet,
       identity,
-      // PROVISIONABLE: once the outage ends, L must be able to serve at all -
-      // otherwise "lands on the target" would be measuring ∅ via the
-      // unavailable port instead of the hold ending cleanly.
-      localHostEnsure: readyLocalHostEnsurePort(),
+      localHostEnsure,
       localOutage: outage,
       clock,
       newIncarnationId: createIncrementingIncarnationIds(),
@@ -5328,7 +5359,11 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
 
   it("COLD START HOLD: a never-served process holds ∅ for a restarting LOCAL target instead of failing over to a usable remote", () => {
     const clock = createFakeAuthorityClock(0);
-    const authority = coldBootAuthorityWithOutageSignal(clock);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
     const { engine, fleet } = authority;
 
     // The mutation lane was ALREADY cycling the local host before the fleet
@@ -5354,7 +5389,11 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
 
   it("LANDS ON THE TARGET ONCE: ending the outage before the ceiling adopts L directly, with no intermediate hop onto R", async () => {
     const clock = createFakeAuthorityClock(0);
-    const authority = coldBootAuthorityWithOutageSignal(clock);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
     const { engine, fleet, events } = authority;
 
     fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
@@ -5386,7 +5425,11 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
 
   it("BOUNDED: the ceiling forces a fallback to R at 20s even with the LOCAL OUTAGE signal (a 15-minute hold) still true - the exact 'stuck on the startup screen' regression this ceiling prevents", () => {
     const clock = createFakeAuthorityClock(0);
-    const authority = coldBootAuthorityWithOutageSignal(clock);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
     const { engine, fleet } = authority;
 
     fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
@@ -5417,7 +5460,11 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
 
   it("after the ceiling forces R, a later-usable local target recovers only through the ordinary RETURN_TO_TARGET_STABILITY_MS window - no special-casing", async () => {
     const clock = createFakeAuthorityClock(0);
-    const authority = coldBootAuthorityWithOutageSignal(clock);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
     const { engine, fleet } = authority;
 
     fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
@@ -5426,8 +5473,10 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
 
     // The outage ends; L becomes usable. The engine is FailedOver now (R is
     // effective, L is target) - the ORDINARY M6 return-to-target window
-    // applies from here, not the hold (the hold's job ended the moment it
-    // forced this fallback - `mruEffectiveHostIds` is no longer empty).
+    // applies from here, not the hold (the hold's own ceiling already
+    // lapsed when it forced R, and `holdsForColdStart` never re-arms a
+    // window for the SAME host once its ceiling has lapsed - see the NO
+    // RE-ARM pin below).
     authority.setOutage(false);
     expect(findLease(engine.snapshot().leases, "L")?.status).not.toBe(
       "restarting-expected",
@@ -5447,6 +5496,194 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
 
     clock.advance(1);
     expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - UNPROVEN INCUMBENT IS BOUNDED: a local host that became effective only because the engine's own ensure is in flight - never proven alive - gets the BOUNDED hold once it starts restarting, not the unbounded D5/M6 one", () => {
+    const clock = createFakeAuthorityClock(0);
+    // An ensure whose promise NEVER settles - the exact shape the review
+    // finding caught `noteEffective` recording: L reads `connecting` (usable)
+    // purely because THIS process's own launch-time ensure is outstanding,
+    // never because anything has actually answered it (arm 2 of
+    // `deriveLease`).
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      false,
+      neverResolvingLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    // First look at L (local) and R (a fine, usable remote). No outage yet,
+    // so the never-dialed local host draws the launch ensure and derives
+    // `connecting` - usable - and is picked as both target and effective.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // The mutation lane starts cycling L a moment later - AFTER the ensure
+    // was already minted. This is exactly the case the module header's
+    // "COMPOSITION" pin protects: the outage signal alone cannot flip L's
+    // lease while this engine's own ensure is still outstanding for it, so
+    // nothing observable changes yet.
+    clock.advance(30_000);
+    authority.setOutage(true);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // The ensure's OWN in-flight ceiling (B2) is what finally retires the
+    // token - the outage's independent 15-minute ceiling (started 30s later)
+    // still has comfortable room left, so the freed arm reveals
+    // `restarting-expected`, not `dead`.
+    clock.advance(LOCAL_EXPECTED_OUTAGE_CEILING_MS - 30_000);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    // L is STILL the effective host - the D5/M6 exemption never newly
+    // selects a restarting host, but it does not throw the app off an
+    // already-effective one either. What changed is which ARM is holding
+    // it: the incumbent has never proved itself, so this is the bounded
+    // cold-start hold, not the unbounded one.
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // BOUNDED: comfortably inside the 20s ceiling, still held.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 1);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // At the ceiling, with NO new evidence, the engine's own deadline timer
+    // falls through to the usable remote - the exact regression this pins:
+    // before the fix, `mruEffectiveHostIds` already held L (from the very
+    // first `noteEffective`, the moment L first read `connecting`), so the
+    // OLD gate read "already served" and took the unbounded arm, pinning the
+    // startup screen for the outage's full 15-minute ceiling with R sitting
+    // right there, usable.
+    clock.advance(1);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - PROVEN INCUMBENT STAYS UNBOUNDED: a local host proved alive by its own successful ensure keeps the unbounded D5/M6 hold once it starts restarting", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      false,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // Let the launch ensure settle: a `{ ok: true }` completion is FIRSTHAND
+    // proof of life (`onHostProvedAlive`) - the one thing the previous pin's
+    // incumbent never got.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Now the mutation lane starts cycling L. With the ensure already
+    // settled (no token left to mask arm 3), the outage signal reaches
+    // `deriveLease` directly and L reads `restarting-expected` at once.
+    authority.setOutage(true);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // UNBOUNDED: well past the 20s cold-start ceiling that bounded the
+    // UNPROVEN incumbent above - this is the D5/M6 hold at full strength,
+    // because `hasProvedAliveAtLeastOnce("L")` is true.
+    clock.advance(60_000);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - RE-KEY ON HOST REPLACEMENT: a fleet republish that swaps the LOCAL identity mid-hold gives the new host its own full 20s window, not the old host's remaining time", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    // L1 is cycling before the fleet ever answers (the TARGET-side hold,
+    // like the "COLD START HOLD" pin above): ∅ while it is awaited.
+    fleet.publish(0, "L1", [
+      fleetHost("L1", "local"),
+      fleetHost("R", "remote"),
+    ]);
+    expect(findLease(engine.snapshot().leases, "L1")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // Comfortably inside L1's window.
+    clock.advance(15_000);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // The desktop republishes on a local-identity change (PID metadata,
+    // re-enrolment): a DIFFERENT host, L2, is now `localHostId`, and it is
+    // ALSO cycling (the outage signal is a port-level fact, not scoped to
+    // one host id).
+    fleet.publish(0, "L2", [
+      fleetHost("L2", "local"),
+      fleetHost("R", "remote"),
+    ]);
+    expect(findLease(engine.snapshot().leases, "L2")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 10 more seconds - 25s total since L1's window opened, past what WOULD
+    // have been L1's 20s ceiling. Still held: L2 re-keyed the hold to ITS
+    // OWN start (t=15s), not L1's elapsed time.
+    clock.advance(10_000);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 20s after the SWAP (t=15s + 20s = t=35s), L2's own window lapses.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 10_000);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - NO RE-ARM AFTER LAPSE: once the ceiling has forced a fallback, further passes for the SAME still-restarting host do not re-engage the hold", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // The ceiling forces R, exactly as in the "BOUNDED" pin above.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // A FURTHER PASS for the SAME host, still restarting: the registry
+    // re-publishes the same membership (a periodic refresh, not a change).
+    // `holdsForColdStart("L", ...)` is invoked again on this pass - via the
+    // LOCAL-TARGET arm, since L is still the target and still
+    // `restarting-expected` - and must not re-arm a fresh window just
+    // because it is being asked about again.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // More time and more passes - still no re-arm.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
 
     authority.dispose();
   });
@@ -5483,10 +5720,15 @@ describe("SelectionAuthorityEngineImpl - cold-start hold does not apply once the
     await Promise.resolve();
     await Promise.resolve();
 
-    // L now starts a deliberate restart while R is serving. If the hold's
-    // `mruEffectiveHostIds.length === 0` gate were wrong (or missing), this
-    // is exactly the shape a regression would show up in first - a process
-    // that has already served once, watching an UNRELATED host cycle.
+    // L now starts a deliberate restart while R - not L - is the current
+    // effective host. Under the per-host proof-of-life gate the hold's two
+    // arms only ever consider the CURRENT effective host (the incumbent arm)
+    // or the local TARGET (the second arm, gated on
+    // `targetHostId === localHostId`, false here since R is preferred and L
+    // is never the target). L is neither, so this is exactly the shape a
+    // regression in that per-host scoping would show up in first - a
+    // process serving one host entirely unaffected by an UNRELATED host
+    // cycling.
     engine.ingestEvidence(
       "A",
       incarnation,

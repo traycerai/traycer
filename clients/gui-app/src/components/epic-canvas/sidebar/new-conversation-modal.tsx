@@ -72,10 +72,8 @@ import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
 import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
-import {
-  ComposerHostNotice,
-  type ComposerHostNoticeState,
-} from "@/components/home/composer/composer-host-notice";
+import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
 import {
@@ -140,6 +138,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import {
+  anyHostHasStagedWorktreeIntent,
   newConversationModalStagingKey,
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -774,12 +773,11 @@ export function NewConversationModalBody(props: {
   // §54 refusal copy, as on the landing composer. The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
   // reset staged intent.
-  const [hostNotice, setHostNotice] = useState<ComposerHostNoticeState | null>(
-    null,
-  );
-  const dismissHostNotice = useCallback(() => {
-    setHostNotice(null);
-  }, []);
+  const {
+    notice: hostNotice,
+    raise: raiseHostNotice,
+    dismiss: dismissHostNotice,
+  } = useComposerHostNotice(resolvedHostId);
   // G4: this modal FOLLOWS the effective host only when nothing else answered
   // its placement - no named host, no per-Epic pin in force, no session host
   // in force - and only then does a derivation move re-point it. Its staged
@@ -792,7 +790,11 @@ export function NewConversationModalBody(props: {
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
       if (!composerFollowsEffective) return;
-      const hadStagedIntent = readStagedWorktreeIntent(stagingKey) !== null;
+      // Asked at `clearForAllHosts`'s breadth, not the resolved bucket's: this
+      // modal's slot can hold an intent staged while it was pinned elsewhere,
+      // and the clear below deletes that too. A narrower check would report
+      // "nothing staged" for a choice the user just lost.
+      const hadStagedIntent = anyHostHasStagedWorktreeIntent(stagingKey);
       clearStagedIntent(stagingKey);
       if (hadStagedIntent) {
         toastRepointedStagingReset(hostLabelFor(nextEffectiveHostId));
@@ -840,7 +842,7 @@ export function NewConversationModalBody(props: {
     // modal exactly as the user left them, with the reason inline.
     const placementVerdict = resolveLandingPlacement(submitTarget);
     if (placementVerdict.kind === "refused") {
-      setHostNotice({ kind: "refused", message: placementVerdict.message });
+      raiseHostNotice({ kind: "refused", message: placementVerdict.message });
       return;
     }
     // No render-vs-live drift check needed here (main's #1231 added one for
@@ -975,6 +977,7 @@ export function NewConversationModalBody(props: {
     epicId,
     parentId,
     placement,
+    raiseHostNotice,
     recordPlacement,
     rememberEpicIntent,
     setEpicRunSettings,
@@ -991,7 +994,7 @@ export function NewConversationModalBody(props: {
       // anything reports the failure.
       const placementVerdict = resolveLandingPlacement(submitTarget);
       if (placementVerdict.kind === "refused") {
-        setHostNotice({ kind: "refused", message: placementVerdict.message });
+        raiseHostNotice({ kind: "refused", message: placementVerdict.message });
         return;
       }
       // The staged key and this create both derive from the same captured
@@ -1036,6 +1039,7 @@ export function NewConversationModalBody(props: {
       epicId,
       parentId,
       placement,
+      raiseHostNotice,
       recordPlacement,
       rememberEpicIntent,
       tabId,

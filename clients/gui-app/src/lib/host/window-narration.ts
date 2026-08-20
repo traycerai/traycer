@@ -271,10 +271,26 @@ export function deriveWindowNarration(
     // `plan-restricted` reachable at first launch: both derive from dead
     // leases. After the window has served once, ∅ is always the verdict arm;
     // the grace is strictly a launch statement.
+    //
+    // UNLESS THE TARGET ITSELF IS RESTARTING, which is a start in progress
+    // stated by the authority's own lease rather than inferred from the
+    // absence of conclusions. The authority holds ∅ for a bounded window while
+    // a never-proven local target cycles (its cold-start hold), deliberately
+    // declining a usable fallback so the app does not hop and hop back - so
+    // during that hold ∅ does NOT mean "nothing can serve this window", and
+    // the scan below would say so anyway the moment the account contains one
+    // dead machine (a retired laptop, an incompatible one). That is the same
+    // reasoning the non-∅ cold-start arm already applies further down:
+    // whatever else is wrong out there belongs to the surface chip or the
+    // tile, not to the window's launch story. Bounded by construction - the
+    // authority's hold lapses, and with it this lease state - so `update-host`
+    // and `plan-restricted` stay reachable, just not mid-restart.
+    const targetLease = findLease(input.leases, input.targetHostId);
     if (
       !input.hasBeenServed &&
       input.localHostExpected &&
-      input.leases.every((lease) => lease.status !== "dead")
+      (targetLease?.status === "restarting-expected" ||
+        input.leases.every((lease) => lease.status !== "dead"))
     ) {
       return {
         kind: "narrating",

@@ -184,6 +184,57 @@ describe("deriveWindowNarration", () => {
       });
     });
 
+    it("holds the grace through a dead lease while the TARGET is restarting - the authority is waiting on purpose", () => {
+      // The authority's cold-start hold answers ∅ for a bounded window while a
+      // never-proven local target cycles, declining a usable fallback so the
+      // app does not hop to a remote and get dragged back seconds later. So
+      // this ∅ does not mean "nothing can serve" - and without this arm, one
+      // retired machine anywhere in the account (dead, and every account
+      // accumulates them) would put "No host is available" over a launch that
+      // is going perfectly well, with a working remote sitting right there.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            lease({ hostId: "host-remote", status: "ready" }),
+            deadLease("host-retired", { reason: "offline" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("does not extend that exception past the first service - a restarting target after serving is the ∅ verdict", () => {
+      // The grace is a LAUNCH statement in both of its arms. Once the window
+      // has been served, ∅ is always the verdict, whatever the target's lease
+      // happens to say.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: true,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            deadLease("host-retired", { reason: "offline" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
     it("keeps update-host reachable at first launch - the grace must not swallow a dead incompatible host", () => {
       // The sharp edge of the rule above: `update-host` and `plan-restricted`
       // BOTH derive from dead leases, so a grace that ignored deadness would
