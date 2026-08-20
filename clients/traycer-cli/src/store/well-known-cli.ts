@@ -118,6 +118,11 @@ export async function isPackagedRun(): Promise<boolean> {
 //     binary - mirroring is what makes an OLDER timestamp detectable, which
 //     a `slot newer than source` comparison could not see.
 //
+// A slot that passes that last guard with no staging record ADOPTS one, once,
+// rather than staying on the timestamp proxy for the rest of its life. See
+// `slotRefreshPlan`. That is the only case in which a startup with nothing to
+// copy still takes the lock, and only until the record lands.
+//
 // The source is NOT the running process. The CLI manifest is the resolver's
 // source of truth, and a machine can have several packaged CLIs installed
 // at once; letting whichever one was invoked last win would silently
@@ -199,32 +204,46 @@ async function refreshSlot(
   const running = resolve(process.execPath);
   // Cheap unlocked pre-check, so the common "nothing changed" path never
   // touches the lock file at all.
-  if (
-    (await pendingRefreshSource(environment, wellKnownPath, running)) === null
-  ) {
-    return null;
-  }
+  const planned = await slotRefreshPlan(environment, wellKnownPath, running);
+  if (planned.kind === "current") return null;
   try {
     return await withCliLock(
       {
         environment,
         reason: "refresh-well-known-slot",
-        waitMs: lockWaitMs,
+        // An adoption is never worth WAITING for, whatever the caller's
+        // patience. It writes a small record for a slot that is ALREADY a
+        // faithful copy, so a wait could only buy a supervisor standing still
+        // for seconds over a slot that needs nothing done to it. And whoever
+        // holds the lock is either staging - which writes a record of its own,
+        // making this adoption moot - or adopting the very same one.
+        waitMs: planned.kind === "adopt" ? 0 : lockWaitMs,
         pollIntervalMs: 100,
       },
       async () => {
-        const source = await pendingRefreshSource(
-          environment,
-          wellKnownPath,
-          running,
-        );
-        if (source === null) return null;
+        const plan = await slotRefreshPlan(environment, wellKnownPath, running);
+        if (plan.kind === "current") return null;
+        if (plan.kind === "adopt") {
+          // Under the lock, which is what lets this write fill in the slot
+          // half of the record from a fresh stat: Desktop publishes this same
+          // path and takes this same lock to do it, so nothing can have
+          // replaced the slot since the `lstat` that proved the mirror.
+          await writeSlotSourceRecord(
+            wellKnownPath,
+            plan.source,
+            plan.sourceStat,
+          );
+          return null;
+        }
         // A slot that is absent, dangling, or holding something else is
         // repaired here rather than left for the next registration: the
         // service and the host daemon both launch from this path, so on an
         // already-registered machine "no slot" is a broken machine, not a
         // clean one.
-        return stageWellKnownCliBinary({ environment, binaryPath: source });
+        return stageWellKnownCliBinary({
+          environment,
+          binaryPath: plan.source,
+        });
       },
     );
   } catch (error) {
@@ -244,6 +263,14 @@ async function refreshSlot(
     // a log. Those surface as `failed`, which the entry already logs with the
     // error's real name and message.
     if (isCliLockBusyError(error)) {
+      // An adoption that loses the lock has deferred NOTHING the caller needs
+      // to hear about. The slot is a faithful copy either way; the record it
+      // wanted to write is a strengthening of the freshness test, not a
+      // repair of the bytes. Reporting it as a deferred refresh would put a
+      // "the supervisor may be on old bytes" warning in the supervised entry's
+      // log for a slot that is current, and would do it on every startup until
+      // some run wins the lock.
+      if (planned.kind === "adopt") return null;
       return { staged: "deferred-busy", wellKnownPath };
     }
     const failure = errorFromUnknown(error);
@@ -312,27 +339,47 @@ function isCliLockBusyError(error: unknown): boolean {
   );
 }
 
-// The binary the slot should be staged from, or null when it is already
-// correct (or when nothing can be said about what correct means).
-async function pendingRefreshSource(
+// What a refresh has to do about the slot.
+//
+// A decision, never an action: this is evaluated once unlocked and again
+// under the lock, and only the second evaluation may act on it. Anything
+// that writes belongs in `refreshSlot`'s locked callback.
+type SlotRefreshPlan =
+  // Leave the slot alone - it holds the right bytes, or nothing can be said
+  // about what the right bytes would be.
+  | { readonly kind: "current" }
+  // Copy the slot from `source`.
+  | { readonly kind: "stage"; readonly source: string }
+  // The slot already mirrors `source`, but carries no record that proves it.
+  // Write one from `sourceStat`, the very stat that proved the mirror.
+  | {
+      readonly kind: "adopt";
+      readonly source: string;
+      readonly sourceStat: Stats;
+    };
+
+// What to do about the slot: stage it, adopt a record for it, or leave it.
+async function slotRefreshPlan(
   environment: Environment,
   wellKnownPath: string,
   running: string,
-): Promise<string | null> {
+): Promise<SlotRefreshPlan> {
   const source = await authoritativeSlotSource(environment, running);
-  if (source === null) return null;
-  if (resolve(wellKnownPath) === source) return null;
+  if (source === null) return { kind: "current" };
+  if (resolve(wellKnownPath) === source) return { kind: "current" };
   // `lstat`, not `stat`, and the difference is load-bearing. A slot left as
   // a SYMLINK by an older Desktop is the failure mode copy-not-symlink was
   // adopted to end: `stat` would follow it to the authoritative source and
-  // `mirrors` would compare that source against itself, report a faithful
+  // `mirroredSourceStat` would compare that source against itself, report a
   // copy, and leave the link in place forever - until the package manager
   // moved its target and the slot began dangling, taking the registered
   // service and host-side CLI discovery down with it. A symlink is
   // therefore never "already fresh"; it is always restaged into a real
   // file.
   const slotStat = await lstatOrNull(wellKnownPath);
-  if (slotStat === null || slotStat.isSymbolicLink()) return source;
+  if (slotStat === null || slotStat.isSymbolicLink()) {
+    return { kind: "stage", source };
+  }
   // The staging record is the authority whenever it applies, because it is
   // the one identity no filesystem can take away: staging writes down what
   // it copied and what it produced, so freshness stops depending on a volume
@@ -340,14 +387,38 @@ async function pendingRefreshSource(
   const record = await readSlotSourceRecord(wellKnownPath);
   if (record !== null && recordDescribes(record, slotStat, source)) {
     const sourceStat = await statOrNull(source);
-    if (sourceStat === null) return null;
-    return sourceIsUnchanged(record, sourceStat) ? null : source;
+    if (sourceStat === null) return { kind: "current" };
+    return sourceIsUnchanged(record, sourceStat)
+      ? { kind: "current" }
+      : { kind: "stage", source };
   }
-  // No usable record - a slot staged by a CLI older than this format, or one
-  // a sibling writer published. Fall back to comparing timestamps; when that
-  // cannot prove freshness the caller stages, which writes a record, so a
-  // slot takes this path at most until the first time this CLI stages it.
-  return (await mirrors(slotStat, source)) ? null : source;
+  // No usable record - a slot staged by a CLI older than this format, one a
+  // sibling writer published, or one whose best-effort record write failed.
+  // Fall back to comparing timestamps.
+  //
+  // A `false` here stages, which writes a record, so that arm converges on
+  // its own. A `true` is the arm that does NOT: "already mirrored" means
+  // "do not stage", so a slot that keeps mirroring would keep skipping the
+  // stage, never acquire a record, and stay on the size/mtime proxy FOREVER -
+  // which is precisely the permanent downgrade the record exists to prevent.
+  // A same-size atomic replacement carrying the same mtime (rpm and dpkg both
+  // restore archive timestamps) would then read as current indefinitely,
+  // stranding the service on the previous CLI.
+  //
+  // So adopt instead: bind a record to the source's identity as observed
+  // right now. State the premise honestly - the fallback proves size and mtime
+  // agree, NOT that the bytes do, so adoption inherits whatever the proxy
+  // just concluded rather than establishing something stronger. What it buys
+  // is the future: every LATER replacement changes the inode and is caught
+  // exactly. It is therefore strictly better than the status quo on this
+  // path, which is the same conclusion with no way to ever improve on it.
+  //
+  // Restaging would also converge, and is the more obvious fix, but it costs
+  // every already-installed machine a redundant ~100 MB copy to reach a
+  // record this can write with one stat and one small JSON write.
+  const mirroredSource = await mirroredSourceStat(slotStat, source);
+  if (mirroredSource === null) return { kind: "stage", source };
+  return { kind: "adopt", source, sourceStat: mirroredSource };
 }
 
 // Which binary the slot SHOULD hold. The manifest wins when it names an
@@ -425,16 +496,27 @@ function isEnoentError(error: unknown): boolean {
 // staging did, so a freshly staged slot compares equal.
 //
 // Fallback freshness for a slot with no staging record: same length, same
-// mtime. Nothing is inferred from inequality beyond "cannot prove fresh" -
-// the caller stages on false, which writes a record, and from then on the
-// record answers this question exactly.
-async function mirrors(slotStat: Stats, source: string): Promise<boolean> {
+// mtime. Nothing is inferred from a null beyond "cannot prove fresh" - the
+// caller stages, which writes a record, and from then on the record answers
+// this question exactly. An unreadable source is one such null, and stages
+// for the same reason it always did: this cannot prove anything about a file
+// it cannot stat, and `stageWellKnownCliBinary` reports the real fault.
+//
+// Returns the stat that PROVED the mirror rather than a bare boolean, so an
+// adopting caller can bind its record to that same observation. Re-stat-ing
+// would sample the source a second time and could record an identity the
+// slot was never compared against - see `writeSlotSourceRecord`, which
+// declines the same third sample for the same reason.
+async function mirroredSourceStat(
+  slotStat: Stats,
+  source: string,
+): Promise<Stats | null> {
   const sourceStat = await statOrNull(source);
-  if (sourceStat === null) return false;
-  return (
+  if (sourceStat === null) return null;
+  const mirrored =
     slotStat.size === sourceStat.size &&
-    slotStat.mtime.getTime() === sourceStat.mtime.getTime()
-  );
+    slotStat.mtime.getTime() === sourceStat.mtime.getTime();
+  return mirrored ? sourceStat : null;
 }
 
 // What staging copied, and what it produced.
@@ -507,7 +589,7 @@ function slotSourceRecordPath(wellKnownPath: string): string {
   return `${wellKnownPath}${SLOT_SOURCE_RECORD_SUFFIX}`;
 }
 
-// `mtimeMs` here, deliberately, where `mirrors` must not: both sides are
+// `mtimeMs` here, deliberately, where `mirroredSourceStat` must not: both are
 // this module's own observations of one real file, with no `utimes` round
 // trip in between to truncate the precision away.
 function recordDescribes(
@@ -543,9 +625,10 @@ async function readSlotSourceRecord(
   const value = parsed as Record<string, unknown>;
   // Every field is required, which is also the upgrade path: a record written
   // by a CLI that predates `sourceIno`/`sourceDev` is rejected here, sending
-  // that slot down the `mirrors` fallback exactly once. The restage that
-  // follows writes a current record, so the older format costs one redundant
-  // copy per slot rather than a permanent downgrade to the weaker test.
+  // that slot down the timestamp fallback exactly once. That fallback ends in
+  // a current record either way - by staging when it cannot prove freshness,
+  // by adopting when it can - so the older format costs one pass, never a
+  // permanent downgrade to the weaker test.
   if (
     typeof value.sourcePath !== "string" ||
     typeof value.sourceSize !== "number" ||
@@ -573,27 +656,37 @@ async function readSlotSourceRecord(
 // record written before a publish that then failed would vouch for bytes
 // that never arrived.
 //
-// `copiedSource` is passed in rather than re-stat-ed here, and that is the
+// `sourceIdentity` is passed in rather than re-stat-ed here, and that is the
 // whole correctness argument for this function. Re-stat-ing would sample the
-// source a THIRD time, after the copy: if a package manager replaced A with B
-// mid-copy, the slot holds A's bytes while a fresh stat describes B, and the
-// record would then vouch for the stale slot against B's identity - which B
-// keeps matching, so the slot would never be refreshed again. The caller
-// passes the stat it already PROVED describes the bytes that were copied, and
-// declines to call this at all when it could prove no such thing.
+// source one time too many: if a package manager replaced A with B while the
+// caller was working, the slot holds A's bytes while a fresh stat describes
+// B, and the record would then vouch for the stale slot against B's identity
+// - which B keeps matching, so the slot would never be refreshed again. Each
+// caller passes the stat its own reasoning was carried out against.
+//
+// Two callers, resting on premises of DIFFERENT strength, and the difference
+// is worth stating because the record itself cannot express it. Staging
+// passes the stat it PROVED describes the bytes it copied, and declines to
+// call this at all when it could prove no such thing. Adoption
+// (`slotRefreshPlan`) passes the stat that proved only same-size, same-mtime
+// against a slot some other writer published - so the record it lays down is
+// exactly as good as that proxy, no better. That is still the right trade
+// there: the alternative on that path is a slot that consults the proxy
+// forever and can never improve, whereas one record turns every LATER
+// replacement into an exact inode comparison.
 async function writeSlotSourceRecord(
   wellKnownPath: string,
   source: string,
-  copiedSource: Stats,
+  sourceIdentity: Stats,
 ): Promise<void> {
   const slotStat = await statOrNull(wellKnownPath);
   if (slotStat === null) return;
   const record: SlotSourceRecord = {
     sourcePath: source,
-    sourceSize: copiedSource.size,
-    sourceMtimeMs: copiedSource.mtimeMs,
-    sourceIno: copiedSource.ino,
-    sourceDev: copiedSource.dev,
+    sourceSize: sourceIdentity.size,
+    sourceMtimeMs: sourceIdentity.mtimeMs,
+    sourceIno: sourceIdentity.ino,
+    sourceDev: sourceIdentity.dev,
     slotSize: slotStat.size,
     slotMtimeMs: slotStat.mtimeMs,
   };
@@ -606,7 +699,7 @@ async function writeSlotSourceRecord(
 
 // Whether two stats of the SAME path describe the same unreplaced file.
 //
-// Unlike `mirrors` above this compares `mtimeMs` directly, and must: both
+// Unlike the fallback above this compares `mtimeMs` directly, and must: both
 // sides come from stat-ing one real file, so there is no `utimes`
 // round-trip to truncate away the sub-millisecond digits - and those digits
 // are exactly what catches a replacement that landed inside the same
@@ -629,7 +722,7 @@ async function statOrNull(path: string): Promise<Stats | null> {
   }
 }
 
-// Deliberately does NOT follow symlinks - see `pendingRefreshSource` for why
+// Deliberately does NOT follow symlinks - see `slotRefreshPlan` for why
 // the slot has to be inspected as the directory entry it is rather than as
 // whatever it points at.
 async function lstatOrNull(path: string): Promise<Stats | null> {
@@ -774,10 +867,18 @@ export async function stageWellKnownCliBinary(opts: {
     }
     await rename(staging, wellKnownPath);
     // Deliberately no record when the copy raced a replacement. The next run
-    // then finds none, falls back to `mirrors` - which the un-mirrored mtime
-    // above makes fail - and restages. That costs one redundant copy; writing
-    // a record anyway would cost a slot that is permanently stale and
+    // finds none and falls back to the timestamp test - which the skipped
+    // `utimes` above makes FAIL - and restages. That costs one redundant copy;
+    // writing a record anyway would cost a slot that is permanently stale and
     // permanently sure it is not.
+    //
+    // The skipped `utimes` is doing double duty now that the fallback can
+    // ADOPT a record instead of only staging. An un-mirrored slot fails the
+    // size/mtime test, so it can never be adopted either - which matters more
+    // than it used to, because an adoption here would bind a record to the
+    // RACING replacement's identity and reach exactly the permanent staleness
+    // this branch declines to write. Both escapes from this state are closed
+    // by the same one line not running.
     if (copiedSource !== null) {
       await writeSlotSourceRecord(wellKnownPath, source, copiedSource);
     }

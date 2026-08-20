@@ -756,6 +756,151 @@ describe("refreshWellKnownSlotIfStale", () => {
     expect(readFileSync(wellKnownPath, "utf8")).toBe("matching binary bytes");
   });
 
+  // A mirrored slot with no staging record used to be a TRAP with no exit.
+  // The timestamp fallback answered "already fresh", "already fresh" means
+  // "do not stage", and staging was the only thing that wrote a record - so
+  // the slot consulted the size/mtime proxy for the rest of its life and
+  // could never improve on it. Every slot published by Desktop, by a CLI
+  // predating the record format, or by a stage whose best-effort record write
+  // failed, starts in exactly that state.
+  //
+  // Adoption is the exit: write the record from the very stat that proved the
+  // mirror. It must not re-copy to do it - a ~100 MB restage per installed
+  // machine is the cost this avoids - so the slot's inode is the assertion
+  // that matters here, not just its bytes.
+  it("packaged, slot mirrors its source but carries NO record: adopts one without re-copying the binary", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "AAAAAAAAAA");
+    const stamped = new Date(Date.now() - 120_000);
+    utimesSync(running, stamped, stamped);
+    seedMirroredSlot(wellKnownPath, running);
+    const recordPath = `${wellKnownPath}.source.json`;
+    // Precondition: no record, which is the whole premise. A record already
+    // present here would make the assertion below pass for the wrong reason.
+    expect(existsSync(recordPath)).toBe(false);
+    const slotBefore = statSync(wellKnownPath);
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    // Null, not "staged": nothing was copied and no caller is being told to
+    // restart. The slot is the same file it was, down to the inode.
+    expect(result).toBeNull();
+    expect(statSync(wellKnownPath).ino).toBe(slotBefore.ino);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("AAAAAAAAAA");
+    expect(existsSync(recordPath)).toBe(true);
+  });
+
+  // What the adopted record BUYS, which is the only reason to write it: the
+  // replacement shape the timestamp proxy is blind to. Every package manager
+  // installs by writing a new file and renaming it over the old one, so the
+  // inode always changes; rpm and dpkg then restore the archive's recorded
+  // mtime, and a same-size build reproduces the length. Size and mtime
+  // therefore both match while the bytes are new.
+  //
+  // Skipped on Windows, where `ino` is 0 on filesystems that expose no file
+  // index - `sourceIsUnchanged` documents that it degrades to the size/mtime
+  // test there, so this shape genuinely cannot be caught on such a volume.
+  it.skipIf(process.platform === "win32")(
+    "packaged, an adopted record catches a same-size, same-mtime source replacement",
+    async () => {
+      seaState.current = true;
+      const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+        await import("../well-known-cli");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      const running = join(workHome, "running-binary");
+      writeFileSync(running, "AAAAAAAAAA");
+      const stamped = new Date(Date.now() - 120_000);
+      utimesSync(running, stamped, stamped);
+      seedMirroredSlot(wellKnownPath, running);
+      const sourceBefore = statSync(running);
+
+      expect(
+        await withExecPath(running, () =>
+          refreshWellKnownSlotIfStale(ENVIRONMENT),
+        ),
+      ).toBeNull();
+      expect(existsSync(`${wellKnownPath}.source.json`)).toBe(true);
+
+      // The atomic install: same length, same mtime, new inode.
+      const replacement = `${running}.replacement`;
+      writeFileSync(replacement, "BBBBBBBBBB");
+      utimesSync(replacement, stamped, stamped);
+      renameSync(replacement, running);
+
+      // Positive control, and the reason this test is not vacuous. The
+      // fallback compares exactly these two numbers, and they still agree -
+      // so a re-stage below can only have come from the record's inode
+      // comparison. Without the adoption above there would be no record, and
+      // this refresh could only ever return null.
+      const slotStat = statSync(wellKnownPath);
+      const sourceStat = statSync(running);
+      expect(sourceStat.size).toBe(slotStat.size);
+      expect(sourceStat.mtime.getTime()).toBe(slotStat.mtime.getTime());
+      // ...and the replacement really did change identity.
+      expect(sourceStat.ino).not.toBe(sourceBefore.ino);
+
+      const result = await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      );
+
+      expect(result?.staged).toBe("staged");
+      expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBB");
+    },
+  );
+
+  // An adoption that loses the lock has deferred NOTHING worth telling the
+  // caller about: the slot is a faithful copy either way, and the record is a
+  // strengthening of the freshness test rather than a repair of the bytes.
+  // Reporting `deferred-busy` here would put a "the supervisor may be on old
+  // bytes" warning in `traycer host start`'s log for a slot that is current,
+  // on every startup until some run happened to win the lock.
+  it("packaged, an adoption that loses the CLI lock: returns null rather than a deferred-busy warning", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { acquireCliLock } = await import("../cli-lock");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "AAAAAAAAAA");
+    const stamped = new Date(Date.now() - 120_000);
+    utimesSync(running, stamped, stamped);
+    seedMirroredSlot(wellKnownPath, running);
+    const recordPath = `${wellKnownPath}.source.json`;
+
+    const lock = await acquireCliLock({
+      environment: ENVIRONMENT,
+      reason: "test-hold-for-contention",
+      waitMs: 0,
+      pollIntervalMs: 100,
+    });
+    try {
+      const contended = await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      );
+
+      expect(contended).toBeNull();
+      expect(existsSync(recordPath)).toBe(false);
+    } finally {
+      await lock.release();
+    }
+
+    // Positive control: the same call with the lock free DOES adopt, so the
+    // null above is the contention branch being exercised and not an
+    // adoption that was never wanted in the first place.
+    expect(
+      await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      ),
+    ).toBeNull();
+    expect(existsSync(recordPath)).toBe(true);
+  });
+
   it("packaged, running binary differs in size: re-stages", async () => {
     seaState.current = true;
     const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
@@ -1613,6 +1758,59 @@ describe("refreshWellKnownSlotIfStale", () => {
 
     expect(result?.staged).toBe("staged");
     expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBBBB");
+  });
+
+  // The mirror of the test above, and why the wait is chosen per-PLAN rather
+  // than per-caller. The supervised entry's patience is justified by what a
+  // skipped STAGE costs it - a supervisor left executing the previous CLI
+  // until something restarts the service. An adoption costs nothing of the
+  // sort: the slot is already a faithful copy, and the record is a
+  // strengthening of a later freshness test. Spending five seconds of startup
+  // on it would be the lock holding up a supervisor for no benefit at all,
+  // which is the failure mode this whole lock design is under orders to
+  // avoid.
+  it("packaged, supervised start with only a record to adopt: does NOT wait for a held lock", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotForSupervisedStart, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { acquireCliLock } = await import("../cli-lock");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "AAAAAAAAAA");
+    const stamped = new Date(Date.now() - 120_000);
+    utimesSync(running, stamped, stamped);
+    // Mirrored, so the only thing this refresh could want is a record.
+    seedMirroredSlot(wellKnownPath, running);
+
+    const lock = await acquireCliLock({
+      environment: ENVIRONMENT,
+      reason: "test-hold-for-supervised-adoption",
+      waitMs: 0,
+      pollIntervalMs: 100,
+    });
+    try {
+      let settled = false;
+      const refresh = withExecPath(running, () =>
+        refreshWellKnownSlotForSupervisedStart(ENVIRONMENT),
+      );
+      void refresh.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      // The lock is still held, and stays held for the whole assertion. An
+      // implementation that spent the supervised `waitMs` on an adoption
+      // could not have settled yet - that wait is 5s, twenty times this.
+      await new Promise((r) => setTimeout(r, 250));
+      expect(settled).toBe(true);
+      expect(await refresh).toBeNull();
+    } finally {
+      await lock.release();
+    }
   });
 });
 
