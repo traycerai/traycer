@@ -665,15 +665,11 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(restartMutations.length).toBeGreaterThan(0);
   });
 
-  it("a host-restart doctor fix does not dispatch while a same-key hostRestart is already in flight", async () => {
-    // `onBridgeRestart` returns early while `anyPending` (which includes
-    // the cache-wide `hostRestart` count). Routing through `onLocalFix` /
-    // `hostRunDoctor` would still call `restartHost`.
-    //
-    // Not pinnable without a production change: `DoctorFixControl` still
-    // reads `localFixPending` on the local-bridge route, so
-    // `bridgeRestartPending` never disables the button. The click no-op
-    // is the gate that actually exists.
+  it("a host-restart doctor fix is disabled while a same-key hostRestart is in flight, and a click does not dispatch", async () => {
+    // Discriminator: if `DoctorFixControl` still reads `localFixPending` on
+    // the local-bridge restart route, the button stays enabled (and the
+    // click is only a silent no-op). `bridgeRestartPending` owning that
+    // route's pending state disables it.
     let releaseExternal: (() => void) | null = null;
     const externalGate = new Promise<void>((resolve) => {
       releaseExternal = resolve;
@@ -705,7 +701,10 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
 
     await openHostOverviewMenu();
     fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
-    await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING");
+    const idleFix = await screen.findByTestId(
+      "host-doctor-fix-CLI_UPGRADE_PENDING",
+    );
+    expectButtonEnabled(idleFix);
 
     act(() => {
       if (mutateRef.current === null) {
@@ -721,12 +720,22 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       ).toBeGreaterThan(0);
     });
 
-    fireEvent.click(screen.getByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"));
+    const gatedFix = screen.getByTestId("host-doctor-fix-CLI_UPGRADE_PENDING");
+    if (!(gatedFix instanceof HTMLButtonElement)) {
+      throw new Error("expected fix button");
+    }
+    expect(gatedFix.disabled).toBe(true);
+    fireEvent.click(gatedFix);
     expect(management.restartHost).not.toHaveBeenCalled();
 
     await act(async () => {
       releaseExternal?.();
       await externalGate;
+    });
+    await waitFor(() => {
+      expectButtonEnabled(
+        screen.getByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
+      );
     });
   });
 });
