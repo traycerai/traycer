@@ -1,5 +1,6 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -984,5 +985,130 @@ describe("refreshWellKnownSlotIfStale", () => {
     // value, even though the bytes it actually copied were the source's
     // ORIGINAL ones and the source has since moved on to the replacement).
     expect(slotStat.mtime.getTime()).not.toBe(past.getTime());
+  });
+
+  // Fix 1: an unreadable manifest (corrupt bytes, or a real I/O fault such
+  // as EACCES) must not fall back to the running binary - the manifest may
+  // well name a DIFFERENT installation, and repointing on a transient read
+  // error would silently move the slot (and the registered service) onto
+  // whichever executable happened to be invoked. Writing invalid JSON at
+  // the manifest path is enough: `readCliManifest` throws
+  // CLI_MANIFEST_INVALID for any present-but-malformed manifest, which
+  // reaches `authoritativeSlotSource`'s catch the same way a genuine I/O
+  // fault would.
+  it("packaged, manifest is unreadable (corrupt): returns null and leaves the slot untouched", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { cliManifestPath } = await import("../paths");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    // Genuinely stale relative to the running binary, so a null result
+    // below is proof the manifest fault stopped the refresh - not proof
+    // there was nothing to do in the first place.
+    const staleBytes = "stale slot bytes a corrupt manifest must not repoint";
+    writeFileSync(wellKnownPath, staleBytes);
+    const running = join(workHome, "running-binary");
+    writeFileSync(
+      running,
+      "a currently running binary, a different length than the stale slot",
+    );
+    const manifestPath = cliManifestPath(ENVIRONMENT);
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, "not valid json");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result).toBeNull();
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
+  });
+
+  // Fix 2: staleness is now decided via `lstat`, not `stat`, specifically
+  // so a legacy SYMLINK slot (an older Desktop's staging strategy) is never
+  // read as "already fresh". Under the old `stat`-based check this would
+  // follow the link to the authoritative binary and compare that binary
+  // against itself, report a faithful mirror, and leave the link in place
+  // forever - a content check alone can't tell the two outcomes apart,
+  // since reading THROUGH a live symlink looks correct either way. Only
+  // inspecting the slot's own directory entry (lstat) does.
+  it.skipIf(process.platform === "win32")(
+    "packaged, slot is a legacy SYMLINK to the authoritative binary: restages it into a real file",
+    async () => {
+      seaState.current = true;
+      const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+        await import("../well-known-cli");
+      const { writeCliManifest } = await import("../../manifest/cli-manifest");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      mkdirSync(dirname(wellKnownPath), { recursive: true });
+      const anchored = join(workHome, "anchored-binary-b");
+      const anchoredBytes = "binary B - the manifest's real anchor";
+      writeFileSync(anchored, anchoredBytes);
+      await writeCliManifest(ENVIRONMENT, {
+        version: "1.2.3",
+        installedAt: new Date(0).toISOString(),
+        binaryPath: anchored,
+        source: "homebrew",
+        pendingUpgrade: null,
+      });
+      // A legacy slot left as a symlink straight at the authoritative
+      // binary - read THROUGH it, the content already matches byte for
+      // byte.
+      symlinkSync(anchored, wellKnownPath);
+      const running = join(workHome, "some-other-running-binary");
+      writeFileSync(running, "a third, unrelated running binary");
+
+      const result = await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      );
+
+      expect(result?.staged).toBe("staged");
+      // The load-bearing assertion: the slot is now a REGULAR FILE, not
+      // still a symlink. Content alone would pass even under the old
+      // `stat`-based bug, since a live symlink reads through to the right
+      // bytes either way.
+      const slotStat = lstatSync(wellKnownPath);
+      expect(slotStat.isSymbolicLink()).toBe(false);
+      expect(readFileSync(wellKnownPath, "utf8")).toBe(anchoredBytes);
+    },
+  );
+
+  // Fix 3: staging now runs under `withCliLock` with `waitMs: 0`, and a
+  // busy lock makes the whole refresh a no-op rather than blocking startup
+  // behind another process's staging. Simulated here by holding the exact
+  // same lock (same environment -> same `cliLockPath`) from this test
+  // itself before calling the refresh.
+  it("packaged, the CLI lock is already held: returns null and leaves a stale slot untouched", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { acquireCliLock } = await import("../cli-lock");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const staleBytes = "stale slot bytes a busy lock must leave untouched";
+    writeFileSync(wellKnownPath, staleBytes);
+    const running = join(workHome, "running-binary");
+    writeFileSync(
+      running,
+      "a currently running binary, a different length than the stale slot",
+    );
+
+    const lock = await acquireCliLock({
+      environment: ENVIRONMENT,
+      reason: "test-hold-for-contention",
+      waitMs: 0,
+      pollIntervalMs: 100,
+    });
+    try {
+      const result = await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      );
+
+      expect(result).toBeNull();
+      expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
+    } finally {
+      await lock.release();
+    }
   });
 });
