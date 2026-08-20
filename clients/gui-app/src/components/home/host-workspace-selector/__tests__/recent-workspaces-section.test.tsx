@@ -76,13 +76,14 @@ describe("RecentWorkspacesSection", () => {
     render(<RecentWorkspacesSection {...BASE_PROPS} />);
 
     expect(screen.getByText("alpha")).toBeTruthy();
-    expect(
-      screen
-        .getByRole("button", {
-          name: "Recent folders, 2",
-        })
-        .getAttribute("aria-expanded"),
-    ).toBe("true");
+    const disclosure = screen.getByRole("button", {
+      name: "Recent folders, 2",
+    });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("alpha")).toBeNull();
   });
 
   it("keeps stale-path recovery inline and disables parallel Adds", () => {
@@ -97,7 +98,9 @@ describe("RecentWorkspacesSection", () => {
 
     expect(screen.getByText("Unavailable")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      screen
+        .getByRole("button", { name: "Retry alpha" })
+        .hasAttribute("disabled"),
     ).toBe(true);
     expect(screen.getByRole("button", { name: "Locate alpha" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Forget alpha" })).toBeTruthy();

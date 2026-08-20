@@ -52,7 +52,7 @@ export function RecentWorkspacesSection(props: {
   return (
     <Collapsible
       className="contents"
-      open={!empty && (props.activeCount === 0 || open)}
+      open={!empty && open}
       onOpenChange={(nextOpen) => {
         if (!empty) setOpen(nextOpen);
       }}
@@ -168,7 +168,7 @@ function RecentWorkspaceRow(props: {
           disabled={pending || anotherPending}
           aria-label={
             props.failed
-              ? undefined
+              ? `Retry ${workspaceFolderName(props.entry.path)}`
               : `Add ${workspaceFolderName(props.entry.path)} to context`
           }
           onClick={() => void props.onAdd()}

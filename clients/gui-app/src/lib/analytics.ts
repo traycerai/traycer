@@ -19,6 +19,11 @@ export type AnalyticsSource =
   // gesture at all behind it.
   | "host_failover";
 
+export type AnalyticsWorkspaceSurface =
+  "landing" | "new-conversation" | "owner";
+
+export type AnalyticsWorkspaceContextSource = "browse" | "recent";
+
 export type AnalyticsBlocker =
   | "authentication"
   | "authorization"
@@ -584,15 +589,15 @@ export interface AnalyticsEventProperties {
   };
   readonly [AnalyticsEvent.WorkspacePrimaryChanged]: SourceProperties;
   readonly [AnalyticsEvent.WorkspaceContextAdded]: {
-    readonly source: "browse" | "recent";
+    readonly source: AnalyticsWorkspaceContextSource;
     readonly outcome: "succeeded" | "failed";
-    readonly surface: "landing" | "new-conversation" | "owner";
+    readonly surface: AnalyticsWorkspaceSurface;
   };
   readonly [AnalyticsEvent.WorkspaceMovedToRecent]: {
-    readonly surface: "landing" | "new-conversation" | "owner";
+    readonly surface: AnalyticsWorkspaceSurface;
   };
   readonly [AnalyticsEvent.WorkspaceRecentForgotten]: {
-    readonly surface: "landing" | "new-conversation" | "owner";
+    readonly surface: AnalyticsWorkspaceSurface;
   };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {

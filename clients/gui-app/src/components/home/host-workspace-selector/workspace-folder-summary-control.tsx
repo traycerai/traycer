@@ -442,8 +442,6 @@ function EmptyRecentFolderTrigger(props: {
       <span
         className="inline-flex w-fit"
         data-testid="folder-add-disabled-reason"
-        role="button"
-        tabIndex={0}
       >
         {props.trigger}
       </span>

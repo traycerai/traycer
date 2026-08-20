@@ -661,6 +661,7 @@ function HomeWorkspaceRows(props: {
   );
   const recentWorkspaces = useRecentWorkspaces({
     client: activeHostClient,
+    hostId: props.activeHostId,
     workspaceSource,
     disabled: props.disabled,
     surface: stagingKey.surface,

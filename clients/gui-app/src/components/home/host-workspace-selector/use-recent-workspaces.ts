@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { WorkspaceRecentEntry } from "@traycer/protocol/host/workspace/unary-schemas";
@@ -63,6 +63,7 @@ function emptyRecentWorkspaceState(
 
 export function useRecentWorkspaces(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
   readonly workspaceSource: HomeWorkspaceSource;
   readonly disabled: boolean;
   readonly surface: WorktreeStagingKey["surface"];
@@ -90,7 +91,11 @@ export function useRecentWorkspaces(args: {
   const pickAndPrepareFolders = useWorkspaceFolderActionsForClient(
     args.client,
   ).pickAndPrepareFolders;
-  const activeHostId = args.client?.getActiveHostId() ?? null;
+  const activeHostId = args.hostId;
+  const activeHostIdRef = useRef(activeHostId);
+  useLayoutEffect(() => {
+    activeHostIdRef.current = activeHostId;
+  }, [activeHostId]);
   const [state, setState] = useState<RecentWorkspaceState>(() =>
     emptyRecentWorkspaceState(activeHostId),
   );
@@ -220,7 +225,7 @@ export function useRecentWorkspaces(args: {
 
   const add = useCallback(
     async (workspacePath: string): Promise<boolean> => {
-      const dispatchHostId = args.client?.getActiveHostId() ?? null;
+      const dispatchHostId = activeHostIdRef.current;
       updateState((current) => ({
         ...current,
         failedPaths: withoutPath(current.failedPaths, workspacePath),
@@ -229,7 +234,7 @@ export function useRecentWorkspaces(args: {
         const response = await prepareRecent(workspacePath);
         if (
           dispatchHostId === null ||
-          args.client?.getActiveHostId() !== dispatchHostId ||
+          activeHostIdRef.current !== dispatchHostId ||
           response.folders.length === 0
         ) {
           updateState((current) => ({
@@ -302,7 +307,6 @@ export function useRecentWorkspaces(args: {
       }
     },
     [
-      args.client,
       args.surface,
       args.workspaceSource,
       forgetRecent,
@@ -315,7 +319,9 @@ export function useRecentWorkspaces(args: {
   const locate = useCallback(
     async (workspacePath: string): Promise<boolean> => {
       const result = await pickAndPrepareFolders(true);
-      if (result === null) return false;
+      if (result === null || activeHostIdRef.current !== result.hostId) {
+        return false;
+      }
       const folders = result.folders.map((folder) =>
         preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
       );
@@ -330,11 +336,13 @@ export function useRecentWorkspaces(args: {
         failedPaths: replacementForgotten
           ? withoutPath(current.failedPaths, workspacePath)
           : new Set(current.failedPaths).add(workspacePath),
-        announcement: "Workspace location updated and added to context.",
+        announcement: replacementForgotten
+          ? "Workspace location updated and added to context."
+          : "Workspace added to context. The old entry is still in Recent.",
       }));
       Analytics.getInstance().track(AnalyticsEvent.WorkspaceContextAdded, {
         source: "browse",
-        outcome: "succeeded",
+        outcome: replacementForgotten ? "succeeded" : "failed",
         surface: args.surface,
       });
       return true;
@@ -350,7 +358,7 @@ export function useRecentWorkspaces(args: {
   const moveToRecent = useCallback(
     async (workspacePath: string): Promise<boolean> => {
       if (!supported || currentMovingWorkspace !== null) return false;
-      const dispatchHostId = args.client?.getActiveHostId() ?? null;
+      const dispatchHostId = activeHostIdRef.current;
       if (dispatchHostId === null) return false;
       const moving = { hostId: dispatchHostId, path: workspacePath };
       updateState((current) => ({ ...current, movingWorkspace: moving }));
@@ -360,7 +368,7 @@ export function useRecentWorkspaces(args: {
           bumpRecency: false,
           failureFeedback: "move_warning",
         });
-        if (args.client?.getActiveHostId() !== moving.hostId) {
+        if (activeHostIdRef.current !== moving.hostId) {
           return false;
         }
         updateState((current) => ({
@@ -382,7 +390,6 @@ export function useRecentWorkspaces(args: {
       }
     },
     [
-      args.client,
       args.surface,
       currentMovingWorkspace,
       recordRecentAsync,
