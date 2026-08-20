@@ -67,7 +67,7 @@ export interface ServiceInstallLifecycleState {
   // launchd's cached definition and would leave a regenerated plist stale).
   // `start` is used ONLY on the Desktop-managed path: the agent label's
   // definition lives in the app bundle and a host-bytes swap does not
-  // change it, so kickstarting it after a cooperative stop runs the current
+  // change it, so kickstarting it after the swap runs the current
   // definition on the new bytes. Renderer-side consumers keep tolerating
   // the historical `restart`/`start` strings from older CLIs.
   postSwapAction: "start" | "install" | "none";
@@ -101,6 +101,15 @@ export interface CreateServiceInstallLifecycleOptions {
   // When null, the lifecycle leaves an unregistered service alone
   // (legacy `host update` behaviour).
   readonly bootstrap: BootstrapServiceOptions | null;
+  // Forwarded to the pre-swap `controller.stop`. `false` keeps the
+  // cooperative contract: a busy host denies the shutdown claim and the
+  // install aborts with `E_HOST_BUSY` before anything is touched. `true`
+  // is the caller's stated consent (`--force`) to kill in-flight work:
+  // the stop skips the claim and force-stops the host process, exactly
+  // like `host stop --force`. Without this, the `--force` on
+  // ensure/update/apply only skipped the busy PRE-check and the
+  // cooperative stop's own busy denial still aborted the install.
+  readonly force: boolean;
 }
 
 // Build the lifecycle hooks `installHost` needs to keep the OS
@@ -118,12 +127,6 @@ export function createServiceInstallLifecycle(
     postSwapAction: "none",
     postSwapError: null,
   };
-  // True only when beforeSwap's stop was the COOPERATIVE one on a
-  // Desktop-managed host - the only case afterSwap may kickstart the agent
-  // back. Deliberately not keyed on `stoppedBeforeSwap`: Windows' stray-
-  // process stop also sets that, and starting after it would resurrect the
-  // pre-cooperative contract this flag exists to scope.
-  let cooperativeStopBeforeSwap = false;
   const lifecycle: InstallHostLifecycle = {
     swapLockRecovery: swapLockRecoveryFor(label),
     beforeSwap: async () => {
@@ -137,7 +140,7 @@ export function createServiceInstallLifecycle(
       // open handles inside the install dir would fail the swap rename, so
       // it runs even when the service wasn't observed running.
       if (status.state === "running" || process.platform === "win32") {
-        await controller.stop(label, { force: false });
+        await controller.stop(label, { force: options.force });
         state.stoppedBeforeSwap = true;
         return;
       }
@@ -146,20 +149,23 @@ export function createServiceInstallLifecycle(
       // silently - the install printed "stopping service", swapped under
       // the running host, and the new bytes went live only at Desktop's
       // next register cycle, which users reasonably read as "the install
-      // fixed it". `controller.stop` now performs a cooperative shutdown
-      // through the host's own lifecycle RPCs, so use it: a busy denial
-      // still aborts (never swap over live work), while an unreachable
-      // host degrades to today's swap-under-live-host behavior - installing
-      // is strictly better than refusing on the machines where the host is
-      // too broken to answer.
+      // fixed it". `controller.stop` performs a cooperative shutdown
+      // through the host's own lifecycle RPCs - or, when the caller
+      // passed `--force`, a forced kill of the host child - so use it: a
+      // busy denial still aborts (never swap over live work without the
+      // user's stated `--force` consent), while a host that cannot be
+      // stopped - already gone with its pid metadata purged, or too
+      // broken to answer its RPC - degrades to swapping anyway.
+      // Installing is strictly better than refusing there, and
+      // `afterSwap` kickstarts the agent either way, so the degrade never
+      // leaves the machine hostless.
       if (
         status.state === "externally-managed" &&
         process.platform === "darwin"
       ) {
         try {
-          await controller.stop(label, { force: false });
+          await controller.stop(label, { force: options.force });
           state.stoppedBeforeSwap = true;
-          cooperativeStopBeforeSwap = true;
         } catch (cause) {
           if (
             cause instanceof CliError &&
@@ -168,7 +174,7 @@ export function createServiceInstallLifecycle(
             throw cause;
           }
           createCliLogger(options.environment).warn(
-            "Cooperative stop of the Desktop-managed host was unavailable; installing under the live host (new bytes go live at Desktop's next register cycle).",
+            "Stopping the Desktop-managed host was unavailable; swapping the install anyway (the post-swap kickstart starts a stopped host; a live one picks the new bytes up at its next restart).",
             {
               cause: cause instanceof Error ? cause.message : String(cause),
             },
@@ -219,18 +225,48 @@ export function createServiceInstallLifecycle(
               { cause: cause instanceof Error ? cause.message : String(cause) },
             );
           });
-        if (cooperativeStopBeforeSwap) {
-          // We cooperatively stopped the Desktop-managed host to swap;
-          // bring it back on the NEW bytes now instead of leaving the
-          // machine hostless until Desktop's next register cycle. `start`
-          // routes to a kickstart of the agent label - the bundle-owned
-          // definition is unchanged by a host-bytes swap, so this is not
-          // the cached-definition staleness case that forbids
-          // start-after-swap on CLI-owned registrations. A failure must
-          // not abort the completed install - record it and steer to
-          // doctor like every other post-swap error.
+        if (process.platform === "darwin") {
+          // Bring the host up on the NEW bytes now instead of leaving the
+          // machine hostless until Desktop's next register cycle. Both
+          // routes kickstart the agent label - the bundle-owned definition
+          // is unchanged by a host-bytes swap, so this is not the cached-
+          // definition staleness case that forbids start-after-swap on
+          // CLI-owned registrations.
+          //
+          // Unconditional on purpose, NOT gated on whether beforeSwap's
+          // stop stopped anything. The gated version left a machine whose
+          // host was already down (a prior `host stop --force` purges
+          // pid.json, so the pre-swap stop throws no-metadata and degrades)
+          // with a completed install, a printed "starting service", and no
+          // host until someone ran `host restart` by hand.
+          //
+          // Which kickstart depends on what the stop PROVED, and the split
+          // is `stoppedBeforeSwap` exactly:
+          //   - the stop RESOLVED: the host child is proven gone, but its
+          //     supervisor can outlive it through the whole post-mortem
+          //     (stderr drain; crash-report scan after a forced kill), and
+          //     a plain kickstart against a job launchd still considers
+          //     running is a silent no-op - the machine would stay
+          //     hostless. Recycle (`kickstart -k`) instead: it starts a
+          //     stopped job and replaces a winding-down supervisor, and
+          //     the only thing it can kill is a supervisor whose child is
+          //     already dead (same reasoning as `stopServiceForRestart`).
+          //   - the stop THREW (degraded): a host MAY still be live and
+          //     was never asked/consented to die, so recycling would kill
+          //     live work. Plain kickstart: starts a genuinely stopped
+          //     job, silent no-op on a live one, which then picks the new
+          //     bytes up at its next restart.
+          //
+          // A failure must not abort the completed install - record it and
+          // steer to doctor like every other post-swap error.
           try {
-            await controller.start(label);
+            if (state.stoppedBeforeSwap) {
+              await controller.relaunchAfterRestart(label, {
+                forcedRecycle: true,
+              });
+            } else {
+              await controller.start(label);
+            }
             state.postSwapAction = "start";
           } catch (cause) {
             state.postSwapError =

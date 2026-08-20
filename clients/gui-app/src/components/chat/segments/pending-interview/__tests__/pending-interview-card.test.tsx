@@ -140,10 +140,12 @@ function card(): HTMLElement {
   return screen.getByTestId("interview-card");
 }
 
-// The proceed (Next/Submit) action button, identified by its ⏎ shortcut hint -
-// distinct from the pager's "Next question" / "Previous question" buttons.
+// The proceed (Next/Submit) action button, distinct from the pager's
+// "Next question" / "Previous question" buttons.
 function proceedButton(): HTMLButtonElement {
-  return screen.getByRole<HTMLButtonElement>("button", { name: /↵/ });
+  return screen.getByRole<HTMLButtonElement>("button", {
+    name: /^(Next|Submit)$/,
+  });
 }
 
 describe("PendingInterviewCard keyboard navigation", () => {
@@ -151,6 +153,19 @@ describe("PendingInterviewCard keyboard navigation", () => {
     cleanup();
     useInterviewDraftStore.setState({ draftsByChat: {} });
     window.localStorage.clear();
+  });
+
+  it("keeps the Submit shortcut keycaps at the primary action contrast", () => {
+    renderCard([singleSelect("free", "Describe it", [])], vi.fn(), null);
+
+    const submit = screen.getByRole("button", { name: "Submit" });
+    const keycaps = submit.querySelectorAll('[data-slot="kbd"]');
+    expect(keycaps).toHaveLength(2);
+    for (const keycap of keycaps) {
+      expect(keycap.className).toContain("border-current");
+      expect(keycap.className).toContain("bg-transparent");
+      expect(keycap.className).toContain("text-current");
+    }
   });
 
   it("restores each chat's current question and answers after remount", () => {
@@ -422,9 +437,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
     expect(
       screen.getByRole<HTMLButtonElement>("button", { name: /Skip/ }).disabled,
     ).toBe(true);
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: /↵/ }).disabled,
-    ).toBe(true);
+    expect(proceedButton().disabled).toBe(true);
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Previous question",

@@ -71,6 +71,16 @@ export interface HostInstallArgs {
   // is no durable deferred-pin state the way there is for a staged
   // update.
   readonly ifIdle: boolean;
+  // Install even when the host has work in progress: threaded into the
+  // service lifecycle so the pre-swap stop skips the cooperative
+  // shutdown claim and kills the host process, exactly like
+  // `host stop --force`. Without it a busy host denies the claim and
+  // the install aborts with `E_HOST_BUSY` - which used to have no
+  // supported escape short of `host stop --force` + reinstall.
+  // Mutually exclusive with `ifIdle` (one refuses on busy work, the
+  // other kills it). Inert on the bytes-only path (`noServiceRegister`):
+  // that path performs no stop for force to escalate.
+  readonly force: boolean;
 }
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
@@ -84,6 +94,15 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         exitCode: 1,
       });
     }
+    if (args.force && args.ifIdle) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "host install: --force and --if-idle are mutually exclusive; one refuses to disturb in-flight work, the other kills it",
+        details: { environment: ctx.runtime.environment },
+        exitCode: 1,
+      });
+    }
     ctx.runtime.logger.info("Host install command started", {
       environment: ctx.runtime.environment,
       sourceKind: args.fromPath !== null ? "local-file" : "registry",
@@ -93,6 +112,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       allowSelfInvocation: args.allowSelfInvocation,
       noServiceRegister: args.noServiceRegister,
       ifIdle: args.ifIdle,
+      force: args.force,
     });
     const source: InstallSourceArg =
       args.fromPath !== null
@@ -126,6 +146,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             enableLinger: args.enableLinger,
             allowSelfInvocation: args.allowSelfInvocation,
           },
+          force: args.force,
         });
     const lifecycle =
       handle !== null

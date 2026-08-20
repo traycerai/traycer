@@ -206,6 +206,7 @@ function renderBoundSurface(kind: "chat" | "terminal-agent"): void {
           missingWorktreePaths: [],
           bindingResolved: true,
           onBindingCommitted: null,
+          onForkOnHost: null,
         }}
       />
     </TooltipProvider>,

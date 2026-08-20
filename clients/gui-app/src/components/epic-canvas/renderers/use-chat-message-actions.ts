@@ -95,11 +95,16 @@ export interface ChatMessageActionsResult {
    * carried questions re-opened as answerable). Used by pending and resolved
    * interview actions; the per-message fork buttons route through the same
    * seed.
+   *
+   * `initialHostId` preselects the dialog's host picker — the host-switch
+   * gesture passes the host the user picked there; every per-message entry
+   * point passes `null` (open on the source chat's own host).
    */
   readonly forkAtAssistantMessage: (
     assistantMessageId: string,
     mode: ChatForkMode,
     interviewBlockId: string | null,
+    initialHostId: string | null,
   ) => void;
   readonly revertOnEdit: {
     readonly open: boolean;
@@ -277,6 +282,7 @@ export function useChatMessageActions(
       assistantMessageId: string,
       mode: ChatForkMode,
       interviewBlockId: string | null,
+      initialHostId: string | null,
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
@@ -322,6 +328,7 @@ export function useChatMessageActions(
         // plain fork of a completed message — no streaming interview to carry.
         carriedInterviews: mode === "ab-worktree" ? "pending" : "settled",
         forkMode: mode,
+        initialHostId,
       });
     },
     [
@@ -365,6 +372,7 @@ export function useChatMessageActions(
                 assistantMessageId,
                 mode,
                 interviewBlockId,
+                null,
               ),
           },
         };

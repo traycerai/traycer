@@ -27,7 +27,10 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  toastFromHostError,
+  toastFromHostErrorWithDetail,
+} from "@/lib/host-error-toast";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { invalidateChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
@@ -35,6 +38,7 @@ import {
   beginPendingChatCreation,
   clearPendingChatCreation,
 } from "@/lib/chats/pending-chat-creations";
+import { isRecoverableLatestForkRefusal } from "@/lib/chats/recoverable-fork-refusal";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -209,7 +213,29 @@ export function useEpicCreateChatForHostClient(
       onError: (error, variables) => {
         releaseCreatedChat(variables);
         if (isInlineForkRefusal(error)) return;
-        toastFromHostError(error, "Couldn't create agent.");
+        // A step inside an operation that recovers from it, not the end of
+        // one: the clone-on-host-switch flow narrates the history downgrade
+        // itself and retries without `forkSource`, so a toast here describes
+        // an ATTEMPT moments before the clone succeeds. Keyed on the request's
+        // `boundary: "latest"` as well as the code, so the manual fork
+        // dialog's precise-boundary refusal - genuinely terminal, nobody
+        // retrying - is still reported.
+        if (isRecoverableLatestForkRefusal(error, variables)) return;
+        // WITH DETAIL, unlike its sibling mutations. A create is refused for
+        // reasons that live entirely in the host's message and nowhere else:
+        // the worktree the user asked for could not be made (`git worktree
+        // add` failed - a branch name that already exists, a dirty source, a
+        // path that is not a repo). The host answers `RPC_ERROR` with that
+        // reason as free text and deliberately mints no wire code for it
+        // (`WORKTREE_CREATE_FAILED` is a chat-stream reject code only), so the
+        // bare fallback is the whole of what the user gets - "Couldn't create
+        // agent.", with the actual cause reachable only by opening host.log.
+        //
+        // `toastFromHostErrorWithDetail` appends the host text ONLY when no
+        // mapped copy claimed the error, so every branch above
+        // (`E_HOST_UNSUPPORTED`, `WORKTREE_BUSY`, the transport arm) keeps its
+        // written-for-a-person sentence and never gains a raw suffix.
+        toastFromHostErrorWithDetail(error, "Couldn't create agent.");
       },
     },
   });
