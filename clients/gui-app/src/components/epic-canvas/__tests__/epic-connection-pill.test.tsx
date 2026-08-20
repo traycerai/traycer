@@ -18,6 +18,21 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicSyncPillState: mocks.useEpicSyncPillState,
+  // Mirrors the derivation contract instead of a hand-set flag: every state
+  // that REQUIRES a genuine cloud frame this cycle implies the evidence bit,
+  // and `connected`/`syncing` default to the handshake-only (no-evidence)
+  // reading these tests exercise. Keeps each `mockReturnValue(state)` site
+  // self-consistent without threading a second knob through all of them.
+  useEpicHasFreshCloudSyncStatus: (): boolean => {
+    const state = mocks.useEpicSyncPillState() as EpicSyncPillState;
+    return (
+      state === "synced" ||
+      state === "hostPending" ||
+      state === "offlineWithUnsavedChanges" ||
+      state === "offlineWithHostPending" ||
+      state === "offlineChangesSavedLocally"
+    );
+  },
 }));
 vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
   useEpicChatBackupStatus: () => mocks.chatBackupStatus,

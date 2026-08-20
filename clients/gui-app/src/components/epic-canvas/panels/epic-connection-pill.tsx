@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { LivePulse } from "@/components/ui/live-pulse";
-import { useEpicSyncPillState } from "@/lib/epic-selectors";
+import {
+  useEpicHasFreshCloudSyncStatus,
+  useEpicSyncPillState,
+} from "@/lib/epic-selectors";
 import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -36,12 +39,15 @@ export interface EpicConnectionPillProps {
 export function EpicConnectionPill(props: EpicConnectionPillProps) {
   const derived = useEpicSyncPillState();
   const state = useSyncPillDisplayState(derived);
+  const hasFreshCloudSyncStatus = useEpicHasFreshCloudSyncStatus();
   // The escalation clock reads the RAW verdict, not the settled display
   // state: the settle hold renames a genuine `synced` to `syncing` until the
-  // claim has earned its interval, and the clock deliberately ignores
-  // `syncing` (it is handshake-reachable with no evidence). Fed the settled
-  // state, a real recovery inside the hold window would be invisible to it.
-  const linkDownTooLong = useLinkDownTooLong(derived);
+  // claim has earned its interval - fed the settled state, a real recovery
+  // inside the hold window would be invisible to it. It also reads the
+  // per-cycle cloud-evidence bit directly, because `connected`/`syncing` are
+  // reachable both with and without evidence (legacy hosts never move
+  // `hostDirtyState` off `unknown`) and the label alone cannot end an outage.
+  const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.

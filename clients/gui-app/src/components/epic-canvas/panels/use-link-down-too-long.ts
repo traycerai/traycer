@@ -29,30 +29,38 @@ const LINK_DOWN_ESCALATION_MS = 60_000;
  *
  * Takes the RAW derived pill state, never the settled display state: the
  * display settle (`useSyncPillDisplayState`) renames a genuine `synced` to
- * `syncing` until the claim has earned its interval, and this clock treats
- * `syncing` as no-evidence - so the settled state would mask a real recovery
- * that lands (and drops again) inside the hold window.
+ * `syncing` until the claim has earned its interval, and this clock treats an
+ * unevidenced `syncing` as part of the outage - so the settled state would
+ * mask a real recovery that lands (and drops again) inside the hold window.
+ *
+ * `hasFreshCloudSyncStatus` is the same per-cycle evidence bit the pill
+ * derivation itself weighs (input 3), NOT re-derived here: it is reset
+ * atomically with the transport reaching `open`, so whenever this hook reads
+ * it in a non-link-down state it describes the CURRENT subscription cycle.
  */
-export function useLinkDownTooLong(state: EpicSyncPillState): boolean {
+export function useLinkDownTooLong(
+  state: EpicSyncPillState,
+  hasFreshCloudSyncStatus: boolean,
+): boolean {
   const isLinkDown = state === "connecting" || state === "reconnecting";
-  // `connected` and `syncing` are the two rungs an open socket can reach with
-  // NO application evidence behind it - `connected` when nothing else is
-  // known (`deriveEpicSyncPillState` rule 3), `syncing` when renderer-only
-  // unsynced work exists but no genuine cloud frame has landed this cycle
-  // (rule 2: an open WebSocket proves neither receipt nor persistence).
-  // Neither is proof of recovery, and treating either as such is what this
-  // clock has to survive: in an ack-then-fatal loop the transport reaches
-  // `open` on every handshake before the resolver's retryable close lands -
-  // deriving `connected` on a clean epic and `syncing` on one with pending
-  // local edits - so resetting on them restarted the minute each cycle and
-  // the escalated copy could never appear for the exact loop it was written
-  // to explain. Every remaining state either required a genuine cloud-status
-  // frame this cycle (`synced`, `hostPending`, the `offline*` family) or is
-  // the terminal `offline`, where no retry is running at all - so "not link
-  // down and not one of these two" is exactly "application evidence arrived,
-  // or the loop ended".
+  // Recovery is EVIDENCE, not a state label. `connected` and `syncing` are
+  // reachable both ways: on every handshake of an ack-then-fatal loop the
+  // transport hits `open` before the resolver's retryable close lands
+  // (`connected` on a clean epic, `syncing` on one with pending local edits -
+  // no genuine cloud frame either way), but ALSO on a legacy host that never
+  // sends the `epic.subscribe@1.1` dirty snapshot, where `hostDirtyState`
+  // stays `unknown` forever and even a fully evidenced recovery derives
+  // `connected`. Classifying by label alone got both wrong in turn: resetting
+  // on the labels restarted the clock every handshake lap, and never
+  // resetting on them left one legacy-host outage running through a healthy
+  // connection, so escalation silently armed and every later brief drop said
+  // "Still reconnecting…" from its first frame. The evidence bit separates
+  // the two cases exactly: a genuine `cloudSyncStatus` frame landed this
+  // cycle, or it did not. Every other non-link-down state either requires
+  // that bit by derivation (`synced`, `hostPending`, the `offline*` family)
+  // or is the terminal `offline`, where no retry is running at all.
   const hasRecovered =
-    !isLinkDown && state !== "connected" && state !== "syncing";
+    !isLinkDown && (state === "offline" || hasFreshCloudSyncStatus);
   const [escalated, setEscalated] = useState(false);
   // The clock runs per OUTAGE, entered on the first link-down render and left
   // only on real recovery. Keying the timer on "not recovered" alone armed it

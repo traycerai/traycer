@@ -1499,6 +1499,7 @@ class StreamSession<
       // Measure the gap from the pre-probe baseline when a wake probe rebased
       // `lastPongAt`: against the rebased value the probe's own pong reads as
       // a round trip, and a sleep-length outage would emit no recovery at all.
+      const answersWakeProbe = this.preProbePongBaselineAt !== null;
       const pongGapMs = now - (this.preProbePongBaselineAt ?? this.lastPongAt);
       this.preProbePongBaselineAt = null;
       this.lastPongAt = now;
@@ -1507,12 +1508,19 @@ class StreamSession<
       // indistinguishable by `lastPongAt` alone.
       this.pongSeq += 1;
       if (
-        pongGapMs >=
-        this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS
+        answersWakeProbe ||
+        pongGapMs >= this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS
       ) {
-        // The host just answered after leaving at least one ping hanging: it
-        // was unresponsive (event-loop stall) and has recovered - without the
-        // socket ever dropping, so the reconnect path below never fires.
+        // Two distinct recovery edges share this emission. A probe-answering
+        // pong is one unconditionally: probes are sent only on a device-wake /
+        // network-online signal, an epoch in which host-scoped queries may
+        // have failed while the socket itself survived - and a cycle shorter
+        // than the heartbeat threshold left the gap check false, so the
+        // stranded queries (whose other automatic refetch routes are
+        // disabled) never recovered. A big gap WITHOUT a probe is the other:
+        // the host answered after leaving at least one ping hanging (an
+        // event-loop stall), again with no socket drop, so the reconnect
+        // path's recovery emission never fires for either.
         this.config.onAvailabilityRecovered();
       }
       return;

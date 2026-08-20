@@ -1123,6 +1123,8 @@ export class RemoteSession<
       this.subscriptions.delete(streamId);
       this.restoredStreamIds.delete(streamId);
       this.outboundSeq.delete(streamId);
+      // Terminal end: same retry-state cleanup as the FATAL/CLOSE branches.
+      this.clearStreamReopen(streamId);
       stream.goFatal({
         code: "STREAM_MESSAGE_TOO_LARGE",
         reason: error.message,
@@ -1709,6 +1711,13 @@ export class RemoteSession<
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
+      // A host CLOSE ends the stream as terminally as a caller close does, so
+      // it clears the same retry state: the pending re-open timer (a closed
+      // stream must not re-subscribe) AND the attempt count. The count is
+      // only otherwise cleared by a delivered frame, so a reopened stream the
+      // host closes BEFORE its first frame - a normal end for a short-lived
+      // stream - leaked its entry in this long-lived session forever.
+      this.clearStreamReopen(message.streamId);
       this.maybeReachReadyBoundary();
       return;
     }
@@ -2711,6 +2720,19 @@ export class RemoteSession<
       return;
     }
     for (const streamId of this.subscriptions.keys()) {
+      // A stream in its private retryable-FATAL loop (an attempt entry exists
+      // from its first verdict until a frame finally lands) must not hold the
+      // SESSION's boundary hostage: its id can never enter `restoredStreamIds`
+      // while the loop runs, so waiting on it meant one broken resolver kept
+      // `isReady()` false forever - the session was never announced,
+      // availability recovery never fired, and the reconnect backoff never
+      // reset, making the whole remote host look unavailable while every
+      // other stream exchanged frames on a healthy mux. The stream keeps its
+      // own reopen backoff either way; only the session-level verdict stops
+      // depending on it.
+      if (this.streamReopenAttempts.has(streamId)) {
+        continue;
+      }
       if (!this.restoredStreamIds.has(streamId)) {
         return;
       }
@@ -3028,6 +3050,19 @@ export class RemoteSession<
       this.openSubscription(connection, stream);
     }, delay);
     this.streamReopenTimers.set(streamId, timer);
+  }
+
+  /**
+   * Test seam: the per-stream retry state still held. The attempts map is the
+   * one that can leak - it deliberately outlives its timer (see the field doc)
+   * and is otherwise invisible from the outside, so the "every terminal path
+   * clears it" invariant is only checkable here.
+   */
+  streamReopenStateForTests(): { timers: number; attempts: number } {
+    return {
+      timers: this.streamReopenTimers.size,
+      attempts: this.streamReopenAttempts.size,
+    };
   }
 
   /** Drops any pending re-open for a stream that has terminally ended. */

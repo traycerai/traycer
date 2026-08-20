@@ -4214,4 +4214,45 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     session.close();
   });
+
+  // A probe is only ever sent on a device-wake / network-online signal - an
+  // epoch in which host-scoped queries may have failed while the socket
+  // survived. When that cycle is SHORTER than the heartbeat threshold
+  // (pingIntervalMs + slack), the gap check reads the probe's pong as a round
+  // trip and fires nothing - and with `refetchOnReconnect` disabled on the
+  // query client, the errored queries have no other automatic route back. A
+  // successful probe is a recovery edge in its own right, independent of the
+  // stall threshold.
+  it("emits availability recovery for a successful wake probe even when the outage was shorter than the heartbeat threshold", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 1_000,
+      pongTimeoutMs: 2_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+    expect(recovered).not.toHaveBeenCalled();
+
+    // A brief offline/resume cycle: well under pingIntervalMs (1s) + the 5s
+    // recovery slack, so the gap-based arm can never fire for it.
+    vi.setSystemTime(Date.now() + 2_000);
+    client.reconnectAll("wake-resume", { probeFirst: true });
+
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(stub.closed).toBeNull();
+
+    // Healthy-cadence pongs after the probe settled stay silent.
+    await vi.advanceTimersByTimeAsync(1_000);
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
+  });
 });
