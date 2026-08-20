@@ -150,14 +150,20 @@ function nullableString(raw: unknown, key: string): string | null {
  *  - `activate` is the activation tail of an install (packaged-macOS
  *    post-commit, or clearing pendingActivation debt) - an update mid-swap,
  *    when a competing submission is at its most dangerous.
- *  - `ensure` only WITH EVIDENCE: `host ensure`'s no-op fast path (already
- *    installed, registered, running, version satisfied - the common
- *    contention on a page that requires a running host) returns before its
- *    first progress callback, so a lane still at `progress: null` is either
- *    that no-op or has not started provisioning - generic contention either
- *    way. A non-null `progress` means the CLI passed the fast path and is
- *    materially provisioning (staging bytes, registering, starting), the
- *    window a competing install must not race.
+ *  - `ensure` only with NUMERIC evidence. Mere non-null progress is not it:
+ *    `host ensure`'s service branches - `runServiceRegister`, `runStart`,
+ *    the repair retry - narrate through the same null-metric
+ *    `host-provision` events without ever touching the version, so a
+ *    service repair on an already-current host would read as an update.
+ *    What only the version-moving path emits is a NUMBER: the staging
+ *    download reports `bytes`/`totalBytes`/`percent` and the extract
+ *    reports `workUnits`, and those are the long windows a competing
+ *    install must not race. The no-op fast path (already installed,
+ *    registered, running, version satisfied - the common contention on a
+ *    page that requires a running host) returns before any progress at
+ *    all. The brief null-metric moments inside a real install (source
+ *    resolution, the locked promote) fall to generic contention - the
+ *    cheap direction, a retryable refusal rather than a minute-long lock.
  *
  * Every other kind (register, deregister, respawn, recoverIfDown,
  * freePortAndRestart, uninstallHost, removeTraycer) and the login-item
@@ -166,7 +172,16 @@ function nullableString(raw: unknown, key: string): string | null {
  */
 function admissionBlockIsUpdateWork(block: LifecycleAdmissionBlock): boolean {
   if (block.kind === "login-item-refresh") return false;
-  if (block.lane.kind === "ensure") return block.lane.progress !== null;
+  if (block.lane.kind === "ensure") {
+    const progress = block.lane.progress;
+    return (
+      progress !== null &&
+      (progress.percent !== null ||
+        progress.bytes !== null ||
+        progress.totalBytes !== null ||
+        progress.workUnits !== null)
+    );
+  }
   return (
     block.lane.kind === "install" ||
     block.lane.kind === "apply" ||
