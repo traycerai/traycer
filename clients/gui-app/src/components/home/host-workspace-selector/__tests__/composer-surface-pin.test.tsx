@@ -186,17 +186,15 @@ function pinnedHostId(): string | undefined {
 
 function chipLabel(): string {
   const label = screen
-    .getByTestId("settings-host-switcher")
+    .getByRole("button", { name: /^Host:/ })
     .querySelector(".truncate");
   if (label === null) throw new Error("host switcher label is missing");
   return label.textContent;
 }
 
 function pickBuildHost(): void {
-  fireEvent.click(screen.getByTestId("settings-host-switcher"));
-  fireEvent.click(
-    screen.getByTestId("settings-host-switcher-option-host-build"),
-  );
+  fireEvent.click(screen.getByRole("button", { name: /^Host:/ }));
+  fireEvent.click(screen.getByRole("option", { name: /Build Box/ }));
 }
 
 beforeEach(() => {
@@ -281,11 +279,9 @@ describe("composer host picker writes a surface pin", () => {
       hostClient: null,
     });
 
-    const trigger = screen.getByTestId("settings-host-switcher");
+    const trigger = screen.getByRole("button", { name: /^Host:/ });
     fireEvent.click(trigger);
-    expect(
-      screen.queryByTestId("settings-host-switcher-option-host-build"),
-    ).toBeNull();
+    expect(screen.queryByRole("option", { name: /Build Box/ })).toBeNull();
 
     expect(pinnedHostId()).toBeUndefined();
     expect(mocks.selectById).not.toHaveBeenCalled();

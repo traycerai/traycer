@@ -2742,7 +2742,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             sideOffset={undefined}
             align={undefined}
           >
-            <span className="flex w-full min-w-0">
+            <span
+              className="flex w-full min-w-0"
+              tabIndex={0}
+              aria-label="Terminal host is fixed"
+            >
               <WorkspaceHostSwitcher
                 hosts={pickerHosts}
                 activeHostId={props.activeHostId}

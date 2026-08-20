@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import {
   cleanup,
   fireEvent,
@@ -328,9 +329,9 @@ describe.each(["chat", "terminal-agent"] as const)(
 it("explains why a terminal agent's host selector is locked", async () => {
   renderBoundSurface("terminal-agent", true);
 
-  const switcher = screen.getByTestId("settings-host-switcher");
+  const switcher = screen.getByRole("button", { name: "Host: Test host" });
   expect(switcher instanceof HTMLButtonElement && switcher.disabled).toBe(true);
-  fireEvent.focus(switcher);
+  await userEvent.setup().tab();
   expect((await screen.findByRole("tooltip")).textContent).toContain(
     "Terminal host is fixed",
   );
@@ -339,16 +340,13 @@ it("explains why a terminal agent's host selector is locked", async () => {
 it("uses the shared host switcher for a live chat", () => {
   renderBoundSurface("chat", true);
 
-  const switcher = screen.getByTestId("settings-host-switcher");
+  const switcher = screen.getByRole("button", { name: "Host: Test host" });
   const switcherSlot = switcher.parentElement?.parentElement;
   expect(switcherSlot?.className).toContain("flex-[0_1_auto]");
   expect(switcherSlot?.className).toContain("max-w-[min(50%,20rem)]");
 
   fireEvent.click(switcher);
-  expect(screen.getByTestId("settings-host-switcher-list")).toBeTruthy();
-  expect(
-    screen.getByTestId("settings-host-switcher-option-host-test"),
-  ).toBeTruthy();
+  expect(screen.getByRole("option", { name: /Test host/ })).toBeTruthy();
   expect(screen.queryByTestId("composer-host-popover")).toBeNull();
 });
 
