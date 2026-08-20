@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   argvSelectsSupervisedHostStart,
@@ -159,11 +159,18 @@ describe("canonicalBinaryPath", () => {
     rmSync(work, { recursive: true, force: true });
   });
 
+  // Both spellings are assembled with the raw separator, NOT with `join`.
+  // `join` normalizes as it builds, so `join(work, "sub", "..", "traycer")`
+  // returns the very string `join(work, "traycer")` does - handing both sides
+  // of the assertion identical input and passing for any implementation at
+  // all, including one that never normalized anything. The `..` segment has
+  // to survive construction to reach the code under test.
   it("reduces two spellings of the same existing file to one path", async () => {
     const binary = join(work, "traycer");
     writeFileSync(binary, "binary bytes");
-    const indirect = join(work, "sub", "..", "traycer");
     mkdirSync(join(work, "sub"), { recursive: true });
+    const indirect = [work, "sub", "..", "traycer"].join(sep);
+    expect(indirect).not.toBe(binary);
 
     expect(await canonicalBinaryPath(indirect)).toBe(
       await canonicalBinaryPath(binary),
@@ -175,10 +182,15 @@ describe("canonicalBinaryPath", () => {
   // not an exotic one: the rename can leave `process.execPath` naming an
   // unlinked inode. Throwing here would take out the restart decision with
   // it.
+  //
+  // The input carries a `..` for the same reason as above. `resolve` on an
+  // already-absolute, already-normalized path is a no-op, so asserting
+  // against `resolve(missing)` would hold just as well for an implementation
+  // that returned its argument untouched.
   it("falls back to a resolved path when the file cannot be realpath-ed", async () => {
-    const missing = join(work, "never-existed", "traycer");
+    const missing = [work, "never-existed", "..", "traycer"].join(sep);
 
-    expect(await canonicalBinaryPath(missing)).toBe(resolve(missing));
+    expect(await canonicalBinaryPath(missing)).toBe(join(work, "traycer"));
   });
 
   it.skipIf(process.platform === "win32")(
