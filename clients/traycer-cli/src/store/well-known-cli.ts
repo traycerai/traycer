@@ -397,17 +397,45 @@ async function renameSlotBinaryAside(
 // Runs on every platform (the aside files are Windows-only, the staging
 // orphans are not) and never throws.
 //
-// The two prefixes get different treatment, because only one of them can
-// belong to a LIVE writer. An aside file is by definition already
-// superseded, so it is swept on sight - that is what keeps a Windows
-// machine from accumulating one image per upgrade while the old process
-// still holds a delete lock. A `.staging-` file, by contrast, is a copy in
-// flight for whoever created it, and copying a ~100 MB binary takes
-// seconds; sweeping those on sight would let one installer delete another's
-// half-written copy out from under it. So they are removed only once they
-// are far older than any copy could still be running, and this
+// Both prefixes are age-gated, for the same reason and on different clocks.
+//
+// A `.staging-` file is a copy in flight for whoever created it, and copying
+// a ~100 MB binary takes seconds; sweeping those on sight would let one
+// installer delete another's half-written copy out from under it. They are
+// removed only once far older than any copy could still be running, and this
 // invocation's own staging file is skipped outright.
+//
+// An aside file looks superseded, and mostly is - but not during the window
+// that created it. Between `renameSlotBinaryAside` and the publish the aside
+// IS the slot's only copy, and the catch in `stageWellKnownCliBinary`
+// restores from it precisely so a failed publish cannot leave the slot
+// absent. A concurrent staging that swept it on sight would delete that
+// rollback copy mid-window, and if both attempts then failed the slot would
+// be gone - the one outcome the copy-not-symlink design exists to rule out.
+// Concurrency here stopped being hypothetical when the startup refresh
+// began staging outside the CLI lock on every packaged command.
+//
+// Age is read from the NAME, not from `stat`. A rename does not change
+// mtime, and staging deliberately mirrors the source's mtime onto the slot,
+// so an aside file's mtime is its BINARY's timestamp - which can be months
+// old for a fresh rename, and would age-gate to "sweep immediately". The
+// `Date.now()` already embedded in the aside name is the only record of when
+// the rename actually happened.
 const STAGING_ORPHAN_MIN_AGE_MS = 60 * 60 * 1000;
+const ASIDE_INFLIGHT_WINDOW_MS = 5 * 60 * 1000;
+
+// Milliseconds encoded in a `<binary>.old-<ts>-<pid>` name, or null when the
+// name does not carry one (a leftover from a CLI old enough to predate the
+// stamp). Null sweeps, since nothing that shape can belong to a writer
+// running this code.
+function asideStampedAt(entry: string, asidePrefix: string): number | null {
+  const suffix = entry.slice(asidePrefix.length);
+  const separator = suffix.indexOf("-");
+  const stamp = separator === -1 ? suffix : suffix.slice(0, separator);
+  if (stamp.length === 0 || !/^\d+$/.test(stamp)) return null;
+  const parsed = Number(stamp);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
 
 async function sweepSlotLeftovers(
   wellKnownPath: string,
@@ -424,10 +452,17 @@ async function sweepSlotLeftovers(
     return;
   }
   const ownStagingName = basename(ownStagingPath);
-  const stagingCutoff = Date.now() - STAGING_ORPHAN_MIN_AGE_MS;
+  const now = Date.now();
+  const stagingCutoff = now - STAGING_ORPHAN_MIN_AGE_MS;
   for (const entry of entries) {
     const path = join(dir, entry);
     if (entry.startsWith(asidePrefix)) {
+      const stampedAt = asideStampedAt(entry, asidePrefix);
+      // A negative age means the stamp is in the future - a clock that moved
+      // backwards - and must not pin the file here forever, so only a
+      // plausible, recent age defers the sweep.
+      const age = stampedAt === null ? null : now - stampedAt;
+      if (age !== null && age >= 0 && age < ASIDE_INFLIGHT_WINDOW_MS) continue;
       await rm(path, { force: true }).catch(() => undefined);
       continue;
     }
