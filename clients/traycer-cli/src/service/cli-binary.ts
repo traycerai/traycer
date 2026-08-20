@@ -1,5 +1,8 @@
+import { constants } from "node:fs";
 import { access } from "node:fs/promises";
+import { delimiter, resolve } from "node:path";
 import type { Environment } from "../runner/environment";
+import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { readCliManifest } from "../manifest/cli-manifest";
 import {
@@ -182,40 +185,113 @@ export async function resolveServiceCliInvocation(
 
 // Stage `binaryPath`'s bytes into the well-known slot and register the
 // service against the SLOT, so both the supervisor and the host daemon read
-// the same stable path. Staging is best-effort: on failure the service is
-// still registered against the real binary and keeps working - only the
-// host's view through the slot stays cold, which is strictly what it was
-// before this call.
+// the same stable path.
+//
+// Staging is best-effort, but the fallback is NOT simply "register the real
+// binary". The slot is the only path stable across upgrades: Homebrew
+// cellar kegs, Scoop app dirs and winget install roots are all
+// version-scoped, and nothing rewrites a service definition after the fact
+// - on macOS `host update` deliberately PRESERVES the registered invocation
+// (see `install-lifecycle.ts`), which is the same platform Homebrew lives
+// on. A keg path baked in here therefore outlives every subsequent upgrade
+// until brew removes that keg, at which point the service starts failing on
+// a command that no longer exists.
+//
+// So a failed staging prefers an EXISTING slot binary over the real path,
+// even though its bytes may be older: stale-but-functional is this slot's
+// accepted worst case (see `stageWellKnownCliBinary`), it is the one path
+// the host daemon can see, and `refreshWellKnownSlotIfStale` repairs the
+// bytes on the next command. Only with no slot at all does the real binary
+// path get registered - the alternative there is a definition naming
+// nothing, and a working service on a version-scoped path beats no service.
+// That last case is logged, so the eventual breakage has a recorded cause
+// rather than presenting as a service that mysteriously stopped launching.
 async function stagedSlotInvocation(
   environment: Environment,
   binaryPath: string,
 ): Promise<CliInvocation> {
   const staged = await stageWellKnownCliBinary({ environment, binaryPath });
-  return {
-    command: staged.staged === "failed" ? binaryPath : staged.wellKnownPath,
-    args: [],
-  };
+  if (staged.staged !== "failed") {
+    return { command: staged.wellKnownPath, args: [] };
+  }
+  if (await pathExists(staged.wellKnownPath)) {
+    return { command: staged.wellKnownPath, args: [] };
+  }
+  createCliLogger(environment).warn(
+    "service CLI registered against an unstaged binary path",
+    {
+      environment,
+      binaryPath,
+      wellKnownPath: staged.wellKnownPath,
+      errorName: staged.errorName,
+      errorMessage: staged.errorMessage,
+    },
+  );
+  return { command: binaryPath, args: [] };
 }
 
 // The npm distribution ships a Node bundle, not a SEA: its manifest
-// (usually SYNTHESIZED by `readCliManifest` from the bundle's
-// `TRAYCER_CLI_DISTRIBUTION="npm"` shim, since the npm package has no
-// install hook) points at the shebanged bundle script. Registering that
-// script directly makes the service depend on `node` being on the service
-// manager's PATH - false for nvm installs under systemd, so the unit dies
-// with ENOENT while the CLI works fine interactively. When the resolving
-// process IS that bundle (the shim env is set and we are not a packaged
-// binary, so `process.execPath` is the interpreter running it), pin the
-// absolute interpreter into the invocation instead:
-// `<node> <bundle> host start`. Resolutions from OTHER processes cannot
-// know the right interpreter and keep the direct-script behavior.
-// Superseded once npm ships per-platform SEA binaries.
+// (usually SYNTHESIZED by `readCliManifest` from the
+// `TRAYCER_CLI_DISTRIBUTION="npm"` shim that `build-cli-npm.cjs` prepends
+// to the built bundle, since the npm package has no install hook) points at
+// the shebanged bundle script. Registering that script directly makes the
+// service depend on `node` being on the SERVICE MANAGER's PATH - false for
+// nvm / asdf installs under systemd, so the unit dies with ENOENT while the
+// CLI works fine interactively. Pin an absolute interpreter instead:
+// `<node> <bundle> host start`.
+//
+// Two ways to find one, in descending confidence:
+//
+//   1. This process IS the bundle - the shim env is set and we are not a
+//      packaged binary, so `process.execPath` is the very interpreter
+//      running it. Exact by construction.
+//   2. Otherwise the first executable `node` on the resolving user's PATH.
+//      A PERSISTED npm manifest is what reaches this arm: `cli mark-source
+//      --source npm` writes one, and every later resolution from a
+//      different process - a packaged CLI sharing the machine, a
+//      re-registration driven by `host update` - reads it without the shim
+//      env. It is a guess, but it is the same interpreter the bundle's own
+//      shebang would select for this user, and an absolute path is exactly
+//      what the service manager cannot work out for itself.
+//
+// Null only when neither is available, leaving the caller its direct-script
+// fallback. Superseded once npm ships per-platform SEA binaries.
 async function npmInterpreterInvocation(manifest: {
   readonly binaryPath: string;
   readonly source: string;
 }): Promise<CliInvocation | null> {
   if (manifest.source !== "npm") return null;
-  if (process.env.TRAYCER_CLI_DISTRIBUTION !== "npm") return null;
-  if (await isPackagedRun()) return null;
-  return { command: process.execPath, args: [manifest.binaryPath] };
+  if (
+    process.env.TRAYCER_CLI_DISTRIBUTION === "npm" &&
+    !(await isPackagedRun())
+  ) {
+    return { command: process.execPath, args: [manifest.binaryPath] };
+  }
+  const interpreter = await resolveNodeOnPath();
+  return interpreter === null
+    ? null
+    : { command: interpreter, args: [manifest.binaryPath] };
+}
+
+// First executable `node` on PATH, absolute. Deliberately reads the
+// variable rather than shelling out to `which` / `where`: spawning a shell
+// during service registration is a far larger surface than the lookup it
+// would perform, and inherits whatever rc files that shell sources.
+async function resolveNodeOnPath(): Promise<string | null> {
+  const rawPath = process.env.PATH;
+  if (typeof rawPath !== "string" || rawPath.length === 0) return null;
+  const names = process.platform === "win32" ? ["node.exe", "node"] : ["node"];
+  for (const entry of rawPath.split(delimiter)) {
+    if (entry.length === 0) continue;
+    for (const name of names) {
+      const candidate = resolve(entry, name);
+      try {
+        await access(candidate, constants.X_OK);
+        return candidate;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
 }

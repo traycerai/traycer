@@ -98,39 +98,47 @@ export async function isPackagedRun(): Promise<boolean> {
 //     returns before touching the filesystem or reading anything, so no
 //     suite can be tricked into copying over a developer's real
 //     `~/.traycer` slot.
-//   - the running binary IS the slot (the host daemon and the service
-//     itself, which launch from it) - nothing to do.
-//   - the slot already MIRRORS a source: staging copies the source's mtime
-//     onto the slot (see `stageWellKnownCliBinary`), so "same size and same
-//     mtime" means the slot is a faithful copy of that exact file. Any
-//     upgrade changes one of the two, including a package manager that
-//     preserves archive timestamps and happens to ship a same-sized binary
-//     - mirroring is what makes an OLDER timestamp detectable, which a
-//     `slot newer than source` comparison could not see.
+//   - the slot already IS the authoritative source - the Desktop case,
+//     where the anchored binary is the slot itself.
+//   - the slot already MIRRORS that source: staging copies the source's
+//     mtime onto the slot (see `stageWellKnownCliBinary`), so "same size
+//     and same mtime" means the slot is a faithful copy of that exact
+//     file. Any upgrade changes one of the two, including a package manager
+//     that preserves archive timestamps and happens to ship a same-sized
+//     binary - mirroring is what makes an OLDER timestamp detectable, which
+//     a `slot newer than source` comparison could not see.
 //
-// The source is NOT simply the running process. The CLI manifest is the
-// resolver's source of truth, and a machine can have several packaged CLIs
-// installed at once; letting whichever one was invoked last win would
-// silently repoint both the registered service and the host daemon at a
-// possibly OLDER binary. So the manifest's binary wins when it names one,
-// and `process.execPath` is the fallback for an install that has no
-// manifest - which is the hookless cohort this exists for.
+// The source is NOT the running process. The CLI manifest is the resolver's
+// source of truth, and a machine can have several packaged CLIs installed
+// at once; letting whichever one was invoked last win would silently
+// repoint both the registered service and the host daemon at a possibly
+// OLDER binary. So the manifest's binary wins when it names one, and
+// `process.execPath` is the fallback for an install that has no manifest -
+// which is the hookless cohort this exists for.
 //
-// The manifest is only read once the cheap comparison has already found a
-// mismatch, so the common (nothing changed) path stays two stats.
+// That lookup runs BEFORE any comparison against the running binary, and
+// deliberately so. Both of the obvious fast paths - "the running binary IS
+// the slot" and "the slot mirrors the running binary" - are true for
+// precisely the runs that most need the repair. The registered service and
+// the host daemon both launch FROM the slot, so once an anchor has written
+// a manifest for a new binary whose staging then failed transiently, every
+// subsequent slot-launched command would short-circuit on the stale bytes
+// agreeing with themselves, and the machine would stay pinned to them long
+// after the filesystem problem cleared. The manifest is the only witness
+// that the slot is wrong, so it is consulted first; the cost is one small
+// JSON read per packaged startup.
 export async function refreshWellKnownSlotIfStale(
   environment: Environment,
 ): Promise<WellKnownCliStageOutcome | null> {
   if (!(await isPackagedRun())) return null;
   const wellKnownPath = wellKnownCliBinaryPath(environment);
-  const running = resolve(process.execPath);
-  if (resolve(wellKnownPath) === running) return null;
-
-  const slotStat = await statOrNull(wellKnownPath);
-  if (slotStat !== null && (await mirrors(slotStat, running))) return null;
-
-  const source = await authoritativeSlotSource(environment, running);
+  const source = await authoritativeSlotSource(
+    environment,
+    resolve(process.execPath),
+  );
   if (source === null) return null;
+  if (resolve(wellKnownPath) === source) return null;
+  const slotStat = await statOrNull(wellKnownPath);
   if (slotStat !== null && (await mirrors(slotStat, source))) return null;
   // A slot that is absent, dangling, or holding something else is repaired
   // here rather than left for the next registration: the service and the
@@ -176,6 +184,23 @@ async function mirrors(slotStat: Stats, source: string): Promise<boolean> {
   return (
     slotStat.size === sourceStat.size &&
     slotStat.mtime.getTime() === sourceStat.mtime.getTime()
+  );
+}
+
+// Whether two stats of the SAME path describe the same unreplaced file.
+//
+// Unlike `mirrors` above this compares `mtimeMs` directly, and must: both
+// sides come from stat-ing one real file, so there is no `utimes`
+// round-trip to truncate away the sub-millisecond digits - and those digits
+// are exactly what catches a replacement that landed inside the same
+// millisecond as the copy. Inode and device are what catch a same-size,
+// same-mtime swap, which is how an atomic `rename` install normally lands.
+function isSameFile(before: Stats, after: Stats): boolean {
+  return (
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ino === after.ino &&
+    before.dev === after.dev
   );
 }
 
@@ -253,6 +278,15 @@ export async function stageWellKnownCliBinary(opts: {
   let asidePath: string | null = null;
   try {
     await mkdir(dirname(wellKnownPath), { recursive: true });
+    // Stat the source on BOTH sides of the copy. The mtime mirrored below
+    // is the whole basis for deciding the slot is fresh, so it has to
+    // describe the bytes that actually landed in `staging`. A package
+    // manager that atomically replaces `source` mid-copy would otherwise
+    // stamp the NEW file's mtime onto a copy of the OLD one - and two
+    // same-sized releases would then look mirrored to
+    // `refreshWellKnownSlotIfStale` forever, which is the one failure this
+    // module cannot detect its way out of.
+    const sourceBefore = await statOrNull(source);
     await copyFile(source, staging);
     await sweepSlotLeftovers(wellKnownPath, staging);
     if (process.platform === "win32") {
@@ -266,11 +300,21 @@ export async function stageWellKnownCliBinary(opts: {
     // faithful copy of that exact file, so ANY replacement of the source is
     // detectable - including a package manager that preserves archive
     // timestamps and ships a same-sized binary with an OLDER mtime, which
-    // no "is the slot newer?" comparison could ever see. Best-effort: an
-    // unsupported filesystem costs freshness precision, not the staging.
-    const sourceStat = await statOrNull(source);
-    if (sourceStat !== null) {
-      await utimes(staging, sourceStat.atime, sourceStat.mtime).catch(
+    // no "is the slot newer?" comparison could ever see.
+    //
+    // Skipped when the source changed under the copy: the staged file then
+    // keeps its own just-now mtime, mirrors nothing, and the next refresh
+    // re-stages it. Failing toward one redundant copy is the entire point -
+    // failing the other way leaves a permanently stale slot wearing a fresh
+    // timestamp. Best-effort otherwise: an unsupported filesystem costs
+    // freshness precision, not the staging.
+    const sourceAfter = await statOrNull(source);
+    if (
+      sourceBefore !== null &&
+      sourceAfter !== null &&
+      isSameFile(sourceBefore, sourceAfter)
+    ) {
+      await utimes(staging, sourceAfter.atime, sourceAfter.mtime).catch(
         () => undefined,
       );
     }
