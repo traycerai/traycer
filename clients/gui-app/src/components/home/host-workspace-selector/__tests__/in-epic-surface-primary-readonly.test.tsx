@@ -199,6 +199,14 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
   >()),
   useRegisteredHostsPollLiveness: () => undefined,
 }));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: vi.fn(),
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
+}));
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () => null,
 }));
@@ -320,12 +328,23 @@ describe.each(["chat", "terminal-agent"] as const)(
 it("explains why a terminal agent's host selector is locked", async () => {
   renderBoundSurface("terminal-agent", true);
 
-  const switcher = screen.getByTestId("composer-host-trigger");
+  const switcher = screen.getByTestId("settings-host-switcher");
   expect(switcher instanceof HTMLButtonElement && switcher.disabled).toBe(true);
   fireEvent.focus(switcher);
   expect((await screen.findByRole("tooltip")).textContent).toContain(
     "Terminal host is fixed",
   );
+});
+
+it("uses the shared host switcher for a live chat", () => {
+  renderBoundSurface("chat", true);
+
+  fireEvent.click(screen.getByTestId("settings-host-switcher"));
+  expect(screen.getByTestId("settings-host-switcher-list")).toBeTruthy();
+  expect(
+    screen.getByTestId("settings-host-switcher-option-host-test"),
+  ).toBeTruthy();
+  expect(screen.queryByTestId("composer-host-popover")).toBeNull();
 });
 
 it("shows Recent folders in a live chat picker but not a terminal-agent binding", async () => {

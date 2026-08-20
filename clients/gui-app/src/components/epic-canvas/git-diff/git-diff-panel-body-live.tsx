@@ -448,10 +448,9 @@ function renderGitDiffPanelBody(input: {
   // produce) and no refetch (host queries disable every automatic recovery
   // route), so the panel stayed there across reloads: the pin is persisted.
   //
-  // The premise the whole pin design rests on is written down in
-  // `host-select-row-refused.ts` - "a dial that fails is recoverable where an
-  // un-pickable row is not". It only holds while the picker outlives the
-  // failure.
+  // The shared host-option model keeps an indeterminate route selectable: a
+  // dial that fails is recoverable where an un-pickable row is not. That only
+  // helps while the picker outlives the failure.
   return (
     <GitDiffPanelDegraded
       surfaceKey={input.surfaceKey}
