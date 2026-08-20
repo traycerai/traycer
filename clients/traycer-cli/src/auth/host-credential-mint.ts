@@ -12,6 +12,19 @@ export interface CliHostCredentialMintOptions {
   readonly bearer: () => string | null;
   /** Diagnostic sink; the CLI routes these to stderr, never stdout. */
   readonly diag: (message: string) => void;
+  /**
+   * Cancels the mint HTTP request. A long-lived caller (monitor) passes null;
+   * a deadline-bounded one (the host install probe) passes its controller's
+   * signal so an abandoned mint cannot keep the drain-to-exit CLI alive.
+   */
+  readonly signal: AbortSignal | null;
+  /**
+   * Tail of the diagnostic printed when the mint returns nothing, stating
+   * this surface's consequence - it differs: a connection-lease client loses
+   * host access when its connection ends, while an install just leaves the
+   * host unprovisioned for a later client to heal.
+   */
+  readonly unavailableNote: string;
 }
 
 /**
@@ -39,6 +52,7 @@ export function createCliHostCredentialMintFlow(
       options.authnBaseUrl,
       bearer,
       { hostId: request.hostId, hostLabel: hostLabel(), platform: null },
+      options.signal,
     );
     if (result.kind === "ok") {
       return provisionedFrom(result.response);
@@ -47,7 +61,7 @@ export function createCliHostCredentialMintFlow(
     // and its credential is on the way, so there is nothing to hand over and
     // nothing to retry.
     options.diag(
-      `could not provision host ${request.hostId} (${result.kind}); continuing without a host credential — it will stop working when this connection ends.`,
+      `could not provision host ${request.hostId} (${result.kind}); ${options.unavailableNote}`,
     );
     return { kind: "unavailable" };
   };

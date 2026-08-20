@@ -266,7 +266,13 @@ async function maybeProvisionCredential(
   // rewrote the credentials file after it.
   const auth = await resolveHostAuthOrNull(ctx, "provision");
   if (auth === null) {
-    return null;
+    // The pre-flight said signed-in, but the credentials are gone or
+    // unreadable NOW - a concurrent sign-out during the install, or a
+    // corrupted file. Silently returning null here would print a summary
+    // claiming a signed-in user with no provisioning attempt at all, while
+    // the just-started host cannot serve work. Report the one outcome whose
+    // human line says the only thing that helps: sign in again.
+    return { kind: "unauthorized" };
   }
   const progress = (message: string): void => {
     ctx.progress({
@@ -328,7 +334,7 @@ function formatCredentialProvisionNote(
     case "unreachable":
       return `host credential not provisioned (the host did not come up in time) - ${selfHeal}`;
     case "unsupported":
-      return "host credential not provisioned (this host version does not support delegated credentials)";
+      return "host credential not provisioned (this host cannot accept a delegated credential from this client)";
     case "mint-unavailable":
       return `host credential not provisioned (the credential handoff did not complete) - ${selfHeal}`;
     case "not-adopted":
@@ -471,10 +477,11 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     //   - the service lifecycle actually started/restarted a host
     //     (`postSwapAction`), cleanly - a host that failed its post-swap
     //     start has nothing to dial;
-    //   - the pre-flight left us signed in (the mint spends the bearer);
-    //   - not in JSON mode: every Desktop/Doctor shellout is JSON, and there
-    //     the GUI connects immediately after with its own mint flow - a
-    //     second minting connection would only race it.
+    //   - the pre-flight left us signed in (the mint spends the bearer).
+    // Deliberately NOT gated on output mode - `--json` is the automation
+    // surface that most needs a credentialed host, and a Desktop shellout
+    // racing the GUI's own mint resolves inside the probe (a superseded mint
+    // verifies the winner's credential rather than failing).
     // Best-effort throughout: any failure is a warning, never a failed
     // install - an unprovisioned host self-heals on the next minting client.
     const credentialProvision = await maybeProvisionCredential(

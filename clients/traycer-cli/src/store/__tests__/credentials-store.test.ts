@@ -47,7 +47,7 @@ function revalidatorFor(
 ): { revalidate: () => Promise<unknown>; lease: MutableBearerLease } {
   const lease = new MutableBearerLease("old-token", "u1");
   const store = storeReturning(async () => ({ outcome, credentials }));
-  const reval = createStoreBackedRevalidator({ store, lease });
+  const reval = createStoreBackedRevalidator({ store, lease, signal: null });
   return { revalidate: () => reval.revalidateCurrentContext(), lease };
 }
 
@@ -74,7 +74,7 @@ describe("createStoreBackedRevalidator", () => {
       outcome: "applied",
       credentials: pair("fresh"),
     }));
-    const reval = createStoreBackedRevalidator({ store, lease });
+    const reval = createStoreBackedRevalidator({ store, lease, signal: null });
     await reval.revalidateCurrentContext();
     expect(store.rotate).toHaveBeenCalledWith({
       expectedUserId: "u1",
@@ -86,6 +86,31 @@ describe("createStoreBackedRevalidator", () => {
     expect(store.rotate).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards a caller-provided abort signal to rotate verbatim", async () => {
+    // A deadline-bounded caller (the host install probe) passes its own
+    // controller's signal so an abandoned rotation cannot keep a drain-to-exit
+    // CLI alive past its bound; a process-lifetime caller passes null instead
+    // (covered above). Pin that the exact signal instance reaches `rotate`.
+    const lease = new MutableBearerLease("old-token", "u1");
+    const controller = new AbortController();
+    const store = storeReturning(async () => ({
+      outcome: "applied",
+      credentials: pair("fresh"),
+    }));
+    const reval = createStoreBackedRevalidator({
+      store,
+      lease,
+      signal: controller.signal,
+    });
+    await reval.revalidateCurrentContext();
+    expect(store.rotate).toHaveBeenCalledWith({
+      expectedUserId: "u1",
+      expectedToken: "old-token",
+      refreshTokenOverride: null,
+      signal: controller.signal,
+    });
+  });
+
   it("treats commit-failed as rotated - the minted pair is server-issued and live", async () => {
     vi.useFakeTimers();
     const lease = new MutableBearerLease("old-token", "u1");
@@ -95,7 +120,7 @@ describe("createStoreBackedRevalidator", () => {
       outcome: "commit-failed",
       credentials: pair("minted"),
     }));
-    const reval = createStoreBackedRevalidator({ store, lease });
+    const reval = createStoreBackedRevalidator({ store, lease, signal: null });
     const pending = reval.revalidateCurrentContext();
     await vi.runAllTimersAsync();
     expect(await pending).toBe("rotated");
@@ -145,7 +170,7 @@ describe("createStoreBackedRevalidator", () => {
     const store = storeReturning(async () => {
       throw new Error("disk fault");
     });
-    const reval = createStoreBackedRevalidator({ store, lease });
+    const reval = createStoreBackedRevalidator({ store, lease, signal: null });
     expect(await reval.revalidateCurrentContext()).toBe("network-error");
     expect(lease.getBearerToken()).toBe("old-token");
   });

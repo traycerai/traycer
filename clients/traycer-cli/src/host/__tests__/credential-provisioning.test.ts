@@ -123,7 +123,13 @@ const mocks = vi.hoisted(() => {
     (_request: HostCredentialMintRequest): Promise<HostCredentialMintOutcome> =>
       Promise.resolve({ kind: "unavailable" }),
   );
-  const createMintFlowMock = vi.fn(() => mintFlowMock);
+  // Typed with just the field tests need (`signal`) rather than the mint
+  // flow's full options shape - the real call site (source, not this mock)
+  // is still checked against the real signature, so this only needs to be
+  // wide enough for `.mock.calls` to expose what the probe actually wired.
+  const createMintFlowMock = vi.fn(
+    (_options: { readonly signal: AbortSignal | null }) => mintFlowMock,
+  );
 
   const readHostPidMetadataMock = vi.fn(async () => null);
   const isValidLocalHostWebsocketUrlMock = vi.fn((): boolean => true);
@@ -139,9 +145,13 @@ const mocks = vi.hoisted(() => {
   const createCliCredentialsStoreMock = vi.fn(() => ({
     dispose: storeDisposeMock,
   }));
-  const createStoreBackedRevalidatorMock = vi.fn(() => ({
-    revalidateCurrentContext: revalidateCurrentContextMock,
-  }));
+  // Same rationale as `createMintFlowMock` above: typed just wide enough to
+  // expose `signal` from `.mock.calls`.
+  const createStoreBackedRevalidatorMock = vi.fn(
+    (_args: { readonly signal: AbortSignal | null }) => ({
+      revalidateCurrentContext: revalidateCurrentContextMock,
+    }),
+  );
 
   return {
     callOrder: [] as string[],
@@ -255,11 +265,11 @@ function provisionedOutcome(): HostCredentialMintOutcome {
   };
 }
 
-function fatalReason(reason: string): StreamCloseReason {
+function fatalReason(reason: string, code: string): StreamCloseReason {
   return {
     kind: "fatalError",
     details: {
-      code: "UNAUTHORIZED",
+      code,
       reason,
       incompatibleMethods: null,
       upgradeGuidance: null,
@@ -492,10 +502,14 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  it("bounds the mint await by the remaining deadline instead of the mint's own timeout", async () => {
+  it("bounds the mint WAIT by the remaining deadline, but never fabricates an outcome the mint never gave", async () => {
     // The regression this guards: an unbounded `await` on the mint let a host
     // that acked `missing` near the end of the budget push `host install`
     // roughly the mint's full HTTP timeout past the advertised deadline.
+    // `settleMint` is a pure pacing bound now - it abandons the WAIT, never
+    // the bookkeeping - so a mint that is still unsettled when the deadline
+    // fires reports `not-adopted` (invoked, outcome unknown), never the
+    // `mint-unavailable` the old code fabricated from the timeout itself.
     const hostId = "host-1";
     // Never settles - only the deadline can end this.
     mocks.mintFlowMock.mockReturnValueOnce(
@@ -520,12 +534,87 @@ describe("provisionInstalledHostCredential", () => {
     // all, plus the single lap the exhausted budget allows. Under the old
     // code this test does not fail an assertion, it times out.
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
-      kind: "mint-unavailable",
+      kind: "not-adopted",
     });
     expect(mocks.sessions).toHaveLength(1);
     expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
     expectCleanTeardown();
   });
+
+  it("a mint that settles provisioned only after the wait gave up still counts once a later ack verifies active", async () => {
+    // `recordMintOutcome` is attached to the mint's own promise BEFORE
+    // `settleMint` is ever called, so it keeps listening independent of
+    // whatever `settleMint`'s pacing bound decided. A mint that took longer
+    // than a short deadline would ever have waited for it (see the previous
+    // test) still lands as `minted: true` once it resolves, as long as a
+    // later lap is still around to observe `active`.
+    const hostId = "host-1";
+    const deferredMint = createDeferred<HostCredentialMintOutcome>();
+    mocks.mintFlowMock.mockReturnValueOnce(deferredMint.promise);
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        if (lapIndex === 1) {
+          void options.hostCredentialMint({ hostId, reason: "missing" });
+          options.onHostCredentialState(hostId, "missing");
+          return;
+        }
+        options.onHostCredentialState(hostId, "active");
+      }, 0);
+    };
+
+    const resultPromise = provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    // Comfortably longer than the 600ms deadline the previous test used to
+    // exhaust a tight budget entirely - this mint would have been abandoned
+    // under that budget. Here the overall deadline is generous, so the late
+    // settlement still lands well before it.
+    await sleep(900);
+    deferredMint.resolve(provisionedOutcome());
+
+    const outcome = await resultPromise;
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: true,
+    });
+    expect(mocks.mintFlowMock).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  }, 10_000);
+
+  it("a mint that settles unavailable only after the wait gave up still reports mint-unavailable when no ack ever verifies active", async () => {
+    const hostId = "host-1";
+    const deferredMint = createDeferred<HostCredentialMintOutcome>();
+    mocks.mintFlowMock.mockReturnValueOnce(deferredMint.promise);
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        if (lapIndex === 1) {
+          void options.hostCredentialMint({ hostId, reason: "missing" });
+          options.onHostCredentialState(hostId, "missing");
+        }
+        // Every later lap keeps acking "missing" too - adoption never
+        // verifies, so the late `unavailable` is what decides the outcome.
+      }, 0);
+    };
+
+    const resultPromise = provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 3_000, progress: vi.fn() }),
+    );
+
+    await sleep(900);
+    deferredMint.resolve({ kind: "unavailable" });
+
+    const outcome = await resultPromise;
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
+    expect(mocks.mintFlowMock).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  }, 10_000);
 
   it("reports mint-unavailable when the mint flow throws (a rejected promise)", async () => {
     const hostId = "host-1";
@@ -594,6 +683,33 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
+  it("reports unsupported and stops after a single lap when a non-active state arrives with the mint hook never invoked (a withheld mint)", async () => {
+    // The state rides the handshake and is reported before this method's own
+    // version check even runs, so a version-incompatible ack (or a non-UUID
+    // legacy host id) shows up as a non-active state that the client decided
+    // NOT to mint for - `mintInvoked` never flips. Both are deterministic for
+    // this client, so the probe must not burn further laps re-measuring a
+    // constant: exactly one session, no retry.
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        capturedClientOptions().onHostCredentialState("host-1", "missing");
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unsupported",
+    });
+    expect(mocks.mintFlowMock).not.toHaveBeenCalled();
+    expect(mocks.subscribeMock).toHaveBeenCalledTimes(1);
+    expect(mocks.sessions).toHaveLength(1);
+    expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  });
+
   // Each non-active lap drains for PUSH_DRAIN_MS (750ms), so four laps is
   // genuinely a few seconds - well past the 5s default test timeout, hence
   // the explicit one on this case.
@@ -627,12 +743,16 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   }, 15_000);
 
-  it("reports unreachable on a fatal close before any mint was attempted", async () => {
+  it("reports the close code when the host fatally closes before any mint", async () => {
+    // Regression: this used to be reported as `unreachable`, which is false
+    // on its face - a fatal `closed` frame PROVES the host answered. With no
+    // rejected sign-in and no mint history to explain it otherwise, the close
+    // code itself is now surfaced as an `error` outcome.
     mocks.onSessionCreated = (session): void => {
       setTimeout(() => {
         session.emitStatus(
           "closed",
-          fatalReason("simulated fatal close before any mint"),
+          fatalReason("simulated fatal close before any mint", "UNAUTHORIZED"),
         );
       }, 0);
     };
@@ -642,7 +762,33 @@ describe("provisionInstalledHostCredential", () => {
     );
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
-      kind: "unreachable",
+      kind: "error",
+      message: "the host closed the stream (UNAUTHORIZED)",
+    });
+    expect(mocks.mintFlowMock).not.toHaveBeenCalled();
+    expectCleanTeardown();
+  });
+
+  it("reports unsupported on a fatal close whose code is INCOMPATIBLE, before any state was observed", async () => {
+    // This method failed the host's version-compatibility check on the
+    // handshake itself (no state ever rode an ack), which is a capability gap
+    // the self-heal covers - not an unreachable host and not the generic
+    // "closed the stream" error the other fatal codes get.
+    mocks.onSessionCreated = (session): void => {
+      setTimeout(() => {
+        session.emitStatus(
+          "closed",
+          fatalReason("simulated version mismatch", "INCOMPATIBLE"),
+        );
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unsupported",
     });
     expect(mocks.mintFlowMock).not.toHaveBeenCalled();
     expectCleanTeardown();
@@ -661,7 +807,10 @@ describe("provisionInstalledHostCredential", () => {
         }
         session.emitStatus(
           "closed",
-          fatalReason("simulated fatal close after a mint attempt"),
+          fatalReason(
+            "simulated fatal close after a mint attempt",
+            "UNAUTHORIZED",
+          ),
         );
       }, 0);
     };
@@ -717,6 +866,37 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
+  it("reports unauthorized even after a mint resolved - a rejected sign-in outranks mint history", async () => {
+    // `settledOutcome` checks `credentialRejected` FIRST, ahead of
+    // `mintUnavailable`/`mintInvoked`: a dead sign-in explains every other
+    // symptom below it, so it must win the priority order even when this run
+    // also minted (and lost, or was superseded) before the rejection landed.
+    const hostId = "host-1";
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.mintFlowMock.mockResolvedValueOnce({ kind: "unavailable" });
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        if (lapIndex === 1) {
+          void options.hostCredentialMint({ hostId, reason: "missing" });
+          options.onHostCredentialState(hostId, "missing");
+          void options.auth?.revalidateForReconnect();
+        }
+        // Later laps ack nothing - adoption never verifies either.
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unauthorized",
+    });
+    expect(mocks.mintFlowMock).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  });
+
   it("does not START a revalidation once the deadline is spent", async () => {
     // The CLI sets `process.exitCode` instead of calling `process.exit`, so
     // the process waits for the event loop to drain: a rotation begun as the
@@ -764,5 +944,32 @@ describe("provisionInstalledHostCredential", () => {
     expect(clearIntervalSpy).toHaveBeenCalled();
     expect(mocks.clientCloseMock).not.toHaveBeenCalled();
     expect(mocks.subscribeMock).not.toHaveBeenCalled();
+  });
+
+  it("wires the SAME live AbortSignal into the revalidator and the mint flow, aborted once the probe settles", async () => {
+    // The probe's own controller cancels its own remote work - the mint's
+    // HTTP request and the locked credential rotation - on the way out, so an
+    // abandoned one cannot keep a drain-to-exit CLI open past its deadline.
+    // No `onSessionCreated` hook: nothing ever acks, so the lap's own bound
+    // resolves the probe and every acquired resource is torn down in
+    // `finally`, including this controller.
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 300, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unreachable",
+    });
+    expect(mocks.createStoreBackedRevalidatorMock).toHaveBeenCalledTimes(1);
+    expect(mocks.createMintFlowMock).toHaveBeenCalledTimes(1);
+    const revalidatorSignal =
+      mocks.createStoreBackedRevalidatorMock.mock.calls[0][0].signal;
+    const mintFlowSignal = mocks.createMintFlowMock.mock.calls[0][0].signal;
+    if (revalidatorSignal === null) {
+      throw new Error("expected the probe to wire a revalidator signal");
+    }
+    // Same controller backs both: they are cancelled together.
+    expect(mintFlowSignal).toBe(revalidatorSignal);
+    expect(revalidatorSignal.aborted).toBe(true);
   });
 });

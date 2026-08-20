@@ -33,6 +33,8 @@ describe("createCliHostCredentialMintFlow", () => {
       authnBaseUrl: "https://authn.example.test",
       bearer: () => "user-jwt",
       diag: () => undefined,
+      signal: null,
+      unavailableNote: "continuing without a host credential.",
     });
 
     await expect(
@@ -50,6 +52,7 @@ describe("createCliHostCredentialMintFlow", () => {
       "https://authn.example.test",
       "user-jwt",
       { hostId: "host-1", hostLabel: expect.any(String), platform: null },
+      null,
     );
   });
 
@@ -58,6 +61,8 @@ describe("createCliHostCredentialMintFlow", () => {
       authnBaseUrl: "https://authn.example.test",
       bearer: () => null,
       diag: () => undefined,
+      signal: null,
+      unavailableNote: "continuing without a host credential.",
     });
 
     await expect(
@@ -71,6 +76,8 @@ describe("createCliHostCredentialMintFlow", () => {
       authnBaseUrl: "https://authn.example.test",
       bearer: () => "",
       diag: () => undefined,
+      signal: null,
+      unavailableNote: "continuing without a host credential.",
     });
 
     await expect(
@@ -92,6 +99,8 @@ describe("createCliHostCredentialMintFlow", () => {
         authnBaseUrl: "https://authn.example.test",
         bearer: () => "user-jwt",
         diag,
+        signal: null,
+        unavailableNote: "continuing without a host credential.",
       });
 
       await expect(

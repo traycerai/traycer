@@ -86,11 +86,18 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
 export function createStoreBackedRevalidator(args: {
   readonly store: CredentialsMutationStore;
   readonly lease: BearerLease;
+  // Cancels a rotation mid-flight - the lock wait and the refresh fetch both
+  // honor it, and both map an abort to a TRANSIENT outcome (`lock-busy` /
+  // `refresh-network` -> "network-error"), never to "rejected". Callers whose
+  // lifetime is the process pass null; a deadline-bounded caller (the host
+  // install probe) passes its own controller's signal so an abandoned
+  // rotation cannot keep the drain-to-exit CLI alive past its bound.
+  readonly signal: AbortSignal | null;
 }): AuthRevalidator &
   AuthorityBoundAuthRevalidator & {
     revalidateCurrentContext(): Promise<RevalidateOutcome>;
   } {
-  const { store, lease } = args;
+  const { store, lease, signal } = args;
   const revalidateCurrentContext = async (): Promise<RevalidateOutcome> => {
     // Boundary contract (matches the retired `createBearerRevalidator`): NEVER
     // throws — every failure, including a released lease or a store I/O fault,
@@ -105,7 +112,7 @@ export function createStoreBackedRevalidator(args: {
           // `null` → rotate spends the file's own refresh token (the CLI never
           // overrides it; that override is migration-only, §6).
           refreshTokenOverride: null,
-          signal: null,
+          signal,
         }),
       );
       switch (result.outcome) {

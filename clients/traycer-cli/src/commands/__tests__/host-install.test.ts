@@ -957,10 +957,13 @@ describe("buildHostInstallCommand", () => {
     );
   });
 
-  it("credentials file unreadable at the provisioning re-read: install still succeeds, provisioning skipped", async () => {
+  it("credentials file unreadable at the provisioning re-read: install still succeeds, but the loss surfaces as unauthorized", async () => {
     // The nastier half of the same hazard: this read happens AFTER the bytes
     // are swapped and the service started, so a throw here would report an
-    // install that genuinely succeeded as a failure.
+    // install that genuinely succeeded as a failure. The lost credentials are
+    // no longer silently swallowed either - the pre-flight said signed-in, so
+    // `maybeProvisionCredential` reports `unauthorized` rather than skipping
+    // provisioning outright, and the human line names the remedy.
     mocks.resolveHostAuthMock
       .mockResolvedValueOnce({
         token: "test-token",
@@ -986,8 +989,10 @@ describe("buildHostInstallCommand", () => {
     expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
     expect(result.data).toMatchObject({
       authPreflight: { state: "signed-in", reason: null },
-      credentialProvision: null,
+      credentialProvision: { kind: "unauthorized" },
     });
+    expect(result.human ?? "").toContain("your sign-in is no longer valid");
+    expect(result.exitCode).toBe(0);
     expect(ctx.runtime.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("could not read the stored credentials"),
       expect.objectContaining({ stage: "provision" }),
@@ -1221,7 +1226,7 @@ describe("buildHostInstallCommand", () => {
       expect(result.data).toMatchObject({ credentialProvision: null });
     });
 
-    it("resolveHostAuth going null between the preflight and the re-read: skips provisioning", async () => {
+    it("resolveHostAuth going null between the preflight and the re-read: surfaces as unauthorized, not skipped", async () => {
       mocks.resolveHostAuthMock.mockResolvedValueOnce({
         token: "test-token",
         authnBaseUrl: "https://authn.test",
@@ -1245,8 +1250,10 @@ describe("buildHostInstallCommand", () => {
       expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
       expect(result.data).toMatchObject({
         authPreflight: { state: "signed-in", reason: null },
-        credentialProvision: null,
+        credentialProvision: { kind: "unauthorized" },
       });
+      expect(result.human ?? "").toContain("your sign-in is no longer valid");
+      expect(result.exitCode).toBe(0);
     });
   });
 });

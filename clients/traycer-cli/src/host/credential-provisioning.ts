@@ -60,7 +60,13 @@ import {
 // a provision frame needs a live session, and this method's compatibility is
 // what grants one. A mismatch is therefore reported as `unsupported` - we
 // reached the host and learned its state, but this CLI build cannot carry the
-// credential to it - rather than as an unreachable host.
+// credential to it - rather than as an unreachable host. The signal for that
+// is a WITHHELD mint: a non-active state after which the client never invoked
+// the mint hook, which happens exactly when the client decided it cannot
+// deliver (version mismatch tore the session down first, or the host's id
+// predates the UUID format authn requires). Both are deterministic for this
+// client, so a withheld mint also ends the laps - re-dialing cannot change
+// the answer.
 //
 // Every outcome here is advisory: `host install` already succeeded, and an
 // unprovisioned host self-heals when any minting client connects later - so
@@ -74,8 +80,12 @@ export type HostCredentialProvisionOutcome =
   // No `openAck` arrived inside the deadline - the host never came up (or
   // never became reachable) while we watched.
   | { readonly kind: "unreachable" }
-  // The connection opened but the host never reported a credential state:
-  // an older host without the provision capability.
+  // The host was reached but this client cannot credential it: it never
+  // reported a credential state (an older host without the provision
+  // capability), the probe's method failed version negotiation (the state
+  // rides the handshake, but the handover needs a live session), or the
+  // host's id predates the UUID format authn requires - no client can mint
+  // for that last one.
   | { readonly kind: "unsupported" }
   // The host asked, this run did not hand it a credential (authn unreachable,
   // mint rejected, or another client superseded us), AND no later ack
@@ -90,7 +100,9 @@ export type HostCredentialProvisionOutcome =
   // Distinct from every kind above because it is the one outcome that does
   // NOT self-heal - no later client can mint on a dead credential either, so
   // the human line has to say `traycer login` rather than "a client will
-  // sort this out".
+  // sort this out". Also produced by the CALLER when the stored sign-in
+  // disappeared between its pre-flight and this probe (a concurrent sign-out
+  // or an unreadable credentials file) - same remedy, same line.
   | { readonly kind: "unauthorized" }
   // Unexpected throw; the message is diagnostic only.
   | { readonly kind: "error"; readonly message: string };
@@ -117,11 +129,14 @@ const MAX_BACKOFF_MS = 2_000;
 // frame flushes before the verify reconnect. Not correctness-bearing - the
 // verify ack is the real signal - just avoids closing under the write.
 const PUSH_DRAIN_MS = 750;
-// The ack's credential state is reported AFTER the transport reaches `open`,
-// not before: `handleOpenAckFrame` transitions the connection first and calls
-// `onHostCredentialAck` last, so status-open with no state seen yet is the
-// normal ordering, not evidence the host reported none. This grace is what
-// makes the distinction - reaching it means no state followed the open.
+// The ack's credential state is reported BEFORE the transport reaches `open`:
+// `handleOpenAckFrame` reports the state first (ahead of even the version
+// check) and only then completes the subscribe and transitions. So by the
+// time the status listener sees `open`, a state-carrying ack has already
+// settled the lap, and this grace only ever runs out on an ack that
+// genuinely carried no state - an older host without the provision
+// capability. It stays a timer (not an instant call) as a belt against the
+// ordering changing again.
 const SILENT_ACK_GRACE_MS = 100;
 // Sessions are deadline-bounded anyway; the cap is a backstop against a
 // pathological host that acks `missing` forever.
@@ -141,6 +156,16 @@ export async function provisionInstalledHostCredential(
   options: ProvisionHostCredentialOptions,
 ): Promise<HostCredentialProvisionOutcome> {
   const deadlineAt = Date.now() + options.deadlineMs;
+  // Cancels the probe's own remote work - the mint's HTTP request and the
+  // locked credential rotation - when the budget runs out. Bounding the
+  // AWAITS alone is not enough: the CLI exits by draining the event loop
+  // (`runner/exit.ts` sets `process.exitCode`), so an abandoned fetch or a
+  // lock poll left running keeps `host install` visibly sitting at the
+  // prompt for up to tens of seconds after it printed its result. Abort maps
+  // to TRANSIENT outcomes everywhere it lands (lock wait -> `lock-busy`,
+  // refresh fetch -> `refresh-network`, mint fetch -> `network-error`), so
+  // cancelling can never fabricate a "rejected"/unauthorized report.
+  const probeAbort = new AbortController();
 
   // Everything acquirable is declared here and ACQUIRED INSIDE the `try`, so
   // no setup failure can escape this module. The caller runs after the bytes
@@ -193,6 +218,17 @@ export async function provisionInstalledHostCredential(
   let observeState: ((state: HostCredentialState) => void) | null = null;
   let mintInvoked = false;
   let mintSettled: Promise<HostCredentialMintOutcome> | null = null;
+  // Our mint definitively returned a credential / definitively did not
+  // (rejected, superseded, network). A mint abandoned at the deadline is
+  // NEITHER until its promise actually settles - `recordMintOutcome` below
+  // keeps listening so `minted` and the mint-unavailable report track what
+  // actually happened rather than what the deadline happened to see.
+  let mintProvisioned = false;
+  let mintUnavailable = false;
+  // A non-active state after which the client never invoked the mint hook:
+  // it decided it cannot deliver (version-incompatible ack, or a non-UUID
+  // host id). Deterministic per client - ends the laps.
+  let mintWithheld = false;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
 
@@ -209,6 +245,10 @@ export async function provisionInstalledHostCredential(
       // would spend a token authn has already retired.
       bearer: () => readLeaseBearer(lease),
       diag: (message) => options.progress(message),
+      signal: probeAbort.signal,
+      // The install's consequence, not the connection-lease one: this probe
+      // closes its connection on purpose, and the install already succeeded.
+      unavailableNote: "continuing - the host stays unprovisioned for now.",
     });
     // The stored access token has a ~4h TTL, so an ordinary "already signed
     // in" install routinely starts this probe on an EXPIRED bearer - the
@@ -226,6 +266,7 @@ export async function provisionInstalledHostCredential(
     const revalidator: ProbeRevalidator = createStoreBackedRevalidator({
       store,
       lease,
+      signal: probeAbort.signal,
     });
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () => {
@@ -283,12 +324,30 @@ export async function provisionInstalledHostCredential(
     client = activeClient;
 
     let sawSilentOpen = false;
-    // A mint that resolved without handing us a credential. NOT terminal on
-    // its own: the same `unavailable` covers the 409 supersede, where another
-    // client won the race and ITS credential is already on the way to the
-    // host - so adoption still has to be verified before anything is called a
-    // failure. Only an unverified run reports it.
-    let mintUnavailable = false;
+    // Records what OUR mint actually returned, whenever that happens - at the
+    // bounded wait below, or after the deadline abandoned it. `unavailable`
+    // covers the 409 supersede too (another client won the race and ITS
+    // credential is on the way), so adoption is still verified before
+    // anything is called a failure; only an unverified run reports it.
+    const recordMintOutcome = (
+      mint: Promise<HostCredentialMintOutcome>,
+    ): void =>
+      void mint.then(
+        (outcome) => {
+          if (outcome.kind === "provisioned") {
+            mintProvisioned = true;
+          } else {
+            mintUnavailable = true;
+          }
+        },
+        (err: unknown) => {
+          options.logger.warn("Host credential provisioning mint flow threw", {
+            errorName: errorFromUnknown(err).name,
+            errorMessage: errorFromUnknown(err).message,
+          });
+          mintUnavailable = true;
+        },
+      );
     // One place decides every non-`active` exit, so the loop end, the bound,
     // and a fatal close can never drift apart on what they report.
     const settledOutcome = (): HostCredentialProvisionOutcome => {
@@ -304,7 +363,14 @@ export async function provisionInstalledHostCredential(
       if (mintInvoked) {
         return { kind: "not-adopted" };
       }
-      return sawSilentOpen ? { kind: "unsupported" } : { kind: "unreachable" };
+      // Both mean the host WAS reached and cannot be credentialed by this
+      // client: it opened without ever reporting a state, or it reported a
+      // non-active state whose mint the client withheld (version mismatch or
+      // a non-UUID host id).
+      if (mintWithheld || sawSilentOpen) {
+        return { kind: "unsupported" };
+      }
+      return { kind: "unreachable" };
     };
     for (let lap = 1; lap <= MAX_SESSIONS; lap++) {
       const remainingMs = remaining();
@@ -323,14 +389,31 @@ export async function provisionInstalledHostCredential(
         case "state": {
           if (observation.state === "active") {
             session.close();
-            // `minted` claims THIS run provisioned it, so a mint that never
-            // handed over a credential does not count - under a supersede the
-            // host goes active on the winner's credential, and announcing it
-            // as ours would be a lie the human line then prints.
+            // `minted` claims THIS run provisioned it, so only a mint that
+            // definitively returned a credential counts - under a supersede
+            // the host goes active on the winner's credential, and announcing
+            // it as ours would be a lie the human line then prints. A mint
+            // that outlived its bounded wait still counts once it lands:
+            // `recordMintOutcome` kept listening, and a held credential the
+            // client flushed on a later ack is ours.
             return {
               kind: "active",
-              minted: mintInvoked && !mintUnavailable,
+              minted: mintProvisioned,
             };
+          }
+          // Non-active with the mint hook never invoked: the client decided
+          // it cannot deliver - the ack failed this method's version check
+          // (the session is already torn down by the time this continuation
+          // runs; the fatal close raced this state observation and lost), or
+          // the host's id predates the UUID format. Both are deterministic
+          // for this client, so further laps cannot change the answer - stop
+          // burning the budget on them. (On a lap AFTER a mint,
+          // `mintInvoked` is true and a quiet ack is the normal
+          // re-verification path, not a withheld mint.)
+          if (!mintInvoked) {
+            mintWithheld = true;
+            session.close();
+            break;
           }
           // Non-active: the client is minting (first time) or re-delivering a
           // held credential. Wait for the mint to settle so the push happens
@@ -344,23 +427,18 @@ export async function provisionInstalledHostCredential(
             // non-null branch to `never`.
             const pendingMint: Promise<HostCredentialMintOutcome> = mintSettled;
             mintSettled = null;
+            recordMintOutcome(pendingMint);
             const mintBoundMs = remaining();
             if (mintBoundMs > 0) {
-              const outcome = await settleMint(
-                pendingMint,
-                options.logger,
-                mintBoundMs,
-              );
-              // Fall through to the verification lap either way. A supersede
-              // reads as `unavailable` here, and the winner's credential is
-              // exactly what the next ack will report as `active`.
-              mintUnavailable = outcome !== "provisioned";
-            } else {
-              // Out of budget before the mint could even be waited on. That is
-              // "minted, never verified" - `not-adopted` - and NOT a mint
-              // failure, so `mintUnavailable` stays false rather than letting
-              // a zero-length bound manufacture a `mint-unavailable` report.
-              pendingMint.catch(() => {});
+              // Fall through to the verification lap either way once the
+              // mint settles or the bound fires. A supersede reads as
+              // `unavailable` (via `recordMintOutcome`), and the winner's
+              // credential is exactly what the next ack will report as
+              // `active`. A `deadline` here deliberately records NOTHING -
+              // the mint's own settlement does, whenever it lands - so a
+              // tight bound can neither manufacture a `mint-unavailable`
+              // report nor suppress a truthful `minted`.
+              await settleMint(pendingMint, options.logger, mintBoundMs);
             }
           }
           await sleep(Math.min(PUSH_DRAIN_MS, remaining()));
@@ -388,19 +466,38 @@ export async function provisionInstalledHostCredential(
           // unreachable host - we reached it, and it may well advertise the
           // credential capability. Retrying cannot help (the mismatch is a
           // property of this CLI build against this host), so report it as
-          // the capability gap it is and let the self-heal cover it.
+          // the capability gap it is and let the self-heal cover it. (This
+          // arm only fires for an ack that carried NO state - a state-carrying
+          // incompatible ack settles the lap as `state` first, and lands in
+          // `unsupported` through the withheld-mint path instead.)
           const reason = observation.reason;
-          if (
-            reason !== null &&
-            reason.kind === "fatalError" &&
-            reason.details.code === "INCOMPATIBLE"
-          ) {
-            return { kind: "unsupported" };
+          if (reason !== null && reason.kind === "fatalError") {
+            if (reason.details.code === "INCOMPATIBLE") {
+              return { kind: "unsupported" };
+            }
+            // Any other terminal fatal still PROVES the host answered - a
+            // frame carried it. When nothing above explains the close (no
+            // rejected sign-in, no mint history), "the host did not come up"
+            // would be false on its face; report the close for what it is.
+            const settled = settledOutcome();
+            if (settled.kind === "unreachable") {
+              return {
+                kind: "error",
+                message: `the host closed the stream (${reason.details.code})`,
+              };
+            }
+            return settled;
           }
           return settledOutcome();
         }
         case "timeout":
           return settledOutcome();
+      }
+      // A withheld mint is deterministic for this client (the version
+      // mismatch and the id format do not change between dials) - the
+      // remaining laps would spend the budget re-measuring a constant.
+      if (mintWithheld) {
+        break;
       }
     }
     return settledOutcome();
@@ -423,10 +520,11 @@ export async function provisionInstalledHostCredential(
       // a callback, so TS's linear flow narrows this branch to `never`.
       const pendingRevalidation: Promise<RevalidateOutcome> =
         inFlightRevalidation;
-      // A revalidation only ever STARTS with budget left, so waiting out the
-      // remainder keeps the whole probe inside its advertised bound while
-      // making sure a rotation this probe began has finished before the
-      // command returns and the store is disposed under it.
+      // A revalidation only ever STARTS with budget left, so the remainder is
+      // the most a started rotation gets to land cleanly (a landed rotation
+      // leaves the credentials file consistent; an interrupted one leaves its
+      // spent-base marker armed for the next process to resolve). Whatever is
+      // still pending when the bound fires is cancelled just below.
       // A CANCELABLE deadline, not `sleep()`: an uncleared `setTimeout` keeps
       // the Node event loop alive, and the CLI exits by draining it rather
       // than calling `process.exit`. A plain race would therefore hold
@@ -445,6 +543,14 @@ export async function provisionInstalledHostCredential(
     if (client !== null) {
       client.close("host-install-credential-provisioning-settled");
     }
+    // Waiting is over; now cancel the WORK. Anything still in flight - a
+    // rotation the bounded wait above gave up on, a mint the deadline
+    // abandoned - has no session left to deliver to, and left running it
+    // keeps the drain-to-exit CLI sitting at the prompt for up to its own
+    // HTTP timeout. Abort maps to transient outcomes everywhere (see the
+    // controller's declaration), so this cannot rewrite what the probe
+    // already decided to report.
+    probeAbort.abort();
     // Stops any `commit-failed` continuation timer a revalidation armed;
     // without it the process keeps a timer alive past the probe.
     if (store !== null) {
@@ -500,9 +606,11 @@ function observeNextAck(
     session.onStatusChange(
       (status: StreamConnectionStatus, reason: StreamCloseReason | null) => {
         if (status === "open") {
-          // The state callback fires just AFTER this status change (same tick,
-          // end of `handleOpenAckFrame`), so arriving here proves nothing yet -
-          // only surviving the grace without a state does.
+          // A state-carrying ack settles this promise BEFORE `open` fires
+          // (`handleOpenAckFrame` reports the credential state first, ahead
+          // of the version check), so arming the grace here only matters for
+          // an ack that carried no state - it resolves `opened-silent` once
+          // the grace passes without one.
           if (silentTimer === null && !settled) {
             silentTimer = setTimeout(() => {
               finish({ kind: "opened-silent" }, true);
@@ -529,18 +637,18 @@ function observeNextAck(
  *
  * The overall deadline has to bind this too: a host that acks `missing` near
  * the end of the budget would otherwise let the mint's own HTTP timeout run
- * `host install` well past the deadline this module advertises. Abandoning a
- * mint costs nothing - it completes server-side regardless, and its credential
- * simply becomes the one a later client verifies.
+ * `host install` well past the deadline this module advertises.
  *
- * Both the rejection and the bound resolve to `unavailable`; the caller treats
- * that as "not provisioned BY US", never as proof the host has no credential.
+ * Purely a pacing bound: outcome recording is `recordMintOutcome`'s job
+ * (attached to the same promise before this is called), so a deadline here
+ * abandons the WAIT, never the bookkeeping - and the abandoned request itself
+ * is cancelled by the probe's abort on the way out.
  */
 async function settleMint(
   mint: Promise<HostCredentialMintOutcome>,
   logger: ILogger,
   boundMs: number,
-): Promise<"provisioned" | "unavailable"> {
+): Promise<void> {
   let timer: NodeJS.Timeout | null = null;
   const bound = new Promise<"deadline">((resolve) => {
     timer = setTimeout(() => resolve("deadline"), boundMs);
@@ -551,15 +659,8 @@ async function settleMint(
     // rejection once we have stopped waiting on it.
     const settled = await Promise.race([
       mint.then(
-        (outcome): "provisioned" | "unavailable" =>
-          outcome.kind === "provisioned" ? "provisioned" : "unavailable",
-        (err: unknown): "unavailable" => {
-          logger.warn("Host credential provisioning mint flow threw", {
-            errorName: errorFromUnknown(err).name,
-            errorMessage: errorFromUnknown(err).message,
-          });
-          return "unavailable";
-        },
+        (): "settled" => "settled",
+        (): "settled" => "settled",
       ),
       bound,
     ]);
@@ -568,9 +669,7 @@ async function settleMint(
         "Host credential provisioning mint did not settle within the deadline",
         { boundMs },
       );
-      return "unavailable";
     }
-    return settled;
   } finally {
     if (timer !== null) {
       clearTimeout(timer);
