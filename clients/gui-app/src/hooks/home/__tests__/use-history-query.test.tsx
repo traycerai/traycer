@@ -33,6 +33,7 @@ const testState = vi.hoisted(() => {
     activityError: null as Error | null,
     taskContexts: new Map<string, ListTaskLight>(),
     taskContextsError: null as Error | null,
+    chatHostSupport: "supported",
     refetch: vi.fn(),
     fetchNextPage: vi.fn(),
   };
@@ -94,6 +95,10 @@ vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/home/use-chat-host-filter-support", () => ({
+  useChatHostFilterSupport: () => testState.chatHostSupport,
+}));
+
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: (taskIds: readonly string[]) => ({
     tasksById: new Map(
@@ -127,6 +132,7 @@ describe("useHistoryQuery", () => {
     testState.activityError = null;
     testState.taskContexts = new Map();
     testState.taskContextsError = null;
+    testState.chatHostSupport = "supported";
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
   });
@@ -486,6 +492,140 @@ describe("useHistoryQuery", () => {
       "Task contexts failed",
     );
   });
+
+  describe("chat-host filter", () => {
+    const hostSearch: HistorySearchState = {
+      ...DEFAULT_HISTORY_SEARCH,
+      chatHosts: ["host-a"],
+    };
+
+    it("withholds rows when the host negotiated a minor that drops the filter", () => {
+      // The response is well-formed and complete - that is exactly the
+      // hazard. An old host strips `chatHostIds` and answers as if no filter
+      // was asked for, so rendering these rows would present an UNFILTERED
+      // list as a filtered one, with nothing anywhere reporting a problem.
+      testState.chatHostSupport = "unsupported";
+      render(<HistoryQueryHarness search={hostSearch} />);
+
+      expect(screen.getByTestId("chat-host-unsupported").textContent).toBe(
+        "true",
+      );
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("");
+    });
+
+    it("withholds rows when the first page comes back without the chat-host facet", () => {
+      // The cloud tier has no version negotiation of its own: an old server
+      // simply drops request keys it does not recognize. A first page that
+      // omits the `chatHosts` group is the only evidence of that, and it must
+      // fail closed the same way the host arm does.
+      testState.chatHostSupport = "supported";
+      testState.response = {
+        tasks: testState.tasks,
+        hasMore: false,
+        facets: {
+          repos: [],
+          workspaces: [],
+          ownershipScopes: [],
+        },
+      };
+      render(<HistoryQueryHarness search={hostSearch} />);
+
+      expect(screen.getByTestId("chat-host-unsupported").textContent).toBe(
+        "true",
+      );
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("");
+    });
+
+    it("serves rows and facet counts when both tiers can apply the filter", () => {
+      testState.chatHostSupport = "supported";
+      testState.response = {
+        tasks: testState.tasks,
+        hasMore: false,
+        facets: {
+          repos: [],
+          workspaces: [],
+          ownershipScopes: [],
+          chatHosts: [{ hostId: "host-a", count: 2 }],
+        },
+      };
+      render(<HistoryQueryHarness search={hostSearch} />);
+
+      expect(screen.getByTestId("chat-host-unsupported").textContent).toBe(
+        "false",
+      );
+      expect(screen.getByTestId("chat-host-facets").textContent).toBe(
+        "host-a:2",
+      );
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("Alpha workbench|Beta search flow");
+    });
+
+    it("host-filters an id-fetched worktree match instead of dropping the local search", () => {
+      // A branch name lives only in local worktree metadata, so this row can
+      // only arrive through the id-fetched union - which never passed the
+      // server's host filter. The row carries its own visible chat hosts, so
+      // the filter is re-applied here rather than the whole local arm being
+      // switched off (which would make branch search silently return nothing
+      // whenever a host was selected).
+      const onHost = taskLight("epic-local", "Local only", "traycer/gui-app");
+      testState.taskContexts = new Map([
+        ["epic-local", { ...onHost, chatHostIds: ["host-a"] }],
+      ]);
+      testState.worktreeIndex = [
+        {
+          ...worktreeWithPullRequest(1),
+          worktreePath: "/w/histogram",
+          branch: "feature/histogram",
+          owners: [
+            {
+              epicId: "epic-local",
+              ownerKind: "chat",
+              ownerId: "chat-local",
+              updatedAt: 1,
+            },
+          ],
+        },
+      ];
+      testState.response = {
+        tasks: [],
+        hasMore: false,
+        facets: {
+          repos: [],
+          workspaces: [],
+          ownershipScopes: [],
+          chatHosts: [{ hostId: "host-a", count: 1 }],
+        },
+      };
+
+      const { rerender } = render(
+        <HistoryQueryHarness
+          search={{ ...hostSearch, query: "feature/histogram" }}
+        />,
+      );
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("Local only");
+
+      // The same search against a host the row does NOT have drops it.
+      rerender(
+        <HistoryQueryHarness
+          search={{
+            ...hostSearch,
+            chatHosts: ["host-z"],
+            query: "feature/histogram",
+          }}
+        />,
+      );
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("");
+    });
+  });
 });
 
 function HistoryQueryHarness(props: {
@@ -513,6 +653,14 @@ function HistoryQueryHarness(props: {
               `${facet.workspace.hostId}:${facet.workspace.workspacePath}:${facet.count}`,
           )
           .join("|") ?? ""}
+      </div>
+      <div data-testid="chat-host-unsupported">
+        {String(result.data?.chatHostFilterUnsupported ?? false)}
+      </div>
+      <div data-testid="chat-host-facets">
+        {result.data?.facets.chatHosts
+          ?.map((facet) => `${facet.hostId}:${facet.count}`)
+          .join("|") ?? "none"}
       </div>
       <div data-testid="ownership-facets">
         {result.data?.facets.ownershipScopes

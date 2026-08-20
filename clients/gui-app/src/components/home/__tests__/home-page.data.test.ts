@@ -28,6 +28,7 @@ function makeItem(
     updatedLabel: overrides.updatedLabel ?? "x",
     updatedBucket: overrides.updatedBucket ?? "today",
     linkedRepos: overrides.linkedRepos ?? [],
+    chatHostIds: overrides.chatHostIds ?? null,
     linkedWorkspaces: overrides.linkedWorkspaces ?? [],
     pullRequestNumbers: overrides.pullRequestNumbers ?? [],
     worktreeBranches: overrides.worktreeBranches ?? [],
@@ -60,6 +61,8 @@ describe("home-page history helpers", () => {
         repoMatchMode: "any",
         workspaces: [],
         workspaceMatchMode: "any",
+        chatHosts: [],
+        chatHostMatchMode: "any",
         ownershipScopes: [],
       }),
     ).toHaveLength(2);
@@ -70,6 +73,8 @@ describe("home-page history helpers", () => {
         repoMatchMode: "all",
         workspaces: [],
         workspaceMatchMode: "any",
+        chatHosts: [],
+        chatHostMatchMode: "any",
         ownershipScopes: [],
       }),
     ).toHaveLength(1);
@@ -351,6 +356,58 @@ describe("home-page history helpers", () => {
       updatedBucket: "today",
       linkedRepos: ["traycerai/gui-app"],
       isPinned: false,
+    });
+  });
+
+  describe("chat-host filter", () => {
+    const hostItems: ReadonlyArray<HistoryItem> = [
+      makeItem({ id: "a", title: "A", chatHostIds: ["host-1"] }),
+      makeItem({ id: "b", title: "B", chatHostIds: ["host-1", "host-2"] }),
+      makeItem({ id: "c", title: "C", chatHostIds: [] }),
+      // No `chatHostIds` at all - served by a peer too old to report them.
+      makeItem({ id: "d", title: "D", chatHostIds: null }),
+    ];
+
+    function filterByHosts(
+      chatHosts: ReadonlyArray<string>,
+      chatHostMatchMode: "any" | "all",
+    ): ReadonlyArray<string> {
+      return filterHistoryItems(hostItems, {
+        repoNames: [],
+        repoMatchMode: "any",
+        workspaces: [],
+        workspaceMatchMode: "any",
+        chatHosts,
+        chatHostMatchMode,
+        ownershipScopes: [],
+      }).map((item) => item.id);
+    }
+
+    it("matches any selected host and excludes a row with none of them", () => {
+      // "c" reports an empty set, which is a truthful negative - it is
+      // excluded, unlike "d", which cannot answer at all.
+      expect(filterByHosts(["host-2"], "any")).toEqual(["b", "d"]);
+    });
+
+    it("requires every selected host under `all`", () => {
+      // "a" has host-1 only, so `all` drops it where `any` keeps it.
+      expect(filterByHosts(["host-1", "host-2"], "any")).toEqual([
+        "a",
+        "b",
+        "d",
+      ]);
+      expect(filterByHosts(["host-1", "host-2"], "all")).toEqual(["b", "d"]);
+    });
+
+    it("keeps a row that cannot report its hosts rather than inventing a negative", () => {
+      // Dropping "d" would empty the list against an older peer, which reads
+      // identically to "you have no tasks on that host". The version gate
+      // prevents this case; abstaining is the residual safety choice.
+      expect(filterByHosts(["host-9"], "any")).toEqual(["d"]);
+    });
+
+    it("is inert when no host is selected", () => {
+      expect(filterByHosts([], "any")).toEqual(["a", "b", "c", "d"]);
     });
   });
 });

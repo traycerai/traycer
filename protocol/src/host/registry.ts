@@ -294,7 +294,9 @@ import {
   epicFinishArtifactImageV10,
   epicGetTaskContextsV10,
   epicGetTaskContextsV11,
+  epicGetTaskContextsV12,
   epicGetTaskContextsUpgradeV10ToV11,
+  epicGetTaskContextsUpgradeV11ToV12,
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
@@ -312,8 +314,10 @@ import {
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
+  epicListTasksV13,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
+  epicListTasksUpgradeV12ToV13,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -4924,7 +4928,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -4937,6 +4941,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: epicListTasksV12,
           upgradeFromPreviousVersion: epicListTasksUpgradeV11ToV12,
+        },
+        3: {
+          contract: epicListTasksV13,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -4975,7 +4983,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     1: {
       // @1.1's new row-union values are projection-gated in host dispatch:
       // a v1.0 caller receives its released nullable rows, never a union arm.
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicGetTaskContextsV10,
@@ -4985,6 +4993,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: epicGetTaskContextsV11,
           upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV10ToV11,
           responseGrowthProjectionGated: true,
+        },
+        2: {
+          contract: epicGetTaskContextsV12,
+          upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

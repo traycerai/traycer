@@ -119,6 +119,12 @@ export function listCloudTasksRequestForHistorySearch(
     filters.workspaceIdentifiers = [...dedupSortWorkspaces(search.workspaces)];
     filters.workspaceMatchMode = search.workspaceMode;
   }
+  if (search.chatHosts.length > 0) {
+    filters.chatHostIds = Array.from(new Set(search.chatHosts)).sort(
+      (left, right) => left.localeCompare(right),
+    );
+    filters.chatHostMatchMode = search.chatHostMode;
+  }
   if (search.ownershipScopes.length > 0) {
     filters.ownershipScopes = sortOwnershipScopes(search.ownershipScopes);
   }

@@ -43,6 +43,16 @@ export interface HistoryItem {
   updatedBucket: HistoryRecencyBucket;
   linkedRepos: ReadonlyArray<string>;
   linkedWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
+  /**
+   * Hosts owning chats in this task that the signed-in user may see, or
+   * `null` when the serving peer predates the field.
+   *
+   * `null` is not `[]`. An empty array truthfully says "no visible chats on
+   * any host", which a host filter may act on by excluding the row; `null`
+   * says the row cannot answer, and the predicate must abstain rather than
+   * invent a negative.
+   */
+  chatHostIds: ReadonlyArray<string> | null;
   pullRequestNumbers: ReadonlyArray<string>;
   worktreeBranches: ReadonlyArray<string>;
   worktreePaths: ReadonlyArray<string>;
@@ -56,6 +66,8 @@ export interface HistoryFilters {
   repoMatchMode: HistoryMatchMode;
   workspaces: ReadonlyArray<HistoryWorkspaceRef>;
   workspaceMatchMode: HistoryMatchMode;
+  chatHosts: ReadonlyArray<string>;
+  chatHostMatchMode: HistoryMatchMode;
   ownershipScopes: ReadonlyArray<HistoryOwnershipScope>;
 }
 
@@ -156,6 +168,7 @@ function buildHistoryItem(args: {
     updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
     linkedRepos: readTaskRepos(task),
     linkedWorkspaces: readTaskWorkspaces(task),
+    chatHostIds: task.chatHostIds ?? null,
     pullRequestNumbers: [],
     worktreeBranches: [],
     worktreePaths: [],
@@ -350,6 +363,35 @@ function matchesRepoFilter(
   return repoNames.some((repoName) => item.linkedRepos.includes(repoName));
 }
 
+/**
+ * Whether a row satisfies the chat-host filter.
+ *
+ * A row whose `chatHostIds` is `null` came from a peer that cannot report the
+ * field, so it is KEPT rather than excluded: the alternative silently empties
+ * the list against an older host, which looks identical to "you have no tasks
+ * there". The version gate is what stops that case from arising; this is the
+ * residual safety choice if it ever does.
+ */
+function matchesChatHostFilter(
+  item: HistoryItem,
+  chatHosts: ReadonlyArray<string>,
+  chatHostMatchMode: HistoryMatchMode,
+): boolean {
+  if (chatHosts.length === 0) {
+    return true;
+  }
+  if (item.chatHostIds === null) {
+    return true;
+  }
+
+  const itemHostIds = new Set(item.chatHostIds);
+  if (chatHostMatchMode === "all") {
+    return chatHosts.every((hostId) => itemHostIds.has(hostId));
+  }
+
+  return chatHosts.some((hostId) => itemHostIds.has(hostId));
+}
+
 function matchesWorkspaceFilter(
   item: HistoryItem,
   workspaces: ReadonlyArray<HistoryWorkspaceRef>,
@@ -383,6 +425,11 @@ export function filterHistoryItems(
       return false;
     }
     if (!matchesRepoFilter(item, filters.repoNames, filters.repoMatchMode)) {
+      return false;
+    }
+    if (
+      !matchesChatHostFilter(item, filters.chatHosts, filters.chatHostMatchMode)
+    ) {
       return false;
     }
     return matchesWorkspaceFilter(
