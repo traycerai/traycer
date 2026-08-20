@@ -39,10 +39,10 @@ export function PinToggle(props: PinToggleProps) {
         onToggle();
       }}
       className={cn(
-        "size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground group-data-selected/command-item:text-primary",
+        "size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground group-data-[selected=true]/command-item:text-primary",
         pinned
           ? "inline-flex text-foreground"
-          : "hidden group-hover/command-item:inline-flex group-data-selected/command-item:inline-flex",
+          : "hidden group-hover/command-item:inline-flex group-data-[selected=true]/command-item:inline-flex",
       )}
     >
       {pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
