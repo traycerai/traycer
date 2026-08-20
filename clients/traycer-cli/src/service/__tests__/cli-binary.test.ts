@@ -10,7 +10,7 @@ import {
 import type { PathLike } from "node:fs";
 import { lstat, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
 
@@ -151,6 +151,18 @@ function writeFakeExecutableNode(dir: string): string {
   if (process.platform !== "win32") {
     chmodSync(path, 0o755);
   }
+  return path;
+}
+
+// A directory named `node`/`node.exe` on a PATH entry: execute permission on
+// a directory means "searchable", not "runs as a program" - the regression
+// this guards against is `resolveNodeOnPath` accepting it via
+// `access(candidate, X_OK)` alone, ahead of a real interpreter sitting on a
+// later PATH entry.
+function writeNodeLookingDirectory(dir: string): string {
+  const name = process.platform === "win32" ? "node.exe" : "node";
+  const path = join(dir, name);
+  mkdirSync(path);
   return path;
 }
 
@@ -554,6 +566,84 @@ describe("resolveServiceCliInvocation", () => {
       ).rejects.toThrow(/no 'node' was found on PATH/);
     } finally {
       rmSync(emptyPathDir, { recursive: true, force: true });
+    }
+  });
+
+  // Fix: `resolveNodeOnPath` used to accept any PATH candidate that passed
+  // `access(candidate, X_OK)` alone. Execute permission on a DIRECTORY means
+  // "searchable", not "runs as a program" - so a directory named `node`
+  // sitting on an earlier PATH entry used to satisfy that check and win over
+  // the real interpreter sitting on a later entry. The fix `stat`s first and
+  // requires `isFile()`, continuing the scan past a directory instead.
+  it("skips a directory named node on an earlier PATH entry and pins the real executable on a later entry", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    const firstDir = mkdtempSync(join(tmpdir(), "traycer-cli-node-dir-first-"));
+    const secondDir = mkdtempSync(
+      join(tmpdir(), "traycer-cli-node-real-second-"),
+    );
+    writeNodeLookingDirectory(firstDir);
+    const realNode = writeFakeExecutableNode(secondDir);
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+      const result = await withPath(`${firstDir}${delimiter}${secondDir}`, () =>
+        resolveServiceCliInvocation({
+          environment: ENVIRONMENT,
+          override: null,
+          allowSelfInvocation: false,
+        }),
+      );
+
+      expect(result).toEqual({ command: realNode, args: [binaryPath] });
+      // npm never gets an executable slot, same as the sibling PATH tests
+      // above.
+      const { wellKnownCliBinaryPath } =
+        await import("../../store/well-known-cli");
+      expect(existsSync(wellKnownCliBinaryPath(ENVIRONMENT))).toBe(false);
+    } finally {
+      rmSync(firstDir, { recursive: true, force: true });
+      rmSync(secondDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to register when PATH contains only a directory named node", async () => {
+    const binaryPath = join(workHome, "npm-bundle.js");
+    writeFileSync(binaryPath, "#!/usr/bin/env node\n");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "npm",
+      pendingUpgrade: null,
+    });
+    const dirOnlyPathDir = mkdtempSync(
+      join(tmpdir(), "traycer-cli-node-dir-only-"),
+    );
+    writeNodeLookingDirectory(dirOnlyPathDir);
+    try {
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+      await expect(
+        withPath(dirOnlyPathDir, () =>
+          resolveServiceCliInvocation({
+            environment: ENVIRONMENT,
+            override: null,
+            allowSelfInvocation: false,
+          }),
+        ),
+      ).rejects.toThrow(/no 'node' was found on PATH/);
+    } finally {
+      rmSync(dirOnlyPathDir, { recursive: true, force: true });
     }
   });
 
