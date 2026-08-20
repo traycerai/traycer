@@ -135,7 +135,7 @@ function renderCard(host: IRunnerHost): QueryClient {
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={host}>
-        <HostDoctorCard />
+        <HostDoctorCard expectedHostId="local-host" />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );

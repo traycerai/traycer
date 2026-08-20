@@ -684,6 +684,22 @@ export class HostController {
   private pendingRevisionCycleInFlight: Promise<MutationOutcome<ConvergeReadyOk> | null> | null =
     null;
 
+  // The EFFECTIVE owner policy of the cycle in the slot above, which is not
+  // necessarily the policy of the caller that opened it: a within-lane joiner
+  // UPGRADES it (see `applyPendingLoginItemRevisionIfIdle`). The reverse
+  // admission check reads this rather than its own parameter, because a
+  // coalesced call runs once for every caller attached to it - deciding on
+  // the first caller's policy alone would refuse on behalf of a joiner whose
+  // own lane job is the very thing being refused for.
+  private pendingRevisionCycleCaller: PendingRevisionCaller | null = null;
+
+  // Whether the cycle in the slot ended by refusing on OUTSIDE-lane policy.
+  // Distinguishes that refusal from every other `null` (nothing to do, not
+  // reachable, quarantined, host busy), which is what lets a within-lane
+  // joiner tell "there was nothing to apply" from "it was refused for MY
+  // lane" - only the second is worth re-attempting.
+  private pendingRevisionCycleDeferredByLane = false;
+
   // True only while a pending-login-item revision cycle is COMMITTED - past
   // every precheck and either waiting on the desktop lock or running its
   // bootout/re-register. Deliberately narrower than the D1 in-flight slot
@@ -1699,13 +1715,48 @@ export class HostController {
   // slot for the ENTIRE call - including its own pre-checks - the other
   // joins its result outright, exactly mirroring how `runEnsureHost` gated
   // before any of its own logic ran.
+  //
+  // Coalescing carries ONE more obligation than the slot itself: the joiner's
+  // OWNER POLICY. An outside tick that is still in its prechecks when
+  // `convergeReady` joins from inside its lane job would otherwise reach the
+  // reverse-admission check holding only the tick's own `outside-lane`
+  // policy, see the mutation lane the JOINER occupies, and refuse - a cycle
+  // declining to run because of the very caller waiting on it, after which
+  // the no-op converge path reports success having applied nothing. So a
+  // within-lane joiner upgrades the cycle's policy, and (for the narrow case
+  // where the refusal already happened before it could) re-attempts exactly
+  // once under the corrected policy.
   async applyPendingLoginItemRevisionIfIdle(
     caller: PendingRevisionCaller,
   ): Promise<MutationOutcome<ConvergeReadyOk> | null> {
-    if (this.pendingRevisionCycleInFlight !== null) {
-      return this.pendingRevisionCycleInFlight;
+    const inFlight = this.pendingRevisionCycleInFlight;
+    if (inFlight !== null) {
+      // An outside-lane joiner never widens what the cycle may do, so it
+      // takes the in-flight answer as-is.
+      if (caller === "outside-lane") return inFlight;
+      this.pendingRevisionCycleCaller = "within-lane-job";
+      const joined = await inFlight;
+      // The upgrade lands before the check for the whole precheck window
+      // (several file/probe awaits). It can only miss when the cycle had
+      // already refused, and that refusal was against THIS caller's lane -
+      // so it is void for this caller. Re-attempt ONCE, never a loop: the
+      // retry only happens after a lane-policy refusal, and it runs under
+      // `within-lane-job`, which cannot produce another one.
+      if (joined !== null || !this.pendingRevisionCycleDeferredByLane) {
+        return joined;
+      }
+      // Someone else opened a cycle in the gap; theirs subsumes this one
+      // (and carries the upgraded policy set above).
+      if (this.pendingRevisionCycleInFlight !== null) {
+        return this.pendingRevisionCycleInFlight;
+      }
+      // Falls through to open a fresh cycle. The check above and the set
+      // below stay in one synchronous stretch, exactly like the first-caller
+      // path, so the D1 gate still cannot admit two owners in one JS turn.
     }
-    const run = this.applyPendingLoginItemRevisionIfIdleUncoalesced(caller);
+    this.pendingRevisionCycleCaller = caller;
+    this.pendingRevisionCycleDeferredByLane = false;
+    const run = this.applyPendingLoginItemRevisionIfIdleUncoalesced();
     // The D1 cache becomes visible synchronously, before any of the
     // reachability/quarantine/approval prechecks await. Quit drain must see
     // the entire in-flight intent, not only the later lock-owning cycle.
@@ -1721,15 +1772,14 @@ export class HostController {
     const clearInFlight = (): void => {
       if (this.pendingRevisionCycleInFlight === run) {
         this.pendingRevisionCycleInFlight = null;
+        this.pendingRevisionCycleCaller = null;
       }
     };
     run.then(clearInFlight, clearInFlight);
     return run;
   }
 
-  private async applyPendingLoginItemRevisionIfIdleUncoalesced(
-    caller: PendingRevisionCaller,
-  ): Promise<MutationOutcome<ConvergeReadyOk> | null> {
+  private async applyPendingLoginItemRevisionIfIdleUncoalesced(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
     const currentVersion = await readRunningRuntimeVersion(
       this.layout,
       this.reachabilityProbe,
@@ -1769,7 +1819,16 @@ export class HostController {
     // Checked in the same synchronous stretch that raises the flag (no await
     // between), mirroring the handlers' own test-and-submit rule: the lane
     // check, the commitment, and the flag are one decision.
-    if (caller === "outside-lane" && this.mutationStatus !== null) {
+    // Reads the cycle's EFFECTIVE policy, not a captured parameter, so a
+    // within-lane joiner that upgraded it during these prechecks is honoured.
+    // Written as "unless within-lane" rather than "if outside-lane" so the
+    // impossible null reading defers (fails CLOSED) instead of committing a
+    // disruptive cycle beside a live lane intent.
+    if (
+      this.pendingRevisionCycleCaller !== "within-lane-job" &&
+      this.mutationStatus !== null
+    ) {
+      this.pendingRevisionCycleDeferredByLane = true;
       log.debug(
         "[host-controller] pending LaunchAgent revision deferred - mutation lane active",
       );

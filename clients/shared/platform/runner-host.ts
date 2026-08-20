@@ -1585,8 +1585,24 @@ export interface IHostManagement {
   // `IRunnerHost.requestHostRespawn`: resolves `declined` when the host
   // was deliberately not restarted; rejects only on genuine failures.
   readonly restartHost: () => Promise<HostRestartRequestResult>;
+  /**
+   * This machine's host log.
+   *
+   * Carries `expectedHostId` for the same reason the maintenance block below
+   * does, and it is the one READ in that set: the log is host-scoped content
+   * rendered under a named host, so when local host A is replaced by B while
+   * A's Doctor report is still on screen, an unfenced read puts B's log —
+   * paths, ports, workspace names — under A's name. Main compares against the
+   * live local identity and refuses a mismatch.
+   *
+   * An EMPTY string is the fail-CLOSED value, not an opt-out: it matches no
+   * host that can name itself, so it is refused everywhere except a legacy
+   * install with no identity machinery at all — exactly the population where
+   * there is no second host to confuse this one with.
+   */
   readonly getHostLogs: (input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }) => Promise<HostLogsTailResult>;
   readonly runDoctor: () => Promise<HostDoctorReport>;
   readonly availableVersions: (

@@ -39,6 +39,13 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 export interface HostDoctorCardProps {
   readonly recurrenceState?: RecurrenceState;
   readonly onRecurrenceChange?: (next: RecurrenceState) => void;
+  /**
+   * The local host this console is recovering. Its fixes run THIS machine's
+   * CLI, so they carry the id for the same reason every other bridge call
+   * does - the console outlives the host it names, and a replaced host must
+   * not inherit the repairs (or the log) aimed at its predecessor.
+   */
+  readonly expectedHostId: string;
 }
 
 export function HostDoctorCard(props: HostDoctorCardProps) {
@@ -50,6 +57,7 @@ export function HostDoctorCard(props: HostDoctorCardProps) {
   return (
     <HostDoctorCardInner
       management={management}
+      expectedHostId={props.expectedHostId}
       externalRecurrence={props.recurrenceState}
       onExternalRecurrenceChange={props.onRecurrenceChange}
     />
@@ -58,13 +66,19 @@ export function HostDoctorCard(props: HostDoctorCardProps) {
 
 interface HostDoctorCardInnerProps {
   readonly management: IHostManagement;
+  readonly expectedHostId: string;
   readonly externalRecurrence: RecurrenceState | undefined;
   readonly onExternalRecurrenceChange:
     ((next: RecurrenceState) => void) | undefined;
 }
 
 function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
-  const { management, externalRecurrence, onExternalRecurrenceChange } = props;
+  const {
+    management,
+    expectedHostId,
+    externalRecurrence,
+    onExternalRecurrenceChange,
+  } = props;
   const queryClient = useQueryClient();
   const recurrenceModel = useDoctorRecurrence({
     externalRecurrence,
@@ -98,7 +112,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
     onMutate: () => ({ management }),
     mutationFn: async (issue) => {
       if (issue.fixAction === null) return { kind: "applied" };
-      return runFixAction(management, issue);
+      return runFixAction(management, issue, expectedHostId);
     },
     onSuccess: (result, _issue, context) => {
       // A declined restart fix is neither applied nor failed: the host

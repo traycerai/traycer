@@ -419,7 +419,12 @@ describe("Overview doctor — Show logs stays on an honest source", () => {
     );
 
     await waitFor(() => {
-      expect(management.getHostLogs).toHaveBeenCalledWith({ tailLines: 200 });
+      // Fenced on the host the report names, not just asked for: an unfenced
+      // read would hand back a replacement host's log under this one's name.
+      expect(management.getHostLogs).toHaveBeenCalledWith({
+        tailLines: 200,
+        expectedHostId: "host-local",
+      });
     });
     expect(rpcLogCalls.count).toBe(0);
     const tail = await screen.findByTestId("host-doctor-log-tail");

@@ -383,8 +383,19 @@ export function HostOverviewPanel(props: {
       if (management === null) {
         throw new Error("No local host bridge is available.");
       }
+      // Fenced on the SAME id the page's other bridge writes use. Without it
+      // this read is the one place a replaced local host still gets rendered
+      // under the old host's report — a log is host-scoped content, and the
+      // fallback exists precisely for hosts too old to answer for themselves.
+      // `null` means this page's host is not this machine, where a local log
+      // has nothing to do with the report; refused rather than read, exactly
+      // like `restartHostIfIdle`'s own null arm above.
+      if (forceRestartLocalHostId === null) {
+        throw new Error("This page's host is not this computer.");
+      }
       const result = await management.getHostLogs({
         tailLines: DOCTOR_BRIDGE_LOG_TAIL_LINES,
+        expectedHostId: forceRestartLocalHostId,
       });
       return result.tail.length === 0 ? [] : result.tail.split("\n");
     },
@@ -1001,7 +1012,14 @@ export function HostOverviewPanel(props: {
           // page names — the misattribution the rpc-only rule guards against
           // cannot happen when the subject is this computer.
           localDown
-            ? { kind: "bridge" }
+            ? {
+                kind: "bridge",
+                // Non-null in this branch by construction: `localDown` already
+                // requires a local host with a bridge, which is what makes
+                // `forceRestartLocalHostId` an id. Empty stays the fail-closed
+                // reading if that ever stops holding.
+                expectedHostId: forceRestartLocalHostId ?? "",
+              }
             : {
                 kind: "rpc",
                 client,

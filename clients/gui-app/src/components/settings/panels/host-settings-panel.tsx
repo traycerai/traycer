@@ -14,7 +14,10 @@ import { LocalRecoveryDangerZone } from "@/components/settings/host-scope/host-d
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
-import { runFixAction } from "@/components/settings/panels/host-doctor-actions";
+import {
+  fixActionLabel,
+  runFixAction,
+} from "@/components/settings/panels/host-doctor-actions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
@@ -24,7 +27,10 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
+import {
+  toastHostRepairDeclined,
+  toastHostRestartDeclined,
+} from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import type {
@@ -261,9 +267,14 @@ function renderOverviewBody(input: {
  */
 /**
  * What the bridge fix actually did, carried out of `mutationFn` so the
- * callbacks can tell "applied" from "the host declined to restart". A
- * discriminated pair rather than a bare boolean, because the declined arm is
- * the only one with a message and the applied arm must never carry one.
+ * callbacks can tell "applied" from "nothing was enqueued". A discriminated
+ * pair rather than a bare boolean, because the declined arm is the only one
+ * with a message and the applied arm must never carry one.
+ *
+ * The declined arm is deliberately intent-FREE: it says only that the repair
+ * did not run. Which repair it was is the mutation's own variable, so the
+ * callbacks read it from there rather than from a copy in here that could
+ * disagree with the issue that was actually clicked.
  */
 type LocalDoctorFixOutcome =
   | { readonly applied: true; readonly declinedMessage: null }
@@ -375,14 +386,37 @@ function useLocalDoctorFixMutation(
         }
         return { applied: true, declinedMessage: null };
       }
-      const result = await runFixAction(management, issueForBridge);
+      // `localHostId` is null when this page's host is not this machine, and
+      // an empty id is refused by every host that can name itself - the right
+      // answer, since a bridge fix would then be running against a different
+      // computer than the one the report describes.
+      const result = await runFixAction(
+        management,
+        issueForBridge,
+        localHostId ?? "",
+      );
       return result.kind === "declined"
         ? { applied: false, declinedMessage: result.message }
         : { applied: true, declinedMessage: null };
     },
-    onSuccess: (outcome) => {
+    onSuccess: (outcome, issue) => {
       if (!outcome.applied) {
-        toastHostRestartDeclined(outcome.declinedMessage);
+        // WHICH action was refused decides the wording. Before the refusing
+        // repair path existed, `declined` could only ever come from
+        // `restartHost`, so "Host not restarted" was always true; now
+        // `runDoctorRepairIfIdle` refuses Install host and Register service
+        // through the same arm. React Query hands the mutation's own
+        // variables back here, so the intent is read from the issue that was
+        // clicked rather than re-derived or carried in the outcome.
+        const fixAction = issue.fixAction;
+        if (fixAction === "host-start" || fixAction === "host-restart") {
+          toastHostRestartDeclined(outcome.declinedMessage);
+          return;
+        }
+        toastHostRepairDeclined(
+          fixActionLabel(fixAction ?? ""),
+          outcome.declinedMessage,
+        );
         return;
       }
       toast.success("Fix applied");

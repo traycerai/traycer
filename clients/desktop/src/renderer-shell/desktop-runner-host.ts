@@ -294,6 +294,7 @@ export interface DesktopHostManagementBridge {
   restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
   runDoctor(): Promise<HostDoctorReport>;
   availableVersions(

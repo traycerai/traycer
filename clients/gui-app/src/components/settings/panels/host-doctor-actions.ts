@@ -64,6 +64,13 @@ export type FixActionResult =
 export async function runFixAction(
   management: IHostManagement,
   issue: HostDoctorIssue,
+  /**
+   * The local host these fixes are for. Only the log read consults it today —
+   * the lifecycle repairs that need fencing take `runDoctorRepairIfIdle`
+   * instead — but it is threaded here rather than at that one call so a fix
+   * added to this switch cannot reach the bridge without one.
+   */
+  expectedHostId: string,
 ): Promise<FixActionResult> {
   switch (issue.fixAction) {
     case "host-install-latest": {
@@ -93,7 +100,7 @@ export async function runFixAction(
       return { kind: "applied" };
     }
     case "host-logs":
-      await management.getHostLogs({ tailLines: 200 });
+      await management.getHostLogs({ tailLines: 200, expectedHostId });
       return { kind: "applied" };
     case "host-free-port-and-restart": {
       const input = parseFreePortInput(issue);
@@ -162,6 +169,36 @@ export function doctorFixRoute(input: {
   return input.isLocalMachine && input.hasLocalBridge
     ? "local-bridge"
     : "copy-command";
+}
+
+/**
+ * Whether an OPEN "Free port and restart?" confirmation has gone stale.
+ *
+ * The same window the restart confirm and the OS-service confirms already
+ * close for (`host-overview-panel.tsx`, `host-overview-advanced.tsx`): opened
+ * while idle, the dialog stays answerable while an install, a service change
+ * or a restart arms the page-wide lifecycle gate underneath it. Gating the
+ * issue card's BUTTON cannot reach a dialog that is already up, and
+ * `freePortAndRestart` queues rather than refusing — so a confirm landing
+ * there kills the recorded process and forces a restart immediately after the
+ * competing write.
+ *
+ * Stale for every arming EXCEPT this repair's own dispatch, which has to keep
+ * the dialog (and its spinner) up until it settles.
+ */
+export function freePortConfirmWentStale(input: {
+  /**
+   * The open dialog's issue, or `null` when no dialog is open. Structural on
+   * `code` alone so the two `HostDoctorIssue` declarations (protocol and
+   * bridge) both satisfy it without this module picking one.
+   */
+  readonly issue: { readonly code: string } | null;
+  readonly lifecycleArmed: boolean;
+  readonly ownDispatchCode: string | null;
+}): boolean {
+  if (input.issue === null) return false;
+  if (!input.lifecycleArmed) return false;
+  return input.ownDispatchCode !== input.issue.code;
 }
 
 export function parseFreePortInput(

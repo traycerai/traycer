@@ -66,6 +66,7 @@ export interface HostManagementBridgeSurface {
   restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
   runDoctor(): Promise<HostDoctorReport>;
   availableVersions(
@@ -154,9 +155,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostRestart,
       ) as Promise<HostRestartRequestResult>,
-    getHostLogs: ({ tailLines }) =>
+    getHostLogs: ({ tailLines, expectedHostId }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostLogs, {
         tailLines,
+        expectedHostId,
       }) as Promise<HostLogsTailResult>,
     runDoctor: () =>
       ipcRenderer.invoke(

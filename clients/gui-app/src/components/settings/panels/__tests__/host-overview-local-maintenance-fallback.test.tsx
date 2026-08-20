@@ -967,7 +967,13 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      expect(management.getHostLogs).toHaveBeenCalledWith({ tailLines: 200 });
+      // Carries the identity fence: this read projects THIS machine's log
+      // under a scope frozen on HOST_ID, so a replaced local host must be
+      // refused rather than answered with its successor's log.
+      expect(management.getHostLogs).toHaveBeenCalledWith({
+        tailLines: 200,
+        expectedHostId: HOST_ID,
+      });
     });
     expect(rpcLogCalls.count).toBe(0);
     const tail = await screen.findByTestId("host-doctor-log-tail");
@@ -1098,7 +1104,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+      // NOT "Host not restarted": the click was Install host, and reporting a
+      // refused install as a refused restart names an action nobody asked for.
+      expect(toast.info).toHaveBeenCalledWith("Install host didn't run", {
         description: LANE_BUSY_INSTALL_MESSAGE,
       });
     });
@@ -1134,7 +1142,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+      expect(toast.info).toHaveBeenCalledWith("Install host didn't run", {
         description: HOST_CHANGED_MESSAGE,
       });
     });

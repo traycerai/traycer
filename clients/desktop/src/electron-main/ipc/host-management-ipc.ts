@@ -958,6 +958,17 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostLogs,
     async (_event, raw: unknown) => {
+      // Fenced like the maintenance projections, and for the same reason: this
+      // reads THIS machine's log, so a scope frozen on host A that has since
+      // been replaced would render B's log — its paths, ports and workspace
+      // names — under A's name. Throwing matches the other projections; the
+      // callers surface it as a failed read rather than empty content, which
+      // would read as "this host has no log".
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
+      }
       const tail = optionalNumber(raw, "tailLines") ?? 200;
       const args = ["host", "logs", "--tail", String(tail)];
       const data = await runTraycerCliJson<unknown>([...args, "--json"]);

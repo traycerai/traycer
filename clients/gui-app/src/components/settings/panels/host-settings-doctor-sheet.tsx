@@ -28,7 +28,11 @@ import type { HostRpcRegistry } from "@/lib/host";
  * this computer's diagnostics under another host's name.
  */
 export type DoctorSheetSource =
-  | { readonly kind: "bridge" }
+  | {
+      readonly kind: "bridge";
+      /** This machine's host id, fencing the console's own bridge calls. */
+      readonly expectedHostId: string;
+    }
   | {
       readonly kind: "rpc";
       readonly client: HostClient<HostRpcRegistry> | null;
@@ -114,6 +118,7 @@ function DoctorSheetBody(props: {
   if (source.kind === "bridge") {
     return (
       <HostDoctorCard
+        expectedHostId={source.expectedHostId}
         recurrenceState={props.recurrence}
         onRecurrenceChange={props.onRecurrenceChange}
       />

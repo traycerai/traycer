@@ -19,6 +19,7 @@ import {
   describeFreePortPrompt,
   doctorFixRoute,
   fixActionLabel,
+  freePortConfirmWentStale,
   parseFreePortInput,
   severityBadgeClass,
   severityBorderClass,
@@ -134,6 +135,17 @@ export function HostDoctorRpcCard(props: {
   const [freePortIssue, setFreePortIssue] = useState<HostDoctorIssue | null>(
     null,
   );
+  // Adjust-during-render so the close lands in the arming commit. See
+  // `freePortConfirmWentStale` for why an open dialog needs this at all.
+  if (
+    freePortConfirmWentStale({
+      issue: freePortIssue,
+      lifecycleArmed: props.bridgeRestartPending,
+      ownDispatchCode: props.localFixPendingCode,
+    })
+  ) {
+    setFreePortIssue(null);
+  }
 
   const restartMutation = useHostMutation<
     HostRpcRegistry,
@@ -391,6 +403,13 @@ export function HostDoctorRpcCard(props: {
         isPending={props.localFixPendingCode === freePortIssue?.code}
         onConfirm={() => {
           if (freePortIssue === null) return;
+          // Re-read at CONFIRM, not only at open: the close above lands in
+          // the arming commit, but a gate that arms between this click and
+          // that render would otherwise dispatch anyway. `freePortAndRestart`
+          // QUEUES, so what gets through here is a process kill and a forced
+          // restart landing after the competing write - the one outcome this
+          // gate exists to prevent.
+          if (props.bridgeRestartPending) return;
           props.onLocalFix(freePortIssue);
           setFreePortIssue(null);
         }}
