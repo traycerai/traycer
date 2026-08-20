@@ -76,7 +76,11 @@ import {
 } from "@traycer/protocol/host-transport/chunking";
 import { RemoteSession, type RemoteSessionOptions } from "../remote-session";
 import { RemoteStreamClient } from "../remote-stream-client";
-import { INBOUND_CREDIT_GRANT_BATCH } from "../config";
+import {
+  INBOUND_CREDIT_GRANT_BATCH,
+  RECONNECT_INITIAL_BACKOFF_MS,
+  RECONNECT_MAX_BACKOFF_MS,
+} from "../config";
 import type {
   StreamCloseReason,
   StreamFrameEnvelope,
@@ -291,6 +295,15 @@ class FakeRelayHost {
     connection.socket.onmessage?.({
       type: "text",
       data: JSON.stringify({ type: state }),
+    });
+  }
+
+  /** Relay control frame: the peer/session was killed for a relay reason. */
+  sendRelayKill(type: "peer_gone" | "killed", reason: string): void {
+    const connection = this.liveConnection();
+    connection.socket.onmessage?.({
+      type: "text",
+      data: JSON.stringify({ type, reason }),
     });
   }
 
@@ -1074,6 +1087,117 @@ describe("RemoteSession terminal close notification", () => {
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession relay policy kills", () => {
+  it.each(["peer_gone", "killed"] as const)(
+    "%s{policy_violation} drops without going terminal and schedules the capped reconnect",
+    async (controlType) => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        evidence: recorder,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        relay.sendRelayKill(controlType, "policy_violation");
+
+        expect(session.isReady()).toBe(false);
+        expect(session.isClosed()).toBe(false);
+        expect(session.terminalFatal()).toBeNull();
+        expect(setTimeoutSpy).toHaveBeenCalledWith(
+          expect.any(Function),
+          RECONNECT_MAX_BACKOFF_MS,
+        );
+        const indeterminates = recorder.callsNamed("reportDialIndeterminate");
+        expect(indeterminates).toHaveLength(1);
+        expect(indeterminates[0].hostId).toBe("host-1");
+        expect(indeterminates[0].transportKind).toBe("remote-relay");
+        expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
+      } finally {
+        session.close();
+        setTimeoutSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "peer_gone{revoked} remains terminal with an UNAUTHORIZED verdict",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = buildSession(relay, lease, null);
+      let closedEvents = 0;
+      session.onClosed(() => {
+        closedEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        relay.sendRelayKill("peer_gone", "revoked");
+
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(closedEvents).toBe(1);
+        expect(session.terminalFatal()).toEqual({
+          code: "UNAUTHORIZED",
+          reason: "Host access was revoked",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it.each(["peer_gone", "killed"] as const)(
+    "%s{future_reason} is parsed as a capped retryable transport loss",
+    async (controlType) => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        evidence: recorder,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        relay.sendRelayKill(controlType, "future_reason");
+
+        expect(session.isReady()).toBe(false);
+        expect(session.isClosed()).toBe(false);
+        expect(session.terminalFatal()).toBeNull();
+        expect(setTimeoutSpy).toHaveBeenCalledWith(
+          expect.any(Function),
+          RECONNECT_MAX_BACKOFF_MS,
+        );
+        expect(setTimeoutSpy).not.toHaveBeenCalledWith(
+          expect.any(Function),
+          RECONNECT_INITIAL_BACKOFF_MS,
+        );
+        const indeterminates = recorder.callsNamed("reportDialIndeterminate");
+        expect(indeterminates).toHaveLength(1);
+        expect(indeterminates[0].hostId).toBe("host-1");
+        expect(indeterminates[0].transportKind).toBe("remote-relay");
+        expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
+      } finally {
+        session.close();
+        setTimeoutSpy.mockRestore();
       }
     },
     TEST_BUDGET_MS,
