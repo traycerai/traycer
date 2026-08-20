@@ -12,11 +12,22 @@ import type { CommandContext } from "../runner/runner";
 // every command that STARTS a host (client/host token split): the started
 // host reads its owner from the shared credentials file, so starting one
 // while signed out stands up a host that denies every connection
-// ("unprovisioned"). Two commands start hosts - `host install` (unless
-// `--no-service-register`) and `host service install`, the deferred half of
-// the documented split flow - and both must own the same two steps, or the
-// split flow silently recreates the unprovisioned-host regression the
+// ("unprovisioned"). Three commands start hosts - `host install` (unless
+// `--no-service-register`), `host service install` (the deferred half of
+// the documented split flow), and `host ensure` (the idempotent
+// install+register+start) - and all three must own the same two steps, or
+// any one of them silently recreates the unprovisioned-host regression the
 // combined flow fixed.
+//
+// Deliberately NOT wired into the remaining start-capable commands, so this
+// boundary is a decision rather than an omission:
+//   - `host start` is the service manager's own entrypoint (what launchd/
+//     systemd exec) - headless by contract, nothing to prompt, and a probe
+//     there would have the starting host dial itself;
+//   - `host restart` / `host free-port-and-restart` cycle an EXISTING
+//     host whose provisioning state was set by whichever command installed
+//     it - they create no new unprovisioned host, and a host that was
+//     already unprovisioned self-heals on the next minting client.
 //
 // Pre-flight: a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
