@@ -108,6 +108,7 @@ function makeWsStreamClient(
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 10_000,
