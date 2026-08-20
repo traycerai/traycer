@@ -1,9 +1,5 @@
 import type { ReactNode } from "react";
-import { Check } from "lucide-react";
-import {
-  HostGlyph,
-  HostPresenceDot,
-} from "@/components/settings/host-scope/host-glyph";
+import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import {
   hostOptionKindLabel,
   hostOptionStatusWord,
@@ -14,25 +10,23 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import { cn } from "@/lib/utils";
 
 /**
- * ONE host row: kind glyph · name · [ACTIVE] · status word · presence dot ·
- * check.
+ * ONE host row: kind glyph · name · [ACTIVE] · exception status.
  *
  * This is the whole shared vocabulary, and it is deliberately content only —
  * no button, no `CommandItem`, no list semantics. The containers differ in ways
  * that are theirs to own (a cmdk item in a combobox, a radio in a dialog, a row
  * in a section of another popover), and forcing one interaction shell on all of
  * them is what would make the shared picker sit badly in each. What must not
- * differ is this: three pickers each inventing their own icon set, their own
- * dot and their own word for "offline" is exactly what this replaced.
+ * differ is this: three pickers each inventing their own icon set and their own
+ * word for "offline" is exactly what this replaced.
  *
- * Single-line by design. The old two-line row restated health as words under
- * every name, which at six hosts read as a log rather than a list; the dot
- * carries it, and the full sentence lives on Overview where there is room for
- * it to be useful.
+ * Single-line by design. Healthy hosts stay quiet; only exception states get a
+ * status word. The interaction container owns the trailing selection check so
+ * the row does not reserve two competing selection columns.
  */
 export function HostOptionRow(props: {
   readonly host: HostScopeOption;
-  /** The row this surface is currently pointed at — draws the check. */
+  /** The row this surface is currently pointed at. */
   readonly picked: boolean;
   /** The app-wide active host — where new work lands. */
   readonly active: boolean;
@@ -61,7 +55,7 @@ export function HostOptionRow(props: {
         className="size-4 shrink-0 text-muted-foreground"
       />
       <span className="sr-only">{hostOptionKindLabel(host)}</span>
-      <span className="min-w-0 flex-1 truncate text-left">{host.name}</span>
+      <span className="min-w-0 flex-1 truncate text-start">{host.name}</span>
       {props.picked && props.intent === "view" ? (
         <span className="sr-only">Currently viewing</span>
       ) : null}
@@ -70,16 +64,6 @@ export function HostOptionRow(props: {
         <span className="shrink-0 text-ui-xs text-muted-foreground">
           {statusWord}
         </span>
-      )}
-      <HostPresenceDot
-        tone={host.health.tone}
-        animate={host.health.live}
-        className={undefined}
-      />
-      {props.picked ? (
-        <Check className="size-3.5 shrink-0 text-primary" aria-hidden />
-      ) : (
-        <span className="size-3.5 shrink-0" aria-hidden />
       )}
     </>
   );

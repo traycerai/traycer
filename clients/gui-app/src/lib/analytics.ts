@@ -20,6 +20,11 @@ export type AnalyticsSource =
   // gesture at all behind it.
   | "host_failover";
 
+export type AnalyticsWorkspaceSurface =
+  "landing" | "new-conversation" | "owner";
+
+export type AnalyticsWorkspaceContextSource = "browse" | "recent";
+
 export type AnalyticsBlocker =
   | "authentication"
   | "authorization"
@@ -302,6 +307,9 @@ export enum AnalyticsEvent {
   WorkspaceFolderAdded = "workspace_folder_added",
   WorkspaceFolderRemoved = "workspace_folder_removed",
   WorkspacePrimaryChanged = "workspace_primary_changed",
+  WorkspaceContextAdded = "workspace_context_added",
+  WorkspaceMovedToRecent = "workspace_moved_to_recent",
+  WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
   WorktreeCreated = "worktree_created",
@@ -581,6 +589,17 @@ export interface AnalyticsEventProperties {
     readonly workspace_kind: WorkspaceKind;
   };
   readonly [AnalyticsEvent.WorkspacePrimaryChanged]: SourceProperties;
+  readonly [AnalyticsEvent.WorkspaceContextAdded]: {
+    readonly source: AnalyticsWorkspaceContextSource;
+    readonly outcome: "succeeded" | "failed";
+    readonly surface: AnalyticsWorkspaceSurface;
+  };
+  readonly [AnalyticsEvent.WorkspaceMovedToRecent]: {
+    readonly surface: AnalyticsWorkspaceSurface;
+  };
+  readonly [AnalyticsEvent.WorkspaceRecentForgotten]: {
+    readonly surface: AnalyticsWorkspaceSurface;
+  };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {
     readonly editor: AnalyticsEditor;
@@ -1280,6 +1299,17 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.WorkspaceOpenedInEditor],
     ["source", "editor"],
   ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
+    ["source", "outcome", "surface"],
+  ),
+  ...eventKeyEntries(
+    [
+      AnalyticsEvent.WorkspaceMovedToRecent,
+      AnalyticsEvent.WorkspaceRecentForgotten,
+    ],
+    ["surface"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.WorktreeDeleted], ["outcome", "blocker"]),
   ...eventKeyEntries(
     [AnalyticsEvent.WorktreesBulkDeleted],
@@ -1679,6 +1709,25 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ),
   ...eventValueEntries(
     [AnalyticsEvent.WorktreeDeleted],
+    "outcome",
+    new Set(["failed", "succeeded"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
+    "source",
+    new Set(["browse", "recent"]),
+  ),
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.WorkspaceContextAdded,
+      AnalyticsEvent.WorkspaceMovedToRecent,
+      AnalyticsEvent.WorkspaceRecentForgotten,
+    ],
+    "surface",
+    new Set(["landing", "new-conversation", "owner"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
     "outcome",
     new Set(["failed", "succeeded"]),
   ),

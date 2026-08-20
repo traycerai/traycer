@@ -3,21 +3,24 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 interface RecordRecentContext {
   readonly hostId: string | null;
 }
 
+export interface RecordRecentWorkspaceInput {
+  readonly path: string;
+  readonly bumpRecency: boolean;
+  readonly failureFeedback: "silent" | "move_warning";
+}
+
 /**
- * Append a picked folder to the host's recent-workspaces list
- * (`workspace.prepareFolders` v1.1 `recordRecentWorkspace`, which re-validates
- * the path and only appends on success).
+ * Append a folder to the host's recent-workspaces list.
  *
- * Deliberately fire-and-forget, and deliberately WITHOUT an `onError` toast:
- * this is bookkeeping for a convenience row, so a v1.0 host (which fails this
- * closed with `DOWNGRADE_UNSUPPORTED`) or an unreachable one must cost the
- * user nothing - the folder they picked is still added by the caller's own
- * `prepare` call, which owns the real error reporting.
+ * New picks use this as fire-and-forget bookkeeping. Moving an active folder
+ * awaits the same mutation before removing it from context, because that user
+ * action must either complete both halves or leave the active folder intact.
  *
  * No `mutationKey`: `workspaceMutationKeys.prepareFolders()` is what
  * `useWorkspaceFolderActions` counts to drive its `isPreparing` flag, and
@@ -31,14 +34,15 @@ export function useWorkspaceRecordRecentWorkspace(args: {
     HostRpcRegistry,
     "workspace.prepareFolders",
     RecordRecentContext,
-    string
+    RecordRecentWorkspaceInput
   >({
     client: args.client,
     method: "workspace.prepareFolders",
-    mapVariables: (path) => ({
+    mapVariables: (input) => ({
       operation: "recordRecentWorkspace",
       folderPaths: null,
-      path,
+      path: input.path,
+      bumpRecency: input.bumpRecency,
     }),
     options: {
       retry: false,
@@ -56,6 +60,19 @@ export function useWorkspaceRecordRecentWorkspace(args: {
             "workspace.prepareFolders",
           ),
         });
+      },
+      onError: (_error, variables) => {
+        if (variables.failureFeedback !== "move_warning") return;
+        reportableErrorToast(
+          "Workspace wasn't moved because it couldn't be saved to Recent.",
+          undefined,
+          {
+            title: "Could not save recent workspace",
+            message: null,
+            code: null,
+            source: "Workspace folders",
+          },
+        );
       },
     },
   });

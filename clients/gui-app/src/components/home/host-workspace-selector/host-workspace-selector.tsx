@@ -136,6 +136,8 @@ import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
+import { useRecentWorkspaces } from "./use-recent-workspaces";
+import { RecentWorkspacesSection } from "./recent-workspaces-section";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
@@ -536,12 +538,16 @@ export function ActiveHostWorkspaceControls(
 
   // Landing rests as host picker + compact summary chip, matching the in-epic
   // composer. Detailed folder rows still live in the popover/modal stack.
+  const hostSelectConfig = hostOnlySelectConfig(
+    props.hostScope,
+    directoryEntries,
+  );
   const deviceSelect = (
     <HostOnlySelect
       hostLabel={hostLabel}
-      entries={directoryEntries}
+      entries={hostSelectConfig.entries}
       activeHostId={activeHostId}
-      mode="editable"
+      mode={hostSelectConfig.mode}
       onSelect={handleSelectHost}
       loading={false}
       disabled={disabled}
@@ -562,6 +568,22 @@ export function ActiveHostWorkspaceControls(
       disabled={disabled}
     />
   );
+}
+
+function hostOnlySelectConfig(
+  scope: HostWorkspaceControlsHostScope,
+  directoryEntries: ReadonlyArray<HostDirectoryEntry>,
+): {
+  readonly entries: ReadonlyArray<HostDirectoryEntry>;
+  readonly mode: "editable" | "locked";
+} {
+  if (scope.kind !== "fixed") {
+    return { entries: directoryEntries, mode: "editable" };
+  }
+  return {
+    entries: directoryEntries.filter((entry) => entry.hostId === scope.hostId),
+    mode: "locked",
+  };
 }
 
 function HomeWorkspaceRows(props: {
@@ -657,6 +679,13 @@ function HomeWorkspaceRows(props: {
     activeHostClient,
     workspaceSource,
   );
+  const recentWorkspaces = useRecentWorkspaces({
+    client: activeHostClient,
+    hostId: props.activeHostId,
+    workspaceSource,
+    disabled: props.disabled,
+    surface: stagingKey.surface,
+  });
   const queryableFolderPaths = useMemo<ReadonlyArray<string>>(
     () => [...new Set(resolvedFolders.map((entry) => entry.path))],
     [resolvedFolders],
@@ -960,7 +989,7 @@ function HomeWorkspaceRows(props: {
     seedIntentOverride,
   ]);
 
-  const items = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+  const baseItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
       resolvedFolders.map((entry) =>
         workspaceRunItemForResolvedFolder({
@@ -997,6 +1026,46 @@ function HomeWorkspaceRows(props: {
       summariesQuery.isError,
     ],
   );
+  const {
+    moveToRecent: moveWorkspaceToRecent,
+    movingPath: recentWorkspacesMovingPath,
+    supported: recentWorkspacesSupported,
+  } = recentWorkspaces;
+  const items = useMemo<ReadonlyArray<WorkspaceRunItem>>(
+    () =>
+      baseItems.map((item) => {
+        if (!recentWorkspacesSupported || item.onRemove === null) return item;
+        const removeFromActive = item.onRemove;
+        return {
+          ...item,
+          removePending:
+            item.removePending ||
+            recentWorkspacesMovingPath === item.displayPath,
+          onRemove: () => {
+            void moveWorkspaceToRecent(item.displayPath).then((moved) => {
+              if (moved) removeFromActive();
+            });
+          },
+        };
+      }),
+    [
+      baseItems,
+      moveWorkspaceToRecent,
+      recentWorkspacesMovingPath,
+      recentWorkspacesSupported,
+    ],
+  );
+  const recentWorkspacesSection = recentWorkspaces.supported ? (
+    <RecentWorkspacesSection
+      entries={recentWorkspaces.entries}
+      activeCount={workspaceSource.folders.length}
+      pendingPath={recentWorkspaces.pendingPath}
+      failedPaths={recentWorkspaces.failedPaths}
+      onAdd={recentWorkspaces.add}
+      onLocate={recentWorkspaces.locate}
+      onForget={recentWorkspaces.forget}
+    />
+  ) : null;
 
   // Setup/teardown editor is hosted here (not inside the popover) so it outlives
   // the popover closing. Landing is pre-epic: no owner/binding, `epicId: ""`
@@ -1066,6 +1135,9 @@ function HomeWorkspaceRows(props: {
           onEditEnvironment={handleEditEnvironment}
           refresh={summariesRefresh}
           disabled={props.disabled}
+          recentWorkspaces={recentWorkspacesSection}
+          recentWorkspaceCount={recentWorkspaces.entries.length}
+          moveToRecent={recentWorkspaces.supported}
         />
       ) : (
         <WorkspaceFolderRows
@@ -1088,6 +1160,8 @@ function HomeWorkspaceRows(props: {
           // snapshot — an empty list is a genuine "no folders linked yet", so the
           // row shows the add affordance rather than an indefinite spinner.
           bindingResolved
+          recentWorkspaces={recentWorkspacesSection}
+          moveToRecent={recentWorkspaces.supported}
         />
       )}
       <WorktreeScriptsDialog
@@ -1110,6 +1184,9 @@ function HomeWorkspaceSummaryControl(props: {
   readonly onEditEnvironment: (workspacePath: string) => void;
   readonly refresh: WorktreeWorkspacesRefresh;
   readonly disabled: boolean;
+  readonly recentWorkspaces: ReactNode;
+  readonly recentWorkspaceCount: number;
+  readonly moveToRecent: boolean;
 }) {
   return (
     <div
@@ -1138,6 +1215,9 @@ function HomeWorkspaceSummaryControl(props: {
           refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
           popoverSide="top"
+          recentWorkspaces={props.recentWorkspaces}
+          recentWorkspaceCount={props.recentWorkspaceCount}
+          moveToRecent={props.moveToRecent}
         />
       </div>
     </div>
@@ -2221,7 +2301,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // locals and are only invoked from event handlers / item onLocate, never
   // listed as memo deps that would thrash the items array.
   const addFoldersToOwnerBinding = async (): Promise<boolean> => {
-    const result = await folderActions.pickAndPrepareFolders();
+    const result = await folderActions.pickAndPrepareFolders(false);
     if (result === null) return false;
     const addedWorkspacePaths: string[] = [];
     // Add each picked folder independently and sequentially: the binding is a
@@ -2471,7 +2551,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   // delete-first (empty pick / all-adds-fail would drop the entry).
                   // Cancel and zero-success leave the binding untouched.
                   void (async (): Promise<void> => {
-                    const result = await folderActions.pickAndPrepareFolders();
+                    const result =
+                      await folderActions.pickAndPrepareFolders(false);
                     const outcome = await locateReplaceBoundFolder({
                       absentPath: ws.workspacePath,
                       pick: result,
@@ -2773,6 +2854,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             onEditEnvironment={handleEditEnvironment}
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
+            recentWorkspaces={null}
+            recentWorkspaceCount={0}
+            moveToRecent={false}
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).
             // Opening upward (chat's default, where the composer is bottom-anchored)

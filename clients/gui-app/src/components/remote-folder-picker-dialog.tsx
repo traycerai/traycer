@@ -11,7 +11,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type {
   WorkspaceBrowseFolderEntry,
   WorkspaceBrowseFoldersResponse,
-  WorkspacePrepareFoldersResponseV11,
+  WorkspacePrepareFoldersResponseV12,
   WorkspaceRecentEntry,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,6 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceBrowseFolders } from "@/hooks/workspace/use-workspace-browse-folders-query";
 import { useWorkspaceGetHomeDir } from "@/hooks/workspace/use-workspace-get-home-dir-query";
 import { useWorkspaceListRecentWorkspaces } from "@/hooks/workspace/use-workspace-list-recent-workspaces-query";
-import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 
 /**
@@ -109,7 +108,6 @@ function RemoteFolderPickerBody(): ReactNode {
     client,
     enabled: true,
   });
-  const recordRecent = useWorkspaceRecordRecentWorkspace({ client });
 
   // Where `~` points. The root browse response is preferred - it is the
   // directory actually being shown - and `getHomeDir` is the fallback that
@@ -181,10 +179,6 @@ function RemoteFolderPickerBody(): ReactNode {
 
   const addCurrent = (): void => {
     if (addTarget === null) return;
-    // Fire-and-forget, BEFORE settling closes this body: the recents list is
-    // incidental to the pick, so nothing here may delay or block it. The
-    // request is already in flight by the time this unmounts.
-    recordRecent.mutate(addTarget);
     settle(addTarget);
   };
 
@@ -805,7 +799,7 @@ function parseBrowseInput(
  */
 function readRecentShortcuts(
   rawInput: string | null,
-  recentsData: WorkspacePrepareFoldersResponseV11 | undefined,
+  recentsData: WorkspacePrepareFoldersResponseV12 | undefined,
 ): ReadonlyArray<WorkspaceRecentEntry> {
   if (rawInput !== null) return [];
   return recentsData?.recentWorkspaces ?? [];
