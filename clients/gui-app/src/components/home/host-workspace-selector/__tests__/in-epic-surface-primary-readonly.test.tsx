@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   useWorktreeIntentStagingStore,
@@ -20,7 +27,26 @@ const FAKE_CLIENT = {
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
-const mutationMocks = vi.hoisted(() => ({ createWorktree: vi.fn() }));
+const mutationMocks = vi.hoisted(() => ({
+  addBindingFolder: vi.fn(),
+  createWorktree: vi.fn(),
+  recordRecent: vi.fn(),
+  removeBindingFolder: vi.fn(),
+}));
+const recentMocks = vi.hoisted(() => ({
+  add: vi.fn(),
+  forget: vi.fn(() => Promise.resolve(true)),
+  locate: vi.fn(() => Promise.resolve(true)),
+  moveToRecent: vi.fn(() => Promise.resolve(true)),
+}));
+
+interface RecentHookArgs {
+  readonly disabled: boolean;
+  readonly activatePreparedFolders: (
+    folders: ReadonlyArray<PreparedWorkspaceFolder>,
+    hostId: string,
+  ) => Promise<ReadonlyArray<string>>;
+}
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
@@ -86,7 +112,7 @@ vi.mock(
   "@/hooks/workspace/use-workspace-binding-remove-entry-mutation",
   () => ({
     useWorkspaceBindingRemoveEntryForClient: () => ({
-      mutate: vi.fn(),
+      mutate: mutationMocks.removeBindingFolder,
       isPending: false,
     }),
     usePendingRemoveBindingEntryPaths: () => new Set<string>(),
@@ -94,8 +120,51 @@ vi.mock(
 );
 vi.mock("@/hooks/workspace/use-workspace-binding-add-folder-mutation", () => ({
   useWorkspaceBindingAddFolderForClient: () => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: mutationMocks.addBindingFolder,
     isPending: false,
+  }),
+}));
+vi.mock(
+  "@/hooks/workspace/use-workspace-record-recent-workspace-mutation",
+  () => ({
+    useWorkspaceRecordRecentWorkspace: () => ({
+      mutate: mutationMocks.recordRecent,
+    }),
+  }),
+);
+vi.mock("../use-recent-workspaces", () => ({
+  useRecentWorkspaces: (args: RecentHookArgs) => ({
+    supported: !args.disabled,
+    entries: args.disabled
+      ? []
+      : [
+          {
+            path: "/repo/recent",
+            lastOpenedAt: "2026-08-20T00:00:00.000Z",
+          },
+        ],
+    pendingPath: null,
+    movingPath: null,
+    failedPaths: new Set<string>(),
+    announcement: "",
+    moveToRecent: recentMocks.moveToRecent,
+    add: async (path: string) => {
+      recentMocks.add(path);
+      const activated = await args.activatePreparedFolders(
+        [
+          {
+            workspacePath: path,
+            workspaceName: "recent",
+            repoIdentifier: null,
+            repoUrl: null,
+          },
+        ],
+        "host-test",
+      );
+      return activated.length > 0;
+    },
+    locate: recentMocks.locate,
+    forget: recentMocks.forget,
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
@@ -215,7 +284,15 @@ function renderBoundSurface(kind: "chat" | "terminal-agent"): void {
 
 afterEach(() => {
   cleanup();
+  mutationMocks.addBindingFolder.mockReset();
   mutationMocks.createWorktree.mockReset();
+  mutationMocks.recordRecent.mockReset();
+  mutationMocks.removeBindingFolder.mockReset();
+  recentMocks.add.mockReset();
+  recentMocks.forget.mockClear();
+  recentMocks.locate.mockClear();
+  recentMocks.moveToRecent.mockReset();
+  recentMocks.moveToRecent.mockResolvedValue(true);
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
 
@@ -255,6 +332,65 @@ it("explains why a terminal agent's host selector is locked", async () => {
   expect((await screen.findByRole("tooltip")).textContent).toContain(
     "Terminal host is fixed",
   );
+});
+
+it("shows Recent folders in a live chat picker but not a terminal-agent binding", async () => {
+  renderBoundSurface("chat");
+  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  expect(
+    await screen.findByRole("button", { name: "Recent folders, 1" }),
+  ).toBeTruthy();
+
+  cleanup();
+  renderBoundSurface("terminal-agent");
+  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  expect(
+    screen.queryByRole("button", { name: "Recent folders, 1" }),
+  ).toBeNull();
+});
+
+it("adds a Recent folder through the chat owner binding", async () => {
+  mutationMocks.addBindingFolder.mockResolvedValue({});
+  renderBoundSurface("chat");
+  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Recent folders, 1" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Add recent to context" }),
+  );
+
+  await waitFor(() => {
+    expect(mutationMocks.addBindingFolder).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "chat",
+      workspacePath: "/repo/recent",
+    });
+  });
+});
+
+it("removes a chat folder only after moving it to Recent succeeds", async () => {
+  renderBoundSurface("chat");
+  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click((await screen.findAllByTestId("folder-remove"))[0]);
+
+  await waitFor(() => {
+    expect(recentMocks.moveToRecent).toHaveBeenCalledWith("/repo/alpha");
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledTimes(1);
+  });
+
+  cleanup();
+  recentMocks.moveToRecent.mockResolvedValue(false);
+  mutationMocks.removeBindingFolder.mockClear();
+  renderBoundSurface("chat");
+  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click((await screen.findAllByTestId("folder-remove"))[0]);
+
+  await waitFor(() => {
+    expect(recentMocks.moveToRecent).toHaveBeenCalledWith("/repo/alpha");
+  });
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
 });
 
 it("refuses terminal Update when metadata regresses to unresolved", async () => {
