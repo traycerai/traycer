@@ -1340,6 +1340,46 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
   });
 
+  it("a lane-busy Free port + restart names the clicked action and never takes the queueing route", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [PORT_HELD],
+    });
+    vi.mocked(management.freePortAndRestartIfIdle).mockResolvedValue({
+      kind: "lane-busy",
+      message: LANE_BUSY_INSTALL_MESSAGE,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-PORT_HELD_BY_FOREIGN"),
+    );
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Free port + restart didn't run",
+        {
+          description: LANE_BUSY_INSTALL_MESSAGE,
+        },
+      );
+    });
+    expect(management.freePortAndRestart).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalledWith("Fix applied");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("an unknown fix action does not take the refusing doctor-repair path", async () => {
     const { management } = mountFallbackOverview({
       installOutcome: {

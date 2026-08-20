@@ -231,6 +231,10 @@ interface HandlerBridge {
       respawn: () => Promise<MutationOutcome<{ readonly activated: boolean }>>;
       convergeReady: (force: boolean) => Promise<MutationOutcome<null>>;
       registerService: () => Promise<MutationOutcome<null>>;
+      freePortAndRestart: (
+        pid: number | undefined,
+        port: number | undefined,
+      ) => Promise<MutationOutcome<{ readonly activated: boolean }>>;
     };
   };
 }
@@ -266,6 +270,11 @@ function makeBridge(): HandlerBridge {
           Promise.resolve({ kind: "ok" as const, value: null }),
         registerService: () =>
           Promise.resolve({ kind: "ok" as const, value: null }),
+        freePortAndRestart: () =>
+          Promise.resolve({
+            kind: "ok" as const,
+            value: { activated: true },
+          }),
       },
     },
     handleInvoke(channel, handler) {
@@ -1686,5 +1695,154 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       logs(null, { tailLines: 50, expectedHostId: LIVE_HOST_ID }),
     ).rejects.toThrow(HOST_UNVERIFIED_MESSAGE);
     expect(bundledCliCalls).toEqual([]);
+  });
+
+  it("traycerHostDoctor throws on a mismatched expectedHostId and never shells the CLI", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const doctor = await registerHandler(bridge, invoke.traycerHostDoctor);
+
+    await expect(
+      doctor(null, { expectedHostId: OTHER_HOST_ID }),
+    ).rejects.toThrow(HOST_CHANGED_MESSAGE);
+    expect(bundledCliCalls).toEqual([]);
+  });
+
+  it("freePortAndRestartIfIdle returns lane-busy when occupied and never calls the controller", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const freePortAndRestart = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    const occupied: LifecycleAdmissionBlock = {
+      kind: "mutation",
+      lane: {
+        kind: "install",
+        progress: null,
+        startedAt: "2026-08-12T00:00:00Z",
+      },
+    };
+    bridge.options.hostController.lifecycleAdmissionBlock = occupied;
+    bridge.options.hostController.freePortAndRestart = freePortAndRestart;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerFreePortAndRestartIfIdle,
+    );
+
+    await expect(
+      handler(null, {
+        port: 8765,
+        pid: 4242,
+        processName: "node",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({
+      kind: "lane-busy",
+      message: admissionBlockRestartMessage(occupied),
+    });
+    expect(freePortAndRestart).not.toHaveBeenCalled();
+  });
+
+  it("freePortAndRestartIfIdle returns host-changed on a mismatched id and never calls the controller", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const freePortAndRestart = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.freePortAndRestart = freePortAndRestart;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerFreePortAndRestartIfIdle,
+    );
+
+    await expect(
+      handler(null, {
+        port: 8765,
+        pid: 4242,
+        processName: "node",
+        expectedHostId: OTHER_HOST_ID,
+      }),
+    ).resolves.toEqual({
+      kind: "host-changed",
+      message: HOST_CHANGED_MESSAGE,
+    });
+    expect(freePortAndRestart).not.toHaveBeenCalled();
+  });
+
+  it("freePortAndRestartIfIdle dispatches when idle and the expected host still matches", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const freePortAndRestart = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.freePortAndRestart = freePortAndRestart;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerFreePortAndRestartIfIdle,
+    );
+
+    await expect(
+      handler(null, {
+        port: 8765,
+        pid: 4242,
+        processName: "node",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({
+      kind: "dispatched",
+      outcome: { kind: "ok", value: null },
+    });
+    expect(freePortAndRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("freePortAndRestartIfIdle reads identity before the lane — occupying during the identity read still refuses", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const freePortAndRestart = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    occupyLaneOnIdentityFileAccess(bridge);
+    bridge.options.hostController.freePortAndRestart = freePortAndRestart;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerFreePortAndRestartIfIdle,
+    );
+
+    await expect(
+      handler(null, {
+        port: 8765,
+        pid: 4242,
+        processName: "node",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({
+      kind: "lane-busy",
+      message: admissionBlockRestartMessage({
+        kind: "mutation",
+        lane: {
+          kind: "install",
+          progress: null,
+          startedAt: "2026-08-12T00:00:00Z",
+        },
+      }),
+    });
+    expect(freePortAndRestart).not.toHaveBeenCalled();
   });
 });

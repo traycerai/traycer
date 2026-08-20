@@ -19,6 +19,10 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
+
+const HOST_CHANGED_MESSAGE =
+  "This computer's host changed while that was open. Reopen Settings and try again.";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -239,6 +243,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       processName: "node",
       expectedHostId: "local-host",
     });
+    expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
   });
 
   it("allows Free Port + Restart when PID and process name are unknown", async () => {
@@ -289,6 +294,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       processName: null,
       expectedHostId: "local-host",
     });
+    expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
   });
 
   it("never presents Free Port + Restart with port 0", async () => {
@@ -396,16 +402,22 @@ describe("HostDoctorCard pending CLI upgrade", () => {
 
   it("renders an error arm when the report read fails, not no issues detected", async () => {
     const management = makeManagement({
-      runDoctor: () =>
-        Promise.reject(new Error("can't confirm its identity right now")),
+      runDoctor: () => Promise.reject(new Error(HOST_CHANGED_MESSAGE)),
     });
     renderCard(makeHostWithManagement(management));
 
     expect(
-      await screen.findByText(
-        /Doctor could not run: can't confirm its identity right now/,
-      ),
+      await screen.findByText(`Doctor could not run: ${HOST_CHANGED_MESSAGE}`),
     ).toBeTruthy();
-    expect(screen.queryByText(/no issues detected/i)).toBeNull();
+    expect(screen.queryByText("Doctor: no issues detected.")).toBeNull();
+  });
+
+  it("hostDoctor query keys discriminate two host ids even when the bridge hashes to {}", () => {
+    const management = {};
+    expect(
+      JSON.stringify(runnerQueryKeys.hostDoctor(management, "host-a")),
+    ).not.toBe(
+      JSON.stringify(runnerQueryKeys.hostDoctor(management, "host-b")),
+    );
   });
 });
