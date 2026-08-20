@@ -80,12 +80,17 @@ export async function stageWellKnownCliBinary(opts: {
     return { staged: "already-well-known", wellKnownPath };
   }
   const staging = `${wellKnownPath}.staging-${process.pid}-${randomUUID()}`;
+  // Non-null once the Windows branch has moved a pre-existing slot binary
+  // out of the stable name. Between that rename and the publish below the
+  // slot does not exist, so a publish failure must put the old binary BACK -
+  // see the restore in the catch.
+  let asidePath: string | null = null;
   try {
     await mkdir(dirname(wellKnownPath), { recursive: true });
     await copyFile(source, staging);
     if (process.platform === "win32") {
       await sweepAsideSlotBinaries(wellKnownPath);
-      await renameSlotBinaryAside(wellKnownPath);
+      asidePath = await renameSlotBinaryAside(wellKnownPath);
     } else {
       await chmod(staging, 0o755);
     }
@@ -93,6 +98,16 @@ export async function stageWellKnownCliBinary(opts: {
     return { staged: "staged", wellKnownPath };
   } catch (error) {
     await rm(staging, { force: true }).catch(() => undefined);
+    // The whole point of copying rather than linking is that the slot
+    // degrades to stale-but-functional, never to absent. Publishing is the
+    // one window where that can be violated on Windows: the old image is
+    // aside and the new one never landed (antivirus holding the staged
+    // file, a racing installer, a transient share violation). Put the old
+    // binary back so an already-registered service and the host daemon keep
+    // launching the CLI they were launching before this attempt.
+    if (asidePath !== null) {
+      await rename(asidePath, wellKnownPath).catch(() => undefined);
+    }
     const named = error instanceof Error ? error : new Error(String(error));
     return {
       staged: "failed",
@@ -104,12 +119,22 @@ export async function stageWellKnownCliBinary(opts: {
 }
 
 // Move a (possibly running) slot binary out of the stable name so a new
-// copy can take its place. Windows-only concern: a running image blocks
-// delete and rename-onto, but permits being renamed itself. A missing
-// binary (first staging) is not an error.
-async function renameSlotBinaryAside(wellKnownPath: string): Promise<void> {
+// copy can take its place, returning where it went so a failed publish can
+// restore it. Windows-only concern: a running image blocks delete and
+// rename-onto, but permits being renamed itself. A missing binary (first
+// staging) is not an error and yields `null` - there is nothing to restore.
+//
+// The pid suffix keeps two installers staging in the same millisecond from
+// renaming onto each other's aside file and destroying one of them; the
+// sweep below matches on the `.old-` prefix alone, so the extra segment
+// costs nothing.
+async function renameSlotBinaryAside(
+  wellKnownPath: string,
+): Promise<string | null> {
+  const asidePath = `${wellKnownPath}.old-${Date.now()}-${process.pid}`;
   try {
-    await rename(wellKnownPath, `${wellKnownPath}.old-${Date.now()}`);
+    await rename(wellKnownPath, asidePath);
+    return asidePath;
   } catch (error) {
     if (
       error !== null &&
@@ -117,7 +142,7 @@ async function renameSlotBinaryAside(wellKnownPath: string): Promise<void> {
       "code" in error &&
       error.code === "ENOENT"
     ) {
-      return;
+      return null;
     }
     throw error;
   }

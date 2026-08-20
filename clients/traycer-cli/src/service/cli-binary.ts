@@ -8,37 +8,48 @@ import {
 } from "../store/well-known-cli";
 
 // Resolve the stable per-user CLI binary that OS service manifests
-// should invoke. Discovery order:
+// should invoke.
+//
+// The registered command is the well-known slot
+// (`<cliInstallHomeDir>/bin/traycer`) for every EXECUTABLE install, no
+// matter which of the sources below identified that executable. Two
+// reasons, both load-bearing:
+//
+//   - The host daemon's own CLI discovery (`resolveCliExecutablePath`,
+//     traycer-host update-reconciler) reads ONLY that slot. A registration
+//     that names any other path leaves the host reporting `cli-unavailable`
+//     for doctor / update-check / update-install - the GUI's "has no
+//     Traycer CLI installed" banner - even though the service itself runs.
+//   - The slot is stable across upgrades in a way the real binary path is
+//     not: Homebrew cellar paths and npm/winget install roots are
+//     version-scoped, so a unit that names one breaks the moment the
+//     package manager moves it. Every writer of live CLI bytes re-stages
+//     the slot, so pointing the unit there survives upgrades without
+//     re-registration.
+//
+// Discovery order for WHICH executable's bytes belong in that slot:
 //
 //   1. CLI manifest at `<cliInstallHomeDir>/manifest.json` - written by the
-//      Desktop bootstrap + package-manager install hooks. Source of
-//      truth when present. For the npm distribution (an interpreter-run
-//      Node bundle whose manifest is synthesized from its env shim), the
-//      running interpreter is pinned into the invocation - see
-//      `npmInterpreterInvocation`.
-//   2. Install-scoped bin dir at `<cliInstallHomeDir>/bin/traycer` - the
-//      well-known staging location every install path drops a binary
-//      (or wrapper script) into BEFORE invoking `traycer host
-//      install`. Used by:
-//        - Desktop's setup splash (stages bundled CLI at
-//          `~/.traycer/cli/bin/traycer` before host-bootstrap)
-//        - The dev orchestrator (`scripts/dev-desktop.js` stages a
-//          bun wrapper at `~/.traycer/cli/dev-runs/<slot>/bin/traycer`
-//          when `DEV_DESKTOP_SLOT` is present)
-//        - `cli mark-source` / `cli re-anchor` (stage a copy of the
-//          anchored binary alongside the manifest write)
-//      Lets the orchestrator hand off to the CLI without any
-//      explicit flag or env-var coupling - convention over
-//      configuration.
-//   3. Self-invocation: the running binary itself is the right thing to
-//      point the supervisor at. Always available to a PACKAGED (SEA)
-//      binary - npm/brew/hand-placed installs with no manifest yet -
-//      which also stages the well-known slot so the host daemon (whose
-//      own CLI discovery reads ONLY that slot) can shell this CLI.
-//      Interpreter runs (tsx dev, smoke tests) must opt in via
-//      `allowSelfInvocation`.
-//
-// Steps 1 and 2 always run; (3) is the final fallback.
+//      Desktop bootstrap, `cli mark-source` (package-manager install
+//      hooks), and `cli re-anchor`; also SYNTHESIZED by `readCliManifest`
+//      for distributions that never get to run a hook (the npm env shim,
+//      the .deb/.rpm `/var/lib/traycer/source.*` markers). Source of truth
+//      when present. The npm distribution is the one non-executable case -
+//      an interpreter-run Node bundle - and is handled separately by
+//      `npmInterpreterInvocation`; it never reaches the slot.
+//   2. The running process, when it is a PACKAGED (SEA) binary. Deliberately
+//      ahead of an existing slot binary: an already-staged slot is a COPY,
+//      and channels with no post-install hook (winget's portable installer)
+//      upgrade the real executable without touching it. Re-staging from the
+//      running binary is what keeps the slot - and therefore the service and
+//      the host - off an indefinitely stale CLI.
+//   3. An existing slot binary, for INTERPRETER runs only. This is how the
+//      dev orchestrator hands off (`scripts/dev-desktop.js` stages a bun
+//      wrapper at `~/.traycer/cli/dev-runs/<slot>/bin/traycer` when
+//      `DEV_DESKTOP_SLOT` is present) without any flag or env-var coupling.
+//   4. Self-invocation for an interpreter run (tsx dev, smoke tests), which
+//      must opt in via `allowSelfInvocation`. A packaged binary never needs
+//      the flag - (2) already covers it.
 
 export interface CliInvocation {
   // Absolute path to the executable the OS service should run.
@@ -102,58 +113,59 @@ export async function resolveServiceCliInvocation(
         exitCode: 1,
       });
     }
-    return (
-      (await npmInterpreterInvocation(manifest)) ?? {
-        command: manifest.binaryPath,
-        args: [],
-      }
-    );
+    // npm ships a script, not an executable: it must never be copied into
+    // the slot (the host would exec a `.exe` full of JavaScript on Windows,
+    // and a shebang that outlives its interpreter on POSIX). It keeps the
+    // direct-path registration, with the interpreter pinned when we can see
+    // it. Superseded once npm ships per-platform SEA binaries, at which
+    // point npm becomes an ordinary executable install and falls through to
+    // the staging below with everything else.
+    if (manifest.source === "npm") {
+      return (
+        (await npmInterpreterInvocation(manifest)) ?? {
+          command: manifest.binaryPath,
+          args: [],
+        }
+      );
+    }
+    return stagedSlotInvocation(opts.environment, manifest.binaryPath);
   }
 
-  // Well-known per-environment bin dir. Every install path (Desktop setup
-  // splash, dev orchestrator) drops a binary or wrapper script here
-  // before invoking the CLI's host install, so it's the canonical
-  // "registered installer" location even when no manifest has been
-  // written yet.
   const conventionalBinary = wellKnownCliBinaryPath(opts.environment);
+  const packaged = await isPackagedRun();
+
+  // Self-invocation for a packaged binary: the running binary IS the whole
+  // program, so the service gets `<slot> host start` with no leading args.
+  //
+  // A packaged binary's `process.argv[1]` is the raw invocation spelling
+  // (`traycer`, `./traycer`, an absolute path) - never an entry script - so
+  // the interpreter walk below would emit `<execPath> traycer host start`
+  // and every launch would die on `error: unknown command 'traycer'`.
+  //
+  // This runs BEFORE the existing-slot check on purpose: preferring a slot
+  // that is already populated would pin the service to whatever binary last
+  // staged it, and channels without a post-install hook (winget) replace the
+  // real executable without ever re-staging. Restaging from the live binary
+  // is a no-op (`already-well-known`) when this process IS the slot, which
+  // is the Desktop and host-daemon case.
+  if (packaged) {
+    return stagedSlotInvocation(opts.environment, process.execPath);
+  }
+
+  // Interpreter run with a slot already staged - the dev orchestrator's
+  // wrapper-script handoff. Left as a direct reference: a dev wrapper is not
+  // ours to copy over itself.
   if (await pathExists(conventionalBinary)) {
     return { command: conventionalBinary, args: [] };
   }
 
-  const packaged = await isPackagedRun();
-  if (!packaged && !opts.allowSelfInvocation) {
+  if (!opts.allowSelfInvocation) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
       message: `service install: no CLI manifest at <cliHomeDir>/manifest.json and no binary at ${conventionalBinary}; stage a CLI binary at the well-known location, run from a packaged CLI, or pass --allow-self-invocation for an interpreter-run dev CLI`,
       details: { environment: opts.environment, conventionalBinary },
       exitCode: 1,
     });
-  }
-
-  // Self-invocation fallback: register the service against the running
-  // process.
-  //
-  // A PACKAGED (SEA) binary's `process.argv[1]` is the raw invocation
-  // spelling (`traycer`, `./traycer`, an absolute path) - never an entry
-  // script - so re-invoking `<execPath> <argv[1]>` produces
-  // `error: unknown command`. The binary itself is the whole program:
-  // register `<execPath>` with no leading args. Stage the well-known slot
-  // at the same time so the host daemon (whose CLI discovery reads ONLY
-  // `<cliInstallHomeDir>/bin/traycer`) can shell this CLI for doctor /
-  // update, and point the service at that slot when staging succeeds - a
-  // later `cli re-anchor` then refreshes what the service runs without
-  // re-registration. Staging failure degrades to the real binary path:
-  // the service still works, only the host's slot view stays cold.
-  if (packaged) {
-    const staged = await stageWellKnownCliBinary({
-      environment: opts.environment,
-      binaryPath: process.execPath,
-    });
-    return {
-      command:
-        staged.staged === "failed" ? process.execPath : staged.wellKnownPath,
-      args: [],
-    };
   }
 
   // Interpreter run (tsx dev, smoke tests): walking argv re-uses the same
@@ -164,6 +176,23 @@ export async function resolveServiceCliInvocation(
   const args: readonly string[] =
     typeof entryArg === "string" ? [entryArg] : [];
   return { command, args };
+}
+
+// Stage `binaryPath`'s bytes into the well-known slot and register the
+// service against the SLOT, so both the supervisor and the host daemon read
+// the same stable path. Staging is best-effort: on failure the service is
+// still registered against the real binary and keeps working - only the
+// host's view through the slot stays cold, which is strictly what it was
+// before this call.
+async function stagedSlotInvocation(
+  environment: Environment,
+  binaryPath: string,
+): Promise<CliInvocation> {
+  const staged = await stageWellKnownCliBinary({ environment, binaryPath });
+  return {
+    command: staged.staged === "failed" ? binaryPath : staged.wellKnownPath,
+    args: [],
+  };
 }
 
 // The npm distribution ships a Node bundle, not a SEA: its manifest
