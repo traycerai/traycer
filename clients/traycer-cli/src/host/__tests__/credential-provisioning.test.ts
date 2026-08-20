@@ -19,6 +19,7 @@ import type {
   HostCredentialMintOutcome,
   HostCredentialMintRequest,
 } from "../../../../shared/host-transport/host-credential-mint-flow";
+import type { StreamAuthRevalidator } from "../../../../shared/auth/bearer-revalidator";
 
 // Pins `provisionInstalledHostCredential`'s own orchestration: the
 // bounded-lap ack/mint/verify loop, independent of `WsStreamClient`'s
@@ -44,6 +45,9 @@ interface CapturedStreamClientOptions {
   readonly hostCredentialMint: (
     request: HostCredentialMintRequest,
   ) => Promise<HostCredentialMintOutcome>;
+  // The probe wires this so an expired access token can be refreshed instead
+  // of making the first UNAUTHORIZED terminal; tests drive it directly.
+  readonly auth: StreamAuthRevalidator | null;
 }
 
 const mocks = vi.hoisted(() => {
@@ -124,6 +128,21 @@ const mocks = vi.hoisted(() => {
   const readHostPidMetadataMock = vi.fn(async () => null);
   const isValidLocalHostWebsocketUrlMock = vi.fn((): boolean => true);
 
+  // The credentials store is mocked wholesale: the real one resolves paths
+  // under the operator's actual `~/.traycer` and its `rotate` spends a
+  // single-use refresh token. `revalidateCurrentContextMock` is what tests
+  // drive to simulate a refresh outcome.
+  const revalidateCurrentContextMock = vi.fn(
+    async (): Promise<"rotated" | "rejected" | "network-error"> => "rotated",
+  );
+  const storeDisposeMock = vi.fn((): void => undefined);
+  const createCliCredentialsStoreMock = vi.fn(() => ({
+    dispose: storeDisposeMock,
+  }));
+  const createStoreBackedRevalidatorMock = vi.fn(() => ({
+    revalidateCurrentContext: revalidateCurrentContextMock,
+  }));
+
   return {
     callOrder: [] as string[],
     sessions: [] as FakeStreamSession[],
@@ -143,11 +162,20 @@ const mocks = vi.hoisted(() => {
     createMintFlowMock,
     readHostPidMetadataMock,
     isValidLocalHostWebsocketUrlMock,
+    revalidateCurrentContextMock,
+    storeDisposeMock,
+    createCliCredentialsStoreMock,
+    createStoreBackedRevalidatorMock,
   };
 });
 
 vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
   WsStreamClient: mocks.FakeWsStreamClient,
+}));
+
+vi.mock("../../store/credentials-store", () => ({
+  createCliCredentialsStore: mocks.createCliCredentialsStoreMock,
+  createStoreBackedRevalidator: mocks.createStoreBackedRevalidatorMock,
 }));
 
 vi.mock("../../auth/host-credential-mint", () => ({
@@ -258,6 +286,13 @@ beforeEach(() => {
   // never leak into the next test.
   mocks.mintFlowMock.mockReset();
   mocks.mintFlowMock.mockResolvedValue({ kind: "unavailable" });
+
+  mocks.createCliCredentialsStoreMock.mockClear();
+  mocks.createStoreBackedRevalidatorMock.mockClear();
+  mocks.storeDisposeMock.mockClear();
+  // Same hazard as `mintFlowMock`: tests set bespoke outcomes here.
+  mocks.revalidateCurrentContextMock.mockReset();
+  mocks.revalidateCurrentContextMock.mockResolvedValue("rotated");
 
   clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
 });
@@ -656,6 +691,53 @@ describe("provisionInstalledHostCredential", () => {
       message: "simulated subscribe failure",
     });
     // The finally block runs on the error path too.
+    expectCleanTeardown();
+  });
+
+  it("reports unauthorized (never the self-healing kinds) when revalidation is terminally rejected", async () => {
+    // `resolveHostAuth` only checks that the stored token is non-empty, so a
+    // revoked/expired refresh family still reads as "signed in" at pre-flight.
+    // The probe then finds out the hard way. Reporting that as `unreachable`
+    // told the user a later client would sort it out - false, because no
+    // client can mint on a dead credential either. They have to sign in.
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void capturedClientOptions().auth?.revalidateForReconnect();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 500, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unauthorized",
+    });
+    expectCleanTeardown();
+  });
+
+  it("does not START a revalidation once the deadline is spent", async () => {
+    // The CLI sets `process.exitCode` instead of calling `process.exit`, so
+    // the process waits for the event loop to drain: a rotation begun as the
+    // budget ran out would hold `host install` open past its bound, and
+    // disposing the store does not cancel one already in flight.
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 100, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unreachable",
+    });
+    // Drive the hook DIRECTLY now the budget is spent, rather than scheduling
+    // a timer: a timer late enough to be past the deadline is also late
+    // enough to fire after the probe returned, which would assert nothing.
+    const auth = capturedClientOptions().auth;
+    if (auth === null) {
+      throw new Error("expected the probe to wire a stream auth revalidator");
+    }
+    await expect(auth.revalidateForReconnect()).resolves.toBe("rejected");
+    expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
     expectCleanTeardown();
   });
 

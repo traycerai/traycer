@@ -333,6 +333,11 @@ function formatCredentialProvisionNote(
       return `host credential not provisioned (the credential handoff did not complete) - ${selfHeal}`;
     case "not-adopted":
       return `host credential not provisioned (the host did not adopt it in time) - ${selfHeal}`;
+    // The one outcome that must NOT promise the self-heal: a dead sign-in
+    // stops every other client from minting too, so the install leaves an
+    // unusable host until the user actually signs in again.
+    case "unauthorized":
+      return `host credential not provisioned - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
     case "error":
       return `host credential not provisioned (${outcome.message}) - ${selfHeal}`;
   }

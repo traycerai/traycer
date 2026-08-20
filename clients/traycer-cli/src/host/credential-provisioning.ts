@@ -78,6 +78,13 @@ export type HostCredentialProvisionOutcome =
   // A credential was minted and pushed, but no subsequent ack reported
   // `active` inside the deadline.
   | { readonly kind: "not-adopted" }
+  // The stored sign-in is dead: the host rejected the bearer and refreshing
+  // it was terminally rejected too (revoked or expired refresh family).
+  // Distinct from every kind above because it is the one outcome that does
+  // NOT self-heal - no later client can mint on a dead credential either, so
+  // the human line has to say `traycer login` rather than "a client will
+  // sort this out".
+  | { readonly kind: "unauthorized" }
   // Unexpected throw; the message is diagnostic only.
   | { readonly kind: "error"; readonly message: string };
 
@@ -137,6 +144,11 @@ export async function provisionInstalledHostCredential(
   let poll: NodeJS.Timeout | null = null;
   let store: CredentialsMutationStore | null = null;
   let client: WsStreamClient<HostStreamRpcRegistry> | null = null;
+  // The most recent revalidation, awaited (bounded) before returning so a
+  // refresh this probe started does not outlive the call.
+  let inFlightRevalidation: Promise<RevalidateOutcome> | null = null;
+  // Set when a revalidation came back terminally `rejected`.
+  let credentialRejected = false;
 
   // The endpoint provider is synchronous, so a poller keeps a mutable slot
   // fresh (the monitor's pattern): the freshly-started host writes its pid
@@ -209,7 +221,27 @@ export async function provisionInstalledHostCredential(
       lease,
     });
     const streamAuth: StreamAuthRevalidator = {
-      revalidateForReconnect: () => revalidator.revalidateCurrentContext(),
+      revalidateForReconnect: () => {
+        // Never START a rotation the deadline cannot cover. The CLI sets
+        // `process.exitCode` rather than calling `process.exit` (see
+        // `runner/exit.ts`), so the process waits for the event loop to
+        // drain: a refresh begun as the budget ran out would keep
+        // `host install` alive past its advertised bound, and disposing the
+        // store does not cancel one already in flight.
+        if (remaining() <= 0) {
+          return Promise.resolve<RevalidateOutcome>("rejected");
+        }
+        const settled = revalidator.revalidateCurrentContext();
+        inFlightRevalidation = settled;
+        // A terminal rejection means the stored sign-in is dead, which the
+        // fatal close alone cannot tell us apart from an unreachable host.
+        void settled.then((outcome) => {
+          if (outcome === "rejected") {
+            credentialRejected = true;
+          }
+        });
+        return settled;
+      },
     };
 
     const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
@@ -253,6 +285,12 @@ export async function provisionInstalledHostCredential(
     // One place decides every non-`active` exit, so the loop end, the bound,
     // and a fatal close can never drift apart on what they report.
     const settledOutcome = (): HostCredentialProvisionOutcome => {
+      // First: a dead sign-in explains every other symptom below it (the
+      // stream never opens, nothing is ever minted) and is the only one that
+      // does not self-heal, so it must not be reported as "unreachable".
+      if (credentialRejected) {
+        return { kind: "unauthorized" };
+      }
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };
       }
@@ -358,6 +396,20 @@ export async function provisionInstalledHostCredential(
     // way through it must still release whatever was already acquired.
     if (poll !== null) {
       clearInterval(poll);
+    }
+    if (inFlightRevalidation !== null) {
+      // Annotated for the same reason as `pendingMint`: assigned only inside
+      // a callback, so TS's linear flow narrows this branch to `never`.
+      const pendingRevalidation: Promise<RevalidateOutcome> =
+        inFlightRevalidation;
+      // A revalidation only ever STARTS with budget left, so waiting out the
+      // remainder keeps the whole probe inside its advertised bound while
+      // making sure a rotation this probe began has finished before the
+      // command returns and the store is disposed under it.
+      await Promise.race([
+        pendingRevalidation.catch(() => undefined),
+        sleep(remaining()),
+      ]);
     }
     if (client !== null) {
       client.close("host-install-credential-provisioning-settled");
