@@ -704,6 +704,38 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
+  it("stops re-dialing an older host after a few silent opens instead of spending the whole deadline", async () => {
+    // Regression guard on the lap-cap removal. Running verification to the
+    // deadline is right for a question whose answer can still change - has
+    // the host adopted the credential yet - but a connection that opens
+    // without the ack ever carrying a state is a property of the host's
+    // BUILD. Re-dialing cannot change it, so burning the budget on it would
+    // leave `host install` sitting for the full deadline before printing
+    // that this host cannot be credentialed. The previous coverage used a
+    // 400ms deadline, which is too short to tell the two apart.
+    const deadlineMs = 20_000;
+    mocks.onSessionCreated = (session): void => {
+      setTimeout(() => {
+        session.emitStatus("open", null);
+      }, 0);
+    };
+
+    const startedAt = Date.now();
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs, progress: vi.fn() }),
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unsupported",
+    });
+    // SILENT_OPEN_CONFIRMATIONS laps, each a grace window plus its pacing -
+    // nowhere near the budget.
+    expect(mocks.sessions).toHaveLength(3);
+    expect(elapsedMs).toBeLessThan(deadlineMs / 2);
+    expectCleanTeardown();
+  }, 25_000);
+
   it("reports unsupported and stops after a single lap when a non-active state arrives with the mint hook never invoked (a withheld mint)", async () => {
     // The state rides the handshake and is reported before this method's own
     // version check even runs, so a version-incompatible ack (or a non-UUID

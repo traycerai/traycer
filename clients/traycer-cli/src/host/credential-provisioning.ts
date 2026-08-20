@@ -155,6 +155,18 @@ const SILENT_ACK_GRACE_MS = 100;
 // the single stop condition.
 const VERIFY_BACKOFF_INITIAL_MS = 250;
 const VERIFY_BACKOFF_MAX_MS = 2_000;
+// ...with one exception, because the deadline is only the right bound for a
+// question whose answer can still CHANGE. Waiting for a host to adopt a
+// credential is such a question. A connection that opens without the ack
+// ever carrying a credential state is not: that is a property of the host's
+// build, and re-dialing cannot alter it - the same reasoning that already
+// ends the laps on a withheld mint. A single silent open is not conclusive
+// (a state-carrying ack can lose the race with the grace timer), so this
+// takes consecutive ones - reset by any ack that does carry a state - and
+// then stops rather than spending the rest of the budget re-confirming a
+// constant. Without it, `host install` against an older host would sit for
+// the full deadline before printing that it cannot be credentialed.
+const SILENT_OPEN_CONFIRMATIONS = 3;
 
 type ProbeRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
@@ -262,6 +274,10 @@ export async function provisionInstalledHostCredential(
   // because the terminal fallback is `unreachable`, whose copy says the host
   // never came up - false on its face once the host has spoken to us.
   let hostAnswered = false;
+  // CONSECUTIVE silent opens - reset by any ack that carries a state, so an
+  // occasional ack losing the race with the grace timer cannot accumulate
+  // into a false "this host has no credential capability" verdict.
+  let consecutiveSilentOpens = 0;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
 
@@ -464,6 +480,9 @@ export async function provisionInstalledHostCredential(
       observeState = null;
       switch (observation.kind) {
         case "state": {
+          // This ack carried a state, so any silent-open streak was a race
+          // with the grace timer, not a capability gap - start it over.
+          consecutiveSilentOpens = 0;
           if (observation.state === "active") {
             session.close();
             // `minted` claims THIS run provisioned it, so only a mint that
@@ -563,9 +582,12 @@ export async function provisionInstalledHostCredential(
         }
         case "opened-silent":
           // Keep looping rather than returning: an ack that races the grace
-          // window resolves on the next lap; a genuinely older host keeps
-          // opening silently until the deadline reports it.
+          // window resolves on the next lap. A genuinely older host instead
+          // keeps opening silently, and `SILENT_OPEN_CONFIRMATIONS` decides
+          // when that has been established (checked below, with the other
+          // determinism exit).
           sawSilentOpen = true;
+          consecutiveSilentOpens += 1;
           break;
         case "fatal": {
           options.logger.warn(
@@ -615,10 +637,13 @@ export async function provisionInstalledHostCredential(
         case "timeout":
           return settledOutcome();
       }
-      // A withheld mint is deterministic for this client (the version
-      // mismatch and the id format do not change between dials) - the
-      // remaining laps would spend the budget re-measuring a constant.
-      if (mintWithheld) {
+      // Both exits here are the same idea: the answer is a constant for this
+      // client, so the remaining laps would spend the budget re-measuring it.
+      // A withheld mint is deterministic on the first observation (the
+      // version mismatch and the id format do not change between dials); a
+      // silent open needs a few consecutive ones to rule out an ack that
+      // simply lost the race with the grace timer.
+      if (mintWithheld || consecutiveSilentOpens >= SILENT_OPEN_CONFIRMATIONS) {
         break;
       }
       // Pace the re-dial. Without this the loop is bounded only by the
