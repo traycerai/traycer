@@ -20,6 +20,8 @@ import {
   type CliInstallSource,
 } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
+import { CLI_ERROR_CODES, CliError } from "../runner/errors";
+import { errorFromUnknown } from "../logger";
 import { withCliLock } from "./cli-lock";
 import {
   cliInstallHomeDir,
@@ -225,14 +227,32 @@ async function refreshSlot(
         return stageWellKnownCliBinary({ environment, binaryPath: source });
       },
     );
-  } catch {
-    // Lock busy is the expected outcome under contention, not an error worth
-    // surfacing - and this whole refresh is best-effort besides. Reported as
-    // "deferred" rather than "nothing to do" so the supervised caller can say
-    // so in its log: a refresh that was WANTED and could not run is a
-    // different machine state from a slot that was already current, and only
-    // the first one explains a supervisor still on old bytes.
-    return { staged: "deferred-busy", wellKnownPath };
+  } catch (error) {
+    // Contention ONLY. `withCliLock` throws its `CLI_LOCK_BUSY` error when
+    // another writer holds the lock, and that is the expected outcome here -
+    // reported as "deferred" rather than "nothing to do" so the supervised
+    // caller can say so in its log, since a refresh that was WANTED and could
+    // not run is a different machine state from a slot that was already
+    // current, and only the first explains a supervisor still on old bytes.
+    //
+    // But the same call also throws for real filesystem faults on the lock
+    // file itself - EACCES on a home whose permissions were changed, EROFS on
+    // a read-only mount, EIO on failing storage. A catch-all would report
+    // every one of those as "another writer holds the lock": a diagnosis that
+    // is not merely incomplete but WRONG, repeated identically on every
+    // startup, while the slot stays stale and the actual error never reaches
+    // a log. Those surface as `failed`, which the entry already logs with the
+    // error's real name and message.
+    if (isCliLockBusyError(error)) {
+      return { staged: "deferred-busy", wellKnownPath };
+    }
+    const failure = errorFromUnknown(error);
+    return {
+      staged: "failed",
+      wellKnownPath,
+      errorName: failure.name,
+      errorMessage: failure.message,
+    };
   }
 }
 
@@ -281,6 +301,14 @@ export async function isRunningFromWellKnownSlot(
   return (
     (await canonicalBinaryPath(process.execPath)) ===
     (await canonicalBinaryPath(wellKnownCliBinaryPath(environment)))
+  );
+}
+
+// Whether this is the lock module's own "another writer holds it" signal, as
+// opposed to a filesystem fault raised while trying to take the lock.
+function isCliLockBusyError(error: unknown): boolean {
+  return (
+    error instanceof CliError && error.code === CLI_ERROR_CODES.CLI_LOCK_BUSY
   );
 }
 

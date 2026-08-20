@@ -194,43 +194,6 @@ describe("installBundledCli stages a copy that outlives the bundle", () => {
 // `mkdir` touches it at all, because `mode` applies only to directories the
 // call actually creates. The CLI side pins the mirror of this in
 // `store/__tests__/well-known-cli.test.ts`.
-// The decision the post-timeout path turns on. Publishing without the lock
-// re-admits the interleaving the lock exists to prevent - and because a
-// Desktop manifest names the SLOT as its own binaryPath, the CLI's staleness
-// check short-circuits on the result and never repairs it. So a machine that
-// already has a working CLI defers instead; only one that has none publishes
-// unlocked, where there is no installation to make inconsistent and the
-// alternative is a launch that leaves the host with no `traycer` at all.
-describe("shouldDeferContendedPublish", () => {
-  it("defers when a usable slot binary already exists", async () => {
-    const { shouldDeferContendedPublish, stableCliBinaryPath } =
-      await import("../cli-discovery");
-    mkdirSync(dirname(stableCliBinaryPath()), { recursive: true });
-    writeFileSync(stableCliBinaryPath(), "an existing, working CLI");
-
-    expect(await shouldDeferContendedPublish()).toBe(true);
-  });
-
-  it("publishes unlocked when there is no slot at all", async () => {
-    const { shouldDeferContendedPublish } = await import("../cli-discovery");
-
-    expect(await shouldDeferContendedPublish()).toBe(false);
-  });
-
-  // A directory at the slot is not a CLI. Deferring to it would leave the
-  // machine with nothing runnable while declining to fix that.
-  it.skipIf(process.platform === "win32")(
-    "publishes unlocked when the slot path is a directory rather than a binary",
-    async () => {
-      const { shouldDeferContendedPublish, stableCliBinaryPath } =
-        await import("../cli-discovery");
-      mkdirSync(stableCliBinaryPath(), { recursive: true });
-
-      expect(await shouldDeferContendedPublish()).toBe(false);
-    },
-  );
-});
-
 describe("installBundledCli hardens the slot home it shares with the CLI", () => {
   it.skipIf(process.platform === "win32")(
     "repairs an EXISTING 0755 slot home and bin directory to 0700",
@@ -337,12 +300,13 @@ describe("installBundledCli proceeds past lock contention", () => {
   // on. Releasing the lock makes the outcome a consequence of the code under
   // test rather than of the runner.
   //
-  // The past-the-wait fallback is covered by the `shouldDeferContendedPublish`
-  // describe below rather than here: reaching it through `installBundledCli`
-  // needs 15s of real wall clock, and the only faster route is the fake-timer
-  // fast-forward this test exists to avoid. What remains untested is the two
-  // lines that wire that decision to its two outcomes, which this comment
-  // records rather than leaves as an assumed pass.
+  // NOT covered here: the past-the-wait branch, where the holder never lets
+  // go and the publish is deferred. Reaching it needs 15s of real wall clock,
+  // and the only faster route is the fake-timer fast-forward this test exists
+  // to avoid. Its CONSEQUENCE is covered - `cli-reconcile.test.ts` pins that a
+  // deferred publish reports `upgrade-blocked` rather than an upgrade - but
+  // the three lines that log and return it have no direct test, and this
+  // comment records that rather than leaving it an assumed pass.
   it("publishes once a briefly-held lock is released", async () => {
     const bundled = stageBundled("cli-bytes-contended");
     const lockPath = cliLockPath("production");

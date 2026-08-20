@@ -727,72 +727,40 @@ export async function installBundledCli(opts: {
   if (outcome.kind === "acquired") {
     return { path: outcome.result, published: true };
   }
-  // Past the wait. What happens next turns on whether this machine already
-  // has a usable CLI, because the two cases have opposite worst outcomes.
+  // Past the wait: defer, unconditionally.
   //
-  // With one present, publishing anyway would re-admit the exact interleaving
-  // this lock was taken to prevent - and in the case most likely to produce
-  // it, since `traycer cli upgrade` holds this lock across a network download
-  // that routinely outlasts the wait. Two writers would publish a slot and a
+  // Publishing anyway would re-admit the exact interleaving this lock was
+  // taken to prevent, and in the case most likely to produce it - a
+  // `traycer cli upgrade` holding this lock across a network download that
+  // routinely outlasts the wait. Two writers would publish a slot and a
   // manifest in interleaved order, and because a Desktop manifest names the
   // SLOT as its own `binaryPath`, the CLI's staleness check short-circuits on
-  // it and never repairs the mismatch. That is a machine running one
-  // installation's bytes under another's manifest, indefinitely - the failure
-  // this lock exists for, arrived at through the lock's own fallback.
+  // it and never repairs the mismatch: a machine running one installation's
+  // bytes under another's manifest, indefinitely.
   //
-  // So defer instead. The user is not blocked by this: the working CLI they
-  // already have stays exactly where it is, and only the upgrade waits. The
-  // caller routes a deferral into the existing `binary-locked` recovery, the
-  // same one a Windows running-image lock produces, so it surfaces as
-  // "restart to finalize" rather than as a dead end.
-  const existingSlot = stableCliBinaryPath();
-  if (await shouldDeferContendedPublish()) {
-    log.warn("[cli] deferring bundled CLI publish - the cli-lock is held", {
-      lockPath: resolveCliLockPath(),
-      holderPid: outcome.holder?.pid ?? null,
-      holderReason: outcome.holder?.reason ?? null,
-      existingSlot,
-    });
-    return { path: existingSlot, published: false };
-  }
-  // Nothing usable at the slot at all. There is no installation to make
-  // inconsistent, and a Desktop launch that leaves the machine with no CLI is
-  // the worse failure by a wide margin - the bundle-blind host has no
-  // `traycer` to put on PATH, and monitor / title hooks / terminal agents all
-  // exit 127. Publish unlocked.
-  log.warn(
-    "[cli] publishing bundled CLI without the cli-lock - no usable slot",
-    {
-      lockPath: resolveCliLockPath(),
-      holderPid: outcome.holder?.pid ?? null,
-      holderReason: outcome.holder?.reason ?? null,
-    },
-  );
-  return { path: await publishBundledCli(opts), published: true };
-}
-
-/**
- * Whether a publish that lost the lock race should DEFER rather than proceed
- * without the lock: true exactly when this machine already has a usable CLI at
- * the slot.
- *
- * Split out and exported because the branch it decides is otherwise reachable
- * only after a real 15-second wait, and the alternative - fast-forwarding fake
- * timers past it - is the technique that already produced a macOS-passes /
- * Linux-CI-fails test here. The decision is the part worth pinning; a test
- * that has to burn 15 seconds of wall clock to reach it would be the slowest
- * in the suite and the least reliable.
- */
-export async function shouldDeferContendedPublish(): Promise<boolean> {
-  return isRegularFile(stableCliBinaryPath());
-}
-
-async function isRegularFile(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isFile();
-  } catch {
-    return false;
-  }
+  // An earlier version of this made an exception when the slot was ABSENT,
+  // reasoning that with no installation there was nothing to make
+  // inconsistent. That inference is wrong, and the counter-example is the
+  // ordinary one: a first-time `cli mark-source` takes this lock, writes its
+  // manifest, and only then copies the binary - so the slot is legitimately
+  // absent for the whole copy, and "no slot" means "an install is IN
+  // PROGRESS" at least as often as it means "no install exists". Publishing
+  // into that window and letting the CLI writer rename over the result
+  // produces exactly the mismatch above. Absence of the slot is not evidence
+  // of safety; only absence of the LOCK is.
+  //
+  // Deferring is safe against the failure that actually matters here, which
+  // is leaving a machine with no CLI at all. A held lock means another writer
+  // is publishing one, and if that writer dies the lock is reclaimed on the
+  // next attempt by the shared module's holder-liveness check, so the wait
+  // cannot become permanent. The caller routes the deferral into an existing
+  // retryable outcome and reconcile runs again at the next launch.
+  log.warn("[cli] deferring bundled CLI publish - the cli-lock is held", {
+    lockPath: resolveCliLockPath(),
+    holderPid: outcome.holder?.pid ?? null,
+    holderReason: outcome.holder?.reason ?? null,
+  });
+  return { path: stableCliBinaryPath(), published: false };
 }
 
 // Create a directory at 0700, and REPAIR one that already exists.

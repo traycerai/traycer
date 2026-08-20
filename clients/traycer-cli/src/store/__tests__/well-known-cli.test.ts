@@ -1524,6 +1524,43 @@ describe("refreshWellKnownSlotIfStale", () => {
     }
   });
 
+  // A real filesystem fault on the lock file is NOT contention, and reporting
+  // it as such is worse than incomplete - it is a confident wrong answer,
+  // repeated identically on every startup, while the slot stays stale and the
+  // actual error never reaches a log. EACCES here stands in for the family
+  // (EROFS on a read-only mount, EIO on failing storage); what matters is
+  // that it is not `CLI_LOCK_BUSY`.
+  it("packaged: a lock I/O fault is reported as failed with the real error, not as deferred-busy", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "AAAAAAAAAA");
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "BBBBBBBBBBBB");
+    // The lock lives in the CLI install home; making that directory
+    // unwritable makes `open(lockPath, "wx")` fail with EACCES rather than
+    // with the module's own busy signal.
+    const { cliInstallHomeDir } = await import("../paths");
+    const installHome = cliInstallHomeDir(ENVIRONMENT);
+    mkdirSync(installHome, { recursive: true });
+    chmodSync(installHome, 0o500);
+    try {
+      const result = await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      );
+
+      expect(result?.staged).toBe("failed");
+      if (result?.staged === "failed") {
+        expect(result.errorMessage).not.toMatch(/another traycer CLI mutation/);
+      }
+      expect(readFileSync(wellKnownPath, "utf8")).toBe("AAAAAAAAAA");
+    } finally {
+      chmodSync(installHome, 0o700);
+    }
+  });
+
   // The supervised entry (`traycer host start`) waits for the lock where an
   // ordinary command does not, because the cost of losing this race is not
   // symmetric: a short command that skips a refresh is repaired a second
