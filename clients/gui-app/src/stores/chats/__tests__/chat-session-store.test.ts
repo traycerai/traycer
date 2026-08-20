@@ -88,6 +88,29 @@ const SECOND_CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "World" }] }],
 };
 
+const MENTION_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "mention",
+          attrs: {
+            contextType: "file",
+            path: "src/app.ts",
+            relPath: "src/app.ts",
+            absolutePath: "/repo/src/app.ts",
+            workspacePath: "/repo",
+            label: "app.ts",
+          },
+        },
+        { type: "text", text: " needs a second look" },
+      ],
+    },
+  ],
+};
+
 const THIRD_CONTENT: JsonContent = {
   type: "doc",
   content: [
@@ -1677,6 +1700,131 @@ describe("createChatSessionStore", () => {
         .getState()
         .errorNotices.filter((entry) => entry.clientActionId === "send-1"),
     ).toHaveLength(1);
+  });
+
+  // R3-1: absence from a snapshot is only evidence for a send dispatched on an
+  // EARLIER connection, where the ack is definitively dead. A send dispatched
+  // after this connection reached `open` can be missing simply because the
+  // snapshot was generated before it arrived - settling on that would tell the
+  // user to resend a message whose accepted ack is still on its way.
+  it("keeps a live-epoch send pending when the snapshot predates it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    // Occupy the restoration slot, so the live send would take the
+    // displacement branch.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the send.");
+
+    // The connection drops and comes back; the composer gate reopens on
+    // `open`, so the user can send again before the snapshot lands.
+    callbacks.onConnectionStatus("reconnecting", null);
+    callbacks.onConnectionStatus("open", null);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const live = harness.sent.at(-1);
+    if (live === undefined || live.kind !== "send") {
+      throw new Error("Expected the live send frame");
+    }
+
+    // This connection's snapshot arrives without it - a race, not evidence.
+    emitSnapshot(callbacks, "owner");
+
+    const noticesForLive = () =>
+      harness.handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.clientActionId === live.clientActionId,
+        );
+
+    expect(
+      Object.keys(harness.handle.store.getState().pendingActions),
+    ).toContain(live.clientActionId);
+    expect(noticesForLive()).toEqual([]);
+
+    // The ack was always coming. It lands and reconciles normally - the
+    // message materializes and nothing ever told the user to resend it.
+    acceptLastAction(harness);
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: live.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: SECOND_CONTENT },
+        timestamp: 4,
+        sessionAnchor: null,
+      },
+    });
+
+    expect(
+      harness.handle.store
+        .getState()
+        .messages.some((message) => message.messageId === live.messageId),
+    ).toBe(true);
+    expect(noticesForLive()).toEqual([]);
+  });
+
+  // R3-2: a mention chip projects to plain `@path`, so the quoted text LOOKS
+  // complete - but the workspace, host and entity binding behind the chip do
+  // not survive, and pasting the text back does not rebuild it. A partial loss
+  // presented as a whole recovery is the same silence one content class over.
+  it("qualifies a statement whose mention chips lose their binding", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        MENTION_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (entry) => entry.clientActionId === second.clientActionId,
+      );
+    if (notice === undefined) throw new Error("Expected a statement");
+    // The text - including the @path - is carried...
+    expect(notice.message).toContain("@src/app.ts");
+    expect(notice.message).toContain("needs a second look");
+    // ...but the statement says the chip itself has to be re-picked, rather
+    // than implying the pasted text restores it.
+    expect(notice.message).toContain("mention");
   });
 
   // Attachment loss was detected by text-EMPTINESS, which is a proxy for

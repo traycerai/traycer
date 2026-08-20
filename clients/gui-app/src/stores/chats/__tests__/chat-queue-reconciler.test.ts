@@ -304,6 +304,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -325,6 +326,7 @@ describe("chat-queue-reconciler", () => {
           items: [createQueueItem("msg-1", CONTENT)],
         },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -343,6 +345,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -367,6 +370,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: existingRestore,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -396,12 +400,65 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
       const result = reconcileSnapshotChange(input);
 
       expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
+      expect(result.appendedErrorNotices).toEqual([]);
+    });
+
+    it("keeps a send dispatched on the snapshot's own connection", () => {
+      // Epoch 0 pending, epoch 0 snapshot: the frame was dispatched on THIS
+      // connection and simply outran the snapshot the host built. Its ack is
+      // still deliverable, so absence proves nothing yet.
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        connectionEpoch: 0,
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.failedSendRestoration).toBeNull();
+      expect(result.appendedErrorNotices).toEqual([]);
+      expect(result.pendingUserMessages).toEqual(input.pendingUserMessages);
+    });
+
+    it("still settles a live-epoch send the snapshot CONFIRMS", () => {
+      // Presence is authoritative whatever connection dispatched it - the
+      // epoch bar guards conclusions drawn from absence, nothing else.
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [confirmedMessage],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        connectionEpoch: 0,
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({});
+      expect(result.acceptedActions).toHaveProperty("action-1");
       expect(result.appendedErrorNotices).toEqual([]);
     });
 
@@ -413,6 +470,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -464,6 +522,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -499,6 +558,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -528,6 +588,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -557,6 +618,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 
@@ -619,6 +681,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "running", items: [managedItem] },
         failedSendRestoration: null,
+        connectionEpoch: 1,
         nowMs: 5000,
       };
 

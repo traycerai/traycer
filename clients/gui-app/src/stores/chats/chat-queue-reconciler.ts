@@ -7,6 +7,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import {
   collectImageAttachmentsFromJSONContent,
+  collectMentionAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import type {
@@ -76,6 +77,14 @@ export type ReconcileSnapshotInput = {
   readonly messages: ReadonlyArray<Message>;
   readonly queue: ChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
+  /**
+   * The connection this snapshot arrived on. Absence from a snapshot is only
+   * EVIDENCE for an action dispatched on an earlier connection, whose ack died
+   * with it; a same-connection dispatch can be missing simply because the host
+   * built the snapshot before the frame reached it. See
+   * {@link reconcileSnapshotChange}.
+   */
+  readonly connectionEpoch: number;
   readonly nowMs: number;
 };
 
@@ -117,11 +126,15 @@ export type ReconcileSnapshotPatch = {
  * every later snapshot and pushes stale text back into the composer after the
  * user has already resent it.
  *
- * Text is all it can carry - `imageAttachment` / `attachmentGroup` nodes
- * project to `""` - so whenever the original content held attachments the
- * statement says so outright, in the mixed case as well as the
- * attachment-only one. Silently quoting the caption of an image send would
- * send someone back with an incomplete request believing it was whole.
+ * What survives the trip is TEXT, and the two content classes it fails differ
+ * in kind, so the statement names them differently. `imageAttachment` /
+ * `attachmentGroup` project to `""`: a whole loss. A `mention` chip projects
+ * to `@path`, so its text survives but the binding behind it - workspace,
+ * host, entity id, context type - does not, and pasting that string back does
+ * NOT rebuild the chip: a partial loss, which is the more dangerous of the two
+ * precisely because the quote reads as complete. Detection for both is
+ * STRUCTURAL. Emptiness was standing in for "had attachments" and the proxy
+ * failed on mixed content; text-presence would fail on mentions the same way.
  */
 function unrecoverableSendNotice(
   clientActionId: string,
@@ -129,38 +142,51 @@ function unrecoverableSendNotice(
   circumstance: string,
 ): ChatErrorNotice {
   const text = extractPlainTextFromComposerJSONContent(content).trim();
-  // Detected STRUCTURALLY, not by text-emptiness. Emptiness was standing in
-  // for "had attachments", and the proxy fails on the mixed case: an image
-  // plus a caption has text, so it took the quote-the-text arm and the image
-  // vanished behind a statement that looked complete.
   const images = collectImageAttachmentsFromJSONContent(content);
+  const mentions = collectMentionAttachmentsFromJSONContent(content);
   const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
-  const attachments =
-    images.length === 0
-      ? ""
-      : ` It also carried ${images.length} image ${images.length === 1 ? "attachment" : "attachments"} that cannot be carried here - re-add ${images.length === 1 ? "it" : "them"} before resending.`;
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
-    message: messageBody(preamble, text, images.length, attachments),
+    message: [
+      recoverableBody(preamble, text, images.length),
+      imageClause(images.length, text.length > 0),
+      mentionClause(mentions.length),
+    ].join(""),
     severity: "warning",
     clientActionId,
   };
 }
 
-function messageBody(
+function recoverableBody(
   preamble: string,
   text: string,
   imageCount: number,
-  attachments: string,
 ): string {
   if (text.length > 0)
-    return `${preamble} Copy it from here to resend: ${text}`.concat(
-      attachments,
-    );
-  if (imageCount > 0) {
-    return `${preamble} It carried no text - only ${imageCount} image ${imageCount === 1 ? "attachment" : "attachments"}, which cannot be recovered here.`;
-  }
+    return `${preamble} Copy it from here to resend: ${text}`;
+  if (imageCount > 0) return preamble;
   return `${preamble} It had no recoverable content.`;
+}
+
+/** A whole loss: the bytes are not in the notice and cannot be. */
+function imageClause(imageCount: number, hasText: boolean): string {
+  if (imageCount === 0) return "";
+  const noun = imageCount === 1 ? "image attachment" : "image attachments";
+  if (!hasText) {
+    return ` It carried no text - only ${imageCount} ${noun}, which cannot be recovered here.`;
+  }
+  return ` It also carried ${imageCount} ${noun} that cannot be carried here - re-add ${imageCount === 1 ? "it" : "them"} before resending.`;
+}
+
+/**
+ * A PARTIAL loss, and worth its own sentence: the `@path` above is real text
+ * the user can paste, but it pastes as prose. Only re-picking the mention
+ * restores the attachment the agent actually reads.
+ */
+function mentionClause(mentionCount: number): string {
+  if (mentionCount === 0) return "";
+  const noun = mentionCount === 1 ? "mention" : "mentions";
+  return ` Its ${mentionCount} ${noun} will paste as plain text - re-pick ${mentionCount === 1 ? "it" : "them"} so ${mentionCount === 1 ? "it attaches" : "they attach"} again.`;
 }
 
 /**
@@ -210,6 +236,13 @@ export function reconcileQueueChange(
 /**
  * Reconcile pending actions against a snapshot. Clears pending actions whose
  * messages have been confirmed in the snapshot or are in the queue.
+ *
+ * Two kinds of conclusion live here and they have different evidence bars.
+ * PRESENCE - the message is in `messages` or the queue - is authoritative
+ * whatever connection dispatched it. ABSENCE is not: it settles a send only
+ * when that send was dispatched on an EARLIER connection, matching the bar
+ * {@link sweepStalePendingActions} applies to every other action kind. A
+ * same-connection dispatch missing from a snapshot has simply outrun it.
  *
  * Pure function - all timing inputs must be passed explicitly.
  */
@@ -263,6 +296,17 @@ export function reconcileSnapshotChange(
       // Nothing to restore and nothing lost: the send stays pending and no
       // statement is owed.
       if (pending.restoreContent === null) {
+        return next;
+      }
+      // Everything below settles on ABSENCE, and absence is only evidence for
+      // a dispatch from a dead connection. A send issued after this connection
+      // reached `open` - the composer gate reopens there, before the initial
+      // snapshot lands - is legitimately missing from a snapshot the host
+      // built first, and its accepted ack is still on its way. Settling it
+      // would restore or state text that is about to materialize anyway: the
+      // same manufactured duplicate this pass exists to prevent, one side over.
+      // Its ack, or the next connection's snapshot, settles it truthfully.
+      if (pending.connectionEpoch >= input.connectionEpoch) {
         return next;
       }
       // The slot is taken by a longer-waiting send. Keep first-writer-wins,

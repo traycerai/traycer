@@ -1205,6 +1205,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             messages,
             queue: frame.snapshot.queue,
             failedSendRestoration: state.failedSendRestoration,
+            connectionEpoch,
             nowMs: now,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their

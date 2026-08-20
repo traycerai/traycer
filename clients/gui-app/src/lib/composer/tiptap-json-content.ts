@@ -97,7 +97,7 @@ export function extractPlainTextFromComposerJSONContent(
 ): string {
   return plainTextFromNodes(content.content ?? []);
 }
-function collectMentionAttachmentsFromJSONContent(
+export function collectMentionAttachmentsFromJSONContent(
   content: JsonContent,
 ): MentionAttachment[] {
   return dedupeMentions(
