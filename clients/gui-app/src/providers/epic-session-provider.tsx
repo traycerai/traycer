@@ -421,10 +421,11 @@ export function EpicSessionProvider(
     const streamClientFactory: EpicStreamClientFactory = (
       factoryEpicId,
       callbacks,
+      seedOfferProvider,
     ) => {
       const override = getEpicStreamClientFactoryOverride();
       if (override !== null) {
-        return override(factoryEpicId, callbacks);
+        return override(factoryEpicId, callbacks, seedOfferProvider);
       }
       // `targetHostId` is non-null here: the acquire effect gates on it above,
       // and it is a `const`, so that narrowing flows into this factory closure.
@@ -439,6 +440,7 @@ export function EpicSessionProvider(
             wsStreamClient: ws,
             epicId: factoryEpicId,
             callbacks,
+            seedOfferProvider,
           }),
       );
       return {

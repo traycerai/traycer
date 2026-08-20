@@ -70,15 +70,15 @@ export const snapshotMetaEpicSchemaV10 = z.object({
 export type SnapshotMetaEpicV10 = z.infer<typeof snapshotMetaEpicSchemaV10>;
 
 /**
- * `epic.subscribe@1.2` snapshot metadata: adds the room identity.
+ * Frozen `epic.subscribe@1.2` snapshot metadata: adds the room identity.
  *
- * The LATEST installed shape - host code builds meta against this, and every
- * client-side `SnapshotMetaEpic` type flows from it. A NEW schema object
- * (not a mutation of {@link snapshotMetaEpicSchemaV10}) per the
- * frozen-per-minor rule: `@1.0`/`@1.1` connections keep parsing the frozen
- * shape above and silently strip the extra key a `@1.2`-built frame carries.
+ * IMMUTABLE, for the same reason {@link snapshotMetaEpicSchemaV10} is. A NEW
+ * schema object (not a mutation of the V10 shape) per the frozen-per-minor
+ * rule: `@1.0`/`@1.1` connections keep parsing the frozen shape above and
+ * silently strip the extra key a `@1.2`-built frame carries. `@1.3` extends
+ * THIS shape the same way - see {@link snapshotMetaEpicSchema}.
  */
-export const snapshotMetaEpicSchema = snapshotMetaEpicSchemaV10.extend({
+export const snapshotMetaEpicSchemaV12 = snapshotMetaEpicSchemaV10.extend({
   /**
    * The concrete cloud collaboration room the host opened for this snapshot.
    *
@@ -103,6 +103,46 @@ export const snapshotMetaEpicSchema = snapshotMetaEpicSchemaV10.extend({
    * fact instead of a runtime coin flip.
    */
   roomId: z.string().optional(),
+});
+export type SnapshotMetaEpicV12 = z.infer<typeof snapshotMetaEpicSchemaV12>;
+
+/**
+ * `epic.subscribe@1.3` snapshot metadata: adds the delta-seed basis marker.
+ *
+ * The LATEST installed shape - host code builds meta against this, and every
+ * client-side `SnapshotMetaEpic` type flows from it. Another new schema
+ * object rather than a mutation of {@link snapshotMetaEpicSchemaV12}, per the
+ * frozen-per-minor rule.
+ */
+export const snapshotMetaEpicSchema = snapshotMetaEpicSchemaV12.extend({
+  /**
+   * Present ONLY when the snapshot frame's binary payload is a Yjs **delta**
+   * computed against the state vector this client offered in the open
+   * request's `seedOffer` - i.e. the bytes are NOT self-sufficient and MUST be
+   * merged into the very doc that produced that offer.
+   *
+   * Absence means the payload is a full snapshot. That is the encoding for
+   * every case that is not a served delta, and they are deliberately
+   * indistinguishable on the wire: a pre-`@1.3` host, a client that made no
+   * offer (cold open), an offer the host rejected (unparseable state vector,
+   * or a `roomId` that does not name the room the bytes came from), and any
+   * host-side fallback all look identical to the client. A full snapshot is
+   * always safe to apply, so collapsing them costs nothing and removes every
+   * branch where a client could mistake one for the other.
+   *
+   * `z.literal(true)` rather than `z.boolean()` deliberately: the fact is
+   * two-state, so this leaves exactly ONE representation of "full snapshot"
+   * (absence) instead of two (absence and `false`), and no consumer can
+   * branch on `=== false` where it meant `!== true`.
+   *
+   * LOAD-BEARING, not cosmetic. Both a full snapshot and a delta are applied
+   * with the same `Y.applyUpdate`, so this does not select an apply function -
+   * it forbids the renderer's plain-swap path. The renderer decides between
+   * merging into the existing replica and swapping in a fresh doc (the seam
+   * `roomId` was added for at `@1.2`); handing a delta to the swap branch
+   * would drop every byte the delta legitimately omitted.
+   */
+  seededFromOffer: z.literal(true).optional(),
 });
 export type SnapshotMetaEpic = z.infer<typeof snapshotMetaEpicSchema>;
 
