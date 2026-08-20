@@ -56,16 +56,24 @@ describe("isSelfNamingCliInvocation", () => {
   // binary while `argv[1]` keeps the raw spelling, so a CLI reached through
   // a differently named symlink registers a pair that is neither
   // path-equal nor basename-equal. Only filesystem identity catches it.
-  it("is true when the leading arg is a differently named symlink to the command", async () => {
-    const realBinary = join(work, "traycer");
-    const alias = join(work, "tr");
-    writeFileSync(realBinary, "binary bytes");
-    symlinkSync(realBinary, alias);
+  // Skipped on Windows, where creating a symlink needs Developer Mode or an
+  // elevated prompt: `symlinkSync` would throw before the predicate under
+  // test ever ran, so a Windows developer would see a failure that says
+  // nothing about `isSelfNamingCliInvocation`. Same guard the sibling
+  // well-known-cli suite uses for its POSIX-mode cases.
+  it.skipIf(process.platform === "win32")(
+    "is true when the leading arg is a differently named symlink to the command",
+    async () => {
+      const realBinary = join(work, "traycer");
+      const alias = join(work, "tr");
+      writeFileSync(realBinary, "binary bytes");
+      symlinkSync(realBinary, alias);
 
-    await expect(
-      isSelfNamingCliInvocation({ command: realBinary, args: [alias] }),
-    ).resolves.toBe(true);
-  });
+      await expect(
+        isSelfNamingCliInvocation({ command: realBinary, args: [alias] }),
+      ).resolves.toBe(true);
+    },
+  );
 
   // A leading argument that is not a file under any interpretation cannot
   // be the entry script a real interpreter registration would name, so the
