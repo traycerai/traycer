@@ -16,6 +16,7 @@ import { useHostOptions } from "@/components/settings/host-scope/use-host-option
 import {
   findHostOption,
   unavailableHostOption,
+  type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { activeRunNoticeFor } from "./active-run-notice";
@@ -31,7 +32,7 @@ import type {
   WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
@@ -415,14 +416,12 @@ export function ActiveHostWorkspaceControls(
     activeHostId === null
       ? null
       : (listedHostOption ?? unavailableHostOption(activeHostId, hostLabel));
-  const visibleHostOptions =
-    props.hostScope.kind === "fixed"
-      ? selectedHostOption === null
-        ? []
-        : [selectedHostOption]
-      : selectedHostOption !== null && listedHostOption === null
-        ? [selectedHostOption, ...hostOptions.hosts]
-        : hostOptions.hosts;
+  const visibleHostOptions = hostPickerOptionsForScope(
+    props.hostScope,
+    selectedHostOption,
+    listedHostOption,
+    hostOptions.hosts,
+  );
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
@@ -564,6 +563,22 @@ export function ActiveHostWorkspaceControls(
       disabled={disabled}
     />
   );
+}
+
+function hostPickerOptionsForScope(
+  scope: HostWorkspaceControlsHostScope,
+  selectedHostOption: HostScopeOption | null,
+  listedHostOption: HostScopeOption | null,
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  if (scope.kind === "fixed") {
+    if (selectedHostOption === null) return [];
+    return [selectedHostOption];
+  }
+  if (selectedHostOption !== null && listedHostOption === null) {
+    return [selectedHostOption, ...hosts];
+  }
+  return hosts;
 }
 
 function HomeWorkspaceRows(props: {
@@ -2727,6 +2742,35 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // branch edits stage); the explicit "Update" applies the staged set and tells
   // the owning tile to restart the PTY once against the updated binding.
   const readOnly = false;
+  const hostSwitcher = (
+    <WorkspaceHostSwitcher
+      hosts={pickerHosts}
+      activeHostId={props.activeHostId}
+      onSelect={handleSelectHostForChat}
+      intent="pin"
+      refusalByHostId={NO_HOST_OPTION_REFUSALS}
+      inertExceptHostId={null}
+      disabled={surface.kind === "terminal-agent"}
+      isLoading={hostOptions.isLoading}
+      listsFailed={hostOptions.listsFailed}
+      onRetryLists={hostOptions.retryLists}
+      surface="inline"
+    />
+  );
+  const hostSwitcherSlot =
+    surface.kind === "terminal-agent" ? (
+      <span
+        className="flex w-full min-w-0"
+        role="button"
+        tabIndex={0}
+        aria-label="Terminal host is fixed"
+        aria-disabled="true"
+      >
+        {hostSwitcher}
+      </span>
+    ) : (
+      <span className="flex w-full min-w-0">{hostSwitcher}</span>
+    );
 
   return (
     <>
@@ -2742,25 +2786,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             sideOffset={undefined}
             align={undefined}
           >
-            <span
-              className="flex w-full min-w-0"
-              tabIndex={0}
-              aria-label="Terminal host is fixed"
-            >
-              <WorkspaceHostSwitcher
-                hosts={pickerHosts}
-                activeHostId={props.activeHostId}
-                onSelect={handleSelectHostForChat}
-                intent="pin"
-                refusalByHostId={NO_HOST_OPTION_REFUSALS}
-                inertExceptHostId={null}
-                disabled={surface.kind === "terminal-agent"}
-                isLoading={hostOptions.isLoading}
-                listsFailed={hostOptions.listsFailed}
-                onRetryLists={hostOptions.retryLists}
-                surface="inline"
-              />
-            </span>
+            {hostSwitcherSlot}
           </TooltipWrapper>
         </div>
         <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
