@@ -712,7 +712,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(screen.getByTestId("host-busy-force"));
 
     await waitFor(() => {
-      expect(restartHostIfIdle).toHaveBeenCalledTimes(1);
+      expect(restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: "host-local",
+      });
     });
     expect(management.restartHost).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -974,7 +976,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(screen.getByTestId("host-busy-force"));
 
     await waitFor(() => {
-      expect(restartHostIfIdle).toHaveBeenCalledTimes(1);
+      expect(restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: "host-local",
+      });
     });
     expect(management.restartHost).not.toHaveBeenCalled();
     await waitFor(() => {

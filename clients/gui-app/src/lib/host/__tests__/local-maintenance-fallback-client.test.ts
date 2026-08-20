@@ -173,8 +173,16 @@ describe("buildMaintenanceFallbackServeMap", () => {
     // Discriminator: the old two-step read `getHostControllerStatus` then
     // called `installVersion`. Reintroducing that read makes this red.
     const maintenanceInstallVersion = vi.fn(
-      (input: { readonly version: string; readonly force: boolean }) => {
-        expect(input).toEqual({ version: "1.2.0", force: false });
+      (input: {
+        readonly version: string;
+        readonly force: boolean;
+        readonly expectedHostId: string;
+      }) => {
+        expect(input).toEqual({
+          version: "1.2.0",
+          force: false,
+          expectedHostId: LOCAL_HOST_ID,
+        });
         return Promise.resolve({
           kind: "lane-busy" as const,
         } satisfies MaintenanceInstallDispatch);
@@ -215,6 +223,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
     expect(maintenanceInstallVersion).toHaveBeenCalledWith({
       version: "1.2.0",
       force: true,
+      expectedHostId: LOCAL_HOST_ID,
     });
     expect(management.getHostControllerStatus).not.toHaveBeenCalled();
     expect(management.installVersion).not.toHaveBeenCalled();
@@ -276,7 +285,10 @@ describe("buildMaintenanceFallbackServeMap", () => {
 
   it("forwards includePreReleases verbatim on host.update.check", async () => {
     const maintenanceUpdateCheck = vi.fn(
-      (_input: { readonly includePreReleases: boolean }) =>
+      (_input: {
+        readonly includePreReleases: boolean;
+        readonly expectedHostId: string;
+      }) =>
         Promise.resolve({
           outcome: "ok" as const,
           manifest: updateCheckManifest("1.2.0"),
@@ -289,9 +301,61 @@ describe("buildMaintenanceFallbackServeMap", () => {
     await serve["host.update.check"]({ includePreReleases: false });
 
     expect(maintenanceUpdateCheck.mock.calls).toEqual([
-      [{ includePreReleases: true }],
-      [{ includePreReleases: false }],
+      [{ includePreReleases: true, expectedHostId: LOCAL_HOST_ID }],
+      [{ includePreReleases: false, expectedHostId: LOCAL_HOST_ID }],
     ]);
+  });
+
+  it("sends the construction-time expectedHostId on every one of the four calls, not a later id", async () => {
+    // Discriminator: omitting expectedHostId, or re-reading some live id at
+    // dispatch, makes this red. The decorator freezes the id it was built
+    // for; main is the one that compares it against the live local host.
+    const captured = "host-captured";
+    const maintenanceUpdateCheck = vi.fn(() =>
+      Promise.resolve({
+        outcome: "ok" as const,
+        manifest: updateCheckManifest("1.2.0"),
+      }),
+    );
+    const maintenanceDoctor = vi.fn(() =>
+      Promise.resolve({ status: "ok" as const, issues: [] }),
+    );
+    const maintenanceInstallationInfo = vi.fn(() =>
+      Promise.resolve({ status: "unmanaged" as const }),
+    );
+    const maintenanceInstallVersion = vi.fn(() =>
+      Promise.resolve({
+        kind: "lane-busy" as const,
+      } satisfies MaintenanceInstallDispatch),
+    );
+    const management = buildOverviewManagement({
+      maintenanceUpdateCheck,
+      maintenanceDoctor,
+      maintenanceInstallationInfo,
+      maintenanceInstallVersion,
+    });
+    const serve = buildMaintenanceFallbackServeMap(management, captured);
+
+    await serve["host.update.check"]({ includePreReleases: false });
+    await serve["host.doctor"]();
+    await serve["host.getInstallationInfo"]();
+    await serve["host.update.install"]({ version: "1.2.0", force: true });
+
+    expect(maintenanceUpdateCheck).toHaveBeenCalledWith({
+      includePreReleases: false,
+      expectedHostId: captured,
+    });
+    expect(maintenanceDoctor).toHaveBeenCalledWith({
+      expectedHostId: captured,
+    });
+    expect(maintenanceInstallationInfo).toHaveBeenCalledWith({
+      expectedHostId: captured,
+    });
+    expect(maintenanceInstallVersion).toHaveBeenCalledWith({
+      version: "1.2.0",
+      force: true,
+      expectedHostId: captured,
+    });
   });
 
   it("returns the host.getInstallationInfo IPC answer verbatim", async () => {
@@ -428,21 +492,29 @@ describe("createLocalMaintenanceFallbackClient", () => {
 
   function servingManagement(): {
     readonly management: IHostManagement;
-    readonly checkCalls: Array<{ readonly includePreReleases: boolean }>;
+    readonly checkCalls: Array<{
+      readonly includePreReleases: boolean;
+      readonly expectedHostId: string;
+    }>;
     readonly installCalls: Array<{
       readonly version: string;
       readonly force: boolean;
+      readonly expectedHostId: string;
     }>;
-    readonly doctorCalls: number;
-    readonly installInfoCalls: number;
+    readonly doctorCalls: Array<{ readonly expectedHostId: string }>;
+    readonly installInfoCalls: Array<{ readonly expectedHostId: string }>;
   } {
-    const checkCalls: Array<{ readonly includePreReleases: boolean }> = [];
+    const checkCalls: Array<{
+      readonly includePreReleases: boolean;
+      readonly expectedHostId: string;
+    }> = [];
     const installCalls: Array<{
       readonly version: string;
       readonly force: boolean;
+      readonly expectedHostId: string;
     }> = [];
-    let doctorCalls = 0;
-    let installInfoCalls = 0;
+    const doctorCalls: Array<{ readonly expectedHostId: string }> = [];
+    const installInfoCalls: Array<{ readonly expectedHostId: string }> = [];
     const management = buildOverviewManagement({
       maintenanceUpdateCheck: (input) => {
         checkCalls.push(input);
@@ -452,7 +524,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
         });
       },
       maintenanceInstallVersion: (input) => {
-        installCalls.push({ version: input.version, force: input.force });
+        installCalls.push(input);
         return Promise.resolve({
           kind: "dispatched" as const,
           outcome: {
@@ -464,15 +536,15 @@ describe("createLocalMaintenanceFallbackClient", () => {
           },
         });
       },
-      maintenanceDoctor: () => {
-        doctorCalls += 1;
+      maintenanceDoctor: (input) => {
+        doctorCalls.push(input);
         return Promise.resolve({
           status: "ok" as const,
           issues: [doctorIssue("SERVICE_STOPPED")],
         });
       },
-      maintenanceInstallationInfo: () => {
-        installInfoCalls += 1;
+      maintenanceInstallationInfo: (input) => {
+        installInfoCalls.push(input);
         return Promise.resolve({ status: "unmanaged" as const });
       },
     });
@@ -480,12 +552,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
       management,
       checkCalls,
       installCalls,
-      get doctorCalls() {
-        return doctorCalls;
-      },
-      get installInfoCalls() {
-        return installInfoCalls;
-      },
+      doctorCalls,
+      installInfoCalls,
     };
   }
 
@@ -527,8 +595,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
       "host.update.install",
     ]);
     expect(served.checkCalls).toEqual([]);
-    expect(served.doctorCalls).toBe(0);
-    expect(served.installInfoCalls).toBe(0);
+    expect(served.doctorCalls).toEqual([]);
+    expect(served.installInfoCalls).toEqual([]);
     expect(served.installCalls).toEqual([]);
   });
 
@@ -550,10 +618,16 @@ describe("createLocalMaintenanceFallbackClient", () => {
     });
 
     expect(rpcCalls).toEqual([]);
-    expect(served.checkCalls).toEqual([{ includePreReleases: true }]);
-    expect(served.doctorCalls).toBe(1);
-    expect(served.installInfoCalls).toBe(1);
-    expect(served.installCalls).toEqual([{ version: "1.2.0", force: false }]);
+    expect(served.checkCalls).toEqual([
+      { includePreReleases: true, expectedHostId: LOCAL_HOST_ID },
+    ]);
+    expect(served.doctorCalls).toEqual([{ expectedHostId: LOCAL_HOST_ID }]);
+    expect(served.installInfoCalls).toEqual([
+      { expectedHostId: LOCAL_HOST_ID },
+    ]);
+    expect(served.installCalls).toEqual([
+      { version: "1.2.0", force: false, expectedHostId: LOCAL_HOST_ID },
+    ]);
     expect(install).toEqual({ outcome: "accepted" });
     expect(served.management.installVersion).not.toHaveBeenCalled();
     expect(served.management.getHostControllerStatus).not.toHaveBeenCalled();
@@ -594,9 +668,13 @@ describe("createLocalMaintenanceFallbackClient", () => {
     );
 
     expect(rpcCalls).toEqual([]);
-    expect(served.checkCalls).toEqual([{ includePreReleases: false }]);
-    expect(served.doctorCalls).toBe(1);
-    expect(served.installInfoCalls).toBe(1);
+    expect(served.checkCalls).toEqual([
+      { includePreReleases: false, expectedHostId: LOCAL_HOST_ID },
+    ]);
+    expect(served.doctorCalls).toEqual([{ expectedHostId: LOCAL_HOST_ID }]);
+    expect(served.installInfoCalls).toEqual([
+      { expectedHostId: LOCAL_HOST_ID },
+    ]);
   });
 
   it("always delegates a non-intercepted method such as host.status", async () => {
@@ -661,7 +739,9 @@ describe("createLocalMaintenanceFallbackClient", () => {
       manifest: updateCheckManifest("1.2.0"),
     });
     expect(rpcCalls).toEqual(["host.update.check"]);
-    expect(served.checkCalls).toEqual([{ includePreReleases: false }]);
+    expect(served.checkCalls).toEqual([
+      { includePreReleases: false, expectedHostId: LOCAL_HOST_ID },
+    ]);
   });
 
   it("re-serves a live-signal requestWithSignal after the same null→false flip", async () => {
@@ -686,7 +766,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
       ],
     });
     expect(rpcCalls).toEqual(["host.doctor"]);
-    expect(served.doctorCalls).toBe(1);
+    expect(served.doctorCalls).toEqual([{ expectedHostId: LOCAL_HOST_ID }]);
   });
 
   it("re-serves requestWithResponseTimeout when the delegated call rejects and the handshake flips mid-flight", async () => {
@@ -714,7 +794,9 @@ describe("createLocalMaintenanceFallbackClient", () => {
 
     expect(answer).toEqual({ status: "unmanaged" });
     expect(rpcCalls).toEqual([]);
-    expect(served.installInfoCalls).toBe(1);
+    expect(served.installInfoCalls).toEqual([
+      { expectedHostId: LOCAL_HOST_ID },
+    ]);
   });
 
   it("propagates a genuine transport failure when the host already advertises the method", async () => {
@@ -784,6 +866,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
       manifest: updateCheckManifest("1.2.0"),
     });
     expect(rpcCalls).toEqual([]);
-    expect(served.checkCalls).toEqual([{ includePreReleases: true }]);
+    expect(served.checkCalls).toEqual([
+      { includePreReleases: true, expectedHostId: LOCAL_HOST_ID },
+    ]);
   });
 });

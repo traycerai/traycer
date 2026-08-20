@@ -58,6 +58,8 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  DoctorRepairDispatch,
+  DoctorRepairIntent,
   HostRestartRequestResult,
   IHostManagement,
   IRunnerHost,
@@ -140,6 +142,63 @@ const RECENT_CRASH_MARKERS: HostDoctorIssue = {
 
 const LANE_BUSY_INSTALL_MESSAGE =
   "Traycer is installing an update on this host. Restart it once that finishes.";
+
+const HOST_CHANGED_MESSAGE =
+  "This computer's host changed while that was open. Reopen Settings and try again.";
+
+const HOST_NOT_INSTALLED: HostDoctorIssue = {
+  code: "HOST_NOT_INSTALLED",
+  severity: "error",
+  title: "Host not installed",
+  message: "No host is installed.",
+  fixAction: "host-install-latest",
+  terminalCommand: "traycer host install latest",
+  details: null,
+};
+
+const SERVICE_MISSING: HostDoctorIssue = {
+  code: "LAUNCH_AGENT_MISSING",
+  severity: "error",
+  title: "Launch agent missing",
+  message: "The background service is not installed.",
+  fixAction: "service-install",
+  terminalCommand: "traycer host service install",
+  details: null,
+};
+
+const HOST_PROCESS_DOWN: HostDoctorIssue = {
+  code: "HOST_PROCESS_DOWN",
+  severity: "error",
+  title: "Host is down",
+  message: "The host process is not running.",
+  fixAction: "host-start",
+  terminalCommand: "traycer host start",
+  details: null,
+};
+
+const PORT_HELD: HostDoctorIssue = {
+  code: "PORT_HELD_BY_FOREIGN",
+  severity: "error",
+  title: "Port is held",
+  message: "Another process holds the host port.",
+  fixAction: "host-free-port-and-restart",
+  terminalCommand: null,
+  details: {
+    port: 7420,
+    conflictingPid: 99,
+    conflictingProcess: "other",
+  },
+};
+
+const UNKNOWN_FIX: HostDoctorIssue = {
+  code: "UNKNOWN_DOCTOR_CODE",
+  severity: "warning",
+  title: "Unknown",
+  message: "An unrecognized repair.",
+  fixAction: "not-a-real-action",
+  terminalCommand: null,
+  details: null,
+};
 
 function healedHandshake(): void {
   recordNegotiatedHostMethods(HOST_ID, [
@@ -269,7 +328,10 @@ function mountFallbackOverview(options: {
   readonly installOutcome: MutationOutcome<InstallVersionOk>;
   readonly rpcCheckCalls: { count: number };
   readonly restartHostIfIdle:
-    (() => Promise<HostRestartRequestResult>) | undefined;
+    | ((input: {
+        readonly expectedHostId: string;
+      }) => Promise<HostRestartRequestResult>)
+    | undefined;
   readonly extraHandshakeMethods: readonly string[] | undefined;
   readonly extra: ReactNode | undefined;
 }): {
@@ -319,7 +381,11 @@ function mountFallbackOverview(options: {
       }),
     ),
     maintenanceInstallVersion: vi.fn(
-      (_input: { readonly version: string; readonly force: boolean }) =>
+      (_input: {
+        readonly version: string;
+        readonly force: boolean;
+        readonly expectedHostId: string;
+      }) =>
         Promise.resolve({
           kind: "dispatched" as const,
           outcome: options.installOutcome,
@@ -333,6 +399,16 @@ function mountFallbackOverview(options: {
     ),
     maintenanceInstallationInfo: vi.fn(() =>
       Promise.resolve(managedInstallationInfo(BRIDGE_INSTALL_VERSION)),
+    ),
+    runDoctorRepairIfIdle: vi.fn(
+      (_input: {
+        readonly repair: DoctorRepairIntent;
+        readonly expectedHostId: string;
+      }) =>
+        Promise.resolve({
+          kind: "dispatched" as const,
+          outcome: { kind: "ok" as const, value: null },
+        } satisfies DoctorRepairDispatch),
     ),
     ...(options.restartHostIfIdle === undefined
       ? {}
@@ -380,7 +456,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       screen.queryByTestId("host-overview-installation-degraded"),
     ).toBeNull();
     await waitFor(() => {
-      expect(management.maintenanceInstallationInfo).toHaveBeenCalled();
+      expect(management.maintenanceInstallationInfo).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
     });
     fireEvent.click(await screen.findByText("Installation details"));
     const installVersion = await screen.findByTestId(
@@ -426,6 +504,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       expect(management.maintenanceInstallVersion).toHaveBeenCalledWith({
         version: BRIDGE_CHECK_VERSION,
         force: false,
+        expectedHostId: HOST_ID,
       });
     });
     expect(management.installVersion).not.toHaveBeenCalled();
@@ -458,6 +537,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       expect(management.maintenanceInstallVersion).toHaveBeenCalledWith({
         version: BRIDGE_CHECK_VERSION,
         force: false,
+        expectedHostId: HOST_ID,
       });
     });
     expect(management.installVersion).not.toHaveBeenCalled();
@@ -486,7 +566,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
 
     await waitFor(() => {
-      expect(management.maintenanceDoctor).toHaveBeenCalled();
+      expect(management.maintenanceDoctor).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
     });
     expect(await screen.findByText("Doctor: no issues detected.")).toBeTruthy();
     fireEvent.click(await screen.findByText(/this connection already answers/));
@@ -529,7 +611,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(dialog).toBeTruthy();
     await waitFor(() => {
-      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
     });
     expect(management.restartHost).not.toHaveBeenCalled();
     const confirm = screen.getByTestId("confirm-action");
@@ -677,7 +761,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
     });
     expect(management.restartHost).not.toHaveBeenCalled();
     expect(fixture.restartCalls()).toBe(0);
@@ -800,7 +886,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
     });
     expect(management.restartHost).not.toHaveBeenCalled();
     expect(fixture.restartCalls()).toBe(0);
@@ -832,7 +920,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
     });
     expect(management.restartHost).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -906,5 +996,340 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     const tail = await screen.findByTestId("host-doctor-log-tail");
     expect(tail.textContent).toContain("rpc-log-line");
     expect(tail.textContent).not.toContain("bridge-line-1");
+    expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
+  });
+
+  it("Install host (HOST_NOT_INSTALLED) dispatches runDoctorRepairIfIdle converge-ready with the captured local id", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [HOST_NOT_INSTALLED],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-HOST_NOT_INSTALLED"),
+    );
+
+    await waitFor(() => {
+      expect(management.runDoctorRepairIfIdle).toHaveBeenCalledWith({
+        repair: "converge-ready",
+        expectedHostId: HOST_ID,
+      });
+    });
+    expect(management.convergeReady).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith("Fix applied");
+  });
+
+  it("Register service dispatches runDoctorRepairIfIdle register-service, not the queueing registerService", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [SERVICE_MISSING],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-LAUNCH_AGENT_MISSING"),
+    );
+
+    await waitFor(() => {
+      expect(management.runDoctorRepairIfIdle).toHaveBeenCalledWith({
+        repair: "register-service",
+        expectedHostId: HOST_ID,
+      });
+    });
+    expect(management.registerService).not.toHaveBeenCalled();
+  });
+
+  it("a lane-busy doctor repair is informational, not an error, and does not converge", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [HOST_NOT_INSTALLED],
+    });
+    vi.mocked(management.runDoctorRepairIfIdle).mockResolvedValue({
+      kind: "lane-busy",
+      message: LANE_BUSY_INSTALL_MESSAGE,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-HOST_NOT_INSTALLED"),
+    );
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+        description: LANE_BUSY_INSTALL_MESSAGE,
+      });
+    });
+    expect(toast.success).not.toHaveBeenCalledWith("Fix applied");
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(management.convergeReady).not.toHaveBeenCalled();
+  });
+
+  it("a host-changed doctor repair is informational and does not converge", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [HOST_NOT_INSTALLED],
+    });
+    vi.mocked(management.runDoctorRepairIfIdle).mockResolvedValue({
+      kind: "host-changed",
+      message: HOST_CHANGED_MESSAGE,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-HOST_NOT_INSTALLED"),
+    );
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+        description: HOST_CHANGED_MESSAGE,
+      });
+    });
+    expect(toast.success).not.toHaveBeenCalledWith("Fix applied");
+    expect(management.convergeReady).not.toHaveBeenCalled();
+  });
+
+  it("a dispatched non-ok doctor repair surfaces as a thrown Fix failed error", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [HOST_NOT_INSTALLED],
+    });
+    vi.mocked(management.runDoctorRepairIfIdle).mockResolvedValue({
+      kind: "dispatched",
+      outcome: { kind: "failed", message: "converge failed" },
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-HOST_NOT_INSTALLED"),
+    );
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+    expect(toast.success).not.toHaveBeenCalledWith("Fix applied");
+    expect(management.convergeReady).not.toHaveBeenCalled();
+  });
+
+  it("host-start on a capability-false local host still uses the page restart, not runDoctorRepairIfIdle", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: () => Promise.resolve({ kind: "restarted" as const }),
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [HOST_PROCESS_DOWN],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-HOST_PROCESS_DOWN"),
+    );
+
+    await waitFor(() => {
+      expect(management.restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: HOST_ID,
+      });
+    });
+    expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
+  });
+
+  it("host-free-port-and-restart keeps the queueing path and does not call runDoctorRepairIfIdle", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [PORT_HELD],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-PORT_HELD_BY_FOREIGN"),
+    );
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(management.freePortAndRestart).toHaveBeenCalledWith({
+        port: 7420,
+        pid: 99,
+        processName: "other",
+      });
+    });
+    expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
+  });
+
+  it("an unknown fix action does not take the refusing doctor-repair path", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [UNKNOWN_FIX],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-UNKNOWN_DOCTOR_CODE"),
+    );
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+    expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
+  });
+
+  it("an HOST_NOT_INSTALLED fix is disabled while a same-key hostRestart is in flight, and a click does not dispatch", async () => {
+    // Discriminator: round 4 only gated the restart pair. Widening to EVERY
+    // bridge-routed repair disables Install host while the page's lifecycle
+    // gate is armed. Red against 8816fab7^ if DoctorFixControl still uses
+    // isBridgeRestart.
+    let releaseExternal: (() => void) | null = null;
+    const externalGate = new Promise<void>((resolve) => {
+      releaseExternal = resolve;
+    });
+    const mutateRef: { current: (() => void) | null } = { current: null };
+    const { management, queryClient } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: () => Promise.resolve({ kind: "restarted" as const }),
+      extraHandshakeMethods: undefined,
+      extra: (
+        <ExternalHostRestartTrigger
+          onReady={(mutate) => {
+            mutateRef.current = mutate;
+          }}
+          mutationFn={async () => {
+            await externalGate;
+            return { kind: "restarted" as const };
+          }}
+        />
+      ),
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [HOST_NOT_INSTALLED],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    const idleFix = await screen.findByTestId(
+      "host-doctor-fix-HOST_NOT_INSTALLED",
+    );
+    expectButtonEnabled(idleFix);
+
+    act(() => {
+      if (mutateRef.current === null) {
+        throw new Error("external restart trigger was not armed");
+      }
+      mutateRef.current();
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.isMutating({
+          mutationKey: runnerMutationKeys.hostRestart(),
+        }),
+      ).toBeGreaterThan(0);
+    });
+
+    const gatedFix = screen.getByTestId("host-doctor-fix-HOST_NOT_INSTALLED");
+    if (!(gatedFix instanceof HTMLButtonElement)) {
+      throw new Error("expected fix button");
+    }
+    expect(gatedFix.disabled).toBe(true);
+    fireEvent.click(gatedFix);
+    expect(management.runDoctorRepairIfIdle).not.toHaveBeenCalled();
+    expect(management.convergeReady).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseExternal?.();
+      await externalGate;
+    });
+    await waitFor(() => {
+      expectButtonEnabled(
+        screen.getByTestId("host-doctor-fix-HOST_NOT_INSTALLED"),
+      );
+    });
   });
 });
