@@ -15,21 +15,33 @@ function resolveTombstonedProfileLabel(
   if (anchor.profileId === null) return null;
   const providerId = providerCliIdForHarness(anchor.harnessId);
   if (providerId === null) return null;
+  // The provider-enumeration gate stays FIRST, ahead of the host check below.
+  // A provider this host has not enumerated (not installed, or `providers.list`
+  // still loading) is not evidence of anything, and speaking here would mean
+  // footers appearing on messages that render nothing today - including for the
+  // whole async window before the query resolves.
   const state = providers.find((p) => p.providerId === providerId);
   if (state === undefined || state.profiles.length === 0) return null;
+  const label = anchor.labelSnapshot ?? "profile";
+  // The anchor's own `hostId` is the ORIGIN marker: a fork/clone copies
+  // non-boundary message bodies VERBATIM, so a carried anchor still names the
+  // host it was minted on rather than the host now rendering it. Every anchor
+  // variant declares `hostId` as a required string (no `.default`), so legacy
+  // anchors carry one too and this never degrades to a guess.
+  //
+  // Checked BEFORE the local profile match, not after, so "minted elsewhere"
+  // is decided structurally rather than resting on ids never colliding across
+  // machines. Behaviour-neutral today - managed ids are `randomUUID()`, and the
+  // one value identical on every host (the reserved `"ambient"` sentinel) never
+  // reaches an anchor, which spells ambient as `null` - but the ordering is
+  // what makes that a property of the code instead of a property of uuids.
+  // Do not "simplify" it back below the match.
+  if (anchor.hostId !== hostId) return { label, removedOnThisHost: false };
   const stillActive = state.profiles.some(
     (p) => p.profileId === anchor.profileId,
   );
   if (stillActive) return null;
-  return {
-    label: anchor.labelSnapshot ?? "profile",
-    // The anchor's own `hostId` is the ORIGIN marker: a fork/clone copies
-    // non-boundary message bodies VERBATIM, so a carried anchor still names
-    // the host it was minted on rather than the host now rendering it. Every
-    // anchor variant declares `hostId` as a required string (no `.default`),
-    // so legacy anchors carry one too and this never degrades to a guess.
-    removedOnThisHost: anchor.hostId === hostId,
-  };
+  return { label, removedOnThisHost: true };
 }
 
 /**

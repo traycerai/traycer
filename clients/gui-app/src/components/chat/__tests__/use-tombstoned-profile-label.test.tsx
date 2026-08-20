@@ -206,13 +206,45 @@ describe("useTombstonedProfileLabel", () => {
     });
   });
 
-  it("stays silent for a foreign anchor whose id happens to exist here (no claim either way)", () => {
+  it("still treats a foreign anchor as foreign when its profile id COLLIDES with a local one", () => {
+    // The only case the host-check-before-match ordering changes, and it is
+    // unreachable in production: managed ids are `randomUUID()`, and the one
+    // value identical across hosts - the reserved `"ambient"` sentinel - never
+    // reaches an anchor (ambient is spelled `null` there). Pinned anyway,
+    // because it is what stops "minted elsewhere" from silently depending on
+    // uuid uniqueness. A collision must not let this host's list speak for
+    // another machine's profile - in EITHER direction: not "(removed)", and
+    // not "still active" either.
     const { result } = renderHook(
       () =>
         useTombstonedProfileLabel(
           claudeAnchor("work-uuid", "Work", OTHER_HOST),
         ),
       { wrapper: wrapper(["ambient", "work-uuid"]) },
+    );
+    expect(result.current).toEqual({ label: "Work", removedOnThisHost: false });
+  });
+
+  it("stays silent for a foreign anchor whose provider this host has not enumerated", () => {
+    // The provider gate still runs FIRST: an uninstalled provider, or a
+    // `providers.list` that has not resolved yet, is not evidence of anything,
+    // and a foreign anchor must not start rendering a footer on the strength
+    // of an empty list.
+    const { result } = renderHook(
+      () =>
+        useTombstonedProfileLabel(
+          claudeAnchor("removed-uuid", "Work", OTHER_HOST),
+        ),
+      {
+        wrapper: ({ children }) => (
+          <TombstonedProfileProvider
+            providers={[{ ...claudeState([]), profiles: [] }]}
+            hostId={THIS_HOST}
+          >
+            {children}
+          </TombstonedProfileProvider>
+        ),
+      },
     );
     expect(result.current).toBeNull();
   });
