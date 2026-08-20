@@ -6359,8 +6359,11 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
 
     // `applyPendingLoginItemRevisionIfIdle` runs OUTSIDE `enqueueMutation` -
     // no mutation is active when its takeover call spawns, so `streamBundled`
-    // captures `spawnedInLane = false`.
-    const refreshPromise = controller.applyPendingLoginItemRevisionIfIdle();
+    // captures `spawnedInLane = false`. That is exactly what the `caller`
+    // argument now names, so this call passes `"outside-lane"`: it is subject
+    // to reverse admission and defers to a mutation that takes the lane.
+    const refreshPromise =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await vi.waitFor(() => {
       if (takeoverEvents.onEvent === null) {
         throw new Error("takeover streamBundled call not reached yet");
