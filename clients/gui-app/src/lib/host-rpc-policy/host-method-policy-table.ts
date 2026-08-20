@@ -572,6 +572,23 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "managedCommand.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.list": { ...LATEST_SCHEDULING, poll: null },
+  "managedCommand.view": { ...LATEST_SCHEDULING, poll: null },
+  "managedCommand.configure": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.restart": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "agent.gui.listHarnesses": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("agent.gui.listHarnesses", {
@@ -697,6 +714,16 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Forking an agent persists a new collaboration record, like agent.create.
   "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Archiving retires the agent record; fifo so a tap is not coalesced away.
+  "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
+  "host.file.read": { ...LATEST_SCHEDULING, poll: null },
+  "host.file.write": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "host.oneOffShell.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",

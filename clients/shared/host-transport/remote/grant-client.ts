@@ -1,4 +1,14 @@
 import { attachGrantResponseSchema } from "@traycer/protocol/host/attach-grant";
+import type {
+  AttachGrant,
+  AttachGrantProvider,
+} from "@traycer/protocol/host-transport/remote/grant";
+
+export type {
+  AttachGrant,
+  AttachGrantProvider,
+  AttachGrantProvision,
+} from "@traycer/protocol/host-transport/remote/grant";
 
 /**
  * Client-leg attach-grant acquisition (Architecture §2, §4b; relay-do README).
@@ -22,13 +32,6 @@ import { attachGrantResponseSchema } from "@traycer/protocol/host/attach-grant";
  */
 
 const GRANT_FETCH_TIMEOUT_MS = 10_000;
-
-/** A minted attach grant ready to present to the relay. */
-export interface AttachGrant {
-  readonly grant: string;
-  /** Grant lifetime in seconds, from T9's `expires_in`. */
-  readonly expiresInSeconds: number;
-}
 
 /**
  * Outcome of an attach-grant mint. Discriminated + structured-clone-safe, so it
@@ -320,27 +323,6 @@ export async function mintAttachGrantViaHttp(
     },
   };
 }
-
-/** What a grant-provider call yielded — the session picks its response by kind. */
-export type AttachGrantProvision =
-  | { readonly kind: "ok"; readonly grant: AttachGrant }
-  /**
-   * Entitlement denial (`plan_restricted`): the account's plan lacks remote
-   * connectivity. The session goes terminal-fatal — backoff cannot fix a plan.
-   */
-  | { readonly kind: "plan-restricted" }
-  /**
-   * Signed out / revoked / transient failure — stay in reconnect backoff.
-   * `detail` says WHICH, in words, for the session's `DialFailureLog`: the
-   * retry cadence is the same for all of them, so this is the only place the
-   * distinction survives. It is also that log's dedup key, so anything the
-   * varies per attempt rides in `context` instead — see
-   * {@link AttachGrantFailure}.
-   */
-  | ({ readonly kind: "unavailable" } & AttachGrantFailure);
-
-/** Injectable grant source the session calls on attach + resume + re-auth. */
-export type AttachGrantProvider = () => Promise<AttachGrantProvision>;
 
 /**
  * Builds an `AttachGrantProvider` bound to a host + bearer source. Every

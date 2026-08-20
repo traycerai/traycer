@@ -1,7 +1,7 @@
 {
   "name": "@traycer/protocol",
   "license": "MIT",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -18,6 +18,13 @@
     "./host/*": "./src/host/*.ts",
     "./host-transport/mux": "./src/host-transport/mux.ts",
     "./host-transport/chunking": "./src/host-transport/chunking.ts",
+    "./host-transport/backoff": "./src/host-transport/backoff.ts",
+    "./host-transport/stream-session": "./src/host-transport/stream-session.ts",
+    "./host-transport/stream-websocket": "./src/host-transport/stream-websocket.ts",
+    "./host-transport/timers": "./src/host-transport/timers.ts",
+    "./host-transport/websocket": "./src/host-transport/websocket.ts",
+    "./host-transport/remote": "./src/host-transport/remote/index.ts",
+    "./host-transport/remote/*": "./src/host-transport/remote/*.ts",
     "./host-transport/__tests__/chunk-reassembler-conformance": "./src/host-transport/__tests__/chunk-reassembler-conformance.ts",
     "./framework": "./src/framework/index.ts",
     "./framework/*": "./src/framework/*.ts",
@@ -90,6 +97,34 @@
       "./host-transport/chunking": {
         "types": "./dist/src/host-transport/chunking.d.ts",
         "import": "./dist/src/host-transport/chunking.js"
+      },
+      "./host-transport/backoff": {
+        "types": "./dist/src/host-transport/backoff.d.ts",
+        "import": "./dist/src/host-transport/backoff.js"
+      },
+      "./host-transport/stream-session": {
+        "types": "./dist/src/host-transport/stream-session.d.ts",
+        "import": "./dist/src/host-transport/stream-session.js"
+      },
+      "./host-transport/stream-websocket": {
+        "types": "./dist/src/host-transport/stream-websocket.d.ts",
+        "import": "./dist/src/host-transport/stream-websocket.js"
+      },
+      "./host-transport/timers": {
+        "types": "./dist/src/host-transport/timers.d.ts",
+        "import": "./dist/src/host-transport/timers.js"
+      },
+      "./host-transport/websocket": {
+        "types": "./dist/src/host-transport/websocket.d.ts",
+        "import": "./dist/src/host-transport/websocket.js"
+      },
+      "./host-transport/remote": {
+        "types": "./dist/src/host-transport/remote/index.d.ts",
+        "import": "./dist/src/host-transport/remote/index.js"
+      },
+      "./host-transport/remote/*": {
+        "types": "./dist/src/host-transport/remote/*.d.ts",
+        "import": "./dist/src/host-transport/remote/*.js"
       },
       "./framework": {
         "types": "./dist/src/framework/index.d.ts",

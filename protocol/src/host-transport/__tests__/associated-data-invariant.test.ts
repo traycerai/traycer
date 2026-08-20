@@ -25,7 +25,7 @@ import {
  * `streamId`, `seq`, `qos`/flags, `json`, `binary`) is folded into the
  * plaintext that gets encrypted whole. Both production channels
  * (`traycer-host/src/transport/remote/noise-responder.ts` and
- * `clients/shared/host-transport/remote/noise-channel.ts`) call
+ * `protocol/src/host-transport/remote/noise-channel.ts`) call
  * `NoiseSession.encrypt`/`decrypt` with an EMPTY associated-data array — that
  * is correct *only* as long as the invariant above holds. This suite pins it:
  *
@@ -136,7 +136,9 @@ const REPRESENTATIVE_MUX_FRAMES: readonly EncodeMuxFrameInput[] = [
 ];
 
 describe("AEAD associated-data invariant: no mux field is externalized without AD", () => {
-  it.each(REPRESENTATIVE_MUX_FRAMES.map((frame, index) => [index, frame] as const))(
+  it.each(
+    REPRESENTATIVE_MUX_FRAMES.map((frame, index) => [index, frame] as const),
+  )(
     "frame #%i: the transport wire frame's only plaintext bytes are [v, counter] — every mux field requires the session key to recover",
     async (_index, frame) => {
       const { initiator, responder } = await establishSessionPair();

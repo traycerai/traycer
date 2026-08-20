@@ -17,6 +17,10 @@ export const RPC_ERROR_CODES = [
   "INCOMPATIBLE",
   "UNAUTHORIZED",
   "FORBIDDEN",
+  // The authenticated principal kind is not permitted to invoke this verb.
+  // Additive and degrade-safe: old peers narrow the unknown code to
+  // RPC_ERROR while preserving the response status and message.
+  "VERB_NOT_ALLOWED",
   "E_HOST_UNSUPPORTED",
   "WORKTREE_BUSY",
   "WORKTREE_REBIND_BLOCKED",

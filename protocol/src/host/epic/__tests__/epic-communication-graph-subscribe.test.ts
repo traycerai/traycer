@@ -7,10 +7,12 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   epicCommunicationGraphEventSchema,
+  epicCommunicationGraphEventSchemaV10,
   epicCommunicationGraphSubscribeClientFrameSchema,
   epicCommunicationGraphSubscribeOpenRequestSchema,
   epicCommunicationGraphSubscribeServerFrameSchema,
   epicCommunicationGraphSubscribeV10,
+  epicCommunicationGraphSubscribeV11,
 } from "@traycer/protocol/host/epic/communication-graph";
 
 /**
@@ -56,7 +58,7 @@ describe("epic.communicationGraph.subscribe@1.0 contract", () => {
     });
     expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
       major: 1,
-      minor: 0,
+      minor: 1,
     });
   });
 
@@ -229,6 +231,29 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
         kind: "artifact_write",
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts host_agent_verb on the 1.1 schema and rejects it on frozen 1.0", () => {
+    const verb = {
+      ...A2A_MESSAGE_EVENT,
+      kind: "host_agent_verb",
+      originKind: "remote_host",
+      originRefId: "origin-host-1",
+    };
+    expect(epicCommunicationGraphEventSchema.safeParse(verb).success).toBe(
+      true,
+    );
+    expect(epicCommunicationGraphEventSchemaV10.safeParse(verb).success).toBe(
+      false,
+    );
+    expect(epicCommunicationGraphSubscribeV11.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
+    });
+    expect(epicCommunicationGraphSubscribeV10.schemaVersion).toEqual({
+      major: 1,
+      minor: 0,
+    });
   });
 });
 

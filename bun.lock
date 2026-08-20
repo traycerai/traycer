@@ -247,7 +247,7 @@
     },
     "protocol": {
       "name": "@traycer/protocol",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@noble/curves": "^2.3.0",
         "async-mutex": "^0.5.0",

@@ -7,6 +7,7 @@ export * from "./diagnostics";
 export * from "./editor";
 export * from "./epic";
 export * from "./git-asset-stream";
+export * from "./host-agent-capabilities";
 export * from "./git-contracts";
 export * from "./git-constants";
 export * from "./git-schemas";

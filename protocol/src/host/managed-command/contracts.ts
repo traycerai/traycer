@@ -25,12 +25,22 @@
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
+  managedCommandConfigureRequestSchema,
+  managedCommandConfigureResponseSchema,
   managedCommandControlRequestSchema,
   managedCommandControlResponseSchema,
+  managedCommandCreateRequestSchema,
+  managedCommandCreateResponseSchema,
   managedCommandDeleteRequestSchema,
   managedCommandDeleteResponseSchema,
   managedCommandDeliverHeldRequestSchema,
   managedCommandDeliverHeldResponseSchema,
+  managedCommandListRequestSchema,
+  managedCommandListResponseSchema,
+  managedCommandRestartRequestSchema,
+  managedCommandRestartResponseSchema,
+  managedCommandViewRequestSchema,
+  managedCommandViewResponseSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { managedCommandSubscribeOutputV10 } from "@traycer/protocol/host/managed-command/subscribe";
 
@@ -60,6 +70,41 @@ export const managedCommandDeleteV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: managedCommandDeleteRequestSchema,
   responseSchema: managedCommandDeleteResponseSchema,
+});
+
+export const managedCommandCreateV10 = defineRpcContract({
+  method: "managedCommand.create",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandCreateRequestSchema,
+  responseSchema: managedCommandCreateResponseSchema,
+});
+
+export const managedCommandListV10 = defineRpcContract({
+  method: "managedCommand.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandListRequestSchema,
+  responseSchema: managedCommandListResponseSchema,
+});
+
+export const managedCommandViewV10 = defineRpcContract({
+  method: "managedCommand.view",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandViewRequestSchema,
+  responseSchema: managedCommandViewResponseSchema,
+});
+
+export const managedCommandConfigureV10 = defineRpcContract({
+  method: "managedCommand.configure",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandConfigureRequestSchema,
+  responseSchema: managedCommandConfigureResponseSchema,
+});
+
+export const managedCommandRestartV10 = defineRpcContract({
+  method: "managedCommand.restart",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandRestartRequestSchema,
+  responseSchema: managedCommandRestartResponseSchema,
 });
 
 /**

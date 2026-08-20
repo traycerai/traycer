@@ -67,6 +67,7 @@ import {
   agentStopV10,
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
+import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
@@ -243,12 +244,23 @@ import {
   diagnosticsLogsTailV10,
 } from "@traycer/protocol/host/diagnostics/contracts";
 import {
+  managedCommandConfigureV10,
+  managedCommandCreateV10,
   managedCommandDeleteV10,
   managedCommandDeliverHeldV10,
+  managedCommandListV10,
+  managedCommandRestartV10,
   managedCommandStartV10,
   managedCommandStopV10,
   managedCommandSubscribeOutputV10,
+  managedCommandViewV10,
 } from "@traycer/protocol/host/managed-command/contracts";
+import {
+  hostFileReadV10,
+  hostFileWriteV10,
+  hostOneOffShellRunV10,
+  hostResolveRepoPathsV10,
+} from "@traycer/protocol/host/host-agent-capabilities";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
@@ -454,7 +466,9 @@ import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-d
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import {
   epicCommunicationGraphSubscribeV10,
+  epicCommunicationGraphSubscribeV11,
   hostCommunicationGraphCloudFeedSubscribeV10,
+  hostCommunicationGraphCloudFeedSubscribeV11,
 } from "@traycer/protocol/host/epic/communication-graph";
 import { hostChatRecordsSubscribeV10 } from "@traycer/protocol/host/epic/chat-records";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
@@ -4910,6 +4924,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "agent.archive": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentArchiveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "phase.migrateToEpic": {
     1: {
       latestMinor: 0,
@@ -6111,6 +6138,71 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "managedCommand.create": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandCreateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.view": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandViewV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandConfigureV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.restart": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandRestartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // Releasing a Stop fence's durable holds. `degrade: unsupported` like its
   // siblings, and the degrade matters more here than for the other three: a
   // host without it is not merely missing a button, it is holding output that
@@ -6124,6 +6216,58 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandDeliverHeldV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.resolveRepoPaths": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostResolveRepoPathsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.file.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.file.write": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileWriteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.oneOffShell.run": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostOneOffShellRunV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -7837,10 +7981,15 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // it to the unary released floor - that list is fail-closed on the name set.
   "epic.communicationGraph.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds host_agent_verb / remote_host. @1.0 stays frozen so a
+      // client that negotiated it never receives those kinds.
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCommunicationGraphSubscribeV10,
+        },
+        1: {
+          contract: epicCommunicationGraphSubscribeV11,
         },
       },
     },
@@ -7853,10 +8002,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // released floor - that list is fail-closed on the name set.
   "host.communicationGraph.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostCommunicationGraphCloudFeedSubscribeV10,
+        },
+        1: {
+          contract: hostCommunicationGraphCloudFeedSubscribeV11,
         },
       },
     },

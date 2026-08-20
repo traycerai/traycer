@@ -55,7 +55,7 @@ describe("host.communicationGraph.subscribe@1.0 contract", () => {
     });
     expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
       major: 1,
-      minor: 0,
+      minor: 1,
     });
   });
 
