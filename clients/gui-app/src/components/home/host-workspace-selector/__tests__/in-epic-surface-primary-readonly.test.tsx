@@ -295,7 +295,7 @@ describe.each(["chat", "terminal-agent"] as const)(
       renderBoundSurface(kind, true);
 
       // Open the folder-rows popover from the collapsed summary.
-      fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+      fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
       const rows = await screen.findAllByTestId("folder-row");
       expect(rows).toHaveLength(2);
 
@@ -303,14 +303,16 @@ describe.each(["chat", "terminal-agent"] as const)(
       expect(screen.getByTestId("folder-primary-pin")).toBeTruthy();
       // ...and the collapsed chip agreed with it (isPrimary, not items[0]).
       expect(
-        screen.getByTestId("workspace-summary-trigger").textContent,
+        screen.getByRole("button", { name: /^beta/ }).textContent,
       ).toContain("beta");
 
       // No atomic set-primary RPC exists for a live binding - the action
       // must be absent on EVERY row of a bound surface.
       expect(screen.queryByTestId("folder-make-primary")).toBeNull();
       // The other row actions are still there (the rows are editable).
-      expect(screen.getAllByTestId("folder-remove").length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByRole("button", { name: /^(?:Move|Remove) / }).length,
+      ).toBeGreaterThan(0);
     });
   },
 );
@@ -328,14 +330,14 @@ it("explains why a terminal agent's host selector is locked", async () => {
 
 it("shows Recent folders in a live chat picker but not a terminal-agent binding", async () => {
   renderBoundSurface("chat", true);
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   expect(
     await screen.findByRole("button", { name: "Recent folders, 1" }),
   ).toBeTruthy();
 
   cleanup();
   renderBoundSurface("terminal-agent", true);
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   expect(
     screen.queryByRole("button", { name: "Recent folders, 1" }),
   ).toBeNull();
@@ -343,7 +345,7 @@ it("shows Recent folders in a live chat picker but not a terminal-agent binding"
 
 it("keeps Recent unavailable until a chat binding snapshot resolves", () => {
   renderBoundSurface("chat", false);
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
 
   expect(
     screen.queryByRole("button", { name: "Recent folders, 1" }),
@@ -353,7 +355,7 @@ it("keeps Recent unavailable until a chat binding snapshot resolves", () => {
 it("adds a Recent folder through the chat owner binding", async () => {
   mutationMocks.addBindingFolder.mockResolvedValue({});
   renderBoundSurface("chat", true);
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Recent folders, 1" }),
   );
@@ -373,8 +375,14 @@ it("adds a Recent folder through the chat owner binding", async () => {
 
 it("removes a chat folder only after moving it to Recent succeeds", async () => {
   renderBoundSurface("chat", true);
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-  fireEvent.click((await screen.findAllByTestId("folder-remove"))[0]);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    (
+      await screen.findAllByRole("button", {
+        name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
+      })
+    )[0],
+  );
 
   await waitFor(() => {
     expect(recentMocks.recordRecentAsync).toHaveBeenCalledWith({
@@ -389,8 +397,14 @@ it("removes a chat folder only after moving it to Recent succeeds", async () => 
   recentMocks.recordRecentAsync.mockRejectedValueOnce(new Error("nope"));
   mutationMocks.removeBindingFolder.mockClear();
   renderBoundSurface("chat", true);
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-  fireEvent.click((await screen.findAllByTestId("folder-remove"))[0]);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    (
+      await screen.findAllByRole("button", {
+        name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
+      })
+    )[0],
+  );
 
   await waitFor(() => {
     expect(recentMocks.recordRecentAsync).toHaveBeenCalledWith({
@@ -429,7 +443,7 @@ it("refuses terminal Update when metadata regresses to unresolved", async () => 
   });
 
   renderBoundSurface("terminal-agent", true);
-  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const update = await screen.findByRole("button", { name: "Update" });
   fireEvent.click(update);
 
