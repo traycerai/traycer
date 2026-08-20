@@ -126,6 +126,28 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: undefined, isLoading: false }),
 }));
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [
+          hostScopeOptionFixture({
+            hostId: "host-test",
+            name: "Test host",
+          }),
+        ],
+        activeHostId: "host-test",
+      }),
+  };
+});
+vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/auth/use-registered-hosts-query")
+  >()),
+  useRegisteredHostsPollLiveness: () => undefined,
+}));
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () => null,
 }));
@@ -223,6 +245,17 @@ describe.each(["chat", "terminal-agent"] as const)(
     });
   },
 );
+
+it("explains why a terminal agent's host selector is locked", async () => {
+  renderBoundSurface("terminal-agent");
+
+  const switcher = screen.getByTestId("composer-host-trigger");
+  expect(switcher instanceof HTMLButtonElement && switcher.disabled).toBe(true);
+  fireEvent.focus(switcher);
+  expect((await screen.findByRole("tooltip")).textContent).toContain(
+    "Terminal host is fixed",
+  );
+});
 
 it("refuses terminal Update when metadata regresses to unresolved", async () => {
   const key = {
