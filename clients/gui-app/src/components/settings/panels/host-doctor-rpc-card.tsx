@@ -101,6 +101,17 @@ export function HostDoctorRpcCard(props: {
   readonly localFixPendingCode: string | null;
 }): ReactNode {
   const { client, hostName } = props;
+  // The bridge reads THIS computer's log, so it may stand in for
+  // `diagnostics.logs.tail` only when the host being shown IS this computer.
+  // Without the local check a remote host that advertises `host.doctor` but
+  // not the independently-optional logs method would render this machine's
+  // log under its name — the misattribution the whole route taxonomy exists
+  // to prevent (see `DoctorSheetSource`). A remote host with no logs method
+  // has no honest source, so the action is withheld rather than answered
+  // wrongly.
+  const logsViaBridge =
+    !props.rpcLogsSupported && props.isLocalMachine && props.hasLocalBridge;
+  const logsServable = props.rpcLogsSupported || logsViaBridge;
   const doctorRun = useHostDoctorRun(client);
   const [report, setReport] = useState<HostDoctorResponse | null>(null);
   const [logTail, setLogTail] = useState<readonly string[] | null>(null);
@@ -244,10 +255,9 @@ export function HostDoctorRpcCard(props: {
           })}
           restartPending={restartMutation.isPending}
           bridgeRestartPending={props.bridgeRestartPending}
+          logsServable={logsServable}
           logsPending={
-            props.rpcLogsSupported
-              ? logsMutation.isPending
-              : props.bridgeLogsPending
+            logsViaBridge ? props.bridgeLogsPending : logsMutation.isPending
           }
           localFixPending={props.localFixPendingCode === issue.code}
           logTail={logTail}
@@ -283,7 +293,7 @@ export function HostDoctorRpcCard(props: {
             );
           }}
           onShowLogs={() => {
-            if (!props.rpcLogsSupported) {
+            if (logsViaBridge) {
               // No `diagnostics.*` on this host. The bridge reads the same
               // file from this machine, so the button keeps its meaning
               // rather than becoming a refusal.
@@ -386,6 +396,8 @@ function DoctorRpcIssueCard(props: {
   readonly route: DoctorFixRoute;
   readonly restartPending: boolean;
   readonly bridgeRestartPending: boolean;
+  /** False when neither the RPC nor the bridge can honestly read this log. */
+  readonly logsServable: boolean;
   readonly logsPending: boolean;
   readonly localFixPending: boolean;
   readonly logTail: readonly string[] | null;
@@ -433,6 +445,7 @@ function DoctorRpcIssueCard(props: {
               route={route}
               restartPending={props.restartPending}
               bridgeRestartPending={props.bridgeRestartPending}
+              logsServable={props.logsServable}
               logsPending={props.logsPending}
               localFixPending={props.localFixPending}
               onRestart={props.onRestart}
@@ -494,6 +507,8 @@ function DoctorFixControl(props: {
   readonly localFixPending: boolean;
   /** True while the page's restart write — or any lifecycle intent — is armed. */
   readonly bridgeRestartPending: boolean;
+  /** False when neither the RPC nor the bridge can honestly read this log. */
+  readonly logsServable: boolean;
   readonly onRestart: () => void;
   readonly onShowLogs: () => void;
   readonly onLocalFix: () => void;
@@ -504,6 +519,10 @@ function DoctorFixControl(props: {
   // Three destinations, and the fix action decides which: showing a log is the
   // one RPC route that is not a restart, so it is asked first.
   const isLogs = issue.fixAction === "host-logs";
+  // A remote host with no `diagnostics.logs.tail` has no honest source for
+  // this action — the bridge would read a different machine's log — so the
+  // button is withheld rather than wired to something that answers wrongly.
+  if (isLogs && !props.logsServable) return null;
   const isRpcRestart = !isLogs && route === "rpc";
   // EVERY bridge-routed repair is a controller LIFECYCLE write, not just the
   // restart pair: `host-install-latest` converges to latest and
