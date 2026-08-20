@@ -115,10 +115,7 @@ export function HostSection(props: HostSectionProps): ReactNode {
       <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
         Host
       </DropdownMenuLabel>
-      <WorkspaceHostSwitcher
-        {...props}
-        surface="field"
-      />
+      <WorkspaceHostSwitcher {...props} surface="field" />
     </section>
   );
 }
