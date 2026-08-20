@@ -94,14 +94,31 @@ async function emittedSelectors(
   );
   const compiler = await compile('@import "tailwindcss";', {
     base: process.cwd(),
-    loadStylesheet: async () => ({
-      path: entry,
-      base: dirname(entry),
-      content: await readFile(entry, "utf8"),
-    }),
+    loadStylesheet: async (id: string, base: string) => {
+      // Called exactly once, for the `@import` above: 4.3.3's `index.css`
+      // INLINES its theme/base/utilities layers rather than `@import`ing the
+      // sibling `theme.css` / `preflight.css` / `utilities.css` of those names.
+      // Refuse any other id by name - a version that splits the entry again
+      // should fail here saying which import went unresolved, rather than
+      // further down as "the utility compiled to nothing".
+      if (id !== "tailwindcss") {
+        throw new Error(`Unexpected stylesheet import ${id} from ${base}`);
+      }
+      return {
+        path: entry,
+        base: dirname(entry),
+        content: await readFile(entry, "utf8"),
+      };
+    },
   });
   const css = compiler.build([...candidates]);
   const selectors = new Map<string, string>();
+  // Tailwind emits ONE FLAT selector per candidate - the ancestor condition is
+  // a prefix on the same line (`:where(:is([data-slot=button]:is(…))) .in-\[…\]`),
+  // never a nested `&` rule - so the line carrying the escaped class IS the
+  // whole discriminating selector. The only nesting in the output is the
+  // `@supports (color: color-mix(…))` fallback inside a declaration block,
+  // which is what the `@` filter drops.
   const rules = css
     .split("\n")
     .flatMap((line) => {
