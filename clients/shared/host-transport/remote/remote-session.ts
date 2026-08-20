@@ -199,6 +199,13 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * legs never happened rather than reporting them as zero-cost.
  */
 interface ReattachMarks {
+  /**
+   * When the link was LOST, not when the redial began - `0` when this connect
+   * follows no loss (the first-ever connect). The two differ by the whole
+   * backoff wait, which is the client's own contribution to the outage and the
+   * single largest term in it at the upper rungs.
+   */
+  lostAt: number;
   startedAt: number;
   attachAckAt: number | null;
   handshakeAt: number | null;
@@ -207,6 +214,7 @@ interface ReattachMarks {
 
 function emptyReattachMarks(): ReattachMarks {
   return {
+    lostAt: 0,
     startedAt: 0,
     attachAckAt: null,
     handshakeAt: null,
@@ -477,6 +485,16 @@ export class RemoteSession<
    * never reports its predecessor's timings.
    */
   private reattachMarks: ReattachMarks = emptyReattachMarks();
+  /**
+   * When the CURRENT outage began, or `0` while a session is healthy.
+   *
+   * Deliberately outside {@link reattachMarks}, which every `beginConnect`
+   * resets: an outage that costs three failed dials is ONE outage to the user,
+   * and re-stamping it per attempt would report only the last attempt's share
+   * of it. Set on the first loss edge, cleared once a reattach has been
+   * reported.
+   */
+  private connectionLostAt = 0;
   private connection: ActiveConnection | null = null;
 
   /**
@@ -1248,7 +1266,11 @@ export class RemoteSession<
     const generation = ++this.connectGeneration;
     this.phase = "connecting";
     this.clearPhaseTimer();
-    this.reattachMarks = { ...emptyReattachMarks(), startedAt: Date.now() };
+    this.reattachMarks = {
+      ...emptyReattachMarks(),
+      lostAt: this.connectionLostAt,
+      startedAt: Date.now(),
+    };
 
     const provision = await this.options.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
@@ -2013,6 +2035,19 @@ export class RemoteSession<
     connection.scheduler.pause();
     this.markStreamsReconnecting();
     this.retractSession();
+    // A detach is a DOWN edge even though the socket survives, so the two
+    // things every other loss edge does through `handleConnectionLost` have to
+    // happen here too - this path does not reach that funnel.
+    //
+    // The probation timer especially: it is a claim about SUSTAINED HEALTH,
+    // and a host that is absent is not healthy. Left armed it would fire mid
+    // detach, reset the ladder to rung 0, and hand the full reconnect that
+    // `onHostAttached` triggers the immediate rung - so a host whose uplink
+    // flaps on a period longer than the probation window gets redialled
+    // immediately every time, which is the exact behaviour the window exists
+    // to prevent.
+    this.clearStableResetTimer();
+    this.noteConnectionLost();
     // `isReady()` includes `hostAttached`, so it is already false here - this
     // is what tells anyone.
     this.syncReadinessLatch();
@@ -2099,6 +2134,7 @@ export class RemoteSession<
     // ladder reset, however close it came. THE host-plane funnel is the right
     // place for this precisely because every loss arrives here.
     this.clearStableResetTimer();
+    this.noteConnectionLost();
     this.dropConnection(cause);
     this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnect();
@@ -2444,20 +2480,46 @@ export class RemoteSession<
       // attached. The first connect's cost is already covered by the dial
       // failure/recovery log; this line exists to explain RECOVERIES.
       this.reattachMarks = emptyReattachMarks();
+      this.connectionLostAt = 0;
       return;
     }
     const now = Date.now();
     const leg = (from: number | null, to: number | null): string =>
       from === null || to === null ? "n/a" : `${to - from}ms`;
+    // Measured from the LOSS, not from the dial. The backoff wait is time the
+    // user spends disconnected exactly like a slow handshake is, and it is the
+    // one leg the client chooses - excluding it let a 30s wait plus a 1s dial
+    // report "reattached in 1s", which made the budget unfalsifiable in the
+    // only direction that mattered. `wait` breaks it out so a long total can
+    // still be read as "we waited" rather than "the network was slow".
+    const lostAt = marks.lostAt === 0 ? null : marks.lostAt;
+    const outageStartedAt = lostAt ?? marks.startedAt;
     console.info(
-      `[remote-session] host=${this.options.hostId} reattached in ${now - marks.startedAt}ms ` +
-        `(grant+dial=${leg(marks.startedAt, marks.attachAckAt)} ` +
+      `[remote-session] host=${this.options.hostId} reattached in ${now - outageStartedAt}ms ` +
+        `(wait=${leg(lostAt, marks.startedAt)} ` +
+        `grant+dial=${leg(marks.startedAt, marks.attachAckAt)} ` +
         `noise=${leg(marks.attachAckAt, marks.handshakeAt)} ` +
         `open=${leg(marks.handshakeAt, marks.openAckAt)} ` +
         `resubscribe=${leg(marks.openAckAt, now)} ` +
         `streams=${this.subscriptions.size})`,
     );
     this.reattachMarks = emptyReattachMarks();
+    this.connectionLostAt = 0;
+  }
+
+  /**
+   * Stamps the start of an outage, once per outage.
+   *
+   * Guarded rather than unconditional: `handleConnectionLost` runs again for
+   * every FAILED redial, and re-stamping there would restart the clock on each
+   * attempt, so a recovery that took three dials would report only the last
+   * one - which is the same understatement this stamp exists to remove.
+   */
+  private noteConnectionLost(): void {
+    if (this.connectionLostAt !== 0) {
+      return;
+    }
+    this.connectionLostAt = Date.now();
   }
 
   private clearStableResetTimer(): void {
@@ -2490,9 +2552,7 @@ export class RemoteSession<
     // both hammer a host that is legitimately down and accelerate the
     // death-streak machinery that reads those attempts.
     const immediate = this.reconnectAttempt === 0 && this.hasReachedReadyOnce;
-    const rung = this.hasReachedReadyOnce
-      ? this.reconnectAttempt - 1
-      : this.reconnectAttempt;
+    const rung = this.reconnectAttempt - this.recoveryRungOffset;
     const delay = immediate
       ? 0
       : backoffFor(
@@ -2509,16 +2569,35 @@ export class RemoteSession<
   }
 
   /**
+   * How far `reconnectAttempt` runs AHEAD of the backoff rung it will be
+   * spent on.
+   *
+   * A session that has reached ready spends its first attempt on the immediate
+   * recovery redial, so the exponential ladder starts one attempt later and
+   * every rung it reaches is `attempt - 1`. A session that has never connected
+   * has no such freebie and its rung IS its attempt.
+   *
+   * Anything that reasons about rungs has to apply this - `scheduleReconnect`
+   * picking a delay forwards, and `raiseReconnectBackoffToMax` solving
+   * backwards for the attempt that yields a given rung. They disagreed before
+   * this existed, and the disagreement was invisible: it produced a working
+   * reconnect at the wrong interval rather than a failure.
+   */
+  private get recoveryRungOffset(): number {
+    return this.hasReachedReadyOnce ? 1 : 0;
+  }
+
+  /**
    * Starts a congestion-triggered reconnect at the capped backoff rung while
    * preserving the ordinary scheduler and its ready-boundary reset.
    */
   private raiseReconnectBackoffToMax(): void {
-    const attemptAtMaxBackoff = Math.ceil(
+    const rungAtMaxBackoff = Math.ceil(
       Math.log2(RECONNECT_MAX_BACKOFF_MS / RECONNECT_INITIAL_BACKOFF_MS),
     );
     this.reconnectAttempt = Math.max(
       this.reconnectAttempt,
-      attemptAtMaxBackoff,
+      rungAtMaxBackoff + this.recoveryRungOffset,
     );
   }
 

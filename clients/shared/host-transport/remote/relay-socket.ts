@@ -90,8 +90,19 @@ export class RelaySocket {
   private pingTimer: IntervalHandle | null = null;
   /** Last time ANY frame arrived from the relay (pong, control, or data). */
   private lastInboundAt: number;
-  /** Last time APPLICATION traffic went out (keepalive pings excluded - see `noteOutbound`). */
-  private lastOutboundAt = 0;
+  /**
+   * Whether application traffic is currently outstanding - explicit state, NOT
+   * a comparison of the two timestamps.
+   *
+   * `lastOutboundAt > lastInboundAt` looks equivalent and is not: `Date.now()`
+   * has millisecond resolution, so a send issued from an inbound frame's own
+   * handler - a stream frame answered by the next request, the commonest shape
+   * on this socket - reads equal, and a strict comparison resolves the tie as
+   * "not awaiting". That parks a genuinely half-open socket on the 60s idle
+   * deadline instead of the 12s detection one, for exactly the traffic pattern
+   * the fast deadline was added to catch.
+   */
+  private awaitingResponse = false;
   /** When the current unanswered-send run began; the fast deadline's origin. */
   private awaitingSince = 0;
   private lastPingSentAt = 0;
@@ -178,7 +189,7 @@ export class RelaySocket {
       }
       const now = Date.now();
       this.lastInboundAt = now;
-      this.lastOutboundAt = 0;
+      this.awaitingResponse = false;
       this.awaitingSince = 0;
       this.lastPingSentAt = now;
       this.startKeepalive();
@@ -269,7 +280,7 @@ export class RelaySocket {
    * one for a backgrounded app that has nothing to say.
    */
   private isAwaitingResponse(): boolean {
-    return this.lastOutboundAt > this.lastInboundAt;
+    return this.awaitingResponse;
   }
 
   /**
@@ -281,16 +292,23 @@ export class RelaySocket {
    * against it would fail a perfectly good socket the instant the user typed.
    */
   private noteOutbound(): void {
-    const now = Date.now();
-    if (!this.isAwaitingResponse()) {
-      this.awaitingSince = now;
+    if (this.awaitingResponse) {
+      return;
     }
-    this.lastOutboundAt = now;
+    this.awaitingResponse = true;
+    this.awaitingSince = Date.now();
   }
 
-  /** ANY inbound frame proves the socket carries traffic, not just a pong. */
+  /**
+   * ANY inbound frame proves the socket carries traffic, not just a pong, and
+   * closes whatever unanswered run was open. Ordering inside `onmessage` is
+   * what makes the tie safe: this runs before the frame is dispatched, so a
+   * send issued from that dispatch re-opens the run under the same clock
+   * reading rather than being swallowed by it.
+   */
   private noteInbound(): void {
     this.lastInboundAt = Date.now();
+    this.awaitingResponse = false;
   }
 
   private startKeepalive(): void {

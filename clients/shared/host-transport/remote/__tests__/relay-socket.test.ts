@@ -231,6 +231,34 @@ describe("RelaySocket adaptive half-open detection", () => {
     expect(handlers.onClose).not.toHaveBeenCalled();
   });
 
+  it("a send in the SAME millisecond as the last inbound frame is still awaiting a reply", () => {
+    // The commonest shape there is: a stream frame arrives and its handler
+    // synchronously issues the next request, so the send and the inbound land
+    // on one `Date.now()` reading. A strict timestamp comparison calls that
+    // "not awaiting" and parks a half-open socket on the 60s idle deadline
+    // rather than the 12s detection one - the tie has to resolve in favour of
+    // the unanswered send, because a send with nothing after it is exactly
+    // what "awaiting" means.
+    const handlers = makeHandlers({});
+    const { socket, stream } = openSocket(handlers);
+
+    stream.emitBinary(new Uint8Array([1]));
+    expect(socket.sendData(new Uint8Array([2]))).toBe(true);
+
+    // Comfortably inside the fast deadline: still healthy, so the assertion
+    // below cannot pass from a socket that failed for some unrelated reason.
+    vi.advanceTimersByTime(RELAY_AWAITING_PONG_TIMEOUT_MS - RELAY_PING_TICK_MS);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    // Past it, with nothing having come back: the fast deadline must fire.
+    // On the 60s idle deadline this socket would still look perfectly fine.
+    vi.advanceTimersByTime(2 * RELAY_PING_TICK_MS);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
+  });
+
   it("a keepalive ping alone does not put the socket into the fast mode", () => {
     const handlers = makeHandlers({});
     const { stream } = openSocket(handlers);

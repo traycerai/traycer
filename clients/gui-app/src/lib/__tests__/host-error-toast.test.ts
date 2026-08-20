@@ -28,6 +28,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 
 function makeError(code: HostRpcError["code"], message: string): HostRpcError {
@@ -405,6 +406,57 @@ describe("transport-class causes never reach a reportable toast", () => {
       .filter((id): id is string => id !== undefined);
     expect(ids).toHaveLength(3);
     expect(new Set(ids).size).toBe(1);
+  });
+
+  function retryableTransportFailure(
+    method: string,
+  ): HostTransportFailureError {
+    return new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Dial failed before the request was sent",
+      requestId: `req-${method}`,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  it("only claims the request didn't go through when the host provably never dispatched it", () => {
+    // `RetryableTransportError` is the pre-send subclass: the request frame
+    // never reached the host, which is exactly what makes it safe to retry a
+    // non-idempotent method. A plain `HostTransportFailureError` is the
+    // AMBIGUOUS post-send drop - the host may well have executed the call and
+    // only the answer was lost - so telling the user it "didn't go through"
+    // invites them to repeat a side effect that already happened. Deleting a
+    // chat twice is the cheap version of that mistake.
+    toastFromHostError(retryableTransportFailure("terminal.create"), "a");
+    toastFromHostError(transportFailure("epic.deleteChat"), "b");
+
+    const messages = vi
+      .mocked(toast)
+      .mock.calls.map((call) => call[0])
+      .filter((message): message is string => typeof message === "string");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain("didn't go through");
+    expect(messages[1]).not.toContain("didn't go through");
+    // Stating the outcome is unknown, not merely declining to state it: a
+    // notice that says nothing about the operation reads as "it failed" too.
+    expect(messages[1]).toMatch(/may or may not have gone through/i);
+  });
+
+  it("keeps the ambiguous notice on its own id so a pre-send notice cannot overwrite it", () => {
+    // One shared id is right for one shared statement. These are two different
+    // statements, and the ambiguous one is the load-bearing one - collapsing it
+    // under a later "that didn't go through" would restore the overclaim by
+    // the back door.
+    toastFromHostError(transportFailure("epic.deleteChat"), "a");
+    toastFromHostError(retryableTransportFailure("terminal.create"), "b");
+
+    const ids = vi
+      .mocked(toast)
+      .mock.calls.map((call) => call[1]?.id)
+      .filter((id): id is string => id !== undefined);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it("stays completely silent for an aborted request", () => {

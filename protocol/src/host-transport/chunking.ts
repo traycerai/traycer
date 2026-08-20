@@ -277,6 +277,22 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
  * (`nextFrame` slices at exactly that bound). A peer claiming otherwise is
  * malformed, and it is rejected the same fail-closed way every other
  * structural violation on this path is.
+ *
+ * The output buffer is deliberately allocated ONE BYTE LARGER than the
+ * declared length, and that byte is what makes the length check a check at all.
+ * `inflateSync` reports the bytes it wrote by returning `out.subarray(0, n)` —
+ * but a write past the end of a `Uint8Array` is silently dropped and
+ * `subarray`'s end index is CLAMPED to the buffer, so sizing `out` at exactly
+ * `plainLength` makes an over-expanding payload report exactly `plainLength`
+ * and pass. That is the bad direction: the tail is gone, nothing complains, and
+ * a truncated body still decodes, so the dispatcher is handed silently
+ * corrupted data. With the spare byte the three cases separate cleanly —
+ * `plainLength` is the only accepted result, a short expansion returns fewer,
+ * and an over-expansion returns `plainLength + 1`.
+ *
+ * The spare byte also means a future `fflate` that returned the whole buffer
+ * instead of a written-length view would reject every compressed frame rather
+ * than silently stop checking — loud, and caught by the tests either way.
  */
 function inflateFramePayload(payload: Uint8Array): Uint8Array {
   if (payload.length < COMPRESSED_PAYLOAD_HEADER_LEN) {
@@ -294,7 +310,7 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
       `compressed frame declares ${plainLength} plaintext bytes, over the ${BULK_CHUNK_SIZE_BYTES}-byte chunk bound`,
     );
   }
-  const out = new Uint8Array(plainLength);
+  const out = new Uint8Array(plainLength + 1);
   let inflated: Uint8Array;
   try {
     inflated = inflateSync(payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN), {
@@ -306,8 +322,15 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
     );
   }
   if (inflated.length !== plainLength) {
+    // "more than" rather than a count: the spare byte proves the payload
+    // over-expanded without measuring by how much, and inventing a figure the
+    // buffer never held would be worse than naming the direction.
+    const actual =
+      inflated.length > plainLength
+        ? `more than ${plainLength}`
+        : `${inflated.length}`;
     throw new MuxFrameDecodeError(
-      `compressed frame inflated to ${inflated.length} bytes, declared ${plainLength}`,
+      `compressed frame inflated to ${actual} bytes, declared ${plainLength}`,
     );
   }
   return inflated;

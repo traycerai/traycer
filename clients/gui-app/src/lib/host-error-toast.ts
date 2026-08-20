@@ -2,6 +2,7 @@ import {
   HostRequestAbortedError,
   HostTransportFailureError,
   isTransientHostRpcFailure,
+  RetryableTransportError,
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
@@ -18,7 +19,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
  * Call this in every mutation hook's `onError` callback.
  */
 /**
- * One stable id for EVERY transport notice, across every call site.
+ * One stable id for every PRE-SEND transport notice, across every call site.
  *
  * Being unable to reach the host is a SESSION-WIDE condition, not a property
  * of whichever mutation happened to be in flight, so a flap that catches five
@@ -27,6 +28,18 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
  * here.
  */
 const TRANSPORT_NOTICE_TOAST_ID = "host-transport-notice";
+
+/**
+ * The ambiguous arm gets its OWN id rather than sharing the one above.
+ *
+ * One id is right for one statement. "The host never saw it" and "the host may
+ * have done it" are two, and the second is the one with consequences - a user
+ * who reads it decides whether to check before repeating a delete. Sharing an
+ * id would let a later pre-send notice replace it with the more reassuring
+ * copy, which is the overclaim this split exists to remove, reintroduced by
+ * the deduplication rather than by the wording. At most two lines per flap.
+ */
+const TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID = "host-transport-notice-unknown";
 
 /**
  * Whether this failure is the transport itself, and therefore says nothing
@@ -79,10 +92,32 @@ function isTransportClassFailure(error: HostRpcError): boolean {
  * like a fence and would not be one - the property is not lexically decidable.
  * The helper test is the real coverage; this paragraph is the rest.
  */
-function transportNoticeToast(): void {
-  toast("Reconnecting to the Traycer host — that didn't go through.", {
-    id: TRANSPORT_NOTICE_TOAST_ID,
-  });
+function transportNoticeToast(error: HostRpcError): void {
+  // The two arms are NOT stylistic variants of one message - they differ on
+  // whether the operation may already have happened.
+  //
+  // `RetryableTransportError` is the pre-send subclass, and its whole reason
+  // for existing is the guarantee that the host never dispatched the request:
+  // either the frame never made it onto the wire, or the host attested it was
+  // still waiting for one. That guarantee is what makes `createRetryingMessenger`
+  // safe to retry a non-idempotent method, and it is equally what makes
+  // "didn't go through" a true statement.
+  //
+  // A plain `HostTransportFailureError` has no such guarantee. It is the
+  // ambiguous post-send drop: the request may have been dispatched, executed,
+  // and had only its RESPONSE lost. Telling that user it did not go through
+  // invites them to do it again - and at ~158 gesture call sites the set of
+  // things being repeated includes deletes, revokes and archives.
+  if (error instanceof RetryableTransportError) {
+    toast("Reconnecting to the Traycer host — that didn't go through.", {
+      id: TRANSPORT_NOTICE_TOAST_ID,
+    });
+    return;
+  }
+  toast(
+    "Reconnecting to the Traycer host — no reply came back, so this may or may not have gone through.",
+    { id: TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID },
+  );
 }
 
 export function toastFromHostError(
@@ -97,7 +132,7 @@ export function toastFromHostError(
   // "couldn't do X" for something they themselves cancelled is no better.
   if (error instanceof HostRequestAbortedError) return;
   if (isTransportClassFailure(error)) {
-    transportNoticeToast();
+    transportNoticeToast(error);
     return;
   }
   const message = hostErrorToastMessage(error, fallback);
@@ -141,7 +176,7 @@ export function toastFromHostErrorWithDetail(
   if (shouldSuppressRecoverableUnauthorized(error)) return;
   if (error instanceof HostRequestAbortedError) return;
   if (isTransportClassFailure(error)) {
-    transportNoticeToast();
+    transportNoticeToast(error);
     return;
   }
   const message = hostErrorToastMessageWithDetail(error, fallback);

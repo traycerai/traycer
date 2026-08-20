@@ -483,4 +483,64 @@ describe("body compression round-trip (T5)", () => {
       expect(() => reassembler.accept(frame)).toThrow(MuxFrameDecodeError);
     });
   });
+
+  /**
+   * The declared `plainLen` prefix is only a real check if it is compared
+   * against the bytes the inflater ACTUALLY produced. Both directions are
+   * pinned here because they fail differently and only one of them was ever
+   * caught: an over-declaring payload ends short and is rejected on length,
+   * while an under-declaring one silently loses its tail — the inflater drops
+   * the writes that fall past the output buffer and reports a count clamped to
+   * that buffer, so a corrupt body sails through and is DELIVERED.
+   *
+   * A valid encoded body is used as the plaintext rather than loose bytes so
+   * the failure is the one that matters: a truncated body still decodes, so
+   * without this check the receiver hands its dispatcher a message whose binary
+   * section is quietly one byte short of what the sender wrote.
+   */
+  describe("declared plaintext length vs the ACTUAL inflated size", () => {
+    const plainBody = encodeMuxMessageBody(
+      null,
+      new Uint8Array(8192).fill(0x2a),
+    );
+
+    function compressedFrame(
+      streamId: number,
+      declaredPlainLength: number,
+    ): MuxFrame {
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, declaredPlainLength);
+      return decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(
+            header,
+            deflateSync(plainBody, { level: 1 }),
+          ),
+        }),
+      );
+    }
+
+    it("rejects a payload that inflates to MORE bytes than it declared, rather than delivering the truncated prefix", () => {
+      const reassembler = new ChunkReassembler(undefined);
+      expect(() =>
+        reassembler.accept(compressedFrame(11, plainBody.length - 1)),
+      ).toThrow(MuxFrameDecodeError);
+    });
+
+    it("rejects a payload that inflates to FEWER bytes than it declared", () => {
+      const reassembler = new ChunkReassembler(undefined);
+      expect(() =>
+        reassembler.accept(compressedFrame(12, plainBody.length + 1)),
+      ).toThrow(MuxFrameDecodeError);
+    });
+  });
 });

@@ -1121,6 +1121,14 @@ describe("RemoteSession relay policy kills", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
+        // MUST clear before the kill. The ready boundary arms the ladder
+        // probation timer at RECONNECT_STABLE_RESET_MS, which is the same
+        // 30_000 as RECONNECT_MAX_BACKOFF_MS - so without this the assertion
+        // below is satisfied by that timer no matter what the backoff
+        // scheduled, and it passed for months against a redial that was
+        // actually armed at 16s.
+        setTimeoutSpy.mockClear();
+
         relay.sendRelayKill(controlType, "policy_violation");
 
         expect(session.isReady()).toBe(false);
@@ -1188,6 +1196,11 @@ describe("RemoteSession relay policy kills", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // Same constant collision as the arm above - clear, or the cap
+        // assertion is answered by the probation timer rather than by the
+        // redial this test is about.
+        setTimeoutSpy.mockClear();
 
         relay.sendRelayKill(controlType, "future_reason");
 
@@ -1300,6 +1313,135 @@ describe("RemoteSession availability-recovered evidence", () => {
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession reconnect ladder accounting", () => {
+  // `RECONNECT_STABLE_RESET_MS` and `RECONNECT_MAX_BACKOFF_MS` are BOTH
+  // 30_000, and the ready boundary arms the former. Any assertion that "the
+  // backoff was the cap" which does not first clear the spy is therefore
+  // satisfied by the probation timer regardless of what the backoff actually
+  // scheduled - which is why the arms below clear before acting.
+
+  it(
+    "cancels the ladder-reset probation timer on the host_detached edge",
+    async () => {
+      // `host_detached` does NOT run through `handleConnectionLost`, so it is
+      // the one loss edge that never reached the funnel's
+      // `clearStableResetTimer`. Left running, the probation timer counts a
+      // host that is ABSENT as sustained health and resets `reconnectAttempt`
+      // to 0 - so the full reconnect that `host_attached` then triggers is
+      // handed the immediate rung, which is precisely the flapping-host
+      // hammering the probation window exists to prevent.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = buildSession(relay, lease, null);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // Premise: exactly one probation timer is armed, at the ready
+        // boundary. If this ever picks up a second 30s timer the handle
+        // assertion below would be testing the wrong one.
+        const armed = setTimeoutSpy.mock.results
+          .filter(
+            (_result, index) =>
+              setTimeoutSpy.mock.calls[index][1] === RECONNECT_STABLE_RESET_MS,
+          )
+          .map((result) => result.value);
+        expect(armed).toHaveLength(1);
+
+        clearTimeoutSpy.mockClear();
+        relay.sendHostAttachment("host_detached");
+
+        expect(clearTimeoutSpy).toHaveBeenCalledWith(armed[0]);
+      } finally {
+        session.close();
+        setTimeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a congestion kill after the session reached ready redials at the full cap, not one rung under it",
+    async () => {
+      // `raiseReconnectBackoffToMax` solves for the ATTEMPT whose backoff is
+      // the cap, but post-ready `scheduleReconnect` reads rung `attempt - 1`
+      // (rung 0 is the immediate recovery redial). Ignoring that offset lands
+      // one rung short - 16s against a promised 30s - so a relay
+      // `policy_violation`, which is a congestion signal, redials an already
+      // overloaded relay at half the interval it claims to.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession(
+        buildSessionOptions(relay, lease, null),
+      );
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        setTimeoutSpy.mockClear();
+
+        relay.sendRelayKill("killed", "policy_violation");
+
+        const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+        expect(delays).toContain(RECONNECT_MAX_BACKOFF_MS);
+        // The one-rung-short value, named rather than written as 16_000 so it
+        // tracks the constants if they ever move.
+        expect(delays).not.toContain(RECONNECT_MAX_BACKOFF_MS / 2);
+      } finally {
+        session.close();
+        setTimeoutSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "reports reattach duration from the moment the link was lost, including the backoff wait",
+    async () => {
+      // The clock used to start at `beginConnect`, so the backoff the client
+      // imposed on ITSELF was excluded: a 1s wait plus a 5ms dial logged
+      // "reattached in 5ms" against 1005ms of real user downtime, and the
+      // budget the line exists to make falsifiable could not be checked.
+      //
+      // Two drops, because the FIRST post-ready drop takes the immediate rung
+      // (0ms) and would leave nothing to exclude. The second pays rung 0 of
+      // the ladder, `RECONNECT_INITIAL_BACKOFF_MS`, which is what must show up
+      // in the total.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = buildSession(relay, lease, null);
+      const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        relay.sendRelayKill("killed", "host_gone");
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        infoSpy.mockClear();
+        relay.sendRelayKill("killed", "host_gone");
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const line = infoSpy.mock.calls
+          .map((call) => String(call[0]))
+          .find((text) => text.includes("reattached in"));
+        expect(line).toBeDefined();
+        const total = Number(/reattached in (\d+)ms/.exec(line ?? "")?.[1]);
+        const wait = Number(/wait=(\d+)ms/.exec(line ?? "")?.[1]);
+        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+        expect(total).toBeGreaterThanOrEqual(wait);
+      } finally {
+        session.close();
+        infoSpy.mockRestore();
       }
     },
     TEST_BUDGET_MS,
