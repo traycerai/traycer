@@ -187,6 +187,24 @@ function SelectLabel({
   );
 }
 
+/**
+ * An item owns its coarse-pointer target through its own height
+ * (`pointer-coarse:min-h-11`), not through the invisible `::after` slop the
+ * `[data-*-touch-scope]` files give buttons and select TRIGGERS. Either half of
+ * the reason decides it alone:
+ *
+ * - `SelectContent` renders through `SelectPrimitive.Portal`, so an item is
+ *   never a descendant of the surface that opened it. A scope attribute cannot
+ *   reach it, and a rule written as if it could is silently dead - which is how
+ *   a trigger ends up with a larger hit area than the rows it opens.
+ * - Items stack flush, so slop that overhangs by design would reach into the
+ *   neighbouring row and hand it the tap. `mobile-shell-touch-targets.css`
+ *   makes the same call for `command-item`, for the same geometry.
+ *
+ * The row grows on touch only; `items-center` keeps the label and the check
+ * indicator centred in whatever height that yields, and pointer devices keep
+ * the dense list.
+ */
 function SelectItem({
   className,
   children,
@@ -196,7 +214,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className,
       )}
       {...props}

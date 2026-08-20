@@ -116,6 +116,15 @@ Supporting pieces, all viewport-agnostic where possible:
   switch/button/select-trigger primitives to >=44px on coarse-pointer devices
   without changing any visual size - settings-only, the shared primitives in
   `src/components/ui/` are untouched.
+  - The scope reaches only what the settings subtree CONTAINS, so the rows
+    inside an open menu are out of its range by construction: Radix portals
+    popover content to the body. A control the scope enlarges can therefore
+    open a list it cannot, which is how the Providers `Select` came to have a
+    44px trigger over 28px rows. Anything living in a portal owns its own
+    target instead, at the primitive: `pointer-coarse:min-h-11` on
+    `ui/select.tsx`'s `SelectItem` and on all four of `ui/dropdown-menu.tsx`'s
+    row types (item, checkbox, radio, sub-trigger - keep them in step). Reach
+    for a scope rule only for a control that renders in place.
 
 ## Key Files
 
