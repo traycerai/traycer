@@ -1,9 +1,34 @@
 import { createContext, use } from "react";
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schemas";
 
+/**
+ * What a session anchor's profile snapshot is worth saying about, once the
+ * anchor's ORIGIN host has been compared against the host whose
+ * `providers.list` produced the verdict.
+ *
+ * The two arms exist because "no matching row in this host's providers.list"
+ * answers two different questions, and only one of them is an accusation:
+ *
+ * - `removedOnThisHost: true` - the anchor was minted on THIS host, so this
+ *   host's own list is authoritative evidence: the profile was genuinely
+ *   deleted here. History renders "Ran on <label> (removed)".
+ * - `removedOnThisHost: false` - the anchor was minted somewhere else (a fork
+ *   or clone carries message bodies verbatim, so a carried anchor still names
+ *   its origin host). Profile ids are host-local: they name a managed config
+ *   dir on one machine, so an id from another machine can never match here and
+ *   its absence proves nothing. The provenance is still worth keeping - which
+ *   account a past turn ran on is useful - so history renders "Ran on <label>"
+ *   with no removal claim.
+ */
+export type TombstonedProfileVerdict = {
+  /** `labelSnapshot`, or a generic `"profile"` when the snapshot has none. */
+  readonly label: string;
+  readonly removedOnThisHost: boolean;
+};
+
 export type TombstonedProfileResolver = (
   anchor: ChatSessionAnchor,
-) => string | null;
+) => TombstonedProfileVerdict | null;
 
 // Inert by default: nothing renders a tombstone until a real provider (see
 // `TombstonedProfileProvider`) is mounted with live `providers.list` data.
@@ -19,7 +44,9 @@ export const TombstonedProfileContext =
  * artifacts" - `profileId` + `labelSnapshot`, never email). This resolves
  * whether that profile is STILL active on the provider today, so history can
  * render "ran on <label> (removed)" for a since-tombstoned/removed profile
- * without ever mutating the anchor itself.
+ * without ever mutating the anchor itself - and, for an anchor carried here
+ * from ANOTHER host, renders the provenance without the removal claim (see
+ * {@link TombstonedProfileVerdict}).
  *
  * Returns `null` for every case with nothing to show: no anchor, no
  * `TombstonedProfileProvider` mounted (context default), the ambient login
@@ -27,7 +54,7 @@ export const TombstonedProfileContext =
  */
 export function useTombstonedProfileLabel(
   sessionAnchor: ChatSessionAnchor | null,
-): string | null {
+): TombstonedProfileVerdict | null {
   const resolve = use(TombstonedProfileContext);
   if (sessionAnchor === null) return null;
   return resolve(sessionAnchor);

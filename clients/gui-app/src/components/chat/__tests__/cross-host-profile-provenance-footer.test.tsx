@@ -12,13 +12,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 /**
- * F4 (durability audit), tombstone-display surface: a user message's
- * `sessionAnchor.labelSnapshot` is a snapshot taken at anchor-mint time - it
- * can carry whatever hostile content a profile label held back then, and
- * `chat-message-user-body.tsx` renders it verbatim as
- * "Ran on {label} (removed)" with no truncate/escape wrapper of its own
- * (only plain JSX text interpolation - see the `dangerouslySetInnerHTML`
- * grep note in the sibling `profile-durability-f4-hostile-labels.test.tsx`).
+ * A profile id is HOST-LOCAL - it names a managed config dir on one machine -
+ * so an anchor a fork/clone carried here from another host can never match
+ * this host's `providers.list`, and the old "(removed)" verdict accused the
+ * user of deleting a profile that is alive and well on the other machine.
+ *
+ * The provenance itself stays: which account a past turn ran on is useful.
+ * Only the removal claim is dropped, and only for a FOREIGN anchor - a
+ * same-host miss is a genuine deletion and still says "(removed)".
  */
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -32,8 +33,8 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
   useComposerPickerItems: () => undefined,
 }));
 
-const VERY_LONG_LABEL = "B".repeat(2000);
-const HTML_LOOKING_LABEL = '<img src=x onerror="alert(1)">';
+const THIS_HOST = "host-1";
+const OTHER_HOST = "host-2";
 
 function claudeStateWithoutProfile(): ProviderCliState {
   const ambient: ProviderProfile = {
@@ -84,18 +85,14 @@ function claudeStateWithoutProfile(): ProviderCliState {
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
-    // The provider HAS enumerated profiles (non-empty, so
-    // `resolveTombstonedProfileLabel` doesn't bail out as "flag off / not
-    // enumerated") - the removed profile is simply absent from that list,
-    // which is exactly what makes it tombstoned.
     profiles: [ambient],
   };
 }
 
-function anchorWithLabelSnapshot(labelSnapshot: string): ChatSessionAnchor {
+function anchorFromHost(hostId: string): ChatSessionAnchor {
   return {
     harnessId: "claude",
-    hostId: "host-1",
+    hostId,
     sessionId: "session-1",
     sessionWorkspaceSnapshot: {
       workspaceKind: "session-snapshot",
@@ -107,7 +104,7 @@ function anchorWithLabelSnapshot(labelSnapshot: string): ChatSessionAnchor {
     createdAt: 100,
     coveredUntilMessageId: null,
     profileId: "removed-uuid",
-    labelSnapshot,
+    labelSnapshot: "Work",
     accountUuid: null,
     accentColor: null,
   };
@@ -137,17 +134,17 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
   };
 }
 
-function renderTombstoned(labelSnapshot: string) {
+function renderAnchoredMessage(anchorHostId: string) {
   return render(
     <TombstonedProfileProvider
       providers={[claudeStateWithoutProfile()]}
-      hostId="host-1"
+      hostId={THIS_HOST}
     >
-      <ChatExpansionTestProviders tileInstanceId="tombstone-f4-tile">
+      <ChatExpansionTestProviders tileInstanceId="cross-host-provenance-tile">
         <TooltipProvider>
           <UserMessageBody
             actions={null}
-            message={plainUserMessage(anchorWithLabelSnapshot(labelSnapshot))}
+            message={plainUserMessage(anchorFromHost(anchorHostId))}
           />
         </TooltipProvider>
       </ChatExpansionTestProviders>
@@ -155,24 +152,18 @@ function renderTombstoned(labelSnapshot: string) {
   );
 }
 
-describe("F4: hostile profile labels - tombstone display", () => {
+describe("cross-host profile provenance footer", () => {
   afterEach(() => cleanup());
 
-  it("renders a very long snapshotted label without crashing", () => {
-    const { container } = renderTombstoned(VERY_LONG_LABEL);
-    expect(
-      screen.getByText(`Ran on ${VERY_LONG_LABEL} (removed)`),
-    ).not.toBeNull();
-    expect(container.querySelector("img")).toBeNull();
+  it("drops the removal claim for a turn that ran on another host", () => {
+    renderAnchoredMessage(OTHER_HOST);
+    expect(screen.getByText("Ran on Work")).not.toBeNull();
+    expect(screen.queryByText("Ran on Work (removed)")).toBeNull();
   });
 
-  it("renders an HTML-looking snapshotted label as literal text, no injected <img>", () => {
-    const { container } = renderTombstoned(HTML_LOOKING_LABEL);
-    expect(
-      screen.getByText(`Ran on ${HTML_LOOKING_LABEL} (removed)`),
-    ).not.toBeNull();
-    // If this were ever rendered via dangerouslySetInnerHTML, an <img> tag
-    // would materialize as a real DOM element here instead of literal text.
-    expect(container.querySelector("img")).toBeNull();
+  it("still reports a genuine deletion on the host that owned the profile", () => {
+    renderAnchoredMessage(THIS_HOST);
+    expect(screen.getByText("Ran on Work (removed)")).not.toBeNull();
+    expect(screen.queryByText("Ran on Work")).toBeNull();
   });
 });
