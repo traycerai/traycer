@@ -27,6 +27,8 @@ import type {
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
   DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
   DoctorRepairIntent,
   MutationOutcome,
   ServiceRegistrationOk,
@@ -106,6 +108,10 @@ export interface HostManagementBridgeSurface {
   restartHostIfIdle(input: {
     readonly expectedHostId: string;
   }): Promise<HostRestartRequestResult>;
+  runDoctorRepairQueued(input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }): Promise<QueuedDoctorRepairResult>;
   runDoctorRepairIfIdle(input: {
     readonly repair: DoctorRepairIntent;
     readonly expectedHostId: string;
@@ -227,6 +233,11 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestartIfIdle, {
         expectedHostId,
       }) as Promise<HostRestartRequestResult>,
+    runDoctorRepairQueued: ({ repair, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairQueued, {
+        repair,
+        expectedHostId,
+      }) as Promise<QueuedDoctorRepairResult>,
     runDoctorRepairIfIdle: ({ repair, expectedHostId }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairIfIdle, {
         repair,

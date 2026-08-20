@@ -118,6 +118,7 @@ function makeHostManagement(kind: MutationKind | null): IHostManagement {
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
     freePortAndRestart: (input) => Promise.resolve(input),
+    runDoctorRepairQueued: () => Promise.resolve({ kind: "applied" as const }),
     freePortAndRestartIfIdle: () =>
       Promise.resolve({
         kind: "dispatched" as const,

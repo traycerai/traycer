@@ -274,6 +274,7 @@ export const RunnerHostInvoke = {
   traycerFreePortAndRestart: "runnerHost:traycer:freePortAndRestart",
   traycerFreePortAndRestartIfIdle:
     "runnerHost:traycer:freePortAndRestartIfIdle",
+  traycerDoctorRepairQueued: "runnerHost:traycer:doctorRepairQueued",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
   // The `maintenance:*` channels answer the v1.2.0 host maintenance RPCs for
   // the GUI's local fallback (a local host ≤ 1.1.11 negotiated the family

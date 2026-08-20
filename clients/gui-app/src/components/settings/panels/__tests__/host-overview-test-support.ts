@@ -314,6 +314,9 @@ export function buildOverviewManagement(
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
     freePortAndRestartIfIdle: vi.fn((_input) =>
       Promise.resolve({
         kind: "dispatched" as const,

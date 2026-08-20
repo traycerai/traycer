@@ -90,6 +90,9 @@ function makeManagement(overrides: Overrides): IHostManagement {
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
     freePortAndRestartIfIdle: vi.fn(() =>
       Promise.resolve({
         kind: "dispatched" as const,

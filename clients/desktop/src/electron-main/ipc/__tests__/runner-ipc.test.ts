@@ -777,6 +777,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerMaintenanceInstallationInfo,
         RunnerHostInvoke.traycerMaintenanceInstallVersion,
         RunnerHostInvoke.traycerHostRestartIfIdle,
+        RunnerHostInvoke.traycerDoctorRepairQueued,
         RunnerHostInvoke.traycerDoctorRepairIfIdle,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
         // which is now invoked from `RunnerIpcBridge.install()` rather than

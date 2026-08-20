@@ -177,6 +177,9 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
     freePortAndRestartIfIdle: vi.fn(() =>
       Promise.resolve({
         kind: "dispatched" as const,

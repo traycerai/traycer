@@ -22,6 +22,8 @@ import type {
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
   DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
   HostRestartRequestResult,
   MutationKind,
   FreePortAndRestartInput,
@@ -1192,6 +1194,52 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         force,
       );
       return { kind: "dispatched", outcome };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerDoctorRepairQueued,
+    async (_event, raw: unknown): Promise<QueuedDoctorRepairResult> => {
+      const repair = optionalString(raw, "repair");
+      if (
+        repair !== "converge-ready" &&
+        repair !== "register-service" &&
+        repair !== "restart"
+      ) {
+        throw new Error(`Unknown doctor repair: ${String(repair)}`);
+      }
+      // The recovery console's route. It QUEUES deliberately — see
+      // `QueuedDoctorRepair` — so there is no `lifecycleAdmissionBlock` test
+      // here, and that is the ONLY thing it gives up. Identity is still
+      // decided before anything is enqueued: this console can outlive the host
+      // it names, and a queued repair that lands on a replacement is a write
+      // nobody asked for.
+      const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "declined", message: identity.message };
+      }
+      if (repair === "restart") {
+        // The host's own refusal (busy work, removed-by-user, lock
+        // contention) is informational, and `restartRequestResultFromOutcome`
+        // is the one place that taxonomy lives.
+        const result = restartRequestResultFromOutcome(
+          await bridge.options.hostController.respawn(),
+        );
+        return result.kind === "declined"
+          ? { kind: "declined", message: result.message }
+          : { kind: "applied" };
+      }
+      // Anything else that stopped this repair is a genuine failure and
+      // rejects, matching what the renderer did when it called the unfenced
+      // methods directly. Branched rather than sharing one `okOrThrow` call:
+      // the two intents resolve DIFFERENT ok-value types.
+      if (repair === "converge-ready") {
+        okOrThrow(await bridge.options.hostController.convergeReady(false));
+      } else {
+        okOrThrow(await bridge.options.hostController.registerService());
+      }
+      return { kind: "applied" };
     },
   );
 

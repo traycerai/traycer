@@ -551,6 +551,7 @@ function buildFakeBridge(
         includePreReleases: false,
       }),
       freePortAndRestart: async (input) => input,
+      runDoctorRepairQueued: async () => ({ kind: "applied" as const }),
       freePortAndRestartIfIdle: async () => ({
         kind: "dispatched",
         outcome: { kind: "ok", value: null },

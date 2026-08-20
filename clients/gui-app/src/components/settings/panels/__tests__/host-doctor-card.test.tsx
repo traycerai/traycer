@@ -14,6 +14,8 @@ import type {
   HostDoctorIssue,
   HostDoctorReport,
   HostRestartRequestResult,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
   FreePortAndRestartInput,
   IHostManagement,
   IRunnerHost,
@@ -37,6 +39,10 @@ interface ManagementOverrides {
     readonly expectedHostId: string;
   }) => Promise<HostDoctorReport>;
   readonly restartHost?: () => Promise<HostRestartRequestResult>;
+  readonly runDoctorRepairQueued?: (input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }) => Promise<QueuedDoctorRepairResult>;
   readonly freePortAndRestart?: (
     input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ) => Promise<FreePortAndRestartInput>;
@@ -69,6 +75,9 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     registryCheck: vi.fn(notImplemented("registryCheck")),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued:
+      overrides.runDoctorRepairQueued ??
+      vi.fn(() => Promise.resolve({ kind: "applied" as const })),
     freePortAndRestartIfIdle: vi.fn((_input) =>
       Promise.resolve({
         kind: "dispatched" as const,
@@ -376,9 +385,12 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     expect(screen.getByRole("button", { name: /Restart host/i })).toBeTruthy();
   });
 
-  it("calls management.restartHost() when the fix button is clicked", async () => {
+  it("routes the restart fix through the identity-fenced queued repair, not the unfenced restartHost", async () => {
     const restartHost = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
     );
     const management = makeManagement({
       runDoctor: () =>
@@ -387,6 +399,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
           ranAt: "2026-05-15T00:00:00Z",
         }),
       restartHost,
+      runDoctorRepairQueued,
     });
     renderCard(makeHostWithManagement(management));
 
@@ -396,8 +409,15 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     fireEvent.click(button);
 
     await waitFor(() => {
-      expect(restartHost).toHaveBeenCalledTimes(1);
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "restart",
+        expectedHostId: "local-host",
+      });
     });
+    // The console keeps QUEUEING semantics, but it may no longer reach the
+    // app-wide method that carries no host id: this console can outlive the
+    // host it opened on, and that call would kill whichever host is here now.
+    expect(restartHost).not.toHaveBeenCalled();
   });
 
   it("renders an error arm when the report read fails, not no issues detected", async () => {

@@ -42,6 +42,8 @@ export type {
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
   DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
   DoctorRepairIntent,
   MutationKind,
   MutationLaneStatus,

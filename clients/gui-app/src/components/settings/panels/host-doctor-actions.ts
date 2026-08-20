@@ -65,45 +65,46 @@ export async function runFixAction(
   management: IHostManagement,
   issue: HostDoctorIssue,
   /**
-   * The local host these fixes are for. The log read and the free-port repair
-   * both carry it to main; the two lifecycle repairs reach their own fenced
-   * dispatch (`runDoctorRepairIfIdle`) before they get here. Threaded as a
-   * parameter rather than at the individual calls so a fix added to this
-   * switch cannot reach the bridge without one.
+   * The local host these fixes are for. EVERY arm below now carries it: the
+   * log read, the free-port repair, and the three lifecycle repairs via
+   * `runDoctorRepairQueued`. There is deliberately no unfenced arm left, so a
+   * fix added to this switch cannot reach the bridge without naming a host.
    *
-   * This is the QUEUEING route — the down-host recovery console. A Doctor
-   * sheet someone is watching sends free-port through
-   * `freePortAndRestartIfIdle` instead, which also refuses on a busy lane.
+   * This is the QUEUEING route — the down-host recovery console, which must
+   * never learn to refuse. A Doctor sheet someone is WATCHING sends the same
+   * repairs through the `*IfIdle` twins, which additionally refuse on a busy
+   * lane.
    */
   expectedHostId: string,
 ): Promise<FixActionResult> {
   switch (issue.fixAction) {
-    case "host-install-latest": {
+    // The three lifecycle repairs go through ONE identity-fenced, queueing
+    // dispatch rather than the app-wide `convergeReady` / `registerService` /
+    // `restartHost` methods they used to call. Those carry no host id, so this
+    // console - which can outlive the host it is recovering - could aim an
+    // install, a service cycle or a kill at a replacement. Queueing is kept;
+    // only the "which host" question moved into main. `QueuedDoctorRepairResult`
+    // is already this function's own result shape, declined arm included.
+    case "host-install-latest":
       // No "install latest" intent survives the two-lane cutover - the
       // idempotent-converge intent (`convergeReady`) subsumes it: it
       // installs/registers/starts the host when reachable, which is exactly
       // what this Doctor issue means.
-      const outcome = await management.convergeReady(false);
-      if (outcome.kind !== "ok") {
-        throw new Error(outcome.message);
-      }
-      return { kind: "applied" };
-    }
-    case "service-install": {
-      const outcome = await management.registerService();
-      if (outcome.kind !== "ok") {
-        throw new Error(outcome.message);
-      }
-      return { kind: "applied" };
-    }
+      return management.runDoctorRepairQueued({
+        repair: "converge-ready",
+        expectedHostId,
+      });
+    case "service-install":
+      return management.runDoctorRepairQueued({
+        repair: "register-service",
+        expectedHostId,
+      });
     case "host-start":
-    case "host-restart": {
-      const result = await management.restartHost();
-      if (result.kind === "declined") {
-        return { kind: "declined", message: result.message };
-      }
-      return { kind: "applied" };
-    }
+    case "host-restart":
+      return management.runDoctorRepairQueued({
+        repair: "restart",
+        expectedHostId,
+      });
     case "host-logs":
       await management.getHostLogs({ tailLines: 200, expectedHostId });
       return { kind: "applied" };

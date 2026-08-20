@@ -22,6 +22,8 @@ import type {
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
   DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
   DoctorRepairIntent,
   MutationOutcome,
   NotificationFeedSource,
@@ -332,6 +334,10 @@ export interface DesktopHostManagementBridge {
   restartHostIfIdle(input: {
     readonly expectedHostId: string;
   }): Promise<HostRestartRequestResult>;
+  runDoctorRepairQueued(input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }): Promise<QueuedDoctorRepairResult>;
   runDoctorRepairIfIdle(input: {
     readonly repair: DoctorRepairIntent;
     readonly expectedHostId: string;
@@ -818,6 +824,8 @@ export class DesktopRunnerHost implements IRunnerHost {
       maintenanceInstallVersion: (input) =>
         managementBridge.maintenanceInstallVersion(input),
       restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
+      runDoctorRepairQueued: (input) =>
+        managementBridge.runDoctorRepairQueued(input),
       runDoctorRepairIfIdle: (input) =>
         managementBridge.runDoctorRepairIfIdle(input),
       getHostName: () => managementBridge.getHostName(),

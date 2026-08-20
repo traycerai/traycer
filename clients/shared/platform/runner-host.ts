@@ -1496,6 +1496,31 @@ export type DoctorRepairIntent = "converge-ready" | "register-service";
  * enqueued — the caller renders the message as information, the same way a
  * host's own refusal is rendered.
  */
+/**
+ * The recovery console's repairs, which QUEUE rather than refusing.
+ *
+ * Same four fix actions the watched sheet sends through
+ * `runDoctorRepairIfIdle`, minus the admission test: this console repairs a
+ * host that is already down, so waiting behind whatever is running is the
+ * point, and a surface reachable when Settings cannot render must never learn
+ * to say no. That exemption is about TIMING only. Identity is a separate
+ * question and is enforced here exactly as it is everywhere else — the console
+ * outlives the host it names, and a replacement must not inherit repairs
+ * aimed at its predecessor.
+ */
+export type QueuedDoctorRepair =
+  "converge-ready" | "register-service" | "restart";
+
+/**
+ * `declined` covers both "nothing was enqueued because this is no longer that
+ * host" and the HOST's own refusal of a restart — one informational,
+ * self-clearing arm, mapped in main so the renderer has no second place to get
+ * the taxonomy wrong. A repair that could not run for any other reason rejects.
+ */
+export type QueuedDoctorRepairResult =
+  | { readonly kind: "applied" }
+  | { readonly kind: "declined"; readonly message: string };
+
 export type DoctorRepairDispatch =
   | { readonly kind: "lane-busy"; readonly message: string }
   | { readonly kind: "host-changed"; readonly message: string }
@@ -1744,6 +1769,15 @@ export interface IHostManagement {
    * path: they run against a host that is already down, where waiting is the
    * point.
    */
+  /**
+   * The down-host recovery console's four lifecycle repairs, identity-fenced
+   * and QUEUEING. See {@link QueuedDoctorRepair} for why those two properties
+   * belong together rather than being traded off.
+   */
+  readonly runDoctorRepairQueued: (input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }) => Promise<QueuedDoctorRepairResult>;
   readonly runDoctorRepairIfIdle: (input: {
     readonly repair: DoctorRepairIntent;
     readonly expectedHostId: string;
