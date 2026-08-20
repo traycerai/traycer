@@ -198,9 +198,12 @@ export type TaskFiltersPre13 = z.infer<typeof taskFiltersSchemaPre13>;
  * is created there. Deliberately not the workspace association above - a
  * workspace is bound at create and never follows the work.
  *
- * Only chats the caller may see participate (their own, plus task-visible
- * ones); a collaborator's private chat must not disclose its host through a
- * filter hit or a facet count.
+ * Scoped to the caller's OWN live chats. A collaborator's host is a machine
+ * the caller cannot name - their host directory has never seen it - and
+ * surfacing which machine a teammate works on is an association nothing else
+ * in the product exposes. It also sidesteps duplicate chat ids, which the
+ * real readers resolve by an owner-precedence tiebreak that an aggregate
+ * cannot reproduce.
  */
 export const taskFiltersSchema = taskFiltersSchemaPre13.extend({
   chatHostIds: z.array(z.string()).optional(),
@@ -528,14 +531,14 @@ export const listTaskLightSchemaPre13 = taskLightSchema.extend({
 export type ListTaskLightPre13 = z.infer<typeof listTaskLightSchemaPre13>;
 
 /**
- * `chatHostIds` are the hosts owning chats in this task that the CALLER may
- * see - the same ACL the `chatHostIds` filter and the `chatHosts` facet
- * apply, evaluated per row. It is what lets a client re-apply the host filter
+ * `chatHostIds` are the hosts owning the CALLER'S OWN live chats in this task
+ * - the same scope the `chatHostIds` filter and the `chatHosts` facet apply,
+ * evaluated per row. It is what lets a client re-apply the host filter
  * locally: to cached rows while a request is in flight, and to rows it fetched
  * by id (which never passed through the server's filter at all).
  *
  * Absent, not `[]`, on a row from a peer that predates the field - the
- * distinction matters, because `[]` is a truthful "no visible chats anywhere"
+ * distinction matters, because `[]` is a truthful "none of my chats anywhere"
  * and would let a local predicate confidently filter the row OUT.
  */
 export const listTaskLightSchema = listTaskLightSchemaPre13.extend({

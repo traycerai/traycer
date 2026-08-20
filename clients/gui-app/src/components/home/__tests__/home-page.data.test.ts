@@ -384,26 +384,24 @@ describe("home-page history helpers", () => {
     }
 
     it("matches any selected host and excludes a row with none of them", () => {
-      // "c" reports an empty set, which is a truthful negative - it is
-      // excluded, unlike "d", which cannot answer at all.
-      expect(filterByHosts(["host-2"], "any")).toEqual(["b", "d"]);
+      // "c" reports an empty set - a truthful negative. "d" cannot answer, and
+      // is excluded too: nothing has checked it against the filter.
+      expect(filterByHosts(["host-2"], "any")).toEqual(["b"]);
     });
 
     it("requires every selected host under `all`", () => {
       // "a" has host-1 only, so `all` drops it where `any` keeps it.
-      expect(filterByHosts(["host-1", "host-2"], "any")).toEqual([
-        "a",
-        "b",
-        "d",
-      ]);
-      expect(filterByHosts(["host-1", "host-2"], "all")).toEqual(["b", "d"]);
+      expect(filterByHosts(["host-1", "host-2"], "any")).toEqual(["a", "b"]);
+      expect(filterByHosts(["host-1", "host-2"], "all")).toEqual(["b"]);
     });
 
-    it("keeps a row that cannot report its hosts rather than inventing a negative", () => {
-      // Dropping "d" would empty the list against an older peer, which reads
-      // identically to "you have no tasks on that host". The version gate
-      // prevents this case; abstaining is the residual safety choice.
-      expect(filterByHosts(["host-9"], "any")).toEqual(["d"]);
+    it("excludes a row that cannot report its hosts", () => {
+      // "d" reaches this predicate only from a source the server never
+      // filtered - an id-fetched worktree/PR match, or a cached row mid
+      // request. Keeping it would render an unfiltered row as a filtered one.
+      // A peer too old to report the field never gets this far: the version
+      // gate withholds the whole list with an explicit explanation.
+      expect(filterByHosts(["host-9"], "any")).toEqual([]);
     });
 
     it("is inert when no host is selected", () => {

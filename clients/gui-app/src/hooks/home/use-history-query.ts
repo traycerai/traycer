@@ -392,7 +392,7 @@ function filterHistoryItemsLocally(
     repoMatchMode: search.repoMode,
     workspaces: search.workspaces,
     workspaceMatchMode: search.workspaceMode,
-    // Rows carry their caller-visible chat hosts, so the host filter is
+    // Rows carry the caller's own chat hosts, so the host filter is
     // re-applied locally: to id-fetched worktree/PR matches, which never went
     // through the server's filter, and to cached rows while a request for a
     // newly-toggled host is still in flight.

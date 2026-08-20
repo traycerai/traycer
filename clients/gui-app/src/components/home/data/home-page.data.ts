@@ -44,13 +44,12 @@ export interface HistoryItem {
   linkedRepos: ReadonlyArray<string>;
   linkedWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
   /**
-   * Hosts owning chats in this task that the signed-in user may see, or
-   * `null` when the serving peer predates the field.
+   * Hosts owning the signed-in user's OWN chats in this task, or `null` when
+   * the serving peer predates the field.
    *
-   * `null` is not `[]`. An empty array truthfully says "no visible chats on
-   * any host", which a host filter may act on by excluding the row; `null`
-   * says the row cannot answer, and the predicate must abstain rather than
-   * invent a negative.
+   * `null` is not `[]`. An empty array truthfully says "none of my chats live
+   * on any host", which a host filter acts on by excluding the row; `null`
+   * says the row cannot answer at all.
    */
   chatHostIds: ReadonlyArray<string> | null;
   pullRequestNumbers: ReadonlyArray<string>;
@@ -366,11 +365,22 @@ function matchesRepoFilter(
 /**
  * Whether a row satisfies the chat-host filter.
  *
- * A row whose `chatHostIds` is `null` came from a peer that cannot report the
- * field, so it is KEPT rather than excluded: the alternative silently empties
- * the list against an older host, which looks identical to "you have no tasks
- * there". The version gate is what stops that case from arising; this is the
- * residual safety choice if it ever does.
+ * A row whose `chatHostIds` is `null` is EXCLUDED while a host is selected,
+ * because nothing about that row has been checked against the filter. This
+ * predicate runs on rows from three sources and only one of them is
+ * pre-filtered by the server: settled `epic.listTasks` pages. The other two -
+ * tasks fetched by id for a branch/worktree/PR match, and cached rows still
+ * showing while a new request is in flight - never passed through it, so
+ * keeping an unverifiable row there renders an unfiltered result as a
+ * filtered one.
+ *
+ * Abstaining was the earlier choice, on the reasoning that excluding would
+ * silently empty the list against an older peer. That case cannot reach here:
+ * a peer too old to report the field is caught by the version gate in
+ * `useHistoryQuery`, which withholds every row behind an explicit
+ * "can't filter by host here" state. A settled row from a peer that CAN report
+ * always carries the field - `[]` at minimum. So the only rows this exclusion
+ * can reach are the unverified ones, which is exactly the intent.
  */
 function matchesChatHostFilter(
   item: HistoryItem,
@@ -381,7 +391,7 @@ function matchesChatHostFilter(
     return true;
   }
   if (item.chatHostIds === null) {
-    return true;
+    return false;
   }
 
   const itemHostIds = new Set(item.chatHostIds);
