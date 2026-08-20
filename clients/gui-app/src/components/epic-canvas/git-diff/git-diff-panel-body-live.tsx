@@ -19,9 +19,9 @@ import type {
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
-  HostRpcError,
-  HostTransportFailureError,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+  classifyBindingsFailure,
+  type BindingsFailure,
+} from "@/lib/worktree/bindings-failure";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useGitDiffPanelSurfaceKey,
@@ -361,7 +361,7 @@ export function GitDiffPanelBodyLive(
     pin.selection !== null &&
     pin.followingHostId !== null &&
     pin.resolvedHostId !== pin.followingHostId;
-  const useActiveHost = useCallback(() => {
+  const handleUseActiveHost = useCallback(() => {
     setSelection(null);
   }, [setSelection]);
 
@@ -390,40 +390,11 @@ export function GitDiffPanelBodyLive(
         retryUnavailableRoots,
         unavailableGitRootKeys: unavailableGitRootKeys.keys,
         retryBindings,
-        useActiveHost: canUseActiveHost ? useActiveHost : null,
+        useActiveHost: canUseActiveHost ? handleUseActiveHost : null,
         resolvedHostName: resolvedHostEntry?.label ?? null,
       })}
     </StreamRuntimeContext.Provider>
   );
-}
-
-/**
- * Why the bindings read failed, to the only resolution the panel can act on.
- *
- * `unreachable` is the machine not answering. Everything else is the host
- * answering with a refusal - unauthorized, unsupported method, an internal
- * failure on the far side - and those are NOT interchangeable: one is fixed by
- * re-dialing or moving off the pin, the other by reading what the host said.
- * Collapsing them would put this panel back where it started, asserting a
- * remedy on the wrong machine.
- */
-type BindingsFailure =
-  | { readonly kind: "unreachable" }
-  | { readonly kind: "answered"; readonly message: string };
-
-function classifyBindingsFailure(
-  error: HostRpcError | null,
-): BindingsFailure | null {
-  if (error === null) return null;
-  // `HostTransportFailureError` extends `HostRpcError`, so this order matters:
-  // it is the ONLY error that means the host did not answer.
-  if (error instanceof HostTransportFailureError)
-    return { kind: "unreachable" };
-  const message = error.message.trim();
-  return {
-    kind: "answered",
-    message: message.length > 0 ? message : "The host refused the request.",
-  };
 }
 
 function renderGitDiffPanelBody(input: {

@@ -209,6 +209,12 @@ import {
   type SidebarBulkSelectionPanelId,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
+import { FileTreeWorkspacesUnavailable } from "@/components/epic-canvas/sidebar/file-tree-workspaces-unavailable";
+import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  classifyBindingsFailure,
+  type BindingsFailure,
+} from "@/lib/worktree/bindings-failure";
 import { useShallow } from "zustand/react/shallow";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -228,6 +234,18 @@ interface FileTreeWorkspaceSelection {
   readonly hostId: string | null;
   readonly selectedWorkspacePath: string | null;
   readonly setSelectedWorkspacePath: (workspacePath: string) => void;
+  /**
+   * Non-null when the bindings read FAILED, as opposed to answering with no
+   * browsable roots. Both leave `selectedWorkspacePath` null, and the panel
+   * must not tell the same story about them.
+   */
+  readonly failure: BindingsFailure | null;
+  /**
+   * Re-runs the bindings read. The panel's only recovery: host-scoped queries
+   * disable retry, polling and focus/reconnect refetch, so an errored read
+   * stays errored until something asks again.
+   */
+  readonly retry: () => Promise<void>;
 }
 
 function useFileTreeWorkspaceSelection(
@@ -304,10 +322,16 @@ function useFileTreeWorkspaceSelection(
     },
     [epicId, hostId, setSelectedWorkspace],
   );
+  const { refetch: refetchWorkspaces } = workspacesQuery;
+  const retry = useCallback(async (): Promise<void> => {
+    await refetchWorkspaces();
+  }, [refetchWorkspaces]);
   return {
     hostId,
     selectedWorkspacePath,
     setSelectedWorkspacePath,
+    failure: classifyBindingsFailure(workspacesQuery.error),
+    retry,
   };
 }
 
@@ -1134,6 +1158,7 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
   // dispatch on the host the workspace selection actually names, not the
   // app-wide effective host.
   const hostClient = useSurfaceHostClient(pin.resolvedHostId);
+  const resolvedHostEntry = useHostDirectoryEntryForHostId(pin.resolvedHostId);
   const handleSelectPath = (workspacePath: string): void => {
     pin.latchOnFirstUse();
     selection.setSelectedWorkspacePath(workspacePath);
@@ -1174,24 +1199,68 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
           hostClient={hostClient}
         />
       </div>
-      {selection.selectedWorkspacePath === null ? (
-        <SidebarPanelEmptyState
-          icon={FolderOpen}
-          title="No workspace linked."
-          description={null}
-          testId="epic-file-tree-empty"
-        />
-      ) : (
-        <FileTreePanelBodyForWorkspace
-          key={selection.selectedWorkspacePath}
-          epicId={props.epicId}
-          tabId={props.tabId}
-          workspacePath={selection.selectedWorkspacePath}
-          hostId={pin.resolvedHostId}
-          onLatchHost={pin.latchOnFirstUse}
-        />
-      )}
+      {fileTreePanelBody({
+        epicId: props.epicId,
+        tabId: props.tabId,
+        selection,
+        resolvedHostId: pin.resolvedHostId,
+        resolvedHostName: resolvedHostEntry?.label ?? null,
+        onLatchHost: pin.latchOnFirstUse,
+      })}
     </div>
+  );
+}
+
+/**
+ * The three states below the picker, in the order their conditions must be
+ * asked - which is not the order they were written in.
+ *
+ * A FAILED bindings read is checked first, because it also leaves
+ * `selectedWorkspacePath` null and would otherwise fall through to "No
+ * workspace linked." That sentence is a claim about the agent ("you have not
+ * linked one"), and here the truth is a fact about the connection ("we could
+ * not ask") - the same wrong-remedy conflation the git-diff panel's empty
+ * state had. It is also the only branch that offers a way out: host-scoped
+ * queries disable every automatic recovery route, so nothing re-reads on its
+ * own.
+ */
+function fileTreePanelBody(input: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly selection: FileTreeWorkspaceSelection;
+  readonly resolvedHostId: string | null;
+  readonly resolvedHostName: string | null;
+  readonly onLatchHost: () => void;
+}): ReactNode {
+  const { selection } = input;
+  if (selection.failure !== null) {
+    return (
+      <FileTreeWorkspacesUnavailable
+        failure={selection.failure}
+        hostName={input.resolvedHostName}
+        onRetry={selection.retry}
+      />
+    );
+  }
+  if (selection.selectedWorkspacePath === null) {
+    return (
+      <SidebarPanelEmptyState
+        icon={FolderOpen}
+        title="No workspace linked."
+        description={null}
+        testId="epic-file-tree-empty"
+      />
+    );
+  }
+  return (
+    <FileTreePanelBodyForWorkspace
+      key={selection.selectedWorkspacePath}
+      epicId={input.epicId}
+      tabId={input.tabId}
+      workspacePath={selection.selectedWorkspacePath}
+      hostId={input.resolvedHostId}
+      onLatchHost={input.onLatchHost}
+    />
   );
 }
 

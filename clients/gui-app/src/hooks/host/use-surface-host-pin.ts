@@ -148,9 +148,14 @@ function useSurfaceHostPinResolved(
     defaultHostId !== null && !isSurfacePinDeposed(defaultHostId, fleet)
       ? defaultHostId
       : null;
+  // ONE local, deliberately: `resolvedHostId` falls back to this exact value,
+  // and consumers compare the two to ask "would unpinning move me?"
+  // (`resolvedHostId !== followingHostId`). That question is only answerable
+  // while both are the same expression, so they must not be able to drift.
+  const followingHostId = honoredDefaultHostId ?? effectiveHostId;
   const resolvedHostId = resolvedSurfaceHostId(
     selection,
-    honoredDefaultHostId ?? effectiveHostId,
+    followingHostId,
     fleet,
   );
   const resolvedFrom = resolvedTier(honoredSelection, honoredDefaultHostId);
@@ -181,7 +186,7 @@ function useSurfaceHostPinResolved(
     honoredSelection,
     setSelection,
     resolvedHostId,
-    followingHostId: honoredDefaultHostId ?? effectiveHostId,
+    followingHostId,
     isPinned: selection !== null,
     latchOnFirstUse,
     resolvedFrom,

@@ -5039,6 +5039,127 @@ describe("selection authority dial-evidence instrumentation", () => {
     authority.dispose();
   });
 
+  it("names the crossing ONCE - later refusals stay ordinary `counted`", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    const dials = CONFIRMED_DEATH_REFUSAL_STREAK + 3;
+    for (let i = 0; i < dials; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    // The lease DECISION stays `>=` - the host is dead and stays dead - but
+    // the label marks the single report that crossed. `>=` here would report a
+    // long outage as an unbroken run of deaths.
+    const dispositions = dialLogs(log.records).map(
+      (record) => record.detail.disposition,
+    );
+    expect(
+      dispositions.filter((d) => d === "counted-reached-death"),
+    ).toHaveLength(1);
+    expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK - 1]).toBe(
+      "counted-reached-death",
+    );
+    expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK]).toBe("counted");
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
+
+    authority.dispose();
+  });
+
+  it("keeps NO stall state for a host outside the fleet", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Evidence for an unknown host is dropped, so there is no lease to strand
+    // a surface on and nothing to warn about. Accumulating here would grow one
+    // entry per distinct id between fleet snapshots, and an entry recreated
+    // after a prune would be inherited by a durable id that later re-registers.
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal(`GONE-${i}`, `attempt-${i}`, null, i),
+      );
+    }
+    // Same id repeatedly, which is the case a per-host counter would catch.
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("GONE", `gone-${i}`, null, 100 + i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("does not count a REPLAYED success as a stalled failure", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // A duplicate is classified before its outcome is ever read, so a success
+    // arriving twice looks exactly like a refusal that went nowhere. Warning
+    // "dial failures are not advancing" on a run of successes would point the
+    // reader at the opposite of what happened.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "same", "success", 0),
+    );
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 2; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", "same", "success", 1 + i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("clears the stall on proof of life that is not a dial - a session", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // `onHostProvedAlive` is the funnel for every kind of proof, not just a
+    // dial success. Without clearing there, inert reports from BEFORE a
+    // recovery combine with one after it and warn about an episode that ended.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a1", "indeterminate", 0),
+    );
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a2", "indeterminate", 1),
+    );
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 2),
+    );
+    // With the session live every later refusal is suppressed, so this is the
+    // first report after the recovery and must not complete the old episode.
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a3", null, 3));
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
   it("warns again after a host recovers and stalls a SECOND time", () => {
     const log = createRecordingAuthorityLog();
     const { authority, incarnationId } = attachedAuthority(log);

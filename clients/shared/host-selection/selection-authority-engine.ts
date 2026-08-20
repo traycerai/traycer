@@ -1383,6 +1383,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     evidence.refusalStreak = 0;
     evidence.lastCountedRefusalDetail = null;
     evidence.restartEpisodeEndsAt = null;
+    // The dial-stall counter retires with the streak, and HERE rather than
+    // only on a dial success, because this is the single funnel every kind of
+    // proof already passes through. A session appearing, an announcement or a
+    // successful ensure all mean the authority learned something; leaving the
+    // counter set would let inert reports from before the recovery combine
+    // with one after it to warn about an episode that had already ended.
+    this.dialStalls.delete(hostId);
     // Proof of life is proof of life: it retires the corpse deadline for the
     // same reason it clears the streak. This is the ONLY producer that needs
     // to know about the deadline, because every kind of proof already funnels
@@ -1439,7 +1446,12 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       report.outcome === "confirmed-refusal" ? report.refusalDetail : null;
     this.recordDialDisposition(
       report,
-      evidence.refusalStreak >= CONFIRMED_DEATH_REFUSAL_STREAK
+      // Equality, not `>=`: this names the ONE report that crossed, which is
+      // what a reader is looking for. The lease decision itself stays `>=` -
+      // a host at or above the threshold IS dead, and it stays dead - but a
+      // label that re-announced the crossing on every later refusal would
+      // report a prolonged outage as an endless series of deaths.
+      evidence.refusalStreak === CONFIRMED_DEATH_REFUSAL_STREAK
         ? "counted-reached-death"
         : "counted",
     );
@@ -1496,12 +1508,26 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       refusalStreak: streakAfter,
       deathThreshold: CONFIRMED_DEATH_REFUSAL_STREAK,
     });
+    // Evidence for a host outside the fleet is DROPPED, so there is no stall
+    // to track: this host has no lease to strand a surface on. Creating an
+    // entry here would also grow the map once per distinct unknown id between
+    // fleet snapshots, and - worse - survive a prune, because an in-flight
+    // report landing after `pruneEvidenceOutsideFleet` recreates the entry,
+    // and the NEXT prune sees a durable id that has since re-registered and
+    // keeps it. The re-registered host would then inherit a stall it never
+    // earned and warn early.
+    if (disposition === "dropped-outside-fleet") {
+      this.dialStalls.delete(hostId);
+      return;
+    }
     // A success is proof of life and a counted refusal is progress toward a
     // verdict; either way the authority learned something, so the stall ends.
-    if (
-      disposition === "cleared-by-success" ||
-      dispositionCounts(disposition)
-    ) {
+    //
+    // Keyed off the report's OUTCOME rather than the disposition alone, because
+    // a success that arrives twice is classified `dropped-duplicate-attempt`
+    // before its outcome is ever examined. Counting that as a stalled failure
+    // would let a replayed SUCCESS raise "dial failures are not advancing".
+    if (report.outcome === "success" || dispositionCounts(disposition)) {
       this.dialStalls.delete(hostId);
       return;
     }
