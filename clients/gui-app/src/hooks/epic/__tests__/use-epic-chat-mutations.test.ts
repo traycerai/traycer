@@ -38,8 +38,6 @@ const {
   forceReleaseChatSession,
   beginPendingChatCreation,
   clearPendingChatCreation,
-  closeConfirmedDeletedChatTiles,
-  unmarkArtifactSelfDeleted,
 } = vi.hoisted(() => ({
   archiveChatMutateAsync: vi.fn(),
   epicSessionHostClient: {
@@ -51,8 +49,6 @@ const {
   forceReleaseChatSession: vi.fn(),
   beginPendingChatCreation: vi.fn(),
   clearPendingChatCreation: vi.fn(),
-  closeConfirmedDeletedChatTiles: vi.fn(),
-  unmarkArtifactSelfDeleted: vi.fn(),
 }));
 // The pending-creation registry is the open-epic store's seam
 // (`stores/epics/open-epic/pending-chat-creations.ts`), covered on its own
@@ -73,14 +69,6 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
     forceRelease: forceReleaseChatSession,
   }),
-}));
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: {
-    getState: () => ({
-      closeConfirmedDeletedChatTiles,
-      unmarkArtifactSelfDeleted,
-    }),
-  },
 }));
 
 import type {
@@ -129,6 +117,8 @@ import type {
   SetChatArchivedRequest,
   SetChatArchivedResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -171,6 +161,7 @@ beforeEach(() => {
   for (const method of Object.keys(capturedMutations)) {
     delete capturedMutations[method];
   }
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
 describe("useEpicCreateChatForHostClient", () => {
@@ -256,6 +247,24 @@ describe("useEpicRenameChat", () => {
 
 describe("useEpicDeleteChat", () => {
   it("force-releases the deleted chat session on success", () => {
+    const store = useEpicCanvasStore.getState();
+    const targetTabId = store.openEpicTab("epic-1", "Target");
+    const peerTabId = store.openEpicTab("epic-1", "Peer");
+    const target: EpicCanvasTileRef = {
+      id: "chat-1",
+      instanceId: "target-chat-instance",
+      type: "chat",
+      name: "Target chat",
+      hostId: "host-test",
+    };
+    const sameIdOtherHost: EpicCanvasTileRef = {
+      ...target,
+      instanceId: "peer-chat-instance",
+      hostId: "peer-host",
+    };
+    store.openTileInTab(targetTabId, target);
+    store.openTileInTab(peerTabId, sameIdOtherHost);
+
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat")
       .options as DeleteChatMutationOptions;
@@ -281,14 +290,29 @@ describe("useEpicDeleteChat", () => {
       "chat-1",
       "host-test",
     );
-    expect(closeConfirmedDeletedChatTiles).toHaveBeenCalledWith(
-      "epic-1",
-      "chat-1",
-      "host-test",
-    );
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[targetTabId]
+        ?.tilesByInstanceId[target.instanceId],
+    ).toBeUndefined();
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[peerTabId]?.tilesByInstanceId[
+        sameIdOtherHost.instanceId
+      ],
+    ).toEqual(sameIdOtherHost);
   });
 
   it("does not force-release anything when no host was active at mutate time", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-1", "Target");
+    const target: EpicCanvasTileRef = {
+      id: "chat-1",
+      instanceId: "target-chat-instance",
+      type: "chat",
+      name: "Target chat",
+      hostId: "host-test",
+    };
+    store.openTileInTab(tabId, target);
+
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat")
       .options as DeleteChatMutationOptions;
@@ -307,10 +331,15 @@ describe("useEpicDeleteChat", () => {
     // whichever machine happened to be active - the exact cross-host teardown
     // this scoping exists to prevent.
     expect(forceReleaseChatSession).not.toHaveBeenCalled();
-    expect(closeConfirmedDeletedChatTiles).not.toHaveBeenCalled();
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        target.instanceId
+      ],
+    ).toEqual(target);
   });
 
   it("shows fallback on error", () => {
+    useEpicCanvasStore.getState().markArtifactSelfDeleted("chat-1");
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat").options as {
       onError: (
@@ -322,7 +351,9 @@ describe("useEpicDeleteChat", () => {
       epicId: "epic-1",
       chatId: "chat-1",
     });
-    expect(unmarkArtifactSelfDeleted).toHaveBeenCalledWith("chat-1");
+    expect(
+      useEpicCanvasStore.getState().selfDeletedArtifactIds.has("chat-1"),
+    ).toBe(false);
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
   });
 
