@@ -17,7 +17,7 @@ import {
   type CliInstallSource,
 } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
-import { cliInstallHomeDir } from "./paths";
+import { cliInstallHomeDir, ensureCliInstallHomeDir } from "./paths";
 
 // The well-known per-environment CLI binary location,
 // `<cliInstallHomeDir>/bin/traycer[.exe]`.
@@ -277,7 +277,18 @@ export async function stageWellKnownCliBinary(opts: {
   // see the restore in the catch.
   let asidePath: string | null = null;
   try {
-    await mkdir(dirname(wellKnownPath), { recursive: true });
+    // Create the install home through its own 0700 helper rather than
+    // letting the recursive mkdir below do it. On a fresh packaged install
+    // with no manifest - winget and hand-placed binaries, and since the
+    // startup refresh, on EVERY packaged command - this is the first writer
+    // under the CLI home, and a bare recursive mkdir would create the whole
+    // chain at the process umask (0755 typically). Neither this call nor a
+    // later `ensureCliInstallHomeDir` repairs the mode of a directory that
+    // already exists, so that first run would leave the CLI home
+    // world-traversable for the life of the install - the same directory the
+    // credentials file sits in, whose 0700 exists precisely to prevent that.
+    await ensureCliInstallHomeDir(opts.environment);
+    await mkdir(dirname(wellKnownPath), { recursive: true, mode: 0o700 });
     // Stat the source on BOTH sides of the copy. The mtime mirrored below
     // is the whole basis for deciding the slot is fresh, so it has to
     // describe the bytes that actually landed in `staging`. A package
