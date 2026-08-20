@@ -308,6 +308,44 @@ export const silentAuthorityLog: AuthorityLog = {
 };
 
 /**
+ * What the authority DID with one dial report - the complete, closed set of
+ * exits from {@link SelectionAuthorityEngineImpl.ingestDial}.
+ *
+ * It exists because "the refusal streak never reached the threshold" was not
+ * answerable from a production log. Six of these seven exits used to be
+ * indistinguishable from outside: two logged at `debug` (which the renderer
+ * drops in production, where the default level is `info`) and four logged
+ * nothing at all. A report that advances no counter and leaves no trace is
+ * the same observation as a report that never arrived, and those two have
+ * opposite fixes - one is a classification bug in the transport, the other is
+ * a missing dial.
+ *
+ * Exhaustive by construction: `ingestDial` funnels EVERY exit through
+ * {@link SelectionAuthorityEngineImpl.recordDialDisposition}, so a new arm
+ * added without a disposition fails to compile rather than going dark.
+ */
+export type DialDisposition =
+  /** Streak advanced. The only disposition that can ever reach death. */
+  | "counted"
+  /** Streak advanced AND crossed {@link CONFIRMED_DEATH_REFUSAL_STREAK}. */
+  | "counted-reached-death"
+  /** A dial succeeded: proof of life, streak reset to zero. */
+  | "cleared-by-success"
+  /** `indeterminate` - inert by contract, advances nothing. */
+  | "inert-indeterminate"
+  /** A live session for this host outranks the failure (invariant 5). */
+  | "suppressed-live-session"
+  /** The host is not in the answered fleet. */
+  | "dropped-outside-fleet"
+  /** This (incarnation, attemptId) was already ingested. */
+  | "dropped-duplicate-attempt";
+
+/** Whether a disposition moved the host closer to a death verdict. */
+function dispositionCounts(disposition: DialDisposition): boolean {
+  return disposition === "counted" || disposition === "counted-reached-death";
+}
+
+/**
  * Incarnation ids identify a client instance to the engine that minted them;
  * they never cross a trust boundary and are never persisted, so a process
  * -local counter is sufficient and keeps tests deterministic.
@@ -684,6 +722,22 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
 
   private readonly reporters = new Map<string, ReporterRecord>();
   private readonly evidence = new Map<string, HostEvidence>();
+  /**
+   * Per host, consecutive dial reports that taught the authority NOTHING - a
+   * drop, a dedup, an inert `indeterminate`, or a live-session suppression.
+   * Reset by any success or counted refusal.
+   *
+   * PURELY DIAGNOSTIC, and deliberately its own map rather than a field on
+   * {@link HostEvidence}: that map's emptiness for a host is read as
+   * "never dialed" ({@link SelectionAuthorityEngineImpl.isLocalNeverDialed}),
+   * so hanging a counter off it would materialise records for hosts whose
+   * evidence was DROPPED and silently change which hosts the launch-time
+   * ensure considers. It shares `evidence`'s lifecycle exactly - pruned in
+   * {@link SelectionAuthorityEngineImpl.pruneEvidenceOutsideFleet}, cleared in
+   * the identity transition - so it can neither leak nor outlive the fleet it
+   * describes.
+   */
+  private readonly dialStalls = new Map<string, number>();
   /**
    * The next observation ordinal to hand out. The ordinals themselves live on
    * the ATTACHMENT that observed them (see {@link AttachmentRecord}); this
@@ -1329,6 +1383,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     evidence.refusalStreak = 0;
     evidence.lastCountedRefusalDetail = null;
     evidence.restartEpisodeEndsAt = null;
+    // The dial-stall counter retires with the streak, and HERE rather than
+    // only on a dial success, because this is the single funnel every kind of
+    // proof already passes through. A session appearing, an announcement or a
+    // successful ensure all mean the authority learned something; leaving the
+    // counter set would let inert reports from before the recovery combine
+    // with one after it to warn about an episode that had already ended.
+    this.dialStalls.delete(hostId);
     // Proof of life is proof of life: it retires the corpse deadline for the
     // same reason it clears the streak. This is the ONLY producer that needs
     // to know about the deadline, because every kind of proof already funnels
@@ -1351,31 +1412,145 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     report: Extract<SelectionEvidenceReport, { kind: "dial" }>,
   ): void {
     const hostId = report.hostId;
-    if (this.dropsAsOutsideFleet(hostId, report.kind)) return;
+    if (this.dropsAsOutsideFleet(hostId, report.kind)) {
+      this.recordDialDisposition(report, "dropped-outside-fleet");
+      return;
+    }
     const key = attemptKey(attachment.incarnationId, report.attemptId);
-    if (attachment.seenAttemptIds.has(key)) return;
+    if (attachment.seenAttemptIds.has(key)) {
+      this.recordDialDisposition(report, "dropped-duplicate-attempt");
+      return;
+    }
     attachment.seenAttemptIds.add(key);
     if (report.outcome === "success") {
       this.onHostProvedAlive(hostId);
+      this.recordDialDisposition(report, "cleared-by-success");
       return;
     }
     // `indeterminate` is inert by contract: a liveness-read failure or an
     // attempt abandoned for unrelated reasons is not evidence about the host.
-    if (report.outcome === "indeterminate") return;
+    if (report.outcome === "indeterminate") {
+      this.recordDialDisposition(report, "inert-indeterminate");
+      return;
+    }
     if (this.hasLiveSession(hostId)) {
       // Recorded for diagnostics, never accumulated: a live session anywhere
       // in the app outranks every other evidence class (invariant 5). The
       // streak resumes only once the session set for this host empties.
-      this.options.log.debug(
-        "[selection-authority] dial failure suppressed by live session",
-        { hostId, outcome: report.outcome },
-      );
+      this.recordDialDisposition(report, "suppressed-live-session");
       return;
     }
     const evidence = this.hostEvidence(hostId);
     evidence.refusalStreak += 1;
     evidence.lastCountedRefusalDetail =
       report.outcome === "confirmed-refusal" ? report.refusalDetail : null;
+    this.recordDialDisposition(
+      report,
+      // Equality, not `>=`: this names the ONE report that crossed, which is
+      // what a reader is looking for. The lease decision itself stays `>=` -
+      // a host at or above the threshold IS dead, and it stays dead - but a
+      // label that re-announced the crossing on every later refusal would
+      // report a prolonged outage as an endless series of deaths.
+      evidence.refusalStreak === CONFIRMED_DEATH_REFUSAL_STREAK
+        ? "counted-reached-death"
+        : "counted",
+    );
+  }
+
+  /**
+   * The single exit every dial report leaves by, and the whole instrumentation
+   * of this path.
+   *
+   * ONE REPORT IN, ONE LINE OUT. The question this answers is "a host stopped
+   * answering and never reached `dead` - where did its refusals go?", and that
+   * was previously unanswerable: a dropped, deduplicated or inert report was
+   * byte-identical, in the log, to a report that was never sent. Distinguishing
+   * "the transport classified it as `indeterminate`" from "nothing dialed the
+   * host at all" is the difference between a transport bug and a missing
+   * subscriber, and no amount of reading the code settles which one a given
+   * install hit.
+   *
+   * `streakAfter` is read WITHOUT creating an evidence record
+   * (`this.evidence.get`, never `hostEvidence`): the map's emptiness for a host
+   * is load-bearing state - {@link SelectionAuthorityEngineImpl.isLocalNeverDialed}
+   * reads `!this.evidence.has(hostId)` to gate the launch-time ensure - so
+   * instrumentation that materialised a record here would change which hosts
+   * get provisioned. A diagnostic that alters the thing it measures is worse
+   * than no diagnostic.
+   *
+   * LEVELS. Every report logs at `debug`, which is the complete picture when
+   * someone reproduces with the level raised. The `warn` is reserved for the
+   * pathology itself: {@link CONFIRMED_DEATH_REFUSAL_STREAK} consecutive
+   * FAILED dials that the authority learned nothing from. That is silent on a
+   * healthy fleet by construction - a success or a counted refusal both reset
+   * it - and it fires exactly when a host is failing while its lease cannot
+   * move, which is the state that strands a pinned surface.
+   *
+   * It fires ONCE per stall episode, at the crossing. The alternative - warn
+   * while the counter sits at or above the threshold - turns the longest
+   * outages into the loudest ones and buries the transition under its own
+   * repetitions; the counter still climbs, and the `debug` line still carries
+   * every individual report. A later success or counted refusal clears the
+   * stall, so a host that recovers and stalls again warns again.
+   */
+  private recordDialDisposition(
+    report: Extract<SelectionEvidenceReport, { kind: "dial" }>,
+    disposition: DialDisposition,
+  ): void {
+    const hostId = report.hostId;
+    const streakAfter = this.evidence.get(hostId)?.refusalStreak ?? 0;
+    this.options.log.debug("[selection-authority] dial evidence", {
+      hostId,
+      disposition,
+      outcome: report.outcome,
+      transportKind: report.transportKind,
+      attemptId: report.attemptId,
+      refusalStreak: streakAfter,
+      deathThreshold: CONFIRMED_DEATH_REFUSAL_STREAK,
+    });
+    // Evidence for a host outside the fleet is DROPPED, so there is no stall
+    // to track: this host has no lease to strand a surface on. Creating an
+    // entry here would also grow the map once per distinct unknown id between
+    // fleet snapshots, and - worse - survive a prune, because an in-flight
+    // report landing after `pruneEvidenceOutsideFleet` recreates the entry,
+    // and the NEXT prune sees a durable id that has since re-registered and
+    // keeps it. The re-registered host would then inherit a stall it never
+    // earned and warn early.
+    if (disposition === "dropped-outside-fleet") {
+      this.dialStalls.delete(hostId);
+      return;
+    }
+    // A success is proof of life and a counted refusal is progress toward a
+    // verdict; either way the authority learned something, so the stall ends.
+    //
+    // Keyed off the report's OUTCOME rather than the disposition alone, because
+    // a success that arrives twice is classified `dropped-duplicate-attempt`
+    // before its outcome is ever examined. Counting that as a stalled failure
+    // would let a replayed SUCCESS raise "dial failures are not advancing".
+    if (report.outcome === "success" || dispositionCounts(disposition)) {
+      this.dialStalls.delete(hostId);
+      return;
+    }
+    const stalled = (this.dialStalls.get(hostId) ?? 0) + 1;
+    this.dialStalls.set(hostId, stalled);
+    // Exactly at the crossing, not `>=`. A prolonged outage is precisely when
+    // this fires, and it is also when dials are most frequent, so a `>=` here
+    // would warn on EVERY subsequent report and bury the transition it exists
+    // to mark. The counter keeps climbing either way; the `debug` line above
+    // carries each individual report for anyone reading the whole history.
+    if (stalled !== CONFIRMED_DEATH_REFUSAL_STREAK) return;
+    this.options.log.warn(
+      "[selection-authority] dial failures are not advancing the death streak",
+      {
+        hostId,
+        disposition,
+        outcome: report.outcome,
+        transportKind: report.transportKind,
+        consecutiveNonCounting: stalled,
+        refusalStreak: streakAfter,
+        deathThreshold: CONFIRMED_DEATH_REFUSAL_STREAK,
+      },
+    );
   }
 
   private ingestSession(
@@ -1594,6 +1769,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     for (const hostId of Array.from(this.seenTombstoneIds.keys())) {
       if (!present.has(hostId)) this.seenTombstoneIds.delete(hostId);
     }
+    for (const hostId of Array.from(this.dialStalls.keys())) {
+      if (!present.has(hostId)) this.dialStalls.delete(hostId);
+    }
   }
 
   /**
@@ -1694,6 +1872,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     this.evidence.clear();
     this.seenTombstoneIds.clear();
+    this.dialStalls.clear();
     this.nextSessionOrdinal = 0;
     // The local expected-outage hold is PORT STATE, not evidence: the
     // HostController mutation lane does not stop being in flight because the
@@ -1884,6 +2063,18 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    *    authority itself called dead for the remaining seventeen - the
    *    enumeration above asks only about the destination, and this is the one
    *    question about the origin.
+   *  - An incumbent held usable ONLY by the engine's own in-flight ensure: NO
+   *    window either. The in-flight arm reports the local host `connecting`
+   *    so that ∅ never shows for a host the engine is starting FOR the user -
+   *    a claim about candidacy, not about service. Since the ensure fires for
+   *    a down local host whichever host is the target (2026-08-19), the arm
+   *    now also fires for a dead INCUMBENT: the window failed over onto the
+   *    local host, the target came back, and then the local host died - the
+   *    same pass that publishes it dead starts booting it and would otherwise
+   *    hand the return window a `connecting` incumbent that cannot serve
+   *    anyone for the remaining seventeen seconds. A live session is the one
+   *    thing that makes an in-flight ensure's host genuinely serving (the
+   *    lease arm says so too), so it is the one thing that keeps the window.
    *
    * Explicit writes bypass all of it. Activate is valid from any state (M5)
    * and must land immediately - a user who picks a host in Settings and waits
@@ -1909,7 +2100,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       effectiveHostId === null ||
       effectiveHostId === targetHostId ||
       desired === null ||
-      !this.isUsable(effectiveHostId, leases)
+      !this.isUsable(effectiveHostId, leases) ||
+      this.isHeldOnlyByOwnEnsure(effectiveHostId)
     ) {
       this.pendingDampingDeadline = null;
       return desired;
@@ -1980,6 +2172,21 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   ): boolean {
     const lease = leases.find((entry) => entry.hostId === hostId);
     return lease !== undefined && isUsableForSelection(lease);
+  }
+
+  /**
+   * Whether this host reads usable ONLY because the engine's own ensure for it
+   * is in flight - the in-flight arm of `deriveLease`, minus its live-session
+   * exception. Read by the damping's incumbent check: such a host is a
+   * candidate (so ∅ never shows while it boots) but not something to keep
+   * SERVING a window from against a target that can.
+   */
+  private isHeldOnlyByOwnEnsure(hostId: string): boolean {
+    return (
+      this.localEnsureToken !== null &&
+      this.localEnsureToken.hostId === hostId &&
+      !this.hasLiveSession(hostId)
+    );
   }
 
   /**
@@ -2106,31 +2313,38 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    * "local first" candidate systematically absent at exactly the moment
    * failover needed it. Nothing in the app would boot a deselected local host,
    * so ∅ was reachable with a perfectly working machine sitting idle. The
-   * engine may now ask for it, and only for it: the registry still never
-   * drives processes, and the rejected alternative (keeping the local host
-   * booted whenever signed in) would charge every deliberate remote user for
-   * an idle host.
+   * engine may ask for it, and only it may: the registry still never drives
+   * processes.
    *
-   * Requested only when derivation genuinely WANTS the local host - it is the
-   * target, or the target cannot serve so local is the next candidate. A
-   * healthy preferred remote leaves the local host alone: that want-local
-   * conjunct is the whole of the narrow rule, and it is what keeps a
-   * deliberate-remote user from paying for an idle local boot.
+   * INDEPENDENT OF THE TARGET, by decision (2026-08-19). This landed with a
+   * narrower rule - request only when derivation WANTED the local host (it was
+   * the target, or the target could not serve), so a healthy preferred remote
+   * left the local host alone and a deliberate-remote user never paid for an
+   * idle local boot. That rule was reversed: the local host's lifecycle is the
+   * same whichever host a window is pointed at - down means bring it back, as
+   * the released desktop always did for the machine it runs on - and only the
+   * NARRATION is target-scoped (a window serving a remote says nothing about
+   * a local boot). So there is no want-local conjunct here any more. What
+   * survives of the C5 argument is where the action lives: this engine, once,
+   * paced by the same cooldowns whichever host is effective.
    *
-   * WANTED + NOT-KNOWN-USABLE, where not-known-usable is `dead` OR
-   * NEVER-DIALED. The dead-only reading was too narrow in exactly one case and
-   * it was the commonest one: a cold boot has no evidence at all, so the local
-   * lease reads `connecting` - which is *usable* - and the engine would refrain
-   * until three confirmed refusals accumulated against a socket that does not
-   * exist yet. Never-dialed is not "up"; and since the ensure is what makes the
-   * socket dialable in the first place, waiting for dial evidence to justify it
-   * is circular. A host that HAS been dialed is excluded either way: mid-streak
-   * it is still connecting, and once it reaches `dead` the first arm takes it.
+   * DOWN means `dead` OR NEVER-DIALED. The dead-only reading was too narrow in
+   * exactly one case and it was the commonest one: a cold boot has no evidence
+   * at all, so the local lease reads `connecting` - which is *usable* - and the
+   * engine would refrain until three confirmed refusals accumulated against a
+   * socket that does not exist yet. Never-dialed is not "up"; and since the
+   * ensure is what makes the socket dialable in the first place, waiting for
+   * dial evidence to justify it is circular. A host that HAS been dialed is
+   * excluded either way: mid-streak it is still connecting, and once it reaches
+   * `dead` the first arm takes it. A never-dialed local host that is up (a
+   * remote is serving the window, nothing has reason to dial it) draws exactly
+   * ONE ensure: the converge answers `ok`, that is proof of life, and proof of
+   * life creates the evidence record that ends never-dialed.
    *
    * Returns whether a request was started, because the caller must re-derive:
    * the request itself changes the local lease.
    */
-  private requestLocalEnsureIfWanted(
+  private requestLocalEnsureIfDown(
     leases: readonly HostLeaseSnapshot[],
     now: number,
   ): boolean {
@@ -2178,10 +2392,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       return false;
     }
 
-    const targetHostId = this.preferredHostId ?? localHostId;
-    if (targetHostId !== localHostId && this.isUsable(targetHostId, leases)) {
-      return false;
-    }
+    // Deliberately NO "is the target serving?" gate here - see the doc above.
     const cooldownUntil = this.localEnsureFailedUntil;
     if (cooldownUntil !== null && now < cooldownUntil) return false;
     const retryHoldUntil = this.localEnsureRetryHoldUntil;
@@ -2266,7 +2477,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // been applied - a guard one step downstream of the damage.
       //
       // Clearing the token is part of the fix, not bookkeeping: while it
-      // stands, `requestLocalEnsureIfWanted` refuses to start anything, so B
+      // stands, `requestLocalEnsureIfDown` refuses to start anything, so B
       // could not ask for its own ensure until A's ceiling lapsed. No
       // cooldown is armed - the failure describes a host this engine is no
       // longer pointed at - and the commit re-derives so B may ask at once.
@@ -2407,7 +2618,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // ours. That stamp is provably always false: an ensure is minted from
       // exactly two arms, and both guarantee a false signal at mint - the
       // never-dialed arm is guarded on it explicitly (see
-      // `requestLocalEnsureIfWanted`), and `dead` is unreachable while
+      // `requestLocalEnsureIfDown`), and `dead` is unreachable while
       // `inExpectedOutage` is true because THIS ORDER puts the outage arm
       // above every dead arm. The one residue - a ceiling-lapsed outage whose
       // start is still recorded - has `inExpectedOutage` answering false
@@ -2446,7 +2657,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       // the cooldown would otherwise render an answering host `dead`.
       //
       // Arm order alone was never sufficient, in two places it cannot reach:
-      // `requestLocalEnsureIfWanted` reads the cooldown DIRECTLY, under no arm
+      // `requestLocalEnsureIfDown` reads the cooldown DIRECTLY, under no arm
       // ordering at all (it is separately declined under a live session, by
       // the never-dialed conjunct), and the masking lapses the moment the
       // session drops, resurfacing a cooldown whose premise the host has since
@@ -2674,14 +2885,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // still be reporting `connecting` into the leases computed below (B2).
     this.expireLocalEnsureIfLapsed(now);
     // TWO PASSES, because the two answers depend on each other: the ensure
-    // decision needs the leases to know whether the local host is down and
-    // whether the target can serve, and the leases then need to reflect that a
-    // request is in flight. Deriving twice is cheap (a map over the fleet) and
+    // decision needs the leases to know whether the local host is down, and
+    // the leases then need to reflect that a request is in flight. Deriving twice is cheap (a map over the fleet) and
     // keeps both answers from the same instant; the alternative - deciding
     // ensure from raw evidence - would duplicate the arm order that IS the
     // evidence hierarchy.
     const initialLeases = this.deriveLeases(now);
-    const leases = this.requestLocalEnsureIfWanted(initialLeases, now)
+    const leases = this.requestLocalEnsureIfDown(initialLeases, now)
       ? this.deriveLeases(now)
       : initialLeases;
     this.trackUsability(leases, now);

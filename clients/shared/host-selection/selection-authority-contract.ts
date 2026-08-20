@@ -1117,8 +1117,10 @@ export interface AuthorityIdentitySource {
 
 /**
  * The engine's one sanctioned process action (C5/D14): request local-host
- * provisioning when derivation wants the local host and it is down. Progress
- * surfaces as the local lease's status; this port carries no state.
+ * provisioning whenever the local host is down - whichever host a window is
+ * pointed at (the local lifecycle is target-independent by decision,
+ * 2026-08-19). Progress surfaces as the local lease's status; this port
+ * carries no state.
  *
  * `deferred` distinguishes "the lifecycle lane was busy, nothing ran" (a CLI
  * lock another actor held, a drained queue slot) from a provisioning attempt

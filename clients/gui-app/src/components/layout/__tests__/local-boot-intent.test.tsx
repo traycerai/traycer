@@ -445,13 +445,14 @@ describe("local-boot intent", () => {
     // asserting otherwise would be pinning the defect the retirement removed.
     //
     // First install did not disappear with it: it is
-    // `armFirstInstallOnSignIn` in the desktop's launch reconciler
-    // (`electron-main/startup/host-launch-converge.ts`), sign-in gated and
-    // removal-sentinel gated, and it is proven THERE - in the process that
-    // actually performs it - by that module's own suite. This chain does not
-    // mount main, so a renderer test asserting a main-process action could
-    // only ever be theatre. What is genuinely this layer's to promise is that
-    // it does not act, and does not lie about the host while it waits.
+    // `armLocalHostBootOnSignIn` in the desktop's launch reconciler
+    // (`electron-main/startup/host-launch-converge.ts`), sign-in gated,
+    // removal-sentinel gated and retrying, and it is proven THERE - in the
+    // process that actually performs it - by that module's own suite. This
+    // chain does not mount main, so a renderer test asserting a main-process
+    // action could only ever be theatre. What is genuinely this layer's to
+    // promise is that it does not act, and does not lie about the host while
+    // it waits.
     const spy = buildManagementSpy();
 
     mountRealChain(spy.management, false);

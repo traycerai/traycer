@@ -7,11 +7,9 @@ import {
   certificationBadgeLabel,
   certificationMetaLine,
   comparePackVersionsDescending,
-  composeVersionRowMeta,
-  installErrorReasonLabel,
   findRecommendedVersion,
-  formatPackSizeBytes,
   formatSharedWithProvidersLine,
+  installErrorReasonLabel,
   installPackVersionRefusalMessage,
   removeResultUserMessage,
   unusableReasonLabel,
@@ -21,7 +19,10 @@ import {
   versionDownloadEligibility,
   versionErrorIsRetryable,
   versionInstallFetchLabel,
+  versionRowChip,
+  versionShowsDeleteAction,
   versionShowsInstallFetchAction,
+  versionTroubleLine,
   versionUseEligibility,
 } from "@/components/settings/panels/provider-pack-version-manager-model";
 
@@ -424,39 +425,6 @@ describe("labels and helpers", () => {
     );
   });
 
-  it("composes uncertified + unverified without claiming still usable", () => {
-    const meta = composeVersionRowMeta({
-      installState: { status: "unusable", reason: "unverified" },
-      certification: "uncertified",
-      sizeLabel: "40 MB",
-      recommended: false,
-    });
-    expect(meta.toLowerCase()).toMatch(/not necessarily damaged/);
-    expect(meta.toLowerCase()).toMatch(/no longer published|remains on disk/);
-    expect(meta.toLowerCase()).not.toMatch(/still usable/);
-  });
-
-  it("never renders the operator-facing wire message on a failed install", () => {
-    // `message` is documented as the UNDERLYING detail and can carry raw
-    // filesystem/network text. The row must speak from the typed reason, which
-    // is also the only field that says whether retrying helps.
-    const raw = "ENOSPC: no space left on device, write '/var/tmp/pack.part'";
-    const meta = composeVersionRowMeta({
-      installState: {
-        status: "error",
-        reason: "disk-full",
-        message: raw,
-        retryAtMs: null,
-      },
-      certification: "eligible",
-      sizeLabel: "40 MB",
-      recommended: false,
-    });
-    expect(meta).not.toContain(raw);
-    expect(meta).not.toContain("ENOSPC");
-    expect(meta).toContain(installErrorReasonLabel("disk-full"));
-  });
-
   it("gives every install-error reason its own sentence", () => {
     // Totality matters more than the wording: a reason with no case would be a
     // compile error, but two reasons collapsing onto one sentence would not,
@@ -475,6 +443,88 @@ describe("labels and helpers", () => {
     expect(new Set(sentences).size).toBe(reasons.length);
     for (const sentence of sentences)
       expect(sentence.length).toBeGreaterThan(0);
+  });
+
+  it("speaks a broken row's trouble from the typed reason, never the wire message", () => {
+    // `message` is documented as the UNDERLYING operator-facing detail and can
+    // carry raw filesystem or network text. This assertion used to live on
+    // `composeVersionRowMeta`, which the hover card's removal deleted; the
+    // invariant outlived the function, so it moves here.
+    const raw = "ENOSPC: no space left on device, write '/var/tmp/pack.part'";
+    const line = versionTroubleLine(
+      version({
+        version: "1.0.0",
+        installState: {
+          status: "error",
+          reason: "disk-full",
+          message: raw,
+          retryAtMs: null,
+        },
+      }),
+    );
+    expect(line).not.toBeNull();
+    expect(line).not.toContain(raw);
+    expect(line).not.toContain("ENOSPC");
+    expect(line).toBe(installErrorReasonLabel("disk-full"));
+  });
+
+  it("gives a healthy row no trouble line at all", () => {
+    // The redesign's whole premise: a row that is fine is a number, a chip and
+    // its controls. If this ever returns a string for `installed` or `absent`,
+    // every healthy row grows a second line and the list is a wall again.
+    for (const state of [
+      { status: "installed" },
+      { status: "absent" },
+      { status: "downloading", percent: 42 },
+    ] as const) {
+      expect(
+        versionTroubleLine(version({ version: "1.0.0", installState: state })),
+      ).toBeNull();
+    }
+  });
+
+  it("speaks a blocking certification on the CURRENT row, whose chip slot `Current` owns", () => {
+    // `versionRowChip` hands `Current` the chip unconditionally, so a current
+    // version that is later withdrawn has nowhere else to say so. Non-current
+    // blocked rows wear the certification AS their chip and must not get a
+    // second copy here.
+    for (const certification of [
+      "yanked",
+      "below-security-floor",
+      "host-ineligible",
+    ] as const) {
+      const current = version({
+        version: "1.0.0",
+        current: true,
+        certification,
+        installState: { status: "installed" },
+      });
+      expect(versionRowChip(current)?.label).toBe("Current");
+      expect(versionTroubleLine(current)).toBe(
+        certificationMetaLine(certification),
+      );
+
+      const sibling = version({
+        version: "0.9.0",
+        current: false,
+        certification,
+        installState: { status: "installed" },
+      });
+      expect(versionRowChip(sibling)?.tone).toBe("blocked");
+      expect(versionTroubleLine(sibling)).toBeNull();
+    }
+    // `uncertified` is NOT blocking (D8): a current copy the channel stopped
+    // listing stays usable and must stay quiet.
+    expect(
+      versionTroubleLine(
+        version({
+          version: "1.0.0",
+          current: true,
+          certification: "uncertified",
+          installState: { status: "installed" },
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("finds the recommended version from managed state", () => {
@@ -582,9 +632,76 @@ describe("labels and helpers", () => {
     }
   });
 
-  it("formats pack sizes and preserves null for yank tombstones", () => {
-    expect(formatPackSizeBytes(null)).toBeNull();
-    expect(formatPackSizeBytes(512)).toBe("512 B");
-    expect(formatPackSizeBytes(40_000_000)).toMatch(/MB/);
+  it("gives an unpublished version a chip that outranks Recommended", () => {
+    // The signal this chip carries is "deleting this is permanent", because an
+    // unpublished version cannot be fetched again. A version can be BOTH
+    // unpublished and recommended, and of the two only one of them changes
+    // what pressing delete costs - so the warning has to win. This ordering
+    // is the whole reason the chip exists; before it, the state lived only in
+    // a hover card, and deleting the card would have taken it with it.
+    const chip = versionRowChip(
+      version({
+        version: "1.0.0",
+        recommended: true,
+        certification: "uncertified",
+        installState: { status: "installed" },
+      }),
+    );
+    expect(chip).toEqual({ label: "Unpublished", tone: "unpublished" });
+  });
+
+  it("still lets Current outrank an unpublished chip", () => {
+    // Not an oversight that the warning loses here: delete is refused for the
+    // current version outright, so there is no reversibility question to warn
+    // about on this row.
+    const chip = versionRowChip(
+      version({
+        version: "1.0.0",
+        current: true,
+        certification: "uncertified",
+        installState: { status: "installed" },
+      }),
+    );
+    expect(chip).toEqual({ label: "Current", tone: "current" });
+  });
+
+  it("shows a Delete control for anything with bytes on disk, and only that", () => {
+    // `versionShowsDeleteAction` is what lets a BLOCKED delete still render as
+    // a disabled button carrying its reason. The quarantine case is the one
+    // that regressed before: the panel hardcoded a `current`-only disabled arm,
+    // so a quarantined row rendered no control and never showed the sentence
+    // `versionDeleteEligibility` computes for it.
+    const onDisk = [
+      version({ version: "1.0.0", installState: { status: "installed" } }),
+      version({
+        version: "1.1.0",
+        installState: { status: "unusable", reason: "quarantined" },
+      }),
+      version({
+        version: "1.2.0",
+        current: true,
+        installState: { status: "installed" },
+      }),
+    ];
+    for (const row of onDisk) expect(versionShowsDeleteAction(row)).toBe(true);
+
+    const notOnDisk = [
+      version({ version: "2.0.0", installState: { status: "absent" } }),
+      version({
+        version: "2.1.0",
+        installState: { status: "downloading", percent: 42 },
+      }),
+      version({
+        version: "2.2.0",
+        installState: {
+          status: "error",
+          reason: "network",
+          message: "timeout",
+          retryAtMs: null,
+        },
+      }),
+    ];
+    for (const row of notOnDisk)
+      expect(versionShowsDeleteAction(row)).toBe(false);
   });
 });

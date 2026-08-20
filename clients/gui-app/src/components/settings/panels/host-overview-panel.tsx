@@ -43,6 +43,8 @@ import {
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
+import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
+import { useRunnerReinstallTraycer } from "@/hooks/runner/use-runner-reinstall-traycer-mutation";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -175,16 +177,17 @@ export function HostOverviewPanel(props: {
   // fires against the ambient host and caches the answer under this page's key,
   // however well a gate hides the result.
   const usable = isHostScopeUsable(scope.status) && client !== null;
-  // THIS machine's host, affirmatively down, with the bridge right here to
-  // revive it. The one state where the RPC-only rule would strand a user: the
-  // page can describe the host from the registry but nothing on it could
-  // start the process back up. `unreachable` only — while `connecting` the
-  // route may still resolve, and offering Start against a host that is about
-  // to answer would race the very process it spawns. This is what remains of
-  // the recovery console's Start/doctor half (its uninstall half lives on the
-  // empty-account path); the app-level gate draws no recovery card of its own
-  // any more, so Settings cannot delegate this state upstream.
-  const localRecovery =
+  // THIS machine's host, affirmatively down, with the bridge right here.
+  // `unreachable` only — while `connecting` the route may still resolve. What
+  // this state gets is NOT a Start verb: this machine's host is brought back
+  // automatically whichever host the window is pointed at (the desktop's
+  // launch reconciler and retrying boot actor, the selection authority's
+  // ensure, the health monitor's crash respawn, the OS service manager), so a
+  // button here was a second actor for the same process and read as "the app
+  // forgot to start my host". It gets the bridge doctor, and — in the one
+  // state the automation deliberately leaves alone, the user having removed
+  // Traycer from this computer — the consent-reversing Reinstall.
+  const localDown =
     scope.status === "unreachable" &&
     (host?.isLocalMachine ?? false) &&
     props.hasLocalBridge;
@@ -620,14 +623,15 @@ export function HostOverviewPanel(props: {
   // already says the host cannot be reached — and "disabled" would wrongly
   // imply a capability verdict rather than a connectivity one. What survives
   // an outage is the account-backed half below: the update policy, which
-  // needs no route at all. The ONE exception is this computer's own stopped
-  // host, whose revival verbs run over the CLI bridge and need no route by
-  // construction.
+  // needs no route at all. The ONE exception is this computer's own down
+  // host, whose doctor (and, after a removal, Reinstall) run over the CLI
+  // bridge and need no route by construction.
   let headerActions: ReactNode = null;
-  if (localRecovery) {
+  if (localDown) {
     headerActions = (
-      <LocalHostRecoveryActions
+      <LocalHostDownActions
         hostName={displayName}
+        settingUp={host.settingUp}
         onOpenDoctor={() => setDoctorOpen(true)}
       />
     );
@@ -910,7 +914,7 @@ export function HostOverviewPanel(props: {
           // report this machine's bridge produces IS about the machine the
           // page names — the misattribution the rpc-only rule guards against
           // cannot happen when the subject is this computer.
-          localRecovery
+          localDown
             ? { kind: "bridge" }
             : {
                 kind: "rpc",
@@ -942,8 +946,9 @@ export function HostOverviewPanel(props: {
  *
  * The lane is `convergeReady({ force: true })` — the SAME mutation and the same
  * `runnerMutationKeys.hostConvergeReady()` key the window modal's "Update host"
- * drives through `forceProvisioning`, and the same one `LocalHostRecoveryActions`
- * below uses with `force: false`. So a click here is narrated by the existing
+ * drives through `forceProvisioning`, and the same one `LocalHostDownActions`
+ * below drives (with `force: false`) for a Reinstall. So a click here is
+ * narrated by the existing
  * actor-agnostic progress lane ("Applying the host update…") with no second
  * observer and no new key; nothing about this surface needed a mechanism of its
  * own, which is why it does not have one.
@@ -984,59 +989,96 @@ export function HostUpdateRequiredSlot(props: {
 /**
  * The header cluster for this computer's host when it is affirmatively DOWN.
  *
- * Two verbs, both bridge-backed and so both honest without a route: Start
- * (`convergeReady` — install + register + start, the same intent the post-auth
- * gate uses) and the bridge doctor. Success needs no explicit refresh here:
- * the host coming up flips the scope status through its ordinary reactivity
- * and the live cluster replaces this one.
+ * NO START VERB, by decision (2026-08-19). The local host's lifecycle is
+ * automatic and independent of which host a window is pointed at: launch
+ * converge and the retrying boot actor (main), the selection authority's
+ * ensure, the health monitor's crash respawn, and the OS service manager
+ * between them bring this machine's host back. A Start button here was a
+ * second process actor for the same host and read as "the app forgot to start
+ * my host" - which is exactly how it was reported. Two things remain, both
+ * bridge-backed and so both honest without a route:
+ *
+ *  - REINSTALL, only when the user removed Traycer from this computer. That is
+ *    the one down state the automation deliberately leaves alone (consent),
+ *    and the danger-zone dialog promises "you can reinstall anytime from
+ *    Settings" - this is where. It clears the removal sentinel and converges;
+ *    `convergeReady` under the sentinel short-circuits `ok {running:false}`
+ *    without installing, which is why the old Start button was a silent no-op
+ *    in precisely this state (`useRunnerReinstallTraycer` does both steps).
+ *  - the bridge doctor, which diagnoses without a route. Disabled while this
+ *    machine's lifecycle lane is busy (`settingUp`, actor-agnostic): a CLI
+ *    inspecting an installation the converge is mid-rewrite reports (and
+ *    offers to fix) states that are simply "not done yet".
+ *
+ * Success needs no explicit refresh here: the host coming up flips the scope
+ * status through its ordinary reactivity and the live cluster replaces this
+ * one.
  */
-function LocalHostRecoveryActions(props: {
+function LocalHostDownActions(props: {
   readonly hostName: string;
+  readonly settingUp: boolean;
   readonly onOpenDoctor: () => void;
 }): ReactNode {
-  const convergeReady = useRunnerConvergeReady();
+  const management = useRunnerHostOrNull()?.hostManagement ?? null;
+  const removal = useRunnerHostRemovalStateQuery({
+    enabled: management !== null,
+  });
+  const reinstall = useRunnerReinstallTraycer();
+  const removed = removal.data?.removedByUser === true;
+  // The verb SURVIVES ITS OWN FAILURE. `reinstall` clears the removal
+  // sentinel first and converges second, so a converge that comes back
+  // `failed`/`deferred` leaves the sentinel already cleared - `removed` flips
+  // to false, and this cluster would drop the only affordance for a machine
+  // that still has no host. Nothing else picks it up in this session either:
+  // main's boot actor settled at launch on the sentinel it saw then. Keeping
+  // the button on `isError` makes the retry the user's to take now; the next
+  // launch sees a cleared sentinel and boots on the ladder without them.
+  //
+  // `isPending` is in here for the RETRY, and its absence was a real hole: a
+  // second click flips the mutation error -> pending, so with the sentinel
+  // already cleared BOTH other terms go false and the button unmounted for
+  // the length of the attempt - taking its own spinner with it. The first
+  // attempt never showed that, because `removed` is still true until the
+  // sentinel refetch lands, which is why it needs its own test.
+  const removalRepairable = removed || reinstall.isError || reinstall.isPending;
+  const busy = props.settingUp || reinstall.isPending;
   return (
     <div className="flex shrink-0 items-center gap-1.5">
-      <Button
-        type="button"
-        variant="default"
-        size="sm"
-        disabled={convergeReady.isPending}
-        data-testid="host-overview-start-local"
-        onClick={() => {
-          convergeReady.mutate(
-            { force: false },
-            {
+      {removalRepairable ? (
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          disabled={busy}
+          data-testid="host-overview-reinstall-local"
+          onClick={() => {
+            reinstall.mutate(undefined, {
               onSuccess: () => {
-                toast.success(`Starting ${props.hostName}…`);
+                toast.success(`Reinstalling Traycer on ${props.hostName}…`);
               },
               onError: (error) =>
                 toastFromRunnerError(
                   error,
-                  `Couldn't start ${props.hostName}.`,
+                  `Couldn't reinstall Traycer on ${props.hostName}.`,
                 ),
-            },
-          );
-        }}
-      >
-        {convergeReady.isPending ? (
-          <AgentSpinningDots
-            className="mr-2 size-3"
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-        Start host
-      </Button>
+            });
+          }}
+        >
+          {reinstall.isPending ? (
+            <AgentSpinningDots
+              className="mr-2 size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Reinstall Traycer
+        </Button>
+      ) : null}
       <Button
         type="button"
         variant="outline"
         size="sm"
-        // Same overlap rule as the live host's page-wide gate: opening the
-        // sheet mounts a doctor card that dispatches immediately, and a CLI
-        // inspecting the installation converge is mid-rewrite would report
-        // (and offer to fix) states that are simply "not done yet".
-        disabled={convergeReady.isPending}
+        disabled={busy}
         data-testid="host-overview-recovery-doctor"
         onClick={props.onOpenDoctor}
       >

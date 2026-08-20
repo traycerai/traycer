@@ -33,8 +33,6 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
-import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
@@ -55,9 +53,7 @@ import {
   usePendingRemoveBindingEntryPaths,
 } from "@/hooks/workspace/use-workspace-binding-remove-entry-mutation";
 import { useWorkspaceBindingAddFolderForClient } from "@/hooks/workspace/use-workspace-binding-add-folder-mutation";
-import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
@@ -122,8 +118,6 @@ import {
   type HostWorkspaceControlsHostScope,
 } from "./host-workspace-controls-scope";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
-import { CloneOnHostSwitchDialog } from "./clone-on-host-switch-dialog";
 import { computeInEpicFolderMode } from "./compute-in-epic-folder-mode";
 import {
   type AddFolderHandler,
@@ -140,9 +134,6 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-result";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
-import { useChatById } from "@/lib/epic-selectors";
-import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
-import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 
@@ -155,7 +146,9 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
  *
  *
  *
- * `home` swaps the bound directory; `chat` clones the chat on switch;
+ * `home` swaps the bound directory; `chat` forks the chat on switch (chats
+ * are host-bound for life, so "switching" means forking onto the picked
+ * machine — the owning tile opens the fork dialog via `onForkOnHost`);
  * `terminal-agent` locks the host section because a PTY can't migrate, but
  * its folder binding can be edited; the owning tile restarts the PTY after a
  * committed binding write.
@@ -193,6 +186,15 @@ type BoundOwnerSurface = {
   readonly bindingResolved: boolean;
   readonly onBindingCommitted:
     ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
+  /**
+   * Chat-only: the owning tile's handler for the host picker's "switch host"
+   * gesture. Chats are host-bound for life (clone-not-migrate), so switching
+   * means forking — the tile opens its fork dialog anchored at the chat's
+   * latest completed turn, preselected on `targetHostId`, or explains why it
+   * can't yet (turn still running / no reply to fork). `null` for surfaces
+   * that cannot fork at all (terminal agents), whose host section is locked.
+   */
+  readonly onForkOnHost: ((targetHostId: string) => void) | null;
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
@@ -1146,7 +1148,7 @@ function HostOnlySelect(props: {
   readonly hostLabel: string;
   readonly entries: ReadonlyArray<HostDirectoryEntry>;
   readonly activeHostId: string | null;
-  readonly mode: "editable" | "clone-on-switch" | "locked";
+  readonly mode: "editable" | "fork-on-switch" | "locked";
   readonly onSelect: (hostId: string) => void;
   readonly loading: boolean;
   readonly disabled: boolean;
@@ -1832,30 +1834,6 @@ interface InEpicSurfaceProps {
 // eslint-disable-next-line complexity
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
-  // Held for the clone handler below, which needs the DIRECTORY and the spine,
-  // not a host-resolved client.
-  const binding = useHostBinding();
-  const sourceChatRecord = useChatById(
-    surface.kind === "chat" ? surface.ownerId : null,
-  );
-  // Ticket 37: the owner this surface is showing for the chat it would clone,
-  // resolved through the same hook the dead-tile banner uses. APP-WIDE BY
-  // INTENT, and this is the strongest case of it in the app: the surface
-  // already HOLDS a host client (`props.hostClient`) and deliberately declines
-  // it, because sharing the cloud list already fetched elsewhere is the whole
-  // point. Not the spine either, which stopped naming a host when P4.2 deleted
-  // the active slot.
-  const appEffectiveHostId = useEffectiveHostId();
-  const appHostClient = useMemo(
-    () => resolveAppWideHostClient(binding, appEffectiveHostId),
-    [binding, appEffectiveHostId],
-  );
-  const sourceOwnerUserId = useCloneSourceOwnerUserId({
-    client: appHostClient,
-    epicId: surface.epicId,
-    chatId: surface.kind === "chat" ? surface.ownerId : null,
-  });
-  const navigateNestedFocus = useEpicNestedFocusNavigation();
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
   });
@@ -1941,15 +1919,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     [bindingEntries, summariesByPath],
   );
 
-  const [pendingCloneHostId, setPendingCloneHostId] = useState<string | null>(
-    null,
-  );
-  // The clone lands on the TARGET host and no longer moves the app-wide
-  // selection (redesign P1.2, D6), so the create runs on that host's own
-  // client - the app-wide variant would reject it as a host mismatch, which
-  // is exactly the check that used to be satisfied by rebinding the window.
-  const cloneTargetClient = useHostClientForHostId(pendingCloneHostId);
-  const createChat = useEpicCreateChatForHostClient(cloneTargetClient);
   // In-epic surfaces address their bound owner host (`props.activeHostId` is
   // `surface.hostId` there), which is also the host whose remembered defaults
   // this picker may read and write.
@@ -2229,82 +2198,17 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     stagedKey,
   ]);
 
+  // `fork-on-switch` mode (and therefore this handler) is only offered for a
+  // chat surface - see the `HostWorkspaceSelector` render below. Chats are
+  // host-bound for life (clone-not-migrate), so picking another host here
+  // means forking onto it: the owning tile opens its fork dialog anchored at
+  // the chat's latest completed turn, preselected on the picked host, or says
+  // why it can't yet (turn still running / nothing to fork).
   const handleSelectHostForChat = (hostId: string): void => {
     if (hostId === props.activeHostId) return;
-    setPendingCloneHostId(hostId);
+    if (surface.onForkOnHost === null) return;
+    surface.onForkOnHost(hostId);
   };
-
-  // Cancel the in-flight clone (its post-success projection subscription
-  // + 30s timeout) on unmount so a host swap mid-wait doesn't leak.
-  // Each new clone supersedes the previous in-flight one.
-  const cloneCancelRef = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    const cloneCancel = cloneCancelRef;
-    return () => {
-      if (cloneCancel.current !== null) {
-        cloneCancel.current();
-        cloneCancel.current = null;
-      }
-    };
-  }, []);
-
-  const handleConfirmClone = (): void => {
-    // `clone-on-switch` mode (and therefore this handler) is only offered
-    // for a chat surface - see the `HostWorkspaceSelector` render below - so
-    // `surface.ownerId` is the source chat's id whenever this actually runs.
-    if (
-      pendingCloneHostId === null ||
-      binding === null ||
-      surface.kind !== "chat"
-    ) {
-      return;
-    }
-    if (cloneCancelRef.current !== null) cloneCancelRef.current();
-    cloneCancelRef.current = cloneChatOnHostSwitch({
-      epicId: surface.epicId,
-      tabId: surface.tabId,
-      sourceChatId: surface.ownerId,
-      sourceOwnerUserId,
-      sourceHostId: surface.hostId,
-      sourceTitle: sourceChatRecord?.title ?? "",
-      targetHostId: pendingCloneHostId,
-      directory: binding.directory,
-      sourceSettings: sourceChatRecord?.settings ?? null,
-      globalClient: binding.hostClient,
-      onProfileFallbackToAmbient: () => {
-        toast(
-          "Continuing on the Terminal account - your profile isn't available on this host.",
-        );
-      },
-      onHistoryUnavailable: (reason) => {
-        toast(
-          reason === "no-checkpoint"
-            ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
-            : "This device can't send this agent's history to that host version - continuing with settings only.",
-        );
-      },
-      // No local "in flight" state to clear here - the confirm dialog
-      // already closes unconditionally below, before the async result is
-      // known. `useEpicCreateChatForHostClient`'s own `onError` still toasts
-      // a terminal failure.
-      onCloneFailed: () => undefined,
-      navigateNestedFocus,
-      createChat: (request, callbacks) => {
-        createChat.mutate(request, {
-          onSuccess: callbacks.onSuccess,
-          onError: callbacks.onError,
-        });
-      },
-    });
-    setPendingCloneHostId(null);
-  };
-
-  const cloneTargetEntry =
-    pendingCloneHostId === null
-      ? null
-      : (props.directoryEntries.find(
-          (entry) => entry.hostId === pendingCloneHostId,
-        ) ?? null);
 
   const activeRunNotice = activeRunNoticeFor(
     surface.kind,
@@ -2831,7 +2735,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             hostLabel={props.hostLabel}
             entries={props.directoryEntries}
             activeHostId={props.activeHostId}
-            mode={surface.kind === "chat" ? "clone-on-switch" : "locked"}
+            mode={surface.kind === "chat" ? "fork-on-switch" : "locked"}
             onSelect={handleSelectHostForChat}
             loading={metadataPending}
             disabled={false}
@@ -2878,14 +2782,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           />
         </div>
       </div>
-      <CloneOnHostSwitchDialog
-        open={pendingCloneHostId !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingCloneHostId(null);
-        }}
-        targetHostLabel={cloneTargetEntry?.label ?? "this host"}
-        onConfirm={handleConfirmClone}
-      />
       <WorktreeScriptsDialog
         open={scriptsTarget !== null}
         target={scriptsTarget}

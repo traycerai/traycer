@@ -19,7 +19,7 @@ import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 /**
  * Whether an account is signed in, and a way to hear when that changes.
  *
- * Narrow on purpose: {@link armFirstInstallOnSignIn} needs consent, not
+ * Narrow on purpose: {@link armLocalHostBootOnSignIn} needs consent, not
  * identity. Main already has this fact - the selection authority's
  * `DesktopAuthorityIdentitySource` is built from the same `authSession` - and
  * declaring the shape here keeps this module from importing the authority to
@@ -125,6 +125,292 @@ export async function refreshHostRegistryIfNotRemoved(
   applyHostUpdateMenuState(menu, status);
 }
 
+/**
+ * Backoff between attempts of {@link armLocalHostBootOnSignIn} after one that
+ * did not end with a running host. Rung 0 matches the selection authority's
+ * `LOCAL_ENSURE_RETRY_COOLDOWN_MS`, so the two process actors that can drive
+ * `convergeReady` for this machine pace their first retry the same way; the
+ * ladder then backs off to a five-minute ceiling and stays there - the retry
+ * never stops on its own, because the released desktop's local host was
+ * always brought up eventually and the user has ruled that this must not
+ * regress. Every attempt is one `host ensure` invocation: for a host whose
+ * install keeps failing that is a bounded, mostly-idle process every five
+ * minutes, and for a host that is only waiting on the user (macOS "Allow in
+ * the Background") the same register cycle the Retry button used to run.
+ */
+export const LOCAL_HOST_BOOT_RETRY_LADDER_MS: readonly number[] = [
+  30_000, 60_000, 120_000, 300_000,
+];
+
+/**
+ * BOOTING THIS MACHINE'S HOST, and the actor that owns it: install when there
+ * has never been one, start when there is one and it is not running, and keep
+ * trying - on {@link LOCAL_HOST_BOOT_RETRY_LADDER_MS} - until a host is
+ * running. Signed-in gated (below).
+ *
+ * Deliberately a SIBLING of {@link runLaunchHostConvergeReconcile} rather than
+ * an arm inside it. That reconciler's contract is "settle the debt of a host
+ * that EXISTS, once, in priority order" - its update, activation and recovery
+ * arms are all structurally unable to first-install, by their own predicates:
+ * `deriveUpdateReady` returns false outright when `installedVersion` is null,
+ * nothing is running so activation reads `"unavailable"` rather than
+ * pending/unknown, and `isUnavailableInstalledHost` requires an installed
+ * version by definition. Two tests pin that contract, and it stays true. This
+ * actor's contract is different in both halves: it does not care WHY there is
+ * no running host, and it is not one-shot. Where the two overlap - an
+ * installed host that is down at launch - both ask `convergeReady(false)`, and
+ * the controller coalesces identical in-flight intents onto one job, so the
+ * overlap costs nothing and the reconciler keeps its unavailable-first
+ * ordering against the release download.
+ *
+ * ## Why main performs it at all
+ *
+ * The RENDERER used to: a once-per-mount `convergeReady` in the local-host
+ * gate (deleted in P3.4), with a manual Retry. Redesign P1.3 retired that -
+ * correctly, because two process actors for one host is what made the ∅
+ * definition undecidable - and moved boot-time provisioning intent to the
+ * selection authority. But the authority asks through `LocalHostEnsurePort`
+ * keyed on a hostId it reads from the fleet, and the fleet reads the local id
+ * from the enrollment and pid-metadata files. Until this machine's host has
+ * RUN at least once those files do not exist, the id is null, and
+ * `requestLocalEnsureIfDown` returns on its second line. The authority cannot
+ * ask for a host that has never existed, so the intent had moved to an actor
+ * unable to exercise it in the one case where boot-time provisioning IS the
+ * point: a first launch sat on "Starting local Traycer Host…" with nothing
+ * starting.
+ *
+ * The split, stated once: getting a host RUNNING for the first time in a
+ * process lifetime here, with retry; steady-state ensure of a host the fleet
+ * can name (one that has run) in the authority - whichever host a window is
+ * pointed at, since 2026-08-19 (the local lifecycle is target-independent;
+ * only its narration is target-scoped). D14/C5's "one sanctioned process
+ * action" is untouched - that constraint scopes the AUTHORITY, which still
+ * performs exactly one.
+ *
+ * ## Why it retries on a timer, not only on a sign-in edge
+ *
+ * A first attempt can fail for reasons that clear on their own - the CLI lock
+ * held by another Traycer process (`deferred`), a download that lost the
+ * network, a service that took longer than the readiness budget, an IPC round
+ * trip that threw - and until 2026-08-19 the only thing that tried again was
+ * the next SIGN-IN edge, which for a user who stays signed in is never. The
+ * ruling that fixed this: the local host is brought up automatically, and it
+ * used to come up without anyone signing in again, so it must keep doing so.
+ * Hence the ladder. A settled arm never re-arms; a mid-session death after a
+ * successful boot is the authority's, since by then the fleet knows the id.
+ *
+ * ## Consent is the precondition, and it is not decoration
+ *
+ * Installing a background service on someone's machine is consent-bearing, and
+ * the retired renderer path was SIGN-IN GATED - `computeGateEligibility`
+ * passes through for a signed-out user, so the host was only ever installed
+ * for someone signed in and looking at a card that said so. Restoring the
+ * behaviour without that gate would not be restoring it; it would be the same
+ * action under a materially weaker precondition. Hence the wait: signed out at
+ * launch means nothing happens until an account actually signs in, which is
+ * also the pre-retirement TIMING, since the gate only mounted after sign-in. A
+ * sign-out cancels a pending retry the same way, and the next sign-in starts
+ * the ladder over from rung 0.
+ *
+ * `removedByUser` is the other half of consent and is checked at the moment of
+ * acting: a user who removed the host has `installedVersion === null` too, and
+ * must not have it reinstalled underneath them.
+ *
+ * Returns a disposer for the subscription and any pending retry. Settles -
+ * disposes itself - only once a host is RUNNING (its own `convergeReady` came
+ * back `ok`, or a status read shows a live runtime) or the user has removed
+ * Traycer. Notably NOT on `busy`: see the outcome branch below.
+ */
+export function armLocalHostBootOnSignIn(
+  hostController: IpcHostController,
+  identity: SignedInGate,
+): () => void {
+  let settled = false;
+  let unsubscribe: (() => void) | null = null;
+  let retryTimer: NodeJS.Timeout | null = null;
+  let retryRung = 0;
+
+  const clearRetry = (): void => {
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+
+  const dispose = (): void => {
+    // TERMINAL, and that has to be recorded BEFORE the resources go, because
+    // an attempt can be in flight right now. Clearing the timer and the
+    // subscription alone leaves `settled` false, so the continuation of an
+    // `getStatus()`/`convergeReady()` that resolves after disposal walks into
+    // `scheduleRetry()` and arms a fresh timer - a disposed actor that goes on
+    // provisioning. Reachable in production since the disposer is registered
+    // on the bridge's teardown list: a quit that lands mid-ladder is exactly
+    // this race.
+    settled = true;
+    clearRetry();
+    if (unsubscribe !== null) {
+      unsubscribe();
+      unsubscribe = null;
+    }
+  };
+
+  // Reaching a terminal outcome and being torn down are now the SAME
+  // operation. The name is kept because the call sites below mean "this actor
+  // is done", not "someone asked it to stop".
+  const settle = (): void => {
+    dispose();
+  };
+
+  const scheduleRetry = (): void => {
+    // Consent is re-read for the TIMER, not only for the action: an outcome
+    // that lands alongside a sign-out (the falling edge reached the
+    // subscription while the converge was in flight) must not leave a retry
+    // ticking for an account that left. The sign-in edge is that account's
+    // retry, and it starts a fresh ladder.
+    if (settled || retryTimer !== null || !identity.isSignedIn()) return;
+    const delayMs =
+      LOCAL_HOST_BOOT_RETRY_LADDER_MS[
+        Math.min(retryRung, LOCAL_HOST_BOOT_RETRY_LADDER_MS.length - 1)
+      ];
+    retryRung += 1;
+    const timer = setTimeout(() => {
+      retryTimer = null;
+      attempt();
+    }, delayMs);
+    // The retry ladder must never be what keeps the main process alive.
+    timer.unref();
+    retryTimer = timer;
+    log.info("[host-controller] local host boot retry scheduled", { delayMs });
+  };
+
+  let inFlight = false;
+  const attempt = (): void => {
+    if (settled || inFlight) return;
+    inFlight = true;
+    void (async () => {
+      try {
+        const status = await hostController.getStatus();
+        // DISPOSAL RE-READ, and it belongs here for the same reason the
+        // consent re-read below does: the decision to act was taken before a
+        // round trip, and teardown can land inside it. Recording terminal in
+        // `dispose()` stops this continuation from arming another RETRY, but
+        // by itself it would let this one still reach `convergeReady` and
+        // enqueue a provisioning mutation - a CLI `host ensure` starting
+        // against a controller the app is tearing down. The check has to be
+        // before the mutation, not only after it.
+        if (settled) return;
+        if (status.removedByUser) {
+          log.info(
+            "[host-controller] local host boot skipped for removed host",
+          );
+          settle();
+          return;
+        }
+        if (status.activation !== "unavailable") {
+          // `unavailable` is the one activation state that means NO runtime is
+          // running (`deriveActivationState`); every other value is a live
+          // host - activated, or carrying activation debt that is the
+          // reconciler's to settle, never this actor's. Something brought it
+          // up between arming and now (a previous launch that finished late,
+          // the reconciler's recovery arm, a user at the terminal), or the
+          // retry that just fired is looking at its predecessor's success.
+          // Nothing owed. Note this is NOT `installedVersion !== null`: a host
+          // whose bytes landed but whose service never started is still owed
+          // a boot, and settling on the bytes was how a half-completed first
+          // install left a machine hostless with nothing retrying.
+          settle();
+          return;
+        }
+        if (!identity.isSignedIn()) {
+          // RE-READ AT THE MOMENT OF ACTING, because the precondition is
+          // consent and `getStatus()` above is a round trip. A sign-out
+          // landing inside that await reaches the subscription as
+          // `onChanged(false)`, which cancels any pending retry but cannot
+          // reach into this continuation - so without this line it installs
+          // a background service for an account that just left.
+          // `removedByUser` is checked one step above for the same reason:
+          // both halves of consent are read here, not at arming time.
+          //
+          // Left ARMED with NO retry scheduled: the next sign-in edge attempts
+          // again, which is exactly the timing a signed-out launch already
+          // has. A timer here would only fire into this same branch.
+          log.info("[host-controller] local host boot deferred to a sign-in");
+          return;
+        }
+        const outcome = await hostController.convergeReady(false);
+        if (outcome.kind === "ok") {
+          settle();
+          log.info("[host-controller] local host boot complete", {
+            kind: outcome.kind,
+          });
+          return;
+        }
+        // A RESOLVED non-ok is not a running host, and `busy` is the one that
+        // argues otherwise. It reads as "a live host with active work declined
+        // a byte swap" - but `E_HOST_BUSY` is a FAIL-SAFE, raised by
+        // `assertHostNotBusy` whenever a live PID's idle state cannot be
+        // determined at all (`/activity` timed out, refused, answered
+        // malformed, or 404'd), which is exactly what a WEDGED host looks
+        // like. Settling on it retired this process's only retry ladder for a
+        // host that may never serve, and nothing downstream necessarily
+        // covers that: the authority can only ensure a host the fleet can
+        // NAME, and `readLastKnownLocalHostId` answers null outright for an
+        // UNUSABLE enrollment record - it deliberately does not fall back to
+        // `pid.json` there - so the wedge would wait for a relaunch.
+        //
+        // `deferred` (CLI lock held by another Traycer process), `failed`,
+        // `installed-not-converged` and `stage-fingerprint-mismatch` are
+        // ordinary return values too, so none of them reach the catch below -
+        // and every one of them, `busy` included, can clear on its own, so
+        // every one earns the next rung. `inFlight` clears in `finally`, so
+        // nothing blocks that retry.
+        log.warn("[host-controller] local host boot did not complete", {
+          kind: outcome.kind,
+        });
+        scheduleRetry();
+      } catch (error: unknown) {
+        // A THROW is not an outcome. `settled` used to be set before this work
+        // began and the rejection had nowhere to land, so one transient IPC
+        // failure retired the only automatic boot actor for the whole
+        // process: the signed-in user stayed in the unavailable-host flow until
+        // a manual retry or a relaunch. Only a running host or a removed one
+        // settles the arm; a failure schedules the next rung.
+        log.warn("[host-controller] local host boot attempt failed", {
+          error: String(error),
+        });
+        scheduleRetry();
+      } finally {
+        inFlight = false;
+      }
+    })();
+  };
+
+  // Subscribed even when already signed in. The subscription is what a
+  // signed-out launch (and a sign-out mid-ladder) re-arms AGAINST; a
+  // successful or terminal attempt disposes it from inside.
+  unsubscribe = identity.onChanged((signedIn) => {
+    if (!signedIn) {
+      // Consent withdrawn: nothing may fire until it is given again, and when
+      // it is, the account gets a fresh ladder rather than the tail of the
+      // previous one.
+      clearRetry();
+      retryRung = 0;
+      return;
+    }
+    // A rising edge attempts at once - UNLESS a retry is already scheduled.
+    // The auth session emits `change` for every token refresh too, and each
+    // of those reaches here as `signedIn: true` while still signed in; letting
+    // them attempt would replace the ladder's pacing with the token's. A real
+    // re-login always arrives with no timer pending, because the sign-out
+    // before it cleared the one there was.
+    if (retryTimer === null) attempt();
+  });
+  if (identity.isSignedIn()) {
+    attempt();
+  }
+  return dispose;
+}
+
 // Launch-time boot reconcile (Fixup B1 + B2): converges any pre-existing
 // activation debt AND applies an eligible staged update, in the correct
 // priority order. `applyStaged`'s own no-op fast path is broader than
@@ -137,163 +423,6 @@ export async function refreshHostRegistryIfNotRemoved(
 // fakes, through the same path `runDeferred` calls - per the ticket, B1/B2
 // must be proven through the production startup wiring, not by calling
 // controller methods directly.
-/**
- * THE FIRST INSTALL, and the actor that performs it.
- *
- * Deliberately a SIBLING of {@link runLaunchHostConvergeReconcile} rather than
- * an arm inside it. That reconciler's contract is "settle the debt of a host
- * that EXISTS" - its update, activation and recovery arms are all structurally
- * unable to first-install, by their own predicates: `deriveUpdateReady`
- * returns false outright when `installedVersion` is null, nothing is running so
- * activation reads `"unavailable"` rather than pending/unknown, and
- * `isUnavailableInstalledHost` requires an installed version by definition.
- * Two tests pin that contract, and it stays true; first install is a different
- * action with a different precondition, so it gets its own entry point.
- *
- * ## Why main performs it at all
- *
- * The RENDERER used to: a once-per-mount `convergeReady` in the local-host
- * gate (deleted in P3.4). Redesign P1.3 retired that - correctly, because two
- * process actors for one host is what made the ∅ definition undecidable - and
- * moved boot-time provisioning intent to the selection authority. But the
- * authority asks through `LocalHostEnsurePort` keyed on a hostId it reads from
- * the fleet, and the fleet reads the local id from the enrollment and
- * pid-metadata files. On a first-ever start those files do not exist, the id is
- * null, and `requestLocalEnsureIfWanted` returns on its second line. The
- * authority cannot ask for a host that has never existed, so the intent had
- * moved to an actor unable to exercise it in the one case where boot-time
- * provisioning IS the point: a first launch sat on "Starting local Traycer
- * Host…" with nothing starting.
- *
- * The split, stated once: launch-time FIRST INSTALL here; selection-time
- * ensure of an existing-but-down host in the authority. D14/C5's "one
- * sanctioned process action" is untouched - that constraint scopes the
- * AUTHORITY, which still performs exactly one.
- *
- * ## Consent is the precondition, and it is not decoration
- *
- * Installing a background service on someone's machine is consent-bearing, and
- * the retired renderer path was SIGN-IN GATED - `computeGateEligibility`
- * passes through for a signed-out user, so the host was only ever installed
- * for someone signed in and looking at a card that said so. Restoring the
- * behaviour without that gate would not be restoring it; it would be the same
- * action under a materially weaker precondition. Hence the wait: signed out at
- * launch means nothing happens until an account actually signs in, which is
- * also the pre-retirement TIMING, since the gate only mounted after sign-in.
- *
- * `removedByUser` is the other half of consent and is checked at the moment of
- * acting: a user who removed the host has `installedVersion === null` too, and
- * must not have it reinstalled underneath them.
- *
- * Returns a disposer for the subscription. One-shot: the first attempt wins,
- * whether it installs or declines.
- */
-export function armFirstInstallOnSignIn(
-  hostController: IpcHostController,
-  identity: SignedInGate,
-): () => void {
-  let settled = false;
-  let unsubscribe: (() => void) | null = null;
-
-  const dispose = (): void => {
-    if (unsubscribe !== null) {
-      unsubscribe();
-      unsubscribe = null;
-    }
-  };
-
-  let inFlight = false;
-  const attempt = (): void => {
-    if (settled || inFlight) return;
-    inFlight = true;
-    void (async () => {
-      try {
-        const status = await hostController.getStatus();
-        if (status.removedByUser) {
-          log.info("[host-controller] first install skipped for removed host");
-          settled = true;
-          dispose();
-          return;
-        }
-        if (status.installedVersion !== null) {
-          // Something installed it between arming and now - a concurrent
-          // recovery arm, or a previous launch that finished late. Nothing
-          // owed.
-          settled = true;
-          dispose();
-          return;
-        }
-        if (!identity.isSignedIn()) {
-          // RE-READ AT THE MOMENT OF ACTING, because the precondition is
-          // consent and `getStatus()` above is a round trip. A sign-out
-          // landing inside that await reaches the subscription as
-          // `onChanged(false)`, which this arm ignores by design - it only
-          // acts on the rising edge - so without this line the continuation
-          // installs a background service for an account that just left.
-          // `removedByUser` is checked one step above for the same reason:
-          // both halves of consent are read here, not at arming time.
-          //
-          // Left ARMED, like every other non-terminal outcome below: the next
-          // sign-in edge attempts again, which is exactly the timing a signed
-          // -out launch already has.
-          log.info("[host-controller] first install deferred to a sign-in");
-          return;
-        }
-        const outcome = await hostController.convergeReady(false);
-        if (outcome.kind !== "ok") {
-          // A RESOLVED non-ok is not an install. `busy`, `deferred` and
-          // `failed` are ordinary return values, so they never reach the catch
-          // below - the throw fix left this half open, and `outcome.kind` was
-          // logged without ever being read. Settling here retired the only
-          // automatic first-install actor for the process and disposed the
-          // sign-in edge it would have retried from, while logging "complete"
-          // about a machine that still has no host.
-          //
-          // Left ARMED deliberately, matching the throw arm: the next sign-in
-          // edge attempts again. `inFlight` clears in `finally`, so nothing
-          // blocks that retry.
-          log.warn("[host-controller] first install did not complete", {
-            kind: outcome.kind,
-          });
-          return;
-        }
-        settled = true;
-        dispose();
-        log.info("[host-controller] first install complete", {
-          kind: outcome.kind,
-        });
-      } catch (error: unknown) {
-        // A THROW is not an outcome. `settled` used to be set before this work
-        // began and the rejection had nowhere to land, so one transient IPC
-        // failure retired the only automatic first-install actor for the whole
-        // process: the signed-in user stayed in the unavailable-host flow until
-        // a manual retry or a relaunch. Only a terminal STATUS or a completed
-        // convergence settles the arm; a failure leaves it armed, so the next
-        // sign-in edge tries again.
-        log.warn("[host-controller] first install attempt failed", {
-          error: String(error),
-        });
-      } finally {
-        inFlight = false;
-      }
-    })();
-  };
-
-  // Subscribed even when already signed in, which the immediate-attempt path
-  // used to skip. The subscription is what a contained failure re-arms
-  // AGAINST: without it, a first attempt that threw at launch had no later
-  // edge to retry from at all. A successful or terminal attempt disposes it
-  // from inside, so the one-shot contract is unchanged for every path that
-  // actually reaches an outcome.
-  unsubscribe = identity.onChanged((signedIn) => {
-    if (signedIn) attempt();
-  });
-  if (identity.isSignedIn()) {
-    attempt();
-  }
-  return dispose;
-}
-
 export async function runLaunchHostConvergeReconcile(
   hostController: IpcHostController,
   menu: HostUpdateMenuSurface,
@@ -317,13 +446,16 @@ export async function runLaunchHostConvergeReconcile(
   // host; `isUnavailableInstalledHost` is what keeps it from ever being the
   // thing that performs the first install.
   //
-  // FIRST INSTALL IS NOT MISSING - it lives in `armFirstInstallOnSignIn`
-  // above, sign-in gated, and it is deliberately NOT an arm of this
-  // reconciler. If you arrived here tracing "nothing installs a first-ever
-  // host", that is the sibling to read; the two pinned tests below
-  // ("does not provision a host that was never installed", "does not turn a
-  // failed apply into a first install") are still true and still describe
-  // THIS function.
+  // FIRST INSTALL IS NOT MISSING - it lives in `armLocalHostBootOnSignIn`
+  // above, sign-in gated and retrying, and it is deliberately NOT an arm of
+  // this reconciler. If you arrived here tracing "nothing installs a
+  // first-ever host" or "the launch converge failed once and nothing tried
+  // again", that is the sibling to read; the two pinned tests below ("does
+  // not provision a host that was never installed", "does not turn a failed
+  // apply into a first install") are still true and still describe THIS
+  // function - a one-shot reconcile. When both this arm and that actor find
+  // an installed host down at launch, both ask `convergeReady(false)` and the
+  // controller coalesces the two onto one job.
   const recovery =
     !initialStatus.updateReady && isUnavailableInstalledHost(initialStatus)
       ? await hostController.convergeReady(false)

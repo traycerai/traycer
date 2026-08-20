@@ -176,9 +176,55 @@ function hostErrorToastMessageWithDetail(
 ) {
   const message = hostErrorToastMessage(error, fallback);
   if (message !== fallback) return message;
-  const detail = error.message.trim();
+  const detail = summarizeHostErrorDetail(error.message);
   if (detail.length === 0 || detail === fallback) return fallback;
   return `${fallback} ${detail}`;
+}
+
+/**
+ * How much of one host detail line a toast will show before cutting it.
+ *
+ * Sized from the failure this exists for: a `git worktree add` refusal names
+ * one branch, one absolute path and the git reason - around 190 characters
+ * for a realistic worktree under a nested repo - and cutting THAT is what a
+ * cap must not do, since the last clause ("a branch named 'x' already exists")
+ * is the whole point. Anything materially longer is a diagnostic dump, not a
+ * sentence, and the ellipsis is the honest thing to show for it.
+ */
+const HOST_ERROR_DETAIL_MAX_CHARS = 240;
+
+/**
+ * Bound a free-form host message down to something a toast can be.
+ *
+ * Host detail is UNBOUNDED by construction, and the producer this helper's
+ * `epic.createChat` caller targets is the clearest case: `worktreeCreateFailed`
+ * joins ONE line per failed workspace, each carrying an absolute path plus raw
+ * git stderr. Appended verbatim that is an arbitrarily tall toast full of local
+ * paths and command diagnostics.
+ *
+ * So: the first non-empty line, character-capped, and an explicit count of what
+ * was dropped. The count is not decoration - taking the first line silently
+ * would hide that two other folders also failed, which is exactly the kind of
+ * quiet omission this whole change set exists to remove. Blank lines are
+ * dropped before counting so a trailing newline never claims a phantom entry.
+ *
+ * No details/expand affordance deliberately: the first line names the first
+ * failing folder AND its reason, which is what someone acts on, and a
+ * disclosure widget is a surface to design rather than a bound to enforce.
+ */
+function summarizeHostErrorDetail(raw: string): string {
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return "";
+  const head = truncateWithEllipsis(lines[0], HOST_ERROR_DETAIL_MAX_CHARS);
+  return lines.length === 1 ? head : `${head} (+${lines.length - 1} more)`;
+}
+
+function truncateWithEllipsis(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars).trimEnd()}…`;
 }
 
 function isLastOwnerRevokeError(message: string): boolean {

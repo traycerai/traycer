@@ -14,26 +14,6 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
 
-/**
- * Pure decision helpers for the per-pack version-manager panel.
- *
- * Kept free of React so tests can prove action availability without mounting
- * hooks, and so the panel stays a thin renderer over product rules that live
- * once.
- */
-
-/** Bytes → compact human label. Null sizes (yank tombstones) stay null. */
-export function formatPackSizeBytes(sizeBytes: number | null): string | null {
-  if (sizeBytes === null) return null;
-  if (sizeBytes < 1024) return `${String(sizeBytes)} B`;
-  const kib = sizeBytes / 1024;
-  if (kib < 1024) return `${kib.toFixed(kib < 10 ? 1 : 0)} KB`;
-  const mib = kib / 1024;
-  if (mib < 1024) return `${mib.toFixed(mib < 10 ? 1 : 0)} MB`;
-  const gib = mib / 1024;
-  return `${gib.toFixed(gib < 10 ? 1 : 0)} GB`;
-}
-
 export function providerDisplayName(providerId: ProviderId): string {
   return PROVIDER_DISPLAY_NAMES[providerId];
 }
@@ -227,22 +207,60 @@ export function versionDeleteEligibility(
 }
 
 /**
+ * Whether the row shows a Delete control at all — enabled, or disabled with a
+ * reason.
+ *
+ * The test is "does this version have bytes on disk", which is exactly when
+ * asking to delete it is a meaningful request. A row with nothing on disk gets
+ * no control: there is nothing to remove and nothing to explain. A row that HAS
+ * bytes but may not drop them — the current version, a quarantined copy — gets
+ * a disabled one carrying {@link versionDeleteEligibility}'s reason.
+ *
+ * The panel used to hardcode the `current` arm beside `del.allowed` and had no
+ * arm for anything else, so the quarantine sentence this module computes was
+ * unreachable: a quarantined row rendered no Delete and no reason, which is the
+ * one state where "why can't I remove this?" actually needs answering.
+ */
+export function versionShowsDeleteAction(
+  version: ProviderPackVersion,
+): boolean {
+  return (
+    version.installState.status === "installed" ||
+    version.installState.status === "unusable"
+  );
+}
+
+/**
  * The ONE chip a version row may wear, or none.
  *
  * The row used to stack up to three (`Recommended` + `Current` + a
  * certification badge) beside a meta line that repeated two of them, so the
  * list read as a wall of labels rather than a list of versions. One chip, by
- * priority; everything else moves to the row's hover card.
+ * priority; everything else was moved to the row's hover card, and then
+ * deleted with it.
  *
- * `uncertified` deliberately earns NO chip. "No longer published" is
- * informational - the copy stays installed and stays usable - and it was the
- * single loudest thing on a healthy row. The three certifications that
- * genuinely BLOCK do outrank `Recommended`, because a version you cannot use
- * matters more than one we suggest.
+ * `uncertified` has come BACK, quietly. It was dropped on the argument that
+ * "no longer published" is informational — the copy stays installed and stays
+ * usable — and that it was the loudest thing on an otherwise healthy row. The
+ * first half of that was wrong: it is the only state on this surface that
+ * decides whether DELETING a version can be undone, because an unpublished
+ * one cannot be fetched again. That is worth a chip on a row whose delete
+ * button is one click from armed. The second half was right, and is answered
+ * by TONE rather than by silence — `unpublished` is the one chip that renders
+ * muted (see `chipVariant`), so it reads as a footnote and not as damage.
+ *
+ * Priority is by consequence: what you are RUNNING, then what you cannot use,
+ * then what you cannot get back, then what we merely suggest. `uncertified`
+ * therefore outranks `recommended` — a version can be both, and of the two
+ * only one of them changes what happens when you press delete.
+ *
+ * On a `current` row the chip is `Current` and the unpublished state goes
+ * unsaid. That costs nothing: delete is disabled for the current version, so
+ * the reversibility the chip exists to warn about is not in question there.
  */
 export type VersionRowChip = {
   readonly label: string;
-  readonly tone: "current" | "blocked" | "recommended";
+  readonly tone: "current" | "blocked" | "unpublished" | "recommended";
 };
 
 /**
@@ -273,37 +291,15 @@ export function versionRowChip(
     const label = certificationBadgeLabel(version.certification);
     if (label !== null) return { label, tone: "blocked" };
   }
+  if (version.certification === "uncertified") {
+    // Shorter than `certificationBadgeLabel`'s "No longer published": a chip
+    // sits inline beside the version it annotates, where three words crowd the
+    // number. The longer sentence is still what the WITHDRAWN family says,
+    // because those are refusals and deserve the room.
+    return { label: "Unpublished", tone: "unpublished" };
+  }
   if (version.recommended) return { label: "Recommended", tone: "recommended" };
   return null;
-}
-
-/**
- * Everything about a version that is NOT its number, its chip, or its action.
- *
- * Lives in the row's hover card. Returned as lines rather than one string so
- * the card can space them; `composeVersionRowMeta` still owns the one-line
- * composition of install-state + size + certification, including the
- * uncertified/unverified pair that must not read as "still usable".
- */
-export function versionDetailLines(
-  version: ProviderPackVersion,
-): readonly string[] {
-  const lines: string[] = [];
-  const meta = composeVersionRowMeta({
-    installState: version.installState,
-    certification: version.certification,
-    sizeLabel: formatPackSizeBytes(version.sizeBytes),
-    recommended: version.recommended,
-  });
-  if (meta.length > 0) lines.push(meta);
-
-  // Only ever stated for a row that RENDERS a disabled Use - an installed,
-  // non-current version. Anywhere else there is no control for it to explain.
-  if (version.installState.status === "installed" && !version.current) {
-    const useElig = versionUseEligibility(version);
-    if (!useElig.allowed) lines.push(`Can't switch to it — ${useElig.reason}`);
-  }
-  return lines;
 }
 
 export function certificationBadgeLabel(
@@ -318,24 +314,6 @@ export function certificationBadgeLabel(
       return "Below security minimum";
     case "host-ineligible":
       return "Not supported on this host";
-    case "eligible":
-      return null;
-  }
-}
-
-export function certificationMetaLine(
-  certification: ProviderPackVersionCertification,
-): string | null {
-  switch (certification) {
-    case "yanked":
-      return "Withdrawn by publisher";
-    case "uncertified":
-      // Do not claim "still usable" — install-state is a separate axis (finding 7).
-      return "No longer published · remains on disk";
-    case "below-security-floor":
-      return "Below the publisher's security minimum";
-    case "host-ineligible":
-      return "This Traycer release cannot drive this version";
     case "eligible":
       return null;
   }
@@ -357,32 +335,97 @@ export function unusableReasonLabel(
   }
 }
 
-/**
- * Composed row metadata. Certification and install-state are independent wire
- * axes; this helper is the only place that concatenates them so contradictory
- * "still usable" + "could not verify" pairs cannot appear (finding 7).
- */
-export function composeVersionRowMeta(options: {
-  readonly installState: ProviderPackVersionInstallState;
-  readonly certification: ProviderPackVersionCertification;
-  readonly sizeLabel: string | null;
-  readonly recommended: boolean;
-}): string {
-  const parts: string[] = [];
-  const installPart = installStateMetaPart(options.installState);
-  if (installPart !== null) parts.push(installPart);
-  if (options.sizeLabel !== null) parts.push(options.sizeLabel);
-  if (options.recommended) {
-    parts.push("pairs with this Traycer release");
+export function installErrorReasonLabel(
+  reason: ProviderManagedInstallErrorReason,
+): string {
+  switch (reason) {
+    case "disk-full":
+      return "Not enough disk space to install";
+    case "network":
+      return "Download failed — network error";
+    case "verification":
+      return "Downloaded bytes failed verification";
+    case "live-owner-stalled":
+      return "Another process was downloading this and stalled";
+    case "unknown":
+      return "Install failed";
+    case "unrepairable":
+      return "This install cannot be repaired on this machine";
+    case "trust-unavailable":
+      return "Trust is unavailable on this host";
+    case "local-storage-mismatch":
+      return "The local copy does not match the published version";
   }
+}
 
-  const certPart = certificationMetaForCompose(
-    options.certification,
-    options.installState,
-  );
-  if (certPart !== null) parts.push(certPart);
+/**
+ * The one sentence a row owes about its OWN health, or null when it is fine.
+ *
+ * This exists because deleting the hover card deleted the only place a broken
+ * row said what was wrong with it. That was fine for the card's other content
+ * — `Installed`, the size, `pairs with this Traycer release` all restated
+ * things the row already showed — but NOT for these two states, which nothing
+ * else on the row can express:
+ *
+ *  - a `condemned` install offers no Download (correctly — it cannot be
+ *    repaired) and no Use, so without a sentence it is a version with a delete
+ *    button and no explanation of why it has nothing else;
+ *  - an `error` row offers `Retry` only when the reason is retryable, so the
+ *    non-retryable half is silent for the same reason;
+ *  - an `unverified` install offers Download instead of Use, which without a
+ *    sentence just looks like an installed version whose Use button is missing.
+ *
+ * Healthy rows return null and stay a number, a chip and their controls — the
+ * point of the redesign. Trouble is the exception that earns a line, and it
+ * earns an INLINE one rather than a hover card, because a state you have to go
+ * hunting for is a state most people never learn about.
+ *
+ * `quarantined` is deliberately included even though its bytes are intact: the
+ * disabled Delete's tooltip says the same thing, and a tooltip is not where a
+ * row should first admit it is being held.
+ *
+ * The CURRENT row is the one other place a blocking fact has nowhere to go.
+ * `versionRowChip` gives `Current` the chip slot unconditionally — the version
+ * in use has to be identifiable before anything else — so a current version
+ * that is later withdrawn, dropped below the security floor, or outgrown by
+ * this Traycer release shows `Current`, dims, and says nothing. The hover card
+ * used to carry that sentence; this line does now. Non-current blocked rows
+ * already wear the certification as their chip, so they get no second copy.
+ */
+export function versionTroubleLine(
+  version: ProviderPackVersion,
+): string | null {
+  if (version.installState.status === "unusable") {
+    return unusableReasonLabel(version.installState.reason);
+  }
+  if (version.installState.status === "error") {
+    // The typed reason ONLY. `installState.message` is documented as the
+    // underlying operator-facing detail and can carry raw filesystem or
+    // network text; it must never reach this surface.
+    return installErrorReasonLabel(version.installState.reason);
+  }
+  if (version.current && isBlockingCertification(version.certification)) {
+    return certificationMetaLine(version.certification);
+  }
+  return null;
+}
 
-  return parts.join(" · ");
+export function certificationMetaLine(
+  certification: ProviderPackVersionCertification,
+): string | null {
+  switch (certification) {
+    case "yanked":
+      return "Withdrawn by publisher";
+    case "uncertified":
+      // Do not claim "still usable" — install-state is a separate axis (finding 7).
+      return "No longer published · remains on disk";
+    case "below-security-floor":
+      return "Below the publisher's security minimum";
+    case "host-ineligible":
+      return "This Traycer release cannot drive this version";
+    case "eligible":
+      return null;
+  }
 }
 
 /**
@@ -517,93 +560,6 @@ export function comparePackVersionsDescending(
   return left < right ? -1 : 1;
 }
 
-// ---------------------------------------------------------------------------
-// Internals
-// ---------------------------------------------------------------------------
-
-function installStateMetaPart(
-  installState: ProviderPackVersionInstallState,
-): string | null {
-  switch (installState.status) {
-    case "installed":
-      return "Installed";
-    case "absent":
-      return "Not installed";
-    case "downloading":
-      return installState.percent === null
-        ? "Downloading…"
-        : `Downloading · ${String(Math.round(installState.percent))}%`;
-    case "unusable":
-      return unusableReasonLabel(installState.reason);
-    case "error":
-      return installErrorReasonLabel(installState.reason);
-  }
-}
-
-/**
- * User-facing copy for a failed install, derived from the TYPED reason.
- *
- * The wire `message` is deliberately not rendered. The schema documents it as
- * the underlying operator-facing detail, so it can carry raw filesystem and
- * network text; and it says nothing about the only thing the reader has to
- * decide - whether waiting, retrying, or freeing disk is what helps. The typed
- * reason carries exactly that, so the renderer owns the sentence.
- *
- * Total over the union with no `default`, so a ninth reason is a compile error
- * here rather than a raw diagnostic reaching the row.
- */
-export function installErrorReasonLabel(
-  reason: ProviderManagedInstallErrorReason,
-): string {
-  switch (reason) {
-    case "disk-full":
-      return "Not enough disk space to install";
-    case "network":
-      return "Download failed — network error";
-    case "verification":
-      return "Downloaded bytes failed verification";
-    case "live-owner-stalled":
-      return "Another process was downloading this and stalled";
-    case "unknown":
-      return "Install failed";
-    case "unrepairable":
-      return "This install cannot be repaired on this machine";
-    case "trust-unavailable":
-      return "Trust is unavailable on this host";
-    case "local-storage-mismatch":
-      return "The local copy does not match the published version";
-  }
-}
-
-function certificationMetaForCompose(
-  certification: ProviderPackVersionCertification,
-  installState: ProviderPackVersionInstallState,
-): string | null {
-  if (certification === "eligible") return null;
-
-  // Uncertified + indeterminate verification: one coherent claim — remains on
-  // disk, not proven usable, not proven damaged.
-  if (
-    certification === "uncertified" &&
-    installState.status === "unusable" &&
-    installState.reason === "unverified"
-  ) {
-    return "No longer published · remains on disk";
-  }
-
-  return certificationMetaLine(certification);
-}
-
-/**
- * Copy for the reasons the Retry allow-list deliberately excludes.
- *
- * The parameter is the protocol union, not `string`. With `string` the
- * `default` arm absorbed every typo and every future reason silently; now a
- * new non-retryable reason that needs its own sentence shows up as an
- * unhandled case at the call site rather than as generic copy in the UI. The
- * `default` stays for the reasons that are on the allow-list and therefore
- * never reach here.
- */
 function nonRetryableErrorDownloadReason(
   reason: ProviderManagedInstallErrorReason,
 ): string {
