@@ -324,14 +324,14 @@ export function useRecentWorkspaces(args: {
 
   const locate = useCallback(
     async (workspacePath: string): Promise<boolean> => {
-      const result = await pickAndPrepareFolders(false);
+      const result = await pickAndPrepareFolders(false).catch(() => null);
       if (result === null || activeHostIdRef.current !== result.hostId) {
         return false;
       }
       const activatedPaths = await activatePreparedFolders(
         result.folders,
         result.hostId,
-      );
+      ).catch((): ReadonlyArray<string> => []);
       if (activatedPaths.length === 0) return false;
       for (const path of activatedPaths) {
         recordRecent({

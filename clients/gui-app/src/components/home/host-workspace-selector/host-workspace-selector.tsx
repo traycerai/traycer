@@ -2808,7 +2808,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     hostId: props.activeHostId,
     activePaths: bindingWorkspacePaths,
     activatePreparedFolders: activatePreparedFoldersForOwner,
-    disabled: surface.kind !== "chat" || activeRunLocksBinding,
+    disabled:
+      surface.kind !== "chat" ||
+      activeRunLocksBinding ||
+      !surface.bindingResolved,
     surface: stagedKey.surface,
   });
   const {
