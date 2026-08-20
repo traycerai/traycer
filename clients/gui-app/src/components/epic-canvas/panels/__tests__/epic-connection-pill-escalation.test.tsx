@@ -63,6 +63,30 @@ describe("useLinkDownTooLong", () => {
     expect(result.current).toBe(true);
   });
 
+  // Same loop, epic with renderer-only unsynced edits: the handshake lap
+  // derives `syncing` instead of `connected` (open socket + local dirty, no
+  // genuine cloud frame yet - `deriveEpicSyncPillState` rule 2). It is the
+  // same absence of evidence wearing a different label, so it must not end
+  // the outage either - resetting here is exactly how the escalation stayed
+  // invisible for the user most likely to be watching it: the one with
+  // unsaved work.
+  it("keeps one outage's clock running across handshake-only syncing flips", () => {
+    const { result, rerender } = renderState("reconnecting");
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    rerender({ state: "syncing" });
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    rerender({ state: "reconnecting" });
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(result.current).toBe(true);
+  });
+
   it("resets on real recovery so the next outage starts un-escalated", () => {
     const { result, rerender } = renderState("reconnecting");
 

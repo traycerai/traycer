@@ -29,15 +29,24 @@ const LINK_DOWN_ESCALATION_MS = 60_000;
  */
 export function useLinkDownTooLong(state: EpicSyncPillState): boolean {
   const isLinkDown = state === "connecting" || state === "reconnecting";
-  // `connected` is the NEUTRAL rung - the socket is up but nothing about cloud
-  // or durability has been established yet (see `deriveEpicSyncPillState` rule
-  // 3). It is therefore NOT proof of recovery, and treating it as such is what
-  // this clock has to survive: in an ack-then-fatal loop the transport reaches
-  // `open` on every handshake before the resolver's retryable close lands, so
-  // resetting here restarted the minute on each cycle and the escalated copy
-  // could never appear for the exact loop it was written to explain. Only a
-  // state that took real application evidence to reach ends the outage.
-  const hasRecovered = !isLinkDown && state !== "connected";
+  // `connected` and `syncing` are the two rungs an open socket can reach with
+  // NO application evidence behind it - `connected` when nothing else is
+  // known (`deriveEpicSyncPillState` rule 3), `syncing` when renderer-only
+  // unsynced work exists but no genuine cloud frame has landed this cycle
+  // (rule 2: an open WebSocket proves neither receipt nor persistence).
+  // Neither is proof of recovery, and treating either as such is what this
+  // clock has to survive: in an ack-then-fatal loop the transport reaches
+  // `open` on every handshake before the resolver's retryable close lands -
+  // deriving `connected` on a clean epic and `syncing` on one with pending
+  // local edits - so resetting on them restarted the minute each cycle and
+  // the escalated copy could never appear for the exact loop it was written
+  // to explain. Every remaining state either required a genuine cloud-status
+  // frame this cycle (`synced`, `hostPending`, the `offline*` family) or is
+  // the terminal `offline`, where no retry is running at all - so "not link
+  // down and not one of these two" is exactly "application evidence arrived,
+  // or the loop ended".
+  const hasRecovered =
+    !isLinkDown && state !== "connected" && state !== "syncing";
   const [escalated, setEscalated] = useState(false);
   // The clock runs per OUTAGE, entered on the first link-down render and left
   // only on real recovery. Keying the timer on "not recovered" alone armed it

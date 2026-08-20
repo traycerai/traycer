@@ -1665,6 +1665,26 @@ export class RemoteSession<
       if (parsed.data.details.retryable === true && this.phase !== "closed") {
         this.restoredStreamIds.delete(message.streamId);
         this.outboundSeq.delete(message.streamId);
+        // The verdict just tombstoned this id on BOTH peers: the host marks a
+        // stream terminal whenever it sends a FATAL, and its R-2 ingest check
+        // then drops every later frame for that id - a SUBSCRIBE included -
+        // so a re-open under the same id can never be answered on this
+        // connection. It would sit `reconnecting` forever against a host that
+        // is deliberately ignoring it (only the test fake, which now enforces
+        // the same invariant, ever accepted one). The re-open therefore rides
+        // a FRESH id, exactly as if the consumer had subscribed anew; the
+        // attempt count moves with the stream so the backoff keeps climbing
+        // across re-keys, and the old id stays tombstoned so relay-delayed
+        // frames from before the verdict remain dead.
+        this.subscriptions.delete(message.streamId);
+        const reopenAttempts = this.streamReopenAttempts.get(message.streamId);
+        this.streamReopenAttempts.delete(message.streamId);
+        const freshStreamId = this.allocateStreamId();
+        stream.adoptStreamIdForReopen(freshStreamId);
+        this.subscriptions.set(freshStreamId, stream);
+        if (reopenAttempts !== undefined) {
+          this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
+        }
         this.scheduleStreamReopen(stream);
         this.maybeReachReadyBoundary();
         return;
@@ -1855,19 +1875,14 @@ export class RemoteSession<
       this.subscriptions.delete(stream.streamId);
       return;
     }
-    // Subscribing this id IS the decision to accept frames for it again, so
-    // any tombstone a retryable FATAL left must be lifted here - in the ONE
-    // place every re-subscribe path funnels through. The per-stream reopen
-    // timer is not the only caller: a session drop during its backoff clears
-    // the timer and the next `handleOpenAck` replays the subscription instead,
-    // and lifting only inside the timer left that replay earning frames
-    // `handleRelayFrame` then discarded forever - `reconnecting` on the wire,
-    // permanently dead in fact. The backoff quarantine is preserved: while the
-    // timer is still pending nothing subscribes the id, so relay-delayed
-    // chunks from before the fatal keep being discarded until a re-subscribe
-    // actually goes out.
-    this.terminalStreamIds.delete(stream.streamId);
-    connection.reassembler.forget(stream.streamId);
+    // No tombstone to lift here - deliberately. A tombstoned id is dead on
+    // BOTH peers: the host's R-2 ingest drop covers a SUBSCRIBE too, so
+    // re-subscribing one could never be answered, and an earlier draft that
+    // lifted the client's own tombstone here merely made the client accept
+    // frames the host would never send. Instead the retryable-FATAL branch
+    // re-keys its stream to a FRESH id at the verdict, which is what keeps
+    // every id this method subscribes un-tombstoned by construction - every
+    // other terminal path removes its stream from `subscriptions` outright.
     const prepared = prepareStreamSubscribeRequest(
       this.options.streamRegistry,
       stream.method,
@@ -3004,14 +3019,12 @@ export class RemoteSession<
       }
       const connection = this.connection;
       // Not ready: the session is between sockets and will replay every
-      // subscription itself once the next `open` is accepted -
-      // `openSubscription` lifts the id's tombstone when that replay runs, so
-      // returning here cannot strand the stream behind a stale tombstone.
+      // subscription itself once the next `open` is accepted. The stream
+      // already carries its fresh, never-tombstoned id (re-keyed at the
+      // FATAL), so returning here cannot strand it.
       if (connection === null || this.phase !== "ready") {
         return;
       }
-      // The tombstone lift (and reassembler forget) lives in
-      // `openSubscription`, shared with the session-level replay.
       this.openSubscription(connection, stream);
     }, delay);
     this.streamReopenTimers.set(streamId, timer);
