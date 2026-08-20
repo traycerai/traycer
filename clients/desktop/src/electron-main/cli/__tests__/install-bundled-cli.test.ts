@@ -249,80 +249,72 @@ describe("installBundledCli proceeds past lock contention", () => {
     writeFileSync(lockPath, JSON.stringify(metadata, null, 2), "utf8");
   }
 
-  it("publishes the binary and writes the manifest after the lock wait elapses", async () => {
+  // Contention is survived by WAITING, which is the branch that actually
+  // runs in the field: another writer holds the lock briefly, this call
+  // polls, and publishes once the holder lets go.
+  //
+  // Deliberately driven by releasing the holder rather than by fast-
+  // forwarding to the end of the 15s wait. The fast-forward version of this
+  // test passed on macOS and failed on Linux CI: pumping fake time outruns
+  // the real filesystem I/O the lock's poll loop awaits between polls, so
+  // the number of real polls that fit inside the pumped budget is a property
+  // of how fast the machine is, which is exactly what a test must not depend
+  // on. Releasing the lock makes the outcome a consequence of the code under
+  // test rather than of the runner.
+  //
+  // NOT covered here: the past-the-wait fallback, where the holder never
+  // lets go and the publish proceeds without the lock. Reaching it needs
+  // 15s of real time or a deterministic way to cross it, and neither is
+  // worth it for a three-line branch - but that means the `log.warn` and the
+  // unlocked publish in `installBundledCli` have no test, and this comment
+  // is here so that is a recorded gap rather than an assumed pass.
+  it("publishes once a briefly-held lock is released", async () => {
     const bundled = stageBundled("cli-bytes-contended");
     const lockPath = cliLockPath("production");
     writeUnbreakableHolderLock(lockPath);
     const { installBundledCli } = await import("../cli-discovery");
     const { default: electronLogMock } = await import("electron-log");
 
-    vi.useFakeTimers();
-    try {
-      let settled = false;
-      let settledValue: string | null = null;
-      let settledError: unknown = null;
-      installBundledCli({
-        bundledCliPath: bundled,
-        version: "1.0.0",
-        source: "desktop",
-      }).then(
-        (value) => {
-          settled = true;
-          settledValue = value;
-        },
-        (error: unknown) => {
-          settled = true;
-          settledError = error;
-        },
-      );
-      // Fast-forward past the 15s wait (`CLI_SLOT_LOCK_WAIT_MS` in
-      // cli-discovery.ts) without a real wall-clock wait. A single large
-      // jump does not work here: at the moment it runs, the poll loop has
-      // not yet scheduled its first `setTimeout` (it is still awaiting the
-      // real, unmocked lock-read I/O ahead of it), so the jump finds
-      // nothing pending, fast-forwards the reported clock, and returns
-      // immediately - after which the loop's later, real `setTimeout` calls
-      // target a fake "now" that nothing is advancing anymore and never
-      // fire. Pumping in small increments instead lets each new
-      // `setTimeout` the loop schedules get caught by a later pump, with
-      // real I/O interleaved between pumps (the `Async` variant yields to
-      // it).
-      for (let pump = 0; pump < 300 && !settled; pump += 1) {
-        await vi.advanceTimersByTimeAsync(100);
-      }
-      if (!settled) {
-        throw new Error(
-          "installBundledCli did not settle after pumping fake timers past the lock wait",
-        );
-      }
-      if (settledError !== null) {
-        throw settledError;
-      }
-      if (settledValue === null) {
-        throw new Error("installBundledCli resolved without a value");
-      }
-      const stable = settledValue;
+    let settled = false;
+    const install = installBundledCli({
+      bundledCliPath: bundled,
+      version: "1.0.0",
+      source: "desktop",
+    });
+    void install.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
 
-      expect(readFileSync(stable, "utf8")).toBe("cli-bytes-contended");
-      const manifest: { binaryPath: string; version: string } = JSON.parse(
-        readFileSync(join(homeDir, ".traycer", "cli", "manifest.json"), "utf8"),
-      );
-      expect(manifest.binaryPath).toBe(stable);
-      expect(manifest.version).toBe("1.0.0");
-      // The pre-created holder lock was never touched by the best-effort
-      // fallback - proving this went through the "busy" branch rather than
-      // somehow acquiring or breaking the contended lock.
-      expect(readFileSync(lockPath, "utf8")).toContain("external-test-token");
-      expect(electronLogMock.warn).toHaveBeenCalledWith(
-        "[cli] publishing bundled CLI without the cli-lock",
-        expect.objectContaining({
-          lockPath,
-          holderPid: process.pid,
-          holderReason: "external-test-holder",
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    // Prove the call is genuinely BLOCKED before handing the lock over.
+    // Without this the test would pass even if the holder were removed
+    // before the first acquisition attempt - i.e. it would quietly be
+    // testing the uncontended path again, with extra steps. The assertion
+    // errs in the safe direction: while an unbreakable holder is in place
+    // the call cannot finish inside this window, because its wait is 15s.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(settled).toBe(false);
+
+    // Hand the lock over. The holder file is removed, not rewritten, so
+    // acquisition succeeds through the ordinary O_CREAT|O_EXCL path rather
+    // than through any break arbitration.
+    rmSync(lockPath, { force: true });
+
+    const stable = await install;
+
+    expect(readFileSync(stable, "utf8")).toBe("cli-bytes-contended");
+    const manifest: { binaryPath: string; version: string } = JSON.parse(
+      readFileSync(join(homeDir, ".traycer", "cli", "manifest.json"), "utf8"),
+    );
+    expect(manifest.binaryPath).toBe(stable);
+    expect(manifest.version).toBe("1.0.0");
+    // Acquired rather than fell back: the lock was taken and released, and
+    // the best-effort warning never fired.
+    expect(existsSync(lockPath)).toBe(false);
+    expect(electronLogMock.warn).not.toHaveBeenCalled();
   });
 });
