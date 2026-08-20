@@ -1492,21 +1492,19 @@ export interface CliInstallManifestSnapshot {
 export type DoctorRepairIntent = "converge-ready" | "register-service";
 
 /**
- * A Doctor repair's answer. `lane-busy` and `host-changed` mean NOTHING was
- * enqueued — the caller renders the message as information, the same way a
- * host's own refusal is rendered.
- */
-/**
  * The recovery console's repairs, which QUEUE rather than refusing.
  *
- * Same four fix actions the watched sheet sends through
- * `runDoctorRepairIfIdle`, minus the admission test: this console repairs a
- * host that is already down, so waiting behind whatever is running is the
- * point, and a surface reachable when Settings cannot render must never learn
- * to say no. That exemption is about TIMING only. Identity is a separate
- * question and is enforced here exactly as it is everywhere else — the console
- * outlives the host it names, and a replacement must not inherit repairs
- * aimed at its predecessor.
+ * The same four Doctor fix actions the WATCHED sheet sends through its
+ * refusing dispatches — install and service-install to
+ * `runDoctorRepairIfIdle`, start and restart to `restartHostIfIdle` — minus
+ * the admission test. This console repairs a host that is already down, so
+ * waiting behind whatever is running is the point, and a surface reachable
+ * when Settings cannot render must never learn to say no.
+ *
+ * That exemption is about TIMING only. Identity is a separate question and is
+ * enforced here exactly as it is everywhere else — the console outlives the
+ * host it names, and a replacement must not inherit repairs aimed at its
+ * predecessor.
  */
 export type QueuedDoctorRepair =
   "converge-ready" | "register-service" | "restart";
@@ -1521,6 +1519,11 @@ export type QueuedDoctorRepairResult =
   | { readonly kind: "applied" }
   | { readonly kind: "declined"; readonly message: string };
 
+/**
+ * A Doctor repair's answer. `lane-busy` and `host-changed` mean NOTHING was
+ * enqueued — the caller renders the message as information, the same way a
+ * host's own refusal is rendered.
+ */
 export type DoctorRepairDispatch =
   | { readonly kind: "lane-busy"; readonly message: string }
   | { readonly kind: "host-changed"; readonly message: string }
@@ -1759,17 +1762,6 @@ export interface IHostManagement {
     readonly expectedHostId: string;
   }) => Promise<HostRestartRequestResult>;
   /**
-   * The Doctor sheet's two lifecycle repairs, refused when the exclusive lane
-   * is occupied or this machine's host is no longer the expected one.
-   *
-   * `convergeReady` converges to LATEST and `registerService` adds a service
-   * cycle; both QUEUE behind a running intent rather than being refused, so a
-   * repair clicked during a pinned install lands after it and overrides the
-   * version the person actually chose. The other repairs keep the queueing
-   * path: they run against a host that is already down, where waiting is the
-   * point.
-   */
-  /**
    * The down-host recovery console's four lifecycle repairs, identity-fenced
    * and QUEUEING. See {@link QueuedDoctorRepair} for why those two properties
    * belong together rather than being traded off.
@@ -1778,6 +1770,18 @@ export interface IHostManagement {
     readonly repair: QueuedDoctorRepair;
     readonly expectedHostId: string;
   }) => Promise<QueuedDoctorRepairResult>;
+  /**
+   * The WATCHED Doctor sheet's two lifecycle repairs, refused when the
+   * exclusive lane is occupied or this machine's host is no longer the
+   * expected one.
+   *
+   * `convergeReady` converges to LATEST and `registerService` adds a service
+   * cycle; both QUEUE behind a running intent rather than being refused, so a
+   * repair clicked during a pinned install would otherwise land after it and
+   * override the version the person actually chose. That sheet's start/restart
+   * take `restartHostIfIdle` above, not this method; the down-host console
+   * keeps the queueing path for all four via `runDoctorRepairQueued`.
+   */
   readonly runDoctorRepairIfIdle: (input: {
     readonly repair: DoctorRepairIntent;
     readonly expectedHostId: string;

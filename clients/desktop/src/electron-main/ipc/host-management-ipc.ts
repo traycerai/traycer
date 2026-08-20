@@ -1230,6 +1230,17 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           ? { kind: "declined", message: result.message }
           : { kind: "applied" };
       }
+      // Clicking Install host or Register service on a Doctor report IS the
+      // explicit user-driven reprovision this helper exists for - the same
+      // gesture as the Updates row's own install - so the removal sentinel
+      // has to come off first. `traycerServiceRegister` already did this and
+      // routing through here dropped it; `traycerHostConvergeReady` never did,
+      // which is why an "Install host" on a removed host reported success
+      // having done nothing: `convergeReady` short-circuits to
+      // `ok {running: false}` while the sentinel is set, and `okOrThrow`
+      // accepts it. Restart is deliberately NOT a reprovision and keeps its
+      // own removed-by-user deferral.
+      await clearHostRemovalIfSet();
       // Anything else that stopped this repair is a genuine failure and
       // rejects, matching what the renderer did when it called the unfenced
       // methods directly. Branched rather than sharing one `okOrThrow` call:
