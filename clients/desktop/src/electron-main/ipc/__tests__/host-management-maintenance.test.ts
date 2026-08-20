@@ -126,12 +126,17 @@ function installFakeCli(
     const actual = await vi.importActual<
       typeof import("../../cli/traycer-cli")
     >("../../cli/traycer-cli");
+    const runJson = (args: readonly string[]) => {
+      bundledCliCalls.push([...args]);
+      return run(args, actual.TraycerCliError);
+    };
     return {
       ...actual,
-      runBundledTraycerCliJson: vi.fn((args: readonly string[]) => {
-        bundledCliCalls.push([...args]);
-        return run(args, actual.TraycerCliError);
-      }),
+      // Both the maintenance projections and `traycerHostAvailable` have to
+      // see the same throw so a test can pin that the two lanes now DIVERGE
+      // on `E_HOST_VERIFY_FAILED`.
+      runBundledTraycerCliJson: vi.fn(runJson),
+      runTraycerCliJson: vi.fn(runJson),
     };
   });
 }
@@ -353,7 +358,14 @@ describe("maintenanceUpdateCheck IPC", () => {
     );
   });
 
-  it("normalizes E_HOST_VERIFY_FAILED to an empty ok manifest, not cli-failed", async () => {
+  it("classifies E_HOST_VERIFY_FAILED as cli-failed — the host never synthesises a manifest", async () => {
+    // The host's own `host.update.check` resolver returns
+    // `{outcome: result.kind}` for any non-ok CLI result and never
+    // synthesises a manifest. A protocol manifest with `latest: ""`
+    // renders "v is available, but <host> can't install it." whenever the
+    // installed version is unknown. This lane answers that same wire
+    // contract, so every failure — including a build without trusted
+    // registry keys — classifies through `classifyCliShellError`.
     installFakeCli((_args, CliError) =>
       Promise.reject(
         new CliError(
@@ -382,15 +394,57 @@ describe("maintenanceUpdateCheck IPC", () => {
     }
     await expect(handler(null, { includePreReleases: false })).resolves.toEqual(
       {
-        outcome: "ok",
-        manifest: {
-          schemaVersion: 1,
-          generatedAt: "",
-          latest: "",
-          versions: [],
-        },
+        outcome: "cli-failed",
       },
     );
+  });
+
+  it("E_HOST_VERIFY_FAILED classifies on the maintenance lane while traycerHostAvailable still returns an empty snapshot", async () => {
+    // Deliberate divergence: `traycerHostAvailable`'s consumer reads an
+    // empty snapshot as "nothing to install". The maintenance wire
+    // contract must not synthesise that same empty `latest`. This test
+    // is red if the maintenance handler starts normalising again.
+    installFakeCli((_args, CliError) =>
+      Promise.reject(
+        new CliError(
+          {
+            message: "no trusted registry keys",
+            code: "E_HOST_VERIFY_FAILED",
+            details: null,
+            exitCode: 1,
+            stderrTail: "E_HOST_VERIFY_FAILED",
+          },
+          null,
+        ),
+      ),
+    );
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const maintenance = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    );
+    const available = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostAvailable,
+    );
+    if (maintenance === undefined || available === undefined) {
+      throw new Error("expected both update-check handlers");
+    }
+    const maintenanceResult = await maintenance(null, {
+      includePreReleases: false,
+    });
+    const availableResult = await available(null, null);
+    expect(maintenanceResult).toEqual({ outcome: "cli-failed" });
+    expect(availableResult).toEqual({
+      generatedAt: "",
+      latest: "",
+      platformKey: "",
+      manifestUrl: "",
+      versions: [],
+    });
   });
 });
 

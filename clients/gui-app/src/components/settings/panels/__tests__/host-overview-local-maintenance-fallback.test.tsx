@@ -118,6 +118,16 @@ const SERVICE_STOPPED: HostDoctorIssue = {
   details: null,
 };
 
+const CLI_UPGRADE_PENDING: HostDoctorIssue = {
+  code: "CLI_UPGRADE_PENDING",
+  severity: "warning",
+  title: "CLI upgrade pending (2.0.0)",
+  message: "Restart the host service to finalise the swap.",
+  fixAction: "host-restart",
+  terminalCommand: "traycer host restart --channel prod",
+  details: null,
+};
+
 function releasedFloorHandshake(): void {
   recordNegotiatedHostMethods(HOST_ID, RELEASED_FLOOR_METHODS);
 }
@@ -590,5 +600,35 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     expect(vi.mocked(management.maintenanceUpdateCheck).mock.calls.length).toBe(
       fallbackChecks,
     );
+  });
+
+  it("a host-restart doctor fix on a capability-false local host dispatches the bridge respawn, not host.restart", async () => {
+    // Discriminator: if `rpcRestartSupported` is hardcoded true, the fix
+    // button takes the RPC route and `fixture.restartCalls()` increments
+    // instead of `management.restartHost`.
+    const { management, fixture } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHost: () => Promise.resolve({ kind: "restarted" as const }),
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [CLI_UPGRADE_PENDING],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
+    );
+
+    await waitFor(() => {
+      expect(management.restartHost).toHaveBeenCalledTimes(1);
+    });
+    expect(fixture.restartCalls()).toBe(0);
   });
 });

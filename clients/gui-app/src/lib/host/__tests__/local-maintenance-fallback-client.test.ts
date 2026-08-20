@@ -5,9 +5,11 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  HostControllerStatus,
   IHostManagement,
   InstallVersionOk,
   MaintenanceDoctorProjection,
+  MutationLaneStatus,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
@@ -167,7 +169,85 @@ describe("localWsDoctorResponse", () => {
   });
 });
 
+function idleControllerStatus(): HostControllerStatus {
+  return {
+    download: null,
+    mutation: null,
+    installedVersion: "1.1.11",
+    latestVersion: "1.2.0",
+    stagedVersion: null,
+    installedRuntimeVersion: "1.1.11",
+    runningRuntimeVersion: "1.1.11",
+    updateReady: false,
+    activation: "activated",
+    reachable: true,
+    removedByUser: false,
+    checkedAt: "2026-08-12T00:00:00Z",
+  };
+}
+
+function occupiedControllerStatus(
+  mutation: MutationLaneStatus,
+): HostControllerStatus {
+  return { ...idleControllerStatus(), mutation };
+}
+
 describe("buildMaintenanceFallbackServeMap", () => {
+  it("refuses host.update.install with already-updating when the shared controller lane is occupied, without calling installVersion", async () => {
+    // Discriminator: if the gate is removed, this becomes `accepted` and
+    // `installVersion` is called — the desktop controller QUEUES a competing
+    // intent rather than refusing it.
+    const installVersion = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      }),
+    );
+    const getHostControllerStatus = vi.fn(() =>
+      Promise.resolve(
+        occupiedControllerStatus({
+          kind: "apply",
+          progress: null,
+          startedAt: "2026-08-12T00:00:00Z",
+        }),
+      ),
+    );
+    const management = buildOverviewManagement({
+      getHostControllerStatus,
+      installVersion,
+    });
+    const serve = buildMaintenanceFallbackServeMap(management);
+
+    await expect(
+      serve["host.update.install"]({ version: "1.2.0", force: false }),
+    ).resolves.toEqual({ outcome: "already-updating" });
+    expect(getHostControllerStatus).toHaveBeenCalledTimes(1);
+    expect(installVersion).not.toHaveBeenCalled();
+  });
+
+  it("installs through installVersion when the shared controller lane is null", async () => {
+    const installVersion = vi.fn((version: string, _force: boolean) =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: version, runningActivated: true },
+      }),
+    );
+    const getHostControllerStatus = vi.fn(() =>
+      Promise.resolve(idleControllerStatus()),
+    );
+    const management = buildOverviewManagement({
+      getHostControllerStatus,
+      installVersion,
+    });
+    const serve = buildMaintenanceFallbackServeMap(management);
+
+    await expect(
+      serve["host.update.install"]({ version: "1.2.0", force: false }),
+    ).resolves.toEqual({ outcome: "accepted" });
+    expect(getHostControllerStatus).toHaveBeenCalledTimes(1);
+    expect(installVersion).toHaveBeenCalledWith("1.2.0", false);
+  });
+
   it("forwards includePreReleases verbatim on host.update.check", async () => {
     const maintenanceUpdateCheck = vi.fn(
       (_input: { readonly includePreReleases: boolean }) =>
