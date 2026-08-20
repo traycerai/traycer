@@ -2194,8 +2194,10 @@ it("packaged, a MANIFEST-anchored stage ignores the slot's claimed version", asy
 // registered service.
 //
 // It asks that of the link's TARGET, never of the slot, and the three
-// tests below are the whole truth table: target newer, target older, target
-// unable to answer. Which path is probed is itself load-bearing - a probe
+// tests below are the whole truth table: target newer (deferred to, never
+// copied - the planner stages only manifest-anchored bytes or the running
+// image), target older, target unable to answer. Which path is probed is
+// itself load-bearing - a probe
 // SPAWNS what it is given, every packaged CLI refreshes before it parses
 // `--version`, and spawned THROUGH the symlink the child's
 // `process.execPath` resolves to the target, missing the
@@ -2208,7 +2210,7 @@ it("packaged, a MANIFEST-anchored stage ignores the slot's claimed version", asy
 // Windows symlink creation needs Developer Mode, which CI runners do not
 // grant - `symlinkSync` throws before the behavior under test runs.
 it.skipIf(process.platform === "win32")(
-  "packaged, no manifest, legacy SYMLINK to a NEWER binary: de-symlinks from the link's target",
+  "packaged, no manifest, legacy SYMLINK to a NEWER binary: leaves the link for the target to heal, copies nothing",
   async () => {
     seaState.current = true;
     const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
@@ -2232,13 +2234,17 @@ it.skipIf(process.platform === "win32")(
       refreshWellKnownSlotIfStale(ENVIRONMENT),
     );
 
-    expect(result?.staged).toBe("staged");
+    // The canned mock's child only PRINTS - it does not run the refresh the
+    // real spawned CLI would. That is exactly what lets this test isolate
+    // the parent's own conduct: with the healer inert, an untouched symlink
+    // proves the parent copied nothing and deferred the repair, rather than
+    // staging bytes it merely found at the end of a link. The re-entrant
+    // test below drives the real child and pins the healed end state.
+    expect(result).toBeNull();
     const stat = lstatSync(wellKnownPath);
-    expect(stat.isSymbolicLink()).toBe(false);
-    expect(stat.isFile()).toBe(true);
-    // Both halves matter: the target's bytes (no downgrade) in a real file
-    // (no dangling link). Asserting only the first would pass on an
-    // untouched symlink.
+    expect(stat.isSymbolicLink()).toBe(true);
+    // Still the target's bytes through the link - and not the running
+    // binary's, which is the demotion this arm must never perform.
     expect(readFileSync(wellKnownPath, "utf8")).toBe(targetBytes);
     expect(readFileSync(wellKnownPath, "utf8")).not.toBe(runningBytes);
     // The recursion pin: every spawn was the TARGET, never the slot.
