@@ -612,9 +612,9 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("inline");
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
-    const hostTrigger = screen.getByTestId("composer-host-trigger");
+    const hostTrigger = screen.getByRole("button", { name: /^Host:/ });
     expect(hostTrigger.className).toContain("h-7");
-    expect(hostTrigger.className).toContain("hover:bg-accent/50");
+    expect(hostTrigger.className).toContain("hover:bg-foreground/5");
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",

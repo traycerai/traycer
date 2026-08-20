@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import {
   cleanup,
   fireEvent,
@@ -199,6 +200,14 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
   >()),
   useRegisteredHostsPollLiveness: () => undefined,
 }));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: vi.fn(),
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
+}));
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () => null,
 }));
@@ -320,12 +329,29 @@ describe.each(["chat", "terminal-agent"] as const)(
 it("explains why a terminal agent's host selector is locked", async () => {
   renderBoundSurface("terminal-agent", true);
 
-  const switcher = screen.getByTestId("composer-host-trigger");
-  expect(switcher instanceof HTMLButtonElement && switcher.disabled).toBe(true);
-  fireEvent.focus(switcher);
+  const switcher = screen.getByRole("button", { name: "Host: Test host" });
+  expect(switcher.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(switcher);
+  expect(screen.queryByTestId("settings-host-switcher-list")).toBeNull();
+  await userEvent.setup().tab();
   expect((await screen.findByRole("tooltip")).textContent).toContain(
     "Terminal host is fixed",
   );
+});
+
+it("uses the shared host switcher for a live chat", () => {
+  renderBoundSurface("chat", true);
+
+  const switcher = screen.getByRole("button", { name: "Host: Test host" });
+  const switcherSlot = switcher.parentElement?.parentElement;
+  expect(switcherSlot?.className).toContain("flex-[0_1_auto]");
+  expect(switcherSlot?.className).toContain("max-w-[min(50%,50vw)]");
+  expect(switcher.className).toContain("w-fit");
+  expect(switcher.className).toContain("max-w-full");
+
+  fireEvent.click(switcher);
+  expect(screen.getByRole("option", { name: /Test host/ })).toBeTruthy();
+  expect(screen.queryByTestId("composer-host-popover")).toBeNull();
 });
 
 it("shows Recent folders in a live chat picker but not a terminal-agent binding", async () => {
