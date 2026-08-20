@@ -229,9 +229,8 @@ export function HostDoctorRpcCard(props: {
             hasLocalBridge: props.hasLocalBridge,
             rpcRestartSupported: props.rpcRestartSupported,
           })}
-          restartPending={
-            restartMutation.isPending || props.bridgeRestartPending
-          }
+          restartPending={restartMutation.isPending}
+          bridgeRestartPending={props.bridgeRestartPending}
           logsPending={logsMutation.isPending}
           localFixPending={props.localFixPendingCode === issue.code}
           logTail={logTail}
@@ -358,6 +357,7 @@ function DoctorRpcIssueCard(props: {
   readonly hostName: string;
   readonly route: DoctorFixRoute;
   readonly restartPending: boolean;
+  readonly bridgeRestartPending: boolean;
   readonly logsPending: boolean;
   readonly localFixPending: boolean;
   readonly logTail: readonly string[] | null;
@@ -404,6 +404,7 @@ function DoctorRpcIssueCard(props: {
               issue={issue}
               route={route}
               restartPending={props.restartPending}
+              bridgeRestartPending={props.bridgeRestartPending}
               logsPending={props.logsPending}
               localFixPending={props.localFixPending}
               onRestart={props.onRestart}
@@ -463,6 +464,8 @@ function DoctorFixControl(props: {
   readonly restartPending: boolean;
   readonly logsPending: boolean;
   readonly localFixPending: boolean;
+  /** True while the page's restart write — or any lifecycle intent — is armed. */
+  readonly bridgeRestartPending: boolean;
   readonly onRestart: () => void;
   readonly onShowLogs: () => void;
   readonly onLocalFix: () => void;
@@ -474,6 +477,15 @@ function DoctorFixControl(props: {
   // one RPC route that is not a restart, so it is asked first.
   const isLogs = issue.fixAction === "host-logs";
   const isRpcRestart = !isLogs && route === "rpc";
+  // A restart that routed to the bridge dispatches the PAGE's restart write,
+  // so its pending state is that write's, not the local-fix mutation's — the
+  // local-fix key is `hostRunDoctor`, which no lifecycle gate reads. Without
+  // this the button renders live while the gate is armed and the click is
+  // silently refused, which is a worse answer than a disabled control.
+  const isBridgeRestart =
+    !isLogs &&
+    route === "local-bridge" &&
+    (issue.fixAction === "host-restart" || issue.fixAction === "host-start");
   let pending = props.localFixPending;
   let onClick = props.onLocalFix;
   if (isLogs) {
@@ -482,6 +494,8 @@ function DoctorFixControl(props: {
   } else if (isRpcRestart) {
     pending = props.restartPending;
     onClick = props.onRestart;
+  } else if (isBridgeRestart) {
+    pending = props.bridgeRestartPending;
   }
   return (
     <Button
