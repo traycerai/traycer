@@ -1099,7 +1099,11 @@ describe("RemoteSession relay policy kills", () => {
     async (controlType) => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
-      const session = buildSession(relay, lease, null);
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        evidence: recorder,
+      });
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       try {
         session.start();
@@ -1114,6 +1118,11 @@ describe("RemoteSession relay policy kills", () => {
           expect.any(Function),
           RECONNECT_MAX_BACKOFF_MS,
         );
+        const indeterminates = recorder.callsNamed("reportDialIndeterminate");
+        expect(indeterminates).toHaveLength(1);
+        expect(indeterminates[0].hostId).toBe("host-1");
+        expect(indeterminates[0].transportKind).toBe("remote-relay");
+        expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
       } finally {
         session.close();
         setTimeoutSpy.mockRestore();
@@ -1158,7 +1167,11 @@ describe("RemoteSession relay policy kills", () => {
     async (controlType) => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
-      const session = buildSession(relay, lease, null);
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        evidence: recorder,
+      });
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       try {
         session.start();
@@ -1177,6 +1190,11 @@ describe("RemoteSession relay policy kills", () => {
           expect.any(Function),
           RECONNECT_INITIAL_BACKOFF_MS,
         );
+        const indeterminates = recorder.callsNamed("reportDialIndeterminate");
+        expect(indeterminates).toHaveLength(1);
+        expect(indeterminates[0].hostId).toBe("host-1");
+        expect(indeterminates[0].transportKind).toBe("remote-relay");
+        expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
       } finally {
         session.close();
         setTimeoutSpy.mockRestore();
