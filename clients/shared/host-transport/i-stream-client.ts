@@ -29,6 +29,29 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
   ): IStreamSession;
 
   /**
+   * Opens a session whose params are re-read immediately before EVERY wire
+   * subscribe, including the re-declare that follows a physical reconnect —
+   * rather than freezing whatever was current when the session was created.
+   *
+   * On this seam rather than only on `IHostStreamClient` because it is a
+   * subscribe-shaped capability, and the wrappers that need it (an epic
+   * offering the root state it already holds, and any future resume cursor)
+   * depend on this narrow interface. Leaving it upstairs would make a wrapper
+   * that offers reattach state non-substitutable over a remote transport —
+   * exactly the substitutability this seam exists to provide, and exactly the
+   * transport that needs the feature most.
+   *
+   * The provider must be a pure, synchronous read: it may report applied
+   * client state, but must not create transport or application state as a
+   * side effect. `WsStreamClient` and `RemoteStreamClient` both implement it,
+   * and both re-invoke it on reconnect.
+   */
+  subscribeWithParamsProvider<Method extends keyof Registry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<Registry, Method>,
+  ): IStreamSession;
+
+  /**
    * The schema version the peer negotiated for `method`, or `null` when it is
    * not (yet) known. Wrappers use it to gate additive minor-line features
    * (e.g. `ChatStreamClient.sameTurnSteeringProtocolSupported`).

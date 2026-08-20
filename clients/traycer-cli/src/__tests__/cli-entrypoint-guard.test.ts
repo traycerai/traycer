@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isTraycerCliEntrypoint } from "../index";
+import {
+  argvSelectsSupervisedHostStart,
+  isTraycerCliEntrypoint,
+} from "../index";
 
 // Native-packaging fixup: the script-entry guard at the bottom of
 // `traycer-cli/src/index.ts` is what gates the auto `parseAsync` so
@@ -73,5 +76,59 @@ describe("isTraycerCliEntrypoint", () => {
     expect(isTraycerCliEntrypoint("/repo/clients/cli/wrapper.sh")).toBe(false);
     // `.exe` on a non-traycer binary must not match either.
     expect(isTraycerCliEntrypoint("C:\\bin\\not-traycer.exe")).toBe(false);
+  });
+});
+
+// `argvSelectsSupervisedHostStart` gates the long-lived supervised entry
+// (`traycer host start`, invoked by launchd / systemd-user / the Windows
+// Scheduled Task) against a Node-style argv. It shares the same "drop the
+// `--` tail, filter out option tokens, read the command path" rule as
+// `rewriteHostUpdateVersion`'s host-update rewrite - pinned here by unit
+// test rather than by spawning a subprocess.
+describe("argvSelectsSupervisedHostStart", () => {
+  const CASES: ReadonlyArray<{
+    readonly name: string;
+    readonly argv: readonly string[];
+    readonly expected: boolean;
+  }> = [
+    {
+      name: "bare `host start`",
+      argv: ["node", "/x/traycer", "host", "start"],
+      expected: true,
+    },
+    {
+      name: "a leading global option before the command path",
+      argv: ["node", "/x/traycer", "--json", "host", "start"],
+      expected: true,
+    },
+    {
+      name: "a different host subcommand",
+      argv: ["node", "/x/traycer", "host", "status"],
+      expected: false,
+    },
+    {
+      name: "`host` with no subcommand",
+      argv: ["node", "/x/traycer", "host"],
+      expected: false,
+    },
+    {
+      name: "no command at all",
+      argv: ["node", "/x/traycer"],
+      expected: false,
+    },
+    {
+      name: "`host start` entirely after the `--` separator",
+      argv: ["node", "/x/traycer", "--", "host", "start"],
+      expected: false,
+    },
+    {
+      name: "`host start` is not the first two command tokens",
+      argv: ["node", "/x/traycer", "agent", "host", "start"],
+      expected: false,
+    },
+  ];
+
+  it.each(CASES)("$name -> $expected", ({ argv, expected }) => {
+    expect(argvSelectsSupervisedHostStart(argv)).toBe(expected);
   });
 });

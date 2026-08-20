@@ -35,7 +35,7 @@ export function WorkspaceFolderRows(props: {
   readonly onEditEnvironment: (workspacePath: string) => void;
   readonly readOnly: boolean;
   readonly bindingResolved: boolean;
-  /** Creation-time Recent tier; null for read-only and live-binding surfaces. */
+  /** Recent tier; null for read-only and terminal-agent binding surfaces. */
   readonly recentWorkspaces: ReactNode;
   readonly moveToRecent: boolean;
   // True only when the rows live inside a popover (in-epic): nested popovers

@@ -236,7 +236,7 @@ export async function maybeAutoBootstrap(
     decision.status !== "service-registered" &&
     decision.status !== "installed"
   ) {
-    // "skipped" or "ready" - nothing to do.
+    // "skipped" or "ready" - no provisioning to do.
     opts.runtime.logger.debug("Auto-bootstrap returning without provisioning", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
@@ -294,6 +294,11 @@ export async function maybeAutoBootstrap(
       // be a no-op anyway.
       force: false,
       onProgress: opts.onProgress,
+      // Auto-bootstrap is implicit (it runs off another command), so there
+      // is no operator waiting on it to answer a sign-in prompt - the
+      // pre-flight belongs to the explicit `host install` / `host ensure` /
+      // `host service install` commands.
+      beforeMutate: null,
     });
     const projected = projectProvisionResult(result);
     opts.runtime.logger.info("Auto-bootstrap provisioning completed", {

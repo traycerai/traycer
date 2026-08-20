@@ -1,21 +1,18 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import type { WorkspaceRecentEntry } from "@traycer/protocol/host/workspace/unary-schemas";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useWorkspaceListRecentWorkspaces } from "@/hooks/workspace/use-workspace-list-recent-workspaces-query";
 import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
-import {
-  preparedWorkspaceFolderToWorkspaceFolderInfo,
-  useWorkspaceFolderActionsForClient,
-} from "@/hooks/workspace/use-workspace-folder-actions";
+import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
-import type { HomeWorkspaceSource } from "./use-home-workspace-source";
 
 interface MutationContext {
   readonly hostId: string | null;
@@ -30,6 +27,7 @@ interface RecentWorkspaceState {
   readonly hostId: string | null;
   readonly failedPaths: ReadonlySet<string>;
   readonly hiddenPaths: ReadonlySet<string>;
+  readonly pendingPath: string | null;
   readonly movingWorkspace: MovingWorkspace | null;
   readonly announcement: string;
 }
@@ -56,6 +54,7 @@ function emptyRecentWorkspaceState(
     hostId,
     failedPaths: EMPTY_PATHS,
     hiddenPaths: EMPTY_PATHS,
+    pendingPath: null,
     movingWorkspace: null,
     announcement: "",
   };
@@ -64,10 +63,16 @@ function emptyRecentWorkspaceState(
 export function useRecentWorkspaces(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
-  readonly workspaceSource: HomeWorkspaceSource;
+  readonly activePaths: ReadonlyArray<string>;
+  readonly activatePreparedFolders: (
+    folders: ReadonlyArray<PreparedWorkspaceFolder>,
+    hostId: string,
+  ) => Promise<ReadonlyArray<string>>;
   readonly disabled: boolean;
   readonly surface: WorktreeStagingKey["surface"];
 }): RecentWorkspacesController {
+  const activatePreparedFolders = args.activatePreparedFolders;
+  const analyticsSurface = args.surface;
   const version = useHostNegotiatedMethodVersion(
     args.client,
     "workspace.prepareFolders",
@@ -93,8 +98,10 @@ export function useRecentWorkspaces(args: {
   ).pickAndPrepareFolders;
   const activeHostId = args.hostId;
   const activeHostIdRef = useRef(activeHostId);
+  const pendingPathRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     activeHostIdRef.current = activeHostId;
+    pendingPathRef.current = null;
   }, [activeHostId]);
   const [state, setState] = useState<RecentWorkspaceState>(() =>
     emptyRecentWorkspaceState(activeHostId),
@@ -106,6 +113,7 @@ export function useRecentWorkspaces(args: {
   const {
     failedPaths: currentFailedPaths,
     hiddenPaths: currentHiddenPaths,
+    pendingPath: currentPendingPath,
     movingWorkspace: currentMovingWorkspace,
     announcement: currentAnnouncement,
   } = currentState;
@@ -184,6 +192,10 @@ export function useRecentWorkspaces(args: {
   });
   const prepareRecent = prepareMutation.mutateAsync;
   const forgetRecent = forgetMutation.mutateAsync;
+  const activePathSet = useMemo(
+    () => new Set(args.activePaths),
+    [args.activePaths],
+  );
 
   const forget = useCallback(
     async (workspacePath: string): Promise<boolean> => {
@@ -194,7 +206,7 @@ export function useRecentWorkspaces(args: {
       try {
         await forgetRecent(workspacePath);
         Analytics.getInstance().track(AnalyticsEvent.WorkspaceRecentForgotten, {
-          surface: args.surface,
+          surface: analyticsSurface,
         });
         updateState((current) => ({
           ...current,
@@ -220,60 +232,46 @@ export function useRecentWorkspaces(args: {
         return false;
       }
     },
-    [args.surface, forgetRecent, updateState],
+    [analyticsSurface, forgetRecent, updateState],
   );
 
   const add = useCallback(
     async (workspacePath: string): Promise<boolean> => {
+      if (pendingPathRef.current !== null) return false;
       const dispatchHostId = activeHostIdRef.current;
+      if (dispatchHostId === null) return false;
+      pendingPathRef.current = workspacePath;
       updateState((current) => ({
         ...current,
         failedPaths: withoutPath(current.failedPaths, workspacePath),
+        pendingPath: workspacePath,
       }));
-      try {
-        const response = await prepareRecent(workspacePath);
-        if (
-          dispatchHostId === null ||
-          activeHostIdRef.current !== dispatchHostId ||
-          response.folders.length === 0
-        ) {
-          updateState((current) => ({
-            ...current,
-            failedPaths: new Set(current.failedPaths).add(workspacePath),
-          }));
-          Analytics.getInstance().track(AnalyticsEvent.WorkspaceContextAdded, {
-            source: "recent",
-            outcome: "failed",
-            surface: args.surface,
-          });
-          return false;
-        }
-        const alreadyActive = response.folders.every((folder) =>
-          args.workspaceSource.folders.includes(folder.workspacePath),
-        );
-        args.workspaceSource.addResolvedFolders(
-          response.folders.map((folder) =>
-            preparedWorkspaceFolderToWorkspaceFolderInfo(
-              folder,
+      const response = await prepareRecent(workspacePath).catch(() => null);
+      const activatedPaths =
+        response !== null &&
+        activeHostIdRef.current === dispatchHostId &&
+        response.folders.length > 0
+          ? await activatePreparedFolders(
+              response.folders,
               dispatchHostId,
-            ),
-          ),
+            ).catch(() => [])
+          : [];
+      const succeeded =
+        response !== null &&
+        activeHostIdRef.current === dispatchHostId &&
+        activatedPaths.length > 0;
+      if (response !== null && succeeded) {
+        const alreadyActive = response.folders.every((folder) =>
+          activePathSet.has(folder.workspacePath),
         );
-        for (const folder of response.folders) {
+        for (const path of activatedPaths) {
           recordRecent({
-            path: folder.workspacePath,
+            path,
             bumpRecency: true,
             failureFeedback: "silent",
           });
         }
-        const canonicalPaths = new Set(
-          response.folders.map((folder) => folder.workspacePath),
-        );
-        if (!canonicalPaths.has(workspacePath)) {
-          updateState((current) => ({
-            ...current,
-            hiddenPaths: new Set(current.hiddenPaths).add(workspacePath),
-          }));
+        if (!activatedPaths.includes(workspacePath)) {
           void forgetRecent(workspacePath).catch(() => {
             updateState((current) => ({
               ...current,
@@ -283,32 +281,40 @@ export function useRecentWorkspaces(args: {
         }
         updateState((current) => ({
           ...current,
+          hiddenPaths: new Set([
+            ...current.hiddenPaths,
+            workspacePath,
+            ...activatedPaths,
+          ]),
           announcement: alreadyActive
             ? "Workspace is already in context."
             : "Workspace added to context.",
         }));
-        Analytics.getInstance().track(AnalyticsEvent.WorkspaceContextAdded, {
-          source: "recent",
-          outcome: "succeeded",
-          surface: args.surface,
-        });
-        return true;
-      } catch {
+      } else {
         updateState((current) => ({
           ...current,
           failedPaths: new Set(current.failedPaths).add(workspacePath),
         }));
-        Analytics.getInstance().track(AnalyticsEvent.WorkspaceContextAdded, {
-          source: "recent",
-          outcome: "failed",
-          surface: args.surface,
-        });
-        return false;
       }
+      Analytics.getInstance().track(AnalyticsEvent.WorkspaceContextAdded, {
+        source: "recent",
+        outcome: succeeded ? "succeeded" : "failed",
+        surface: analyticsSurface,
+      });
+      if (pendingPathRef.current === workspacePath) {
+        pendingPathRef.current = null;
+      }
+      updateState((current) => ({
+        ...current,
+        pendingPath:
+          current.pendingPath === workspacePath ? null : current.pendingPath,
+      }));
+      return succeeded;
     },
     [
-      args.surface,
-      args.workspaceSource,
+      activatePreparedFolders,
+      analyticsSurface,
+      activePathSet,
       forgetRecent,
       prepareRecent,
       recordRecent,
@@ -318,21 +324,33 @@ export function useRecentWorkspaces(args: {
 
   const locate = useCallback(
     async (workspacePath: string): Promise<boolean> => {
-      const result = await pickAndPrepareFolders(true);
+      const result = await pickAndPrepareFolders(false).catch(() => null);
       if (result === null || activeHostIdRef.current !== result.hostId) {
         return false;
       }
-      const folders = result.folders.map((folder) =>
-        preparedWorkspaceFolderToWorkspaceFolderInfo(folder, result.hostId),
-      );
-      if (folders.length === 0) return false;
-      args.workspaceSource.addResolvedFolders(folders);
+      const activatedPaths = await activatePreparedFolders(
+        result.folders,
+        result.hostId,
+      ).catch((): ReadonlyArray<string> => []);
+      if (activatedPaths.length === 0) return false;
+      for (const path of activatedPaths) {
+        recordRecent({
+          path,
+          bumpRecency: true,
+          failureFeedback: "silent",
+        });
+      }
       let replacementForgotten = true;
-      if (!folders.some((folder) => folder.path === workspacePath)) {
+      if (!activatedPaths.includes(workspacePath)) {
         replacementForgotten = await forget(workspacePath);
       }
       updateState((current) => ({
         ...current,
+        hiddenPaths: new Set([
+          ...current.hiddenPaths,
+          workspacePath,
+          ...activatedPaths,
+        ]),
         failedPaths: replacementForgotten
           ? withoutPath(current.failedPaths, workspacePath)
           : new Set(current.failedPaths).add(workspacePath),
@@ -343,15 +361,16 @@ export function useRecentWorkspaces(args: {
       Analytics.getInstance().track(AnalyticsEvent.WorkspaceContextAdded, {
         source: "browse",
         outcome: replacementForgotten ? "succeeded" : "failed",
-        surface: args.surface,
+        surface: analyticsSurface,
       });
       return true;
     },
     [
-      args.surface,
-      args.workspaceSource,
+      activatePreparedFolders,
+      analyticsSurface,
       forget,
       pickAndPrepareFolders,
+      recordRecent,
       updateState,
     ],
   );
@@ -362,35 +381,36 @@ export function useRecentWorkspaces(args: {
       if (dispatchHostId === null) return false;
       const moving = { hostId: dispatchHostId, path: workspacePath };
       updateState((current) => ({ ...current, movingWorkspace: moving }));
+      let moved = false;
       try {
         await recordRecentAsync({
           path: workspacePath,
           bumpRecency: false,
           failureFeedback: "move_warning",
         });
-        if (activeHostIdRef.current !== moving.hostId) {
-          return false;
+        if (activeHostIdRef.current === moving.hostId) {
+          updateState((current) => ({
+            ...current,
+            hiddenPaths: withoutPath(current.hiddenPaths, workspacePath),
+            announcement: "Workspace moved to Recent.",
+          }));
+          Analytics.getInstance().track(AnalyticsEvent.WorkspaceMovedToRecent, {
+            surface: analyticsSurface,
+          });
+          moved = true;
         }
-        updateState((current) => ({
-          ...current,
-          announcement: "Workspace moved to Recent.",
-        }));
-        Analytics.getInstance().track(AnalyticsEvent.WorkspaceMovedToRecent, {
-          surface: args.surface,
-        });
-        return true;
       } catch {
-        return false;
-      } finally {
-        updateState((current) => ({
-          ...current,
-          movingWorkspace:
-            current.movingWorkspace === moving ? null : current.movingWorkspace,
-        }));
+        moved = false;
       }
+      updateState((current) => ({
+        ...current,
+        movingWorkspace:
+          current.movingWorkspace === moving ? null : current.movingWorkspace,
+      }));
+      return moved;
     },
     [
-      args.surface,
+      analyticsSurface,
       currentMovingWorkspace,
       recordRecentAsync,
       supported,
@@ -398,18 +418,17 @@ export function useRecentWorkspaces(args: {
     ],
   );
 
-  const activePaths = args.workspaceSource.folders;
   const entries = useMemo(
     () =>
       supported
         ? (recentsQuery.data?.recentWorkspaces ?? []).filter(
             (entry) =>
-              !activePaths.includes(entry.path) &&
+              !activePathSet.has(entry.path) &&
               !currentHiddenPaths.has(entry.path),
           )
         : [],
     [
-      activePaths,
+      activePathSet,
       currentHiddenPaths,
       recentsQuery.data?.recentWorkspaces,
       supported,
@@ -419,7 +438,7 @@ export function useRecentWorkspaces(args: {
   return {
     supported,
     entries,
-    pendingPath: prepareMutation.isPending ? prepareMutation.variables : null,
+    pendingPath: currentPendingPath,
     movingPath: currentMovingWorkspace?.path ?? null,
     failedPaths: currentFailedPaths,
     announcement: currentAnnouncement,

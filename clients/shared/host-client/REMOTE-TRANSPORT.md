@@ -257,8 +257,10 @@ sequenceDiagram
 frames, not losing them to a host-less relay) and marks streams reconnecting;
 `host_attached` → resume on the **same** Noise session (no re-handshake). Only a
 socket drop or `peer_gone`/`killed` triggers a full attach. `peer_gone`/`killed`
-reasons `revoked` / `policy_violation` are **terminal**; `host_gone` /
-`reauth_timeout` → full-resume with backoff.
+reason `revoked` is **terminal**. `host_gone` / `reauth_timeout` → full-resume
+with ordinary backoff. `policy_violation` and every unknown/future reason →
+full-resume at the capped backoff rung and report an indeterminate relay loss,
+never a host refusal.
 
 ## 10. Re-auth & peer-enforced host standing (R4-D2)
 
