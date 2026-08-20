@@ -410,11 +410,83 @@ describe("provisionInstalledHostCredential", () => {
       makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
     );
 
+    // A failed mint is NOT terminal: the same `unavailable` covers the 409
+    // supersede, so the probe keeps verifying and only reports the failure
+    // once no ack ever said `active`. Every session it opened is closed.
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "mint-unavailable",
     });
-    expect(mocks.sessions).toHaveLength(1);
-    expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
+    expect(mocks.sessions.length).toBeGreaterThan(1);
+    for (const session of mocks.sessions) {
+      expect(session.close).toHaveBeenCalledTimes(1);
+    }
+    expectCleanTeardown();
+  });
+
+  it("a superseded mint still verifies: the winner's credential lands as active, not as a failure", async () => {
+    // The regression this guards: `createCliHostCredentialMintFlow` maps the
+    // 409 supersede onto `unavailable`, and treating that as terminal made an
+    // ordinary concurrent GUI/monitor mint print a false "not provisioned"
+    // warning on an install that in fact ended fully credentialed.
+    const hostId = "host-1";
+    mocks.mintFlowMock.mockResolvedValueOnce({ kind: "unavailable" });
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        if (lapIndex === 1) {
+          void options.hostCredentialMint({ hostId, reason: "missing" });
+          options.onHostCredentialState(hostId, "missing");
+          return;
+        }
+        // The winner's credential arrived while we were losing the race.
+        options.onHostCredentialState(hostId, "active");
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    // `minted: false` - the host is credentialed, but not by us, so the
+    // caller stays quiet instead of claiming the provisioning.
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: false,
+    });
+    expect(mocks.sessions).toHaveLength(2);
+    expectCleanTeardown();
+  });
+
+  it("bounds the mint await by the remaining deadline instead of the mint's own timeout", async () => {
+    // The regression this guards: an unbounded `await` on the mint let a host
+    // that acked `missing` near the end of the budget push `host install`
+    // roughly the mint's full HTTP timeout past the advertised deadline.
+    const hostId = "host-1";
+    // Never settles - only the deadline can end this.
+    mocks.mintFlowMock.mockReturnValueOnce(
+      new Promise<HostCredentialMintOutcome>(() => {}),
+    );
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        void options.hostCredentialMint({ hostId, reason: "missing" });
+        options.onHostCredentialState(hostId, "missing");
+      }, 0);
+    };
+
+    const deadlineMs = 600;
+    const startedAt = Date.now();
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs, progress: vi.fn() }),
+    );
+    const elapsed = Date.now() - startedAt;
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
+    // Generous headroom over the deadline, but far under the unbounded case:
+    // a hung mint used to hold the loop open indefinitely.
+    expect(elapsed).toBeLessThan(deadlineMs + 1_500);
     expectCleanTeardown();
   });
 
@@ -438,8 +510,10 @@ describe("provisionInstalledHostCredential", () => {
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "mint-unavailable",
     });
-    expect(mocks.sessions).toHaveLength(1);
-    expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
+    expect(mocks.sessions.length).toBeGreaterThan(1);
+    for (const session of mocks.sessions) {
+      expect(session.close).toHaveBeenCalledTimes(1);
+    }
     expectCleanTeardown();
   });
 

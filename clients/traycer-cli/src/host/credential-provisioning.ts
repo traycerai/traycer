@@ -3,7 +3,14 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import {
+  MutableBearerLease,
+  readLeaseBearer,
+} from "../../../shared/auth/bearer-source";
+import type {
+  RevalidateOutcome,
+  StreamAuthRevalidator,
+} from "../../../shared/auth/bearer-revalidator";
 import type { HostCredentialMintOutcome } from "../../../shared/host-transport/host-credential-mint-flow";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import type {
@@ -17,6 +24,10 @@ import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transpor
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import type { HostAuth } from "../internal/host-auth";
+import {
+  createCliCredentialsStore,
+  createStoreBackedRevalidator,
+} from "../store/credentials-store";
 import { errorFromUnknown, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 import {
@@ -58,8 +69,10 @@ export type HostCredentialProvisionOutcome =
   // The connection opened but the host never reported a credential state:
   // an older host without the provision capability.
   | { readonly kind: "unsupported" }
-  // The host asked, but minting failed (authn unreachable, mint rejected,
-  // or another client superseded us).
+  // The host asked, this run did not hand it a credential (authn unreachable,
+  // mint rejected, or another client superseded us), AND no later ack
+  // reported `active`. A supersede alone does not land here - the winner's
+  // credential usually verifies on the next lap and reports `active`.
   | { readonly kind: "mint-unavailable" }
   // A credential was minted and pushed, but no subsequent ack reported
   // `active` inside the deadline.
@@ -98,6 +111,10 @@ const SILENT_ACK_GRACE_MS = 100;
 // Sessions are deadline-bounded anyway; the cap is a backstop against a
 // pathological host that acks `missing` forever.
 const MAX_SESSIONS = 4;
+
+type ProbeRevalidator = {
+  revalidateCurrentContext(): Promise<RevalidateOutcome>;
+};
 
 type AckObservation =
   | { readonly kind: "state"; readonly state: HostCredentialState }
@@ -151,20 +168,40 @@ export async function provisionInstalledHostCredential(
   let observeState: ((state: HostCredentialState) => void) | null = null;
   let mintInvoked = false;
   let mintSettled: Promise<HostCredentialMintOutcome> | null = null;
+  const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const innerMint = createCliHostCredentialMintFlow({
     authnBaseUrl: options.auth.authnBaseUrl,
-    bearer: () => options.auth.token,
+    // The LIVE lease, not the token this call was handed: a revalidation
+    // below can rotate the bearer mid-probe, and minting on the snapshot
+    // would spend a token authn has already retired.
+    bearer: () => readLeaseBearer(lease),
     diag: (message) => options.progress(message),
   });
-  const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
+  // The stored access token has a ~4h TTL, so an ordinary "already signed in"
+  // install routinely starts this probe on an EXPIRED bearer - the common
+  // case, not an edge one. `auth: null` (correct only for a client that has
+  // no revalidator) would make that first UNAUTHORIZED terminal, and the host
+  // would never be minted for at all. Route reconnect recovery through the
+  // same locked, single-flight `rotate` the monitor uses, so a probe refresh
+  // and a concurrent desktop refresh cannot double-spend the refresh token.
+  const store = createCliCredentialsStore();
+  // Named narrowing, as `monitor` does: the factory's return intersects
+  // `AuthRevalidator`, whose `revalidateCurrentContext` is declared
+  // `Promise<unknown>` for the unary path that ignores it, and the call
+  // otherwise resolves to that looser overload.
+  const revalidator: ProbeRevalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+  });
+  const streamAuth: StreamAuthRevalidator = {
+    revalidateForReconnect: () => revalidator.revalidateCurrentContext(),
+  };
 
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     endpoint: () => endpoint,
     bearer: () => lease,
-    // Short-lived probe on a token minted or validated moments ago: an
-    // UNAUTHORIZED here is a real answer, not an expiry to refresh past.
-    auth: null,
+    auth: streamAuth,
     hostCredentialMint: (request) => {
       mintInvoked = true;
       const settled = innerMint(request);
@@ -191,10 +228,29 @@ export async function provisionInstalledHostCredential(
     maxBackoffMs: MAX_BACKOFF_MS,
   });
 
+  const remaining = (): number => Math.max(0, deadlineAt - Date.now());
+
   try {
     let sawSilentOpen = false;
+    // A mint that resolved without handing us a credential. NOT terminal on
+    // its own: the same `unavailable` covers the 409 supersede, where another
+    // client won the race and ITS credential is already on the way to the
+    // host - so adoption still has to be verified before anything is called a
+    // failure. Only an unverified run reports it.
+    let mintUnavailable = false;
+    // One place decides every non-`active` exit, so the loop end, the bound,
+    // and a fatal close can never drift apart on what they report.
+    const settledOutcome = (): HostCredentialProvisionOutcome => {
+      if (mintUnavailable) {
+        return { kind: "mint-unavailable" };
+      }
+      if (mintInvoked) {
+        return { kind: "not-adopted" };
+      }
+      return sawSilentOpen ? { kind: "unsupported" } : { kind: "unreachable" };
+    };
     for (let lap = 1; lap <= MAX_SESSIONS; lap++) {
-      const remainingMs = deadlineAt - Date.now();
+      const remainingMs = remaining();
       if (remainingMs <= 0) {
         break;
       }
@@ -210,7 +266,14 @@ export async function provisionInstalledHostCredential(
         case "state": {
           if (observation.state === "active") {
             session.close();
-            return { kind: "active", minted: mintInvoked };
+            // `minted` claims THIS run provisioned it, so a mint that never
+            // handed over a credential does not count - under a supersede the
+            // host goes active on the winner's credential, and announcing it
+            // as ours would be a lie the human line then prints.
+            return {
+              kind: "active",
+              minted: mintInvoked && !mintUnavailable,
+            };
           }
           // Non-active: the client is minting (first time) or re-delivering a
           // held credential. Wait for the mint to settle so the push happens
@@ -218,14 +281,18 @@ export async function provisionInstalledHostCredential(
           // next lap - stacking a second live session onto the handoff one
           // would route the verify ack ambiguously.
           if (mintSettled !== null) {
-            const outcome = await settleMint(mintSettled, options.logger);
+            const outcome = await settleMint(
+              mintSettled,
+              options.logger,
+              remaining(),
+            );
             mintSettled = null;
-            if (outcome !== "provisioned") {
-              session.close();
-              return { kind: "mint-unavailable" };
-            }
+            // Fall through to the verification lap either way. A supersede
+            // reads as `unavailable` here, and the winner's credential is
+            // exactly what the next ack will report as `active`.
+            mintUnavailable = outcome !== "provisioned";
           }
-          await sleep(PUSH_DRAIN_MS);
+          await sleep(Math.min(PUSH_DRAIN_MS, remaining()));
           session.close();
           break;
         }
@@ -246,22 +313,12 @@ export async function provisionInstalledHostCredential(
                   : null,
             },
           );
-          return mintInvoked
-            ? { kind: "not-adopted" }
-            : { kind: "unreachable" };
+          return settledOutcome();
         case "timeout":
-          if (mintInvoked) {
-            return { kind: "not-adopted" };
-          }
-          return sawSilentOpen
-            ? { kind: "unsupported" }
-            : { kind: "unreachable" };
+          return settledOutcome();
       }
     }
-    if (mintInvoked) {
-      return { kind: "not-adopted" };
-    }
-    return sawSilentOpen ? { kind: "unsupported" } : { kind: "unreachable" };
+    return settledOutcome();
   } catch (err) {
     const error = errorFromUnknown(err);
     options.logger.warn("Host credential provisioning failed unexpectedly", {
@@ -273,6 +330,9 @@ export async function provisionInstalledHostCredential(
   } finally {
     clearInterval(poll);
     client.close("host-install-credential-provisioning-settled");
+    // Stops any `commit-failed` continuation timer a revalidation armed;
+    // without it the process keeps a timer alive past the probe.
+    store.dispose();
   }
 }
 
@@ -347,19 +407,57 @@ function observeNextAck(
   });
 }
 
+/**
+ * Awaits the mint, but never past `boundMs`.
+ *
+ * The overall deadline has to bind this too: a host that acks `missing` near
+ * the end of the budget would otherwise let the mint's own HTTP timeout run
+ * `host install` well past the deadline this module advertises. Abandoning a
+ * mint costs nothing - it completes server-side regardless, and its credential
+ * simply becomes the one a later client verifies.
+ *
+ * Both the rejection and the bound resolve to `unavailable`; the caller treats
+ * that as "not provisioned BY US", never as proof the host has no credential.
+ */
 async function settleMint(
   mint: Promise<HostCredentialMintOutcome>,
   logger: ILogger,
+  boundMs: number,
 ): Promise<"provisioned" | "unavailable"> {
+  let timer: NodeJS.Timeout | null = null;
+  const bound = new Promise<"deadline">((resolve) => {
+    timer = setTimeout(() => resolve("deadline"), boundMs);
+  });
   try {
-    const outcome = await mint;
-    return outcome.kind === "provisioned" ? "provisioned" : "unavailable";
-  } catch (err) {
-    logger.warn("Host credential provisioning mint flow threw", {
-      errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
-    });
-    return "unavailable";
+    // Handling the rejection inside the race (rather than around it) is what
+    // keeps an abandoned mint's later failure from surfacing as an unhandled
+    // rejection once we have stopped waiting on it.
+    const settled = await Promise.race([
+      mint.then(
+        (outcome): "provisioned" | "unavailable" =>
+          outcome.kind === "provisioned" ? "provisioned" : "unavailable",
+        (err: unknown): "unavailable" => {
+          logger.warn("Host credential provisioning mint flow threw", {
+            errorName: errorFromUnknown(err).name,
+            errorMessage: errorFromUnknown(err).message,
+          });
+          return "unavailable";
+        },
+      ),
+      bound,
+    ]);
+    if (settled === "deadline") {
+      logger.warn(
+        "Host credential provisioning mint did not settle within the deadline",
+        { boundMs },
+      );
+      return "unavailable";
+    }
+    return settled;
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
   }
 }
 

@@ -301,7 +301,7 @@ function formatCredentialProvisionNote(
     case "unsupported":
       return "host credential not provisioned (this host version does not support delegated credentials)";
     case "mint-unavailable":
-      return `host credential not provisioned (minting failed) - ${selfHeal}`;
+      return `host credential not provisioned (the credential handoff did not complete) - ${selfHeal}`;
     case "not-adopted":
       return `host credential not provisioned (the host did not adopt it in time) - ${selfHeal}`;
     case "error":
