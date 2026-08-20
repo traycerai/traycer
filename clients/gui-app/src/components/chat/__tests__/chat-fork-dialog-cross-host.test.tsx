@@ -40,6 +40,7 @@ const ABSENT_HOST_ID = "absent-host-id";
 
 interface ChatForkCreateInput {
   readonly hostId: string;
+  readonly title: string;
   readonly worktreeIntent: WorktreeIntent | null;
   readonly forkSource: {
     readonly boundary: "assistantMessage";
@@ -394,7 +395,8 @@ import {
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = directoryEntry(hostId, hostId);
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -402,16 +404,10 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
       requestId: () => `req-${hostId}`,
       handlers: {},
     }),
+    findHostById: (id) => (id === hostId ? entry : null),
   });
-  client.bind({
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
-    version: "0.0.0-mock",
-    transportDialability: "dialable",
-  });
-  return client;
+  // `bind()` died with the active slot (D17): address via a requester.
+  return spine.createRequester(entry);
 }
 
 function directoryEntry(hostId: string, label: string): HostDirectoryEntry {
@@ -478,6 +474,7 @@ function forkTarget(
     seedIntentOverride: null,
     carriedInterviews: "settled",
     forkMode: "plain",
+    initialHostId: null,
     ...overrides,
   };
 }
@@ -574,6 +571,11 @@ function selectedRefusalWord(hostId: string): string | undefined {
   return scope?.kind === "selected"
     ? scope.refusalByHostId.get(hostId)
     : undefined;
+}
+
+function selectedHostScopeHostId(): string | null {
+  const scope = dialogMocks.lastWorkspace?.hostScope;
+  return scope?.kind === "selected" ? scope.hostId : null;
 }
 
 function advertiseSourcePublication(): void {
@@ -1406,5 +1408,115 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(otherRow instanceof HTMLButtonElement && otherRow.disabled).toBe(
       false,
     );
+  });
+
+  it('untitled source: empty input, "Untitled agent" placeholder, submit enabled, sends title ""', async () => {
+    renderDialog(forkTarget({ sourceChatTitle: "" }), ignoreOpenChange);
+
+    const input = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Fork agent title",
+    });
+    expect(input.value).toBe("");
+    expect(input.getAttribute("placeholder")).toBe("Untitled agent");
+    // No fillTitle() here on purpose: an untitled source must not need one.
+    expect(forkButton().disabled).toBe(false);
+
+    fireEvent.click(forkButton());
+    await waitFor(() => {
+      expect(dialogMocks.createMutate).toHaveBeenCalled();
+    });
+    const request = dialogMocks.createMutate.mock.calls[0][0];
+    expect(request.title).toBe("");
+  });
+
+  it("untitled source with a user-typed title still sends the typed title", async () => {
+    renderDialog(forkTarget({ sourceChatTitle: "" }), ignoreOpenChange);
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Fork agent title" }),
+      { target: { value: "My chosen name" } },
+    );
+    expect(forkButton().disabled).toBe(false);
+
+    fireEvent.click(forkButton());
+    await waitFor(() => {
+      expect(dialogMocks.createMutate).toHaveBeenCalled();
+    });
+    const request = dialogMocks.createMutate.mock.calls[0][0];
+    expect(request.title).toBe("My chosen name");
+  });
+
+  it("titled source: prefills 'Fork - <title>' and clearing the field disables submit", () => {
+    // The default title is only computed on an open TRANSITION (`if (open
+    // !== dialogState.open)`), not on an initial mount that is already
+    // `open`. Mounting closed and then flipping to open, like the
+    // boundary-notice tests above, is what actually exercises the prefill.
+    const target = forkTarget({ sourceChatTitle: "Source chat" });
+    const view = render(
+      <ChatForkDialog {...dialogProps(target, ignoreOpenChange, false)} />,
+    );
+    view.rerender(
+      <ChatForkDialog {...dialogProps(target, ignoreOpenChange, true)} />,
+    );
+
+    const input = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Fork agent title",
+    });
+    expect(input.value).toBe("Fork - Source chat");
+    expect(input.getAttribute("placeholder")).toBe("");
+    expect(forkButton().disabled).toBe(false);
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(forkButton().disabled).toBe(true);
+  });
+
+  it("a target with initialHostId set to the remote host opens the picker on that host", () => {
+    // The default title is only computed on an open TRANSITION, same as the
+    // prefill test above - mount closed, then flip to open, so the seeding
+    // branch (`target?.initialHostId ?? tabHostId`) actually runs.
+    const remoteTarget = forkTarget({ initialHostId: OTHER_HOST_ID });
+    const view = render(
+      <ChatForkDialog
+        {...dialogProps(remoteTarget, ignoreOpenChange, false)}
+      />,
+    );
+    view.rerender(
+      <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
+    );
+
+    expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
+    // Cross-host, since the seeded host differs from the tab host - the
+    // notices block only renders bare (no publication/boundary notice primed
+    // here) when `isCrossHost` is true.
+    expect(screen.getByTestId("chat-fork-target-notices")).not.toBeNull();
+  });
+
+  it("reopening with a target whose initialHostId is null lands back on the tab host", () => {
+    const remoteTarget = forkTarget({ initialHostId: OTHER_HOST_ID });
+    const view = render(
+      <ChatForkDialog
+        {...dialogProps(remoteTarget, ignoreOpenChange, false)}
+      />,
+    );
+    view.rerender(
+      <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
+    );
+    expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
+
+    // Close, then reopen on a DIFFERENT target with no preselection - the
+    // ordinary per-message fork entry point, which must not inherit the
+    // host-switch gesture's remote host.
+    view.rerender(
+      <ChatForkDialog
+        {...dialogProps(remoteTarget, ignoreOpenChange, false)}
+      />,
+    );
+    const plainTarget = forkTarget({ initialHostId: null });
+    view.rerender(
+      <ChatForkDialog {...dialogProps(plainTarget, ignoreOpenChange, true)} />,
+    );
+
+    expect(selectedHostScopeHostId()).toBe(TAB_HOST_ID);
+    expect(screen.queryByTestId("chat-fork-target-notices")).toBeNull();
   });
 });

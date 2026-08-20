@@ -13,6 +13,14 @@ export interface NotificationCenterOpenLifecycle {
   readonly onContentOpenAutoFocus: (event: Event) => void;
   readonly onContentEscapeKeyDown: () => void;
   readonly onContentCloseAutoFocus: (event: Event) => void;
+  /**
+   * Marks the close that is about to happen as keyboard-driven, so focus
+   * returns to the trigger exactly as it does for Escape. Called by the
+   * keybinding chord when it toggles a center closed whose own surface
+   * currently holds focus - without it that focus would be destroyed with
+   * the popover and land on `<body>`.
+   */
+  readonly markKeyboardDismiss: () => void;
 }
 
 /**
@@ -66,9 +74,11 @@ export function useNotificationCenterOpenLifecycle(
     [input.headingRef],
   );
 
-  const onContentEscapeKeyDown = useCallback(() => {
+  const markKeyboardDismiss = useCallback(() => {
     closeReasonRef.current = "escape";
   }, []);
+
+  const onContentEscapeKeyDown = markKeyboardDismiss;
 
   const onContentCloseAutoFocus = useCallback(
     (event: Event) => {
@@ -87,5 +97,6 @@ export function useNotificationCenterOpenLifecycle(
     onContentOpenAutoFocus,
     onContentEscapeKeyDown,
     onContentCloseAutoFocus,
+    markKeyboardDismiss,
   };
 }

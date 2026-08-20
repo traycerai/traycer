@@ -22,7 +22,8 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  * the polling scheduler branches on:
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
- *   plain GET (openrouter, kilocode, huggingface, opencode). Cheap and safe to
+ *   plain HTTP call (openrouter, kilocode, huggingface, opencode, cursor).
+ *   Cheap and safe to
  *   run concurrently, so
  *   their observers opt into the table-owned fixed cadence and never enter the
  *   serial queue.
@@ -80,6 +81,10 @@ export function rateLimitFetchLane(
     case "kilocode":
     case "huggingface":
     case "opencode":
+    case "cursor":
+      // Two round trips (the API key mints a dashboard session before the
+      // usage read), but still credential-and-fetch - no subprocess - so it
+      // keeps the table-owned fixed cadence rather than the serial queue.
       return "httpFetch";
     case "codex":
     case "claude-code":

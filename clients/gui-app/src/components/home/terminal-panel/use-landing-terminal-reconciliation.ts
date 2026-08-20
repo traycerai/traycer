@@ -1,23 +1,53 @@
-import { queryOptions, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { subscribeHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
+import type {
+  ClosePlainTerminalRequest,
+  ImportLegacyPlainTerminalRequest,
+  ImportLegacyPlainTerminalResponse,
+} from "@traycer/protocol/host/terminal/plain-schemas";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
+  PlainTerminalMigrationCoordinator,
+  plainTerminalCollectionValues,
+  type PlainTerminalCollection,
+} from "@/lib/terminals/plain-terminal-authority";
+import { consumeRetainedPlainTerminalTombstone } from "@/lib/terminals/plain-terminal-presentation-invalidation";
+import {
+  LANDING_TERMINAL_SOURCE_STORE_VERSION,
   terminalSessionKey,
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
-import { reconcileLandingTerminalTabs } from "./landing-terminal-reconciliation";
+import {
+  reconcileHostAuthoritativeLandingTerminalTabs,
+  reconcileLandingTerminalTabs,
+} from "./landing-terminal-reconciliation";
 import type { LandingTerminalAvailability } from "./landing-terminal-availability";
+import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import type { LandingTerminalHostContext } from "./landing-terminal-host-context";
 import type { LandingTerminalKillVariables } from "./use-landing-terminal-kill-mutation";
 
 const INDEPENDENT_SCOPE = { kind: "independent" } as const;
+const migrationCoordinator = new PlainTerminalMigrationCoordinator();
 
 function isAborted(signal: AbortSignal): boolean {
   return signal.aborted;
+}
+
+function reconciliationGenerationIsStale(
+  signal: AbortSignal,
+  client: HostClient<HostRpcRegistry>,
+  activeHostId: string,
+): boolean {
+  return isAborted(signal) || client.getActiveHostId() !== activeHostId;
 }
 
 function abortError(): DOMException {
@@ -68,6 +98,7 @@ interface LandingTerminalReconciliationArgs {
    * selection and would reconcile the wrong host).
    */
   readonly client: HostClient<HostRpcRegistry> | null;
+  readonly plainAuthority: LandingTerminalAuthorityEntry | null;
   readonly killTerminal: (
     variables: LandingTerminalKillVariables,
   ) => Promise<unknown>;
@@ -125,6 +156,7 @@ export function useLandingTerminalReconciliation(
     primaryWorkspacePath,
     generation,
     client,
+    plainAuthority,
     killTerminal,
     onReconciled,
     onError,
@@ -134,15 +166,31 @@ export function useLandingTerminalReconciliation(
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const reconciliationRef = useRef<string | null>(null);
 
+  // TWO WAKES, because two different things can make this panel's list stale
+  // and only one of them is an event about the client.
+  //
+  // The row signal is the host's: its directory entry moving (a restart that
+  // re-published an endpoint, a re-enrollment) means the terminals the panel
+  // listed were listed against a route that no longer exists. That used to
+  // arrive as `bind()`'s `host-updated`, which required this host to be the
+  // BOUND one - the registry reports it per host, so P4.2 deleted the slot arm
+  // without deleting the wake. `host-bound` needed no replacement at all: this
+  // hook is keyed on `activeHostId`, so a host becoming effective already
+  // re-runs the reconciliation below through the key.
+  //
+  // Availability recovery stays on the client, because it is not a row change:
+  // nothing about the host moved, a stalled endpoint started answering again.
+  useEffect(() => {
+    if (activeHostId === null) return;
+    return subscribeHostRowChanged(activeHostId, () => {
+      setConnectionEpoch((current) => current + 1);
+    });
+  }, [activeHostId]);
   useEffect(() => {
     if (client === null) return;
     return client.onChange((event) => {
       if (event.currentHostId !== activeHostId) return;
-      if (
-        event.reason === "availability-recovered" ||
-        event.reason === "host-updated" ||
-        event.reason === "host-bound"
-      ) {
+      if (event.reason === "availability-recovered") {
         setConnectionEpoch((current) => current + 1);
       }
     });
@@ -152,7 +200,9 @@ export function useLandingTerminalReconciliation(
     if (
       client === null ||
       activeHostId === null ||
-      availability !== "supported"
+      availability !== "supported" ||
+      plainAuthority === null ||
+      plainAuthority.authority.capability.status === "unknown"
     ) {
       return;
     }
@@ -162,6 +212,9 @@ export function useLandingTerminalReconciliation(
       primaryWorkspacePath ?? "no-workspace",
       connectionEpoch,
       generation,
+      plainAuthority.authority.capability.status,
+      plainAuthority.authority.collection?.projectionSequence ?? -1,
+      plainAuthority.authority.canMutate ? "mutable" : "read-only",
     ].join("\u0000");
     if (reconciliationRef.current === reconciliationKey) return;
     reconciliationRef.current = reconciliationKey;
@@ -180,8 +233,7 @@ export function useLandingTerminalReconciliation(
         exact: true,
       });
       if (
-        isAborted(controller.signal) ||
-        client.getActiveHostId() !== activeHostId
+        reconciliationGenerationIsStale(controller.signal, client, activeHostId)
       ) {
         releaseLatch();
         return;
@@ -193,8 +245,7 @@ export function useLandingTerminalReconciliation(
         () => null,
       );
       if (
-        isAborted(controller.signal) ||
-        client.getActiveHostId() !== activeHostId
+        reconciliationGenerationIsStale(controller.signal, client, activeHostId)
       ) {
         releaseLatch();
         return;
@@ -212,6 +263,56 @@ export function useLandingTerminalReconciliation(
       };
 
       const initial = useLandingTerminalStore.getState();
+
+      if (plainAuthority.authority.capability.status === "capable") {
+        // A read-only authority is a reconnecting list stream, not a failed
+        // fetch. `onError` clears the picker's selected target and reports
+        // "The terminal directory could not be opened.", which is simply
+        // untrue here - and destroys a directory choice the user must then
+        // make again. The reconciliation latch keys on `canMutate`, so this
+        // pass re-runs by itself the moment mutability returns.
+        if (!plainAuthority.authority.canMutate) {
+          releaseLatch();
+          return;
+        }
+        const outcome: CapableLandingTerminalReconciliationOutcome | "failed" =
+          await reconcileCapableLandingTerminals({
+            activeHostId,
+            landingPageId,
+            capability: plainAuthority.authority.capability,
+            canMutate: plainAuthority.authority.canMutate,
+            closeTerminal: (request) =>
+              plainAuthority.mutations.close.mutateAsync(request),
+            importLegacyTerminal: (request) =>
+              plainAuthority.mutations.importLegacy.mutateAsync(request),
+            queryClient,
+          }).then(
+            (settled) => settled,
+            (): "failed" => "failed",
+          );
+        // Same reasoning as the read-only guard above: a snapshot that went
+        // non-fresh mid-pass is a wait, not a fetch failure, and only a real
+        // rejection may surface the directory error.
+        if (outcome !== "reconciled") {
+          if (outcome === "failed") onError();
+          releaseLatch();
+          return;
+        }
+        if (
+          reconciliationGenerationIsStale(
+            controller.signal,
+            client,
+            activeHostId,
+          )
+        ) {
+          releaseLatch();
+          return;
+        }
+        onReconciled(hostContext);
+        onSettled(generation, hostContext);
+        return;
+      }
+
       const hostTombstones = initial.pendingKills.filter(
         (pending) => pending.hostId === activeHostId,
       );
@@ -241,8 +342,7 @@ export function useLandingTerminalReconciliation(
           ),
       );
       if (
-        isAborted(controller.signal) ||
-        client.getActiveHostId() !== activeHostId
+        reconciliationGenerationIsStale(controller.signal, client, activeHostId)
       ) {
         releaseLatch();
         return;
@@ -289,7 +389,162 @@ export function useLandingTerminalReconciliation(
     onError,
     onSettled,
     panelOpen,
+    plainAuthority,
     primaryWorkspacePath,
     queryClient,
   ]);
+}
+
+/**
+ * `"snapshot-not-fresh"` is a wait, not a failure: the list stream is
+ * reconnecting or its snapshot has been invalidated, so this pass has nothing
+ * authoritative to classify against and the next fresh projection re-runs it.
+ * Genuine failures (a rejected close or import) still reject.
+ */
+export type CapableLandingTerminalReconciliationOutcome =
+  "reconciled" | "snapshot-not-fresh";
+
+export async function reconcileCapableLandingTerminals(args: {
+  readonly activeHostId: string;
+  readonly landingPageId: string;
+  readonly capability: LandingTerminalAuthorityEntry["authority"]["capability"];
+  readonly canMutate: boolean;
+  readonly closeTerminal: (
+    request: ClosePlainTerminalRequest,
+  ) => Promise<unknown>;
+  readonly importLegacyTerminal: (
+    request: ImportLegacyPlainTerminalRequest,
+  ) => Promise<ImportLegacyPlainTerminalResponse>;
+  readonly queryClient: QueryClient;
+}): Promise<CapableLandingTerminalReconciliationOutcome> {
+  const { activeHostId, queryClient } = args;
+  const queryKey = hostQueryKeys.plainTerminals(
+    activeHostId,
+    INDEPENDENT_SCOPE,
+  );
+  const initialCollection =
+    queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+  if (initialCollection?.streamSnapshotFresh !== true) {
+    return "snapshot-not-fresh";
+  }
+  const store = useLandingTerminalStore.getState();
+  const pendingKills = store.pendingKills.filter(
+    (pending) => pending.hostId === activeHostId,
+  );
+
+  await Promise.all(
+    pendingKills.map(async (pending) => {
+      const collection =
+        queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+      if (collection?.terminalsById[pending.sessionId] !== undefined) {
+        await args.closeTerminal({ terminalId: pending.sessionId });
+      }
+      useLandingTerminalStore
+        .getState()
+        .clearPendingKill(activeHostId, pending.sessionId);
+    }),
+  );
+
+  const postKillCollection =
+    queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+  if (postKillCollection?.streamSnapshotFresh !== true) {
+    return "snapshot-not-fresh";
+  }
+
+  const legacyTabs = useLandingTerminalStore
+    .getState()
+    .tabs.filter(
+      (tab) =>
+        tab.hostId === activeHostId &&
+        tab.hostAuthorityAcknowledged !== true &&
+        tab.pendingCreate !== true,
+    );
+  await Promise.all(
+    legacyTabs.map(async (legacyTab) => {
+      const collection =
+        queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+      const known = collection?.terminalsById[legacyTab.sessionId];
+      if (known !== undefined) {
+        useLandingTerminalStore
+          .getState()
+          .adoptHostTerminal(legacyTab.instanceId, known);
+        return;
+      }
+      if (collection?.deletedRevisionById[legacyTab.sessionId] !== undefined) {
+        consumeRetainedPlainTerminalTombstone({
+          queryClient,
+          queryKey,
+          hostId: activeHostId,
+          terminalId: legacyTab.sessionId,
+        });
+        return;
+      }
+      await migrationCoordinator.migrate(
+        {
+          hostId: activeHostId,
+          scope: INDEPENDENT_SCOPE,
+          capability: args.capability,
+          canMutate: args.canMutate,
+          importLegacy: args.importLegacyTerminal,
+        },
+        {
+          read: () => {
+            const current = useLandingTerminalStore
+              .getState()
+              .tabs.find((tab) => tab.instanceId === legacyTab.instanceId);
+            if (
+              current === undefined ||
+              current.hostAuthorityAcknowledged === true ||
+              current.pendingCreate === true
+            ) {
+              return null;
+            }
+            return {
+              terminalId: current.sessionId,
+              hostId: current.hostId,
+              scope: INDEPENDENT_SCOPE,
+              cwd: current.cwd,
+              name: current.name,
+              titleSource: current.titleSource,
+              sourceStoreVersion:
+                current.sourceStoreVersion ??
+                LANDING_TERMINAL_SOURCE_STORE_VERSION,
+            };
+          },
+          adoptCanonical: (response) => {
+            useLandingTerminalStore
+              .getState()
+              .adoptHostTerminal(legacyTab.instanceId, response.terminal);
+          },
+        },
+      );
+    }),
+  );
+
+  const collection =
+    queryClient.getQueryData<PlainTerminalCollection>(queryKey);
+  if (collection?.streamSnapshotFresh !== true) {
+    return "snapshot-not-fresh";
+  }
+  const current = useLandingTerminalStore.getState();
+  const excludedTerminalKeys = new Set(
+    current.pendingKills
+      .filter((pending) => pending.hostId === activeHostId)
+      .map((pending) => terminalSessionKey(pending.hostId, pending.sessionId)),
+  );
+  const reconciliation = reconcileHostAuthoritativeLandingTerminalTabs({
+    tabs: current.tabs,
+    activeInstanceId: current.activeInstanceId,
+    hostId: activeHostId,
+    terminals: plainTerminalCollectionValues(collection),
+    excludedTerminalKeys,
+    mintInstanceId: () => `landing-terminal-${uuidv4()}`,
+  });
+  current.applyReconciliation(
+    args.landingPageId,
+    reconciliation.tabs,
+    reconciliation.activeInstanceId,
+    reconciliation.collapseWhenEmpty,
+  );
+  return "reconciled";
 }

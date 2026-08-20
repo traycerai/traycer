@@ -1,3 +1,4 @@
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
 import type { ZodType } from "zod";
 import {
@@ -205,7 +206,13 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   // once the request settles so a `commit-failed` continuation timer never
   // outlives the command.
   const store = createCliCredentialsStore();
-  const revalidator = createStoreBackedRevalidator({ store, lease });
+  // `signal: null`: this revalidator lives for exactly one unary call, whose
+  // own transport timeout already bounds it.
+  const revalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
 
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
@@ -216,6 +223,9 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
         dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
         frameTimeoutMs: FRAME_TIMEOUT_MS,
         hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
+        // The CLI has no selection authority to feed: there is no window, no
+        // kernel, and nothing that could act on a failover verdict.
+        evidence: NO_TRANSPORT_EVIDENCE,
       }),
       revalidator,
     ),

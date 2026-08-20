@@ -127,6 +127,23 @@ export interface ProvisionHostOptions {
   // unconditionally (the desktop's "Force restart"). Default callers pass
   // false so in-progress chat/terminal/CLI work is protected.
   readonly force: boolean;
+  // Invoked once this call has committed to MUTATING the host (install,
+  // register or start) and never on the no-op fast path - so a caller can
+  // run a step that is only warranted when a host will actually be started.
+  // `host ensure` hangs its sign-in pre-flight here: prompting a signed-out
+  // operator before the no-op decision would interrogate them for a command
+  // that then does nothing.
+  //
+  // The hook point is sound in the direction that matters: the fast path
+  // above RETURNS on a satisfied read, so "no-op predicted" can never become
+  // a start, and a caller that skips its step on no-op cannot be surprised
+  // by one. The reverse (this fires, then the locked re-read finds the state
+  // satisfied after all) needs a genuinely concurrent provisioner and costs
+  // only a redundant call, never a missed one.
+  //
+  // Runs OUTSIDE cli-lock and before staging, so a hook that blocks on a
+  // human neither holds the lock nor waits out a download.
+  readonly beforeMutate: (() => Promise<void>) | null;
 }
 
 interface ProvisionState {
@@ -191,6 +208,12 @@ export async function provisionHost(
       registerService: opts.registerService,
     });
     return noopResult(fast);
+  }
+  // Past the no-op return: this call is going to install, register or start
+  // something, so any caller step gated on "a host will actually be started"
+  // runs here - still outside cli-lock, still ahead of the staging download.
+  if (opts.beforeMutate !== null) {
+    await opts.beforeMutate();
   }
   // Lock-scope restructure (Tech Plan): when the fast read already predicts
   // the install branch will run, resolve + stage (download/verify/extract)
@@ -441,6 +464,7 @@ async function prepareInstallStage(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   return stageHostInstallSource({
     environment: opts.runtime.environment,
@@ -467,6 +491,11 @@ async function commitInstall(
           enableLinger: opts.enableLinger,
           allowSelfInvocation: opts.allowSelfInvocation,
         },
+        // Threaded through to the pre-swap stop, not just the busy
+        // pre-check above: without it, a busy Desktop-managed host still
+        // denied the cooperative shutdown claim and `--force` aborted
+        // anyway.
+        force: opts.force,
       })
     : null;
   const lifecycle =
@@ -531,6 +560,7 @@ async function runServiceRegister(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   const cli = await resolveServiceCliInvocation({
     environment: opts.runtime.environment,
@@ -594,6 +624,7 @@ async function runStart(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   // First attempt: plain start (on win32 this already polls for post-baseline
   // spawn evidence and surfaces Last Run Result on failure - finding F).
@@ -618,6 +649,7 @@ async function runStart(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     const cli = await resolveServiceCliInvocation({
       environment: opts.runtime.environment,

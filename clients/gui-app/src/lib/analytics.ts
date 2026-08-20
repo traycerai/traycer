@@ -19,6 +19,11 @@ export type AnalyticsSource =
   // gesture at all behind it.
   | "host_failover";
 
+export type AnalyticsWorkspaceSurface =
+  "landing" | "new-conversation" | "owner";
+
+export type AnalyticsWorkspaceContextSource = "browse" | "recent";
+
 export type AnalyticsBlocker =
   | "authentication"
   | "authorization"
@@ -268,6 +273,8 @@ export enum AnalyticsEvent {
   HostSetupSucceeded = "host_setup_succeeded",
   HostSetupFailed = "host_setup_failed",
   HostSelected = "host_selected",
+  HostFailover = "host_failover_moved",
+  HostRecovered = "host_recovered",
   HostUpdateStarted = "host_update_started",
   HostUpdateSucceeded = "host_update_succeeded",
   HostUpdateFailed = "host_update_failed",
@@ -299,6 +306,9 @@ export enum AnalyticsEvent {
   WorkspaceFolderAdded = "workspace_folder_added",
   WorkspaceFolderRemoved = "workspace_folder_removed",
   WorkspacePrimaryChanged = "workspace_primary_changed",
+  WorkspaceContextAdded = "workspace_context_added",
+  WorkspaceMovedToRecent = "workspace_moved_to_recent",
+  WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
   WorktreeCreated = "worktree_created",
@@ -484,6 +494,16 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.HostSelected]: SourceProperties & {
     readonly host_kind: "local" | "remote";
   };
+  /**
+   * The DERIVATION moved the app, with no gesture behind it - the selection
+   * authority's `failover` / `recovery` cause (redesign P1.2). Property-less
+   * on purpose: what happened is the whole event, and a host id here would be
+   * an identifier for a machine, attached to a signal nobody segments by.
+   * `HostSelected` stays the INTENT event, fired only by Settings ▸ Activate,
+   * so the two can never be conflated again.
+   */
+  readonly [AnalyticsEvent.HostFailover]: null;
+  readonly [AnalyticsEvent.HostRecovered]: null;
   readonly [AnalyticsEvent.HostUpdateStarted]: SourceProperties;
   readonly [AnalyticsEvent.HostUpdateSucceeded]: null;
   readonly [AnalyticsEvent.HostUpdateFailed]: {
@@ -568,6 +588,17 @@ export interface AnalyticsEventProperties {
     readonly workspace_kind: WorkspaceKind;
   };
   readonly [AnalyticsEvent.WorkspacePrimaryChanged]: SourceProperties;
+  readonly [AnalyticsEvent.WorkspaceContextAdded]: {
+    readonly source: AnalyticsWorkspaceContextSource;
+    readonly outcome: "succeeded" | "failed";
+    readonly surface: AnalyticsWorkspaceSurface;
+  };
+  readonly [AnalyticsEvent.WorkspaceMovedToRecent]: {
+    readonly surface: AnalyticsWorkspaceSurface;
+  };
+  readonly [AnalyticsEvent.WorkspaceRecentForgotten]: {
+    readonly surface: AnalyticsWorkspaceSurface;
+  };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {
     readonly editor: AnalyticsEditor;
@@ -601,7 +632,7 @@ export interface AnalyticsEventProperties {
     readonly scope: "current" | "with_children";
   };
   readonly [AnalyticsEvent.ChatBackgroundItemStopped]: {
-    readonly scope: "one" | "all";
+    readonly scope: "one" | "all" | "session";
   };
   readonly [AnalyticsEvent.ChatQueuePaused]: null;
   readonly [AnalyticsEvent.ChatQueueResumed]: null;
@@ -776,7 +807,29 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.UpdateFailed]: {
     readonly blocker: AnalyticsBlocker;
   };
-  readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties;
+  /**
+   * `source` is the ENTRY POINT (which affordance was used); `surface` is
+   * WHICH in-app button, from the report context's own fixed vocabulary
+   * ("Host startup", "App update", "Git changes"…).
+   *
+   * The two are separate on purpose. Every in-app Report button files under
+   * `source: "direct_ui"`, so the moment one of them is gated - and
+   * `18aef324` now suppresses the app-update toast while a window narration
+   * owns the frame - that series cannot distinguish "people used the other
+   * button" from "people stopped reporting". Re-valuing `direct_ui` per
+   * surface would have answered it by breaking the entry-point series
+   * instead, and `AnalyticsSource` is shared with a dozen unrelated events.
+   * A new dimension costs nothing; a re-valued one costs the history.
+   *
+   * `null` where there is no in-app surface (the native menu). Safe to send:
+   * `host-failure-report.ts` states the contract these values are built to -
+   * categorical phase names, "never paths, error text or anything the user
+   * has to redact" - and all 145 `createReportIssueContext` call sites pass a
+   * string literal.
+   */
+  readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties & {
+    readonly surface: string | null;
+  };
   // Which report type's gate blocked the attempt (ticket 07's evidence gate,
   // Flow 2 manual opens only) - downstream funnels join this against a later
   // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
@@ -1245,6 +1298,17 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.WorkspaceOpenedInEditor],
     ["source", "editor"],
   ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
+    ["source", "outcome", "surface"],
+  ),
+  ...eventKeyEntries(
+    [
+      AnalyticsEvent.WorkspaceMovedToRecent,
+      AnalyticsEvent.WorkspaceRecentForgotten,
+    ],
+    ["surface"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.WorktreeDeleted], ["outcome", "blocker"]),
   ...eventKeyEntries(
     [AnalyticsEvent.WorktreesBulkDeleted],
@@ -1393,6 +1457,8 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
 
 const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
   AnalyticsEvent.SignInSucceeded,
+  AnalyticsEvent.HostFailover,
+  AnalyticsEvent.HostRecovered,
   AnalyticsEvent.HostUpdateSucceeded,
   AnalyticsEvent.TaskShared,
   AnalyticsEvent.ChatMessageEdited,
@@ -1642,6 +1708,25 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ),
   ...eventValueEntries(
     [AnalyticsEvent.WorktreeDeleted],
+    "outcome",
+    new Set(["failed", "succeeded"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
+    "source",
+    new Set(["browse", "recent"]),
+  ),
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.WorkspaceContextAdded,
+      AnalyticsEvent.WorkspaceMovedToRecent,
+      AnalyticsEvent.WorkspaceRecentForgotten,
+    ],
+    "surface",
+    new Set(["landing", "new-conversation", "owner"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.WorkspaceContextAdded],
     "outcome",
     new Set(["failed", "succeeded"]),
   ),
@@ -2114,6 +2199,7 @@ const RPC_ERROR_BLOCKERS: Readonly<Record<string, AnalyticsBlocker>> = {
   RPC_ERROR: "host_unavailable",
   SENDER_TUI_UNSUPPORTED: "unsupported",
   TERMINAL_ID_TAKEN: "conflict",
+  TERMINAL_DELETING: "conflict",
   UNAUTHORIZED: "authentication",
   WORKSPACE_BINDING_REQUIRED: "invalid_input",
   WORKTREE_BUSY: "conflict",

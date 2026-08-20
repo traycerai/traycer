@@ -36,7 +36,19 @@ export function createExtractHeartbeat(opts: {
   readonly onProgress: (info: ProgressInfo) => void;
 }): () => void {
   let lastAtMs = 0;
+  // Entries seen, not heartbeats sent. Counted on EVERY call and reported on the
+  // throttled ones, so the number a consumer sees is real work completed rather
+  // than a count of how often we spoke - and it advances even while the throttle
+  // is suppressing output.
+  //
+  // This is what makes the payload distinguishable between two heartbeats. Every
+  // other field is byte-identical every time (`stage`, and a `message` fixed per
+  // version), so a consumer watching for progress saw a constant and could not
+  // tell this extract from a wedged one. The staged wait consequently promoted a
+  // healthy first-run install to its Retry surface about ten seconds in.
+  let entriesSeen = 0;
   return () => {
+    entriesSeen += 1;
     const nowMs = Date.now();
     if (nowMs - lastAtMs < EXTRACT_HEARTBEAT_INTERVAL_MS) return;
     lastAtMs = nowMs;
@@ -46,6 +58,10 @@ export function createExtractHeartbeat(opts: {
       percent: null,
       bytes: null,
       totalBytes: null,
+      // Entry-driven by construction - see this file's header. The hook fires
+      // once per archive entry, so a rising count IS evidence of work
+      // completing. It must never be made time-driven.
+      workUnits: entriesSeen,
     });
     void refreshDownloadSlotClaim(opts.environment, opts.archivePath).catch(
       () => undefined,

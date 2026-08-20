@@ -4,11 +4,15 @@ import type {
   ListTaskLight,
   ListTasksFacets,
   ListTasksResponse,
+  TaskContextResult,
   TaskLight,
   TaskRepoIdentifier,
   TaskWorkspaceIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { formatRepoIdentifier } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  formatRepoIdentifier,
+  isFoundTaskContext,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   isCloudEpicTasksQueryKey,
   isEpicTaskContextsQueryKey,
@@ -206,16 +210,26 @@ function setEpicPinnedInTaskContextsResponse(
   pinned: boolean,
 ): GetTaskContextsResponse {
   const entry = Object.entries(response.tasks).find(
-    ([, task]) => task?.epic?.light?.id === epicId,
+    ([, resolution]) =>
+      isFoundTaskContext(resolution) &&
+      resolution.task.epic?.light?.id === epicId,
   );
   if (entry === undefined) return response;
-  const [taskId, task] = entry;
-  if (task === null || (task.pinned ?? false) === pinned) return response;
+  const [taskId, resolution] = entry;
+  if (
+    !isFoundTaskContext(resolution) ||
+    (resolution.task.pinned ?? false) === pinned
+  ) {
+    return response;
+  }
   return {
     ...response,
     tasks: {
       ...response.tasks,
-      [taskId]: { ...task, pinned },
+      [taskId]: {
+        ...resolution,
+        task: { ...resolution.task, pinned },
+      },
     },
   };
 }
@@ -302,19 +316,19 @@ function updateEpicTitleInTaskContextsResponse(
   title: string,
 ): GetTaskContextsResponse {
   let changed = false;
-  const tasks: Record<string, ListTaskLight | null> = {};
-  for (const [taskId, task] of Object.entries(response.tasks)) {
-    if (task === null) {
-      tasks[taskId] = null;
+  const tasks: Record<string, TaskContextResult> = {};
+  for (const [taskId, resolution] of Object.entries(response.tasks)) {
+    if (!isFoundTaskContext(resolution)) {
+      tasks[taskId] = resolution;
       continue;
     }
-    const next = updateEpicTitleInListTaskLight(task, epicId, title);
+    const next = updateEpicTitleInListTaskLight(resolution.task, epicId, title);
     if (next === null) {
-      tasks[taskId] = task;
+      tasks[taskId] = resolution;
       continue;
     }
     changed = true;
-    tasks[taskId] = next;
+    tasks[taskId] = { ...resolution, task: next };
   }
   return changed ? { ...response, tasks } : response;
 }
@@ -347,7 +361,7 @@ function updateEpicTitleInListTaskLight(
 
 function removeTasksFromFacets(
   facets: ListTasksFacets,
-  tasks: ReadonlyArray<TaskLight>,
+  tasks: ReadonlyArray<ListTaskLight>,
   userId: string,
 ): ListTasksFacets {
   return {
@@ -360,7 +374,42 @@ function removeTasksFromFacets(
       facets.ownershipScopes,
       ownershipScopesFromTasks(tasks, userId),
     ),
+    // Rebuilding this object DROPS `chatHosts` unless it is carried, and its
+    // absence is not cosmetic: the history gate reads a missing group as proof
+    // that the server never applied the host filter and withholds every row
+    // (`use-history-query`). A local delete would then present as "this host
+    // is too old to filter by host" - permanently, since these entries are
+    // cached with `staleTime`/`gcTime` at Infinity and never refetch on their
+    // own. Any future facet group must be carried here for the same reason.
+    chatHosts: decrementChatHostFacets(facets.chatHosts, tasks),
   };
+}
+
+/**
+ * Decrements per-host task counts for the removed rows, and drops a host whose
+ * last task just went.
+ *
+ * A row with no `chatHostIds` (an older peer that cannot report them) is
+ * skipped rather than treated as contributing to no host: its counts stay
+ * high until the next fetch, which is a stale number rather than a wrong
+ * shape. Losing the GROUP entirely is the failure that matters.
+ */
+function decrementChatHostFacets(
+  current: ListTasksFacets["chatHosts"],
+  removed: ReadonlyArray<ListTaskLight>,
+): ListTasksFacets["chatHosts"] {
+  if (current === undefined) return undefined;
+  const removedCounts = new Map<string, number>();
+  for (const task of removed) {
+    for (const hostId of new Set(task.chatHostIds ?? [])) {
+      removedCounts.set(hostId, (removedCounts.get(hostId) ?? 0) + 1);
+    }
+  }
+  if (removedCounts.size === 0) return current;
+  return current.flatMap((facet) => {
+    const count = facet.count - (removedCounts.get(facet.hostId) ?? 0);
+    return count > 0 ? [{ hostId: facet.hostId, count }] : [];
+  });
 }
 
 function reposFromTasks(

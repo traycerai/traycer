@@ -237,6 +237,7 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
     get stageLatestCalls() {
       return stageLatestCalls;
     },
+    lifecycleAdmissionBlock: null,
     async getStatus(): Promise<HostControllerStatus> {
       return {
         download: null,

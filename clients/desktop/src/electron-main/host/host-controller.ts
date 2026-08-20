@@ -55,20 +55,25 @@ import {
 } from "./host-state";
 import {
   HOST_REMOVED_BY_USER_MESSAGE,
+  type AbandonedByGuard,
   type ActivateInstalledOk,
   type ApplyStagedOk,
   type ApplyStagedTrigger,
   type BusyContinuation,
   type ConvergeReadyOk,
   type DownloadLaneStatus,
+  type GuardedMutationOutcome,
   type HostControllerIntent,
   type HostControllerStatus,
   type InstallVersionOk,
+  type LifecycleAdmissionBlock,
   type MutationKind,
   type MutationLaneStatus,
   type MutationOutcome,
   type MutationProgress,
+  type PendingRevisionCaller,
   type RemoveTraycerOk,
+  type LocalHostMutationIntent,
   type ServiceRegistrationOk,
   type UninstallOk,
 } from "./host-controller-types";
@@ -90,6 +95,16 @@ import {
 // partial went with it (traycer#585/#589). Kept at 10 minutes as an idle
 // budget: comfortably longer than the CLI's own 30s transfer watchdog, so
 // only a child that has genuinely stopped reporting trips it.
+//
+// Deliberately shared by `host service install` too, not a tighter
+// per-command bound: that command's legitimately SILENT windows stack -
+// a 30s cli-lock wait, a 32s cooperative host stop (SHUTDOWN_FORCE_EXIT_MS
+// + margin), and on win32 an install/replace sequence whose schtasks/
+// taskkill subprocess timeouts alone sum past 100s with no NDJSON between
+// them - so any bound tight enough to feel responsive risks SIGKILLing a
+// slow-but-live registration mid-critical-section, the torn-record class
+// the A8 comment above exists to prevent. Slow detection of a rare wedge
+// beats a false kill of a real one.
 const CLI_STREAM_IDLE_TIMEOUT_MS = 10 * 60_000;
 // Fixup A9: the production desktop-held cli-lock wait/poll - matches the
 // CLI's own `waitMs: 30_000` at every `withCliLock` call site (fixup A8).
@@ -130,16 +145,6 @@ function approvalRequiredMessage(): string {
   );
 }
 
-function noopProgress(): MutationProgress {
-  return {
-    stage: null,
-    percent: null,
-    bytes: null,
-    totalBytes: null,
-    message: null,
-  };
-}
-
 function progressFromNdjson(
   event: Extract<NdjsonEvent, { type: "progress" }>,
 ): MutationProgress {
@@ -149,6 +154,7 @@ function progressFromNdjson(
     bytes: event.bytes,
     totalBytes: event.totalBytes,
     message: event.message,
+    workUnits: event.workUnits,
   };
 }
 
@@ -671,6 +677,12 @@ export class HostController {
 
   private mutationTail: Promise<void> = Promise.resolve();
   private mutationStatus: MutationLaneStatus | null = null;
+  // Bumped on every mutation start AND end. `streamBundled` captures it at
+  // spawn so a CLI child's progress events publish only while the mutation
+  // that spawned it is still the active one - `mutationStatus` itself is
+  // replaced on every progress merge, so object identity cannot serve as
+  // the ownership token.
+  private mutationEpoch = 0;
 
   // Fixup B15: `applyPendingLoginItemRevisionIfIdle`'s disruptive
   // SMAppService cycle is reachable both outside the FIFO mutation lane
@@ -690,6 +702,30 @@ export class HostController {
   // `HostController` already owns its own long-lived state.
   private pendingRevisionCycleInFlight: Promise<MutationOutcome<ConvergeReadyOk> | null> | null =
     null;
+
+  // The EFFECTIVE owner policy of the cycle in the slot above, which is not
+  // necessarily the policy of the caller that opened it: a within-lane joiner
+  // UPGRADES it (see `applyPendingLoginItemRevisionIfIdle`). The reverse
+  // admission check reads this rather than its own parameter, because a
+  // coalesced call runs once for every caller attached to it - deciding on
+  // the first caller's policy alone would refuse on behalf of a joiner whose
+  // own lane job is the very thing being refused for.
+  private pendingRevisionCycleCaller: PendingRevisionCaller | null = null;
+
+  // Whether the cycle in the slot ended by refusing on OUTSIDE-lane policy.
+  // Distinguishes that refusal from every other `null` (nothing to do, not
+  // reachable, quarantined, host busy), which is what lets a within-lane
+  // joiner tell "there was nothing to apply" from "it was refused for MY
+  // lane" - only the second is worth re-attempting.
+  private pendingRevisionCycleDeferredByLane = false;
+
+  // True only while a pending-login-item revision cycle is COMMITTED - past
+  // every precheck and either waiting on the desktop lock or running its
+  // bootout/re-register. Deliberately narrower than the D1 in-flight slot
+  // above, which is occupied during the prechecks of every monitor tick;
+  // admission must not refuse a user's install because a poll happened to be
+  // reading files at that moment.
+  private pendingRevisionCycleDisruptive = false;
 
   private downloadTail: Promise<void> = Promise.resolve();
   private downloadStatus: DownloadLaneStatus | null = null;
@@ -718,6 +754,47 @@ export class HostController {
   }
 
   // ---- Canonical status --------------------------------------------------
+
+  /**
+   * What would stop an accepted lifecycle write from running ALONE right now,
+   * sampled synchronously — or `null` when nothing would.
+   *
+   * `getStatus()` reads the lane too, but only after three filesystem reads,
+   * so its answer is already history by the time a caller sees it. A caller
+   * that must not ENQUEUE beside running lifecycle work needs the test and the
+   * submission in one synchronous stretch — the lane is exclusive but it does
+   * not refuse a distinct intent, it queues it, so a stale "idle" verdict
+   * becomes a write that lands after whatever was running. Pair this with the
+   * submission and put no `await` between them.
+   *
+   * TWO sources, because the FIFO lane is not the only lifecycle work: the
+   * pending-login-item revision cycle runs on its own tail (see
+   * `pendingRevisionTail` above) and its bootout/re-register restarts the host
+   * exactly like a lane job would. An admission check that read only the lane
+   * would accept an install or restart during that cycle, serialize it behind
+   * the refresh on the desktop lock, and deliver a second lifecycle change
+   * after a refusal was promised. This getter is the ONLY admission surface —
+   * the lane is deliberately not exposed on its own, so a future `*IfIdle`
+   * handler cannot reach for the narrower fact.
+   *
+   * The lane arm reports the RUNNING intent, and `mutationStatus` is set when
+   * a job begins rather than when it is enqueued — which is nevertheless
+   * sufficient for every caller here, because the gap is not observable from
+   * one. A job queued behind another is queued behind a job that has already
+   * set the field; the only window where something is enqueued and this reads
+   * `null` is between one job's `finally` and the next job's first line, and
+   * those are adjacent microtasks in a single drain. No macrotask — no IPC
+   * handler, no timer — can be scheduled inside it.
+   */
+  get lifecycleAdmissionBlock(): LifecycleAdmissionBlock | null {
+    if (this.mutationStatus !== null) {
+      return { kind: "mutation", lane: this.mutationStatus };
+    }
+    if (this.pendingRevisionCycleDisruptive) {
+      return { kind: "login-item-refresh" };
+    }
+    return null;
+  }
 
   async getStatus(): Promise<HostControllerStatus> {
     const installed = await readDesktopHostInstallRecord(this.layout);
@@ -765,12 +842,15 @@ export class HostController {
   // race the deletion), so a LATER, non-overlapping call with the same key
   // still runs fresh rather than replaying a stale result. Every call site
   // below derives its key from the intent's OWN distinguishing parameters
-  // (e.g. `force`, `pin`) - two `respawn()`s always coalesce; two
-  // `installVersion` calls only coalesce when the pin AND force both match.
+  // (e.g. `force`, `pin`) - two background `respawn()`s always coalesce; two
+  // `installVersion` calls only coalesce when the pin AND force both match;
+  // guarded intents additionally key on the intent kind and target host
+  // (`reprovisionCoalesceKeySuffix`), so a user repair never joins a
+  // background job and inherits its skipped guard.
 
   private readonly inFlightMutations = new Map<
     string,
-    Promise<MutationOutcome<unknown>>
+    Promise<MutationOutcome<unknown> | AbandonedByGuard>
   >();
 
   // Apply and activation both run asynchronous eligibility/download-lane
@@ -800,44 +880,57 @@ export class HostController {
     return job;
   }
 
-  private enqueueMutation<T>(
+  // Generic over the RESULT union, not the ok-value: an intent-taking
+  // mutation resolves `GuardedMutationOutcome` (its lane head can abandon),
+  // everything else plain `MutationOutcome`, and both flow through this one
+  // lane. Whatever the job settles with is what EVERY coalesced waiter
+  // receives - which is why a guard refusal must be an outcome arm rather
+  // than per-caller state (see `AbandonedByGuard`).
+  private enqueueMutation<
+    R extends MutationOutcome<unknown> | AbandonedByGuard,
+  >(
     kind: MutationKind,
     coalesceKey: string,
-    fn: () => Promise<MutationOutcome<T>>,
-  ): Promise<MutationOutcome<T>> {
+    fn: () => Promise<R>,
+  ): Promise<R | { readonly kind: "failed"; readonly message: string }> {
     const existing = this.inFlightMutations.get(coalesceKey);
     if (existing !== undefined) {
-      return existing as Promise<MutationOutcome<T>>;
+      return existing as Promise<
+        R | { readonly kind: "failed"; readonly message: string }
+      >;
     }
-    const job = this.mutationTail.then(async () => {
-      this.mutationStatus = {
-        kind,
-        progress: null,
-        startedAt: new Date().toISOString(),
-      };
-      this.publishMutationStatus();
-      try {
-        return await fn();
-      } catch (err) {
-        log.warn("[host-controller] mutation intent threw", { kind, err });
-        return {
-          kind: "failed",
-          message: describeError(err),
-        } as MutationOutcome<T>;
-      } finally {
-        this.mutationStatus = null;
+    const job = this.mutationTail.then(
+      async (): Promise<
+        R | { readonly kind: "failed"; readonly message: string }
+      > => {
+        this.mutationEpoch += 1;
+        this.mutationStatus = {
+          kind,
+          progress: null,
+          startedAt: new Date().toISOString(),
+        };
         this.publishMutationStatus();
-        this.inFlightMutations.delete(coalesceKey);
-        if (this.stageLatestPending) {
-          this.stageLatestPending = false;
-          void this.stageLatest();
+        try {
+          return await fn();
+        } catch (err) {
+          log.warn("[host-controller] mutation intent threw", { kind, err });
+          return {
+            kind: "failed",
+            message: describeError(err),
+          };
+        } finally {
+          this.mutationEpoch += 1;
+          this.mutationStatus = null;
+          this.publishMutationStatus();
+          this.inFlightMutations.delete(coalesceKey);
+          if (this.stageLatestPending) {
+            this.stageLatestPending = false;
+            void this.stageLatest();
+          }
         }
-      }
-    });
-    this.inFlightMutations.set(
-      coalesceKey,
-      job as Promise<MutationOutcome<unknown>>,
+      },
     );
+    this.inFlightMutations.set(coalesceKey, job);
     this.mutationTail = job.then(
       () => undefined,
       () => undefined,
@@ -861,19 +954,57 @@ export class HostController {
     // rare blip into a constant flicker on exactly the throttled links it
     // exists for. A genuine stage transition (resolve/download/extract/swap/
     // …) still lands.
+    // SCOPED TO ONE STAGE (completing Mi-1, not reversing it). The paragraph
+    // above states a WITHIN-stage purpose - "a bare heartbeat holds the bar" -
+    // and the `stage` guard shows transitions were already being reasoned about.
+    // The numbers were simply not given the same treatment, so they leaked
+    // across a real stage change, and on the SHIPPED download path that meant:
+    //
+    //   download climbs to percent 100, bytes == totalBytes
+    //   extract announces with all three null
+    //   stage transitions correctly, and every number is inherited
+    //
+    // ⇒ a FULL progress bar and "800 MB of 800 MB" under "Setting up Traycer
+    // Host…" for the entire multi-minute extract. A full bar reads as finished,
+    // not as working - the worst of the three, and it was on every registry
+    // install. The bundled path had the same shape one field down: `verify`
+    // emits `totalBytes` with no `bytes`, so extract inherited a frozen total.
+    //
+    // Blanking at a genuine transition is the fix, not a regression: the new
+    // stage has no measured position yet, and an honest empty beats an inherited
+    // lie. `percent`/`bytes`/`totalBytes` describe THIS stage's work.
+    //
+    // NO CLAUSE FOR A NULL INCOMING STAGE, deliberately, and this was checked
+    // rather than assumed. A first draft treated one as "omitted" so it would
+    // not be mistaken for a transition - but it cannot happen: this method has
+    // exactly ONE caller (`progressFromNdjson`, below the stream reader) and the
+    // NDJSON progress event types `stage` as a non-null `string`. So the clause
+    // was dead code and the arm for it was unwritable through any real path;
+    // both are gone rather than left reading as covered.
+    //
+    // This file used to hold a `noopProgress()` returning an all-null progress,
+    // the one thing here that could have produced a null stage. It had no call
+    // site and is now deleted, so the argument above no longer has an exception
+    // to carve out. Re-introducing any all-null producer puts the clause back on
+    // the table - it is the type, not this comment, that would stop being true.
     const prior = this.mutationStatus.progress;
-    const merged: MutationProgress =
-      prior === null
-        ? progress
-        : {
-            stage: isRegistryLivenessStage(progress.stage)
-              ? prior.stage
-              : progress.stage,
-            percent: progress.percent ?? prior.percent,
-            bytes: progress.bytes ?? prior.bytes,
-            totalBytes: progress.totalBytes ?? prior.totalBytes,
-            message: progress.message,
-          };
+    const isLiveness = isRegistryLivenessStage(progress.stage);
+    const withinStage =
+      prior !== null && (isLiveness || progress.stage === prior.stage);
+    const merged: MutationProgress = !withinStage
+      ? progress
+      : {
+          stage: isLiveness ? prior.stage : progress.stage,
+          percent: progress.percent ?? prior.percent,
+          bytes: progress.bytes ?? prior.bytes,
+          totalBytes: progress.totalBytes ?? prior.totalBytes,
+          message: progress.message,
+          // In the carry-forward set for the same reason as the rest: a bare
+          // event inside a stage should HOLD the count, not blank it. It resets
+          // across a genuine transition with everything else, which is correct -
+          // a new stage's work has not started being counted.
+          workUnits: progress.workUnits ?? prior.workUnits,
+        };
     this.mutationStatus = { ...this.mutationStatus, progress: merged };
     this.publishMutationStatus();
     for (const listener of this.progressListeners) {
@@ -925,6 +1056,16 @@ export class HostController {
   // ---- Shared CLI invocation helpers --------------------------------------
 
   private async streamBundled<T>(args: readonly string[]): Promise<T> {
+    // Progress ownership is captured at spawn. Not every caller is inside
+    // the mutation lane: `applyPendingLoginItemRevisionIfIdle` (driven by
+    // the pending-revision monitor, deliberately not enqueued) reaches the
+    // `host service install --takeover` call, and a mutation that starts
+    // while that child is still emitting must not inherit its progress -
+    // the renderer would show a foreign operation's stage/message under the
+    // active mutation's heading. The epoch also stops a lane call's late
+    // events once its own mutation has ended.
+    const spawnEpoch = this.mutationEpoch;
+    const spawnedInLane = this.mutationStatus !== null;
     const result = await streamBundledTraycerCliJson<T>({
       args,
       env: null,
@@ -934,7 +1075,11 @@ export class HostController {
       // an `AbortController`).
       signal: null,
       onEvent: (event) => {
-        if (event.type === "progress") {
+        if (
+          event.type === "progress" &&
+          spawnedInLane &&
+          this.mutationEpoch === spawnEpoch
+        ) {
           this.setMutationProgress(progressFromNdjson(event));
         }
       },
@@ -955,10 +1100,18 @@ export class HostController {
   // acquisition IS the bound. The controller does not re-wrap that in a
   // second retry loop; it just classifies the terminal signal once.
 
-  private lockBusyOutcome<T>(isConvergeReady: boolean): MutationOutcome<T> {
-    return isConvergeReady
-      ? { kind: "failed", message: `${LOCK_BUSY_MESSAGE} Retry.` }
-      : { kind: "deferred", message: LOCK_BUSY_MESSAGE };
+  private lockBusyOutcome<T>(): MutationOutcome<T> {
+    // A held lock means another actor is mid-lifecycle-work; NOTHING ran, so
+    // nothing was learned about the host. `deferred` for every mutation,
+    // convergeReady included: the old convergeReady-only `failed` mapping
+    // served a retired renderer gate that wanted a Retry surface, and it
+    // taught the selection authority's launch ensure to arm a 30s dead-lease
+    // cooldown - the "No host is available" modal over a healthy machine -
+    // whenever it lost the lock to the desktop's own launch reconcile. Every
+    // surviving consumer is kind-agnostic (Settings/doctor throw the message
+    // whatever the kind; launch converge logs it), and the authority port
+    // maps `deferred` to request pacing instead of lease death.
+    return { kind: "deferred", message: LOCK_BUSY_MESSAGE };
   }
 
   private hostBusyOutcome<T>(
@@ -1170,7 +1323,13 @@ export class HostController {
     );
     let raw: unknown;
     try {
-      raw = await this.runBundled<unknown>([
+      // Streaming, not the flat-45s JSON wrapper: `host service install` now
+      // runs the post-registration credential provisioning probe (up to 30s
+      // waiting for the host), which stacked on the CLI's 30s lock wait can
+      // exceed any flat bound - and a SIGKILL there reports a registration
+      // that already succeeded as failed. The idle timeout is re-armed by the
+      // command's own progress NDJSON (`register`, `host-credential`).
+      raw = await this.streamBundled<unknown>([
         "host",
         "service",
         "install",
@@ -1490,7 +1649,7 @@ export class HostController {
       },
     );
     if (outcome.kind === "busy") {
-      return this.lockBusyOutcome(isConvergeReady);
+      return this.lockBusyOutcome();
     }
     const step = outcome.result;
     if (step.phase === "terminal") {
@@ -1611,10 +1770,47 @@ export class HostController {
   // slot for the ENTIRE call - including its own pre-checks - the other
   // joins its result outright, exactly mirroring how `runEnsureHost` gated
   // before any of its own logic ran.
-  async applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
-    if (this.pendingRevisionCycleInFlight !== null) {
-      return this.pendingRevisionCycleInFlight;
+  //
+  // Coalescing carries ONE more obligation than the slot itself: the joiner's
+  // OWNER POLICY. An outside tick that is still in its prechecks when
+  // `convergeReady` joins from inside its lane job would otherwise reach the
+  // reverse-admission check holding only the tick's own `outside-lane`
+  // policy, see the mutation lane the JOINER occupies, and refuse - a cycle
+  // declining to run because of the very caller waiting on it, after which
+  // the no-op converge path reports success having applied nothing. So a
+  // within-lane joiner upgrades the cycle's policy, and (for the narrow case
+  // where the refusal already happened before it could) re-attempts exactly
+  // once under the corrected policy.
+  async applyPendingLoginItemRevisionIfIdle(
+    caller: PendingRevisionCaller,
+  ): Promise<MutationOutcome<ConvergeReadyOk> | null> {
+    const inFlight = this.pendingRevisionCycleInFlight;
+    if (inFlight !== null) {
+      // An outside-lane joiner never widens what the cycle may do, so it
+      // takes the in-flight answer as-is.
+      if (caller === "outside-lane") return inFlight;
+      this.pendingRevisionCycleCaller = "within-lane-job";
+      const joined = await inFlight;
+      // The upgrade lands before the check for the whole precheck window
+      // (several file/probe awaits). It can only miss when the cycle had
+      // already refused, and that refusal was against THIS caller's lane -
+      // so it is void for this caller. Re-attempt ONCE, never a loop: the
+      // retry only happens after a lane-policy refusal, and it runs under
+      // `within-lane-job`, which cannot produce another one.
+      if (joined !== null || !this.pendingRevisionCycleDeferredByLane) {
+        return joined;
+      }
+      // Someone else opened a cycle in the gap; theirs subsumes this one
+      // (and carries the upgraded policy set above).
+      if (this.pendingRevisionCycleInFlight !== null) {
+        return this.pendingRevisionCycleInFlight;
+      }
+      // Falls through to open a fresh cycle. The check above and the set
+      // below stay in one synchronous stretch, exactly like the first-caller
+      // path, so the D1 gate still cannot admit two owners in one JS turn.
     }
+    this.pendingRevisionCycleCaller = caller;
+    this.pendingRevisionCycleDeferredByLane = false;
     const run = this.applyPendingLoginItemRevisionIfIdleUncoalesced();
     // The D1 cache becomes visible synchronously, before any of the
     // reachability/quarantine/approval prechecks await. Quit drain must see
@@ -1631,6 +1827,7 @@ export class HostController {
     const clearInFlight = (): void => {
       if (this.pendingRevisionCycleInFlight === run) {
         this.pendingRevisionCycleInFlight = null;
+        this.pendingRevisionCycleCaller = null;
       }
     };
     run.then(clearInFlight, clearInFlight);
@@ -1665,7 +1862,44 @@ export class HostController {
       );
       return null;
     }
-    return this.runPendingLoginItemRevisionCycle(currentVersion);
+    // Reverse admission, owner-aware: the *IfIdle handlers refuse while this
+    // cycle is committed, and this is the same rule pointed the other way -
+    // an OUTSIDE caller (the monitor's poll) must not commit a disruptive
+    // cycle while the mutation lane owns an intent, or an already-accepted
+    // watched write gets a second unannounced lifecycle change serialized
+    // behind it on the desktop lock. A WITHIN-LANE caller is that intent -
+    // `convergeReady` reaches here from inside its own lane job, where the
+    // lane being occupied is not a competitor but the caller itself.
+    //
+    // Checked in the same synchronous stretch that raises the flag (no await
+    // between), mirroring the handlers' own test-and-submit rule: the lane
+    // check, the commitment, and the flag are one decision.
+    // Reads the cycle's EFFECTIVE policy, not a captured parameter, so a
+    // within-lane joiner that upgraded it during these prechecks is honoured.
+    // Written as "unless within-lane" rather than "if outside-lane" so the
+    // impossible null reading defers (fails CLOSED) instead of committing a
+    // disruptive cycle beside a live lane intent.
+    if (
+      this.pendingRevisionCycleCaller !== "within-lane-job" &&
+      this.mutationStatus !== null
+    ) {
+      this.pendingRevisionCycleDeferredByLane = true;
+      log.debug(
+        "[host-controller] pending LaunchAgent revision deferred - mutation lane active",
+      );
+      return null;
+    }
+    // Committed from here: every precheck passed, and the next thing this
+    // call does is take the desktop lock and run the disruptive bootout /
+    // re-register. Raised BEFORE the lock wait, not inside it - a caller
+    // refused admission during the wait would otherwise be accepted, queue on
+    // the same lock, and land right after the cycle it was told nothing about.
+    this.pendingRevisionCycleDisruptive = true;
+    try {
+      return await this.runPendingLoginItemRevisionCycle(currentVersion);
+    } finally {
+      this.pendingRevisionCycleDisruptive = false;
+    }
   }
 
   private async runPendingLoginItemRevisionCycle(
@@ -1885,12 +2119,26 @@ export class HostController {
 
   async convergeReady(
     force: boolean,
-  ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return this.enqueueMutation<ConvergeReadyOk>(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>> {
+    return this.enqueueMutation<GuardedMutationOutcome<ConvergeReadyOk>>(
       "ensure",
-      `ensure:${force}`,
+      // The intent is part of the coalesce key, not decoration, and so is the
+      // host it targets. A repair that coalesced onto a background converge
+      // would inherit that job's policy and silently skip both its guard and
+      // its sentinel clear - the same shape as the pending-revision
+      // coalescing bug, where the joiner's policy was discarded in favour of
+      // the occupant's. Two repairs for DIFFERENT hosts are likewise not the
+      // same job: joining would hand the newcomer the occupant's guard, which
+      // then refuses it for naming a different host.
+      `ensure:${force}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
-        if (await isHostRemovedByUser()) {
+        const abandoned = await this.admitReprovision(intent);
+        if (abandoned !== null) return abandoned;
+        // Only a BACKGROUND converge obeys the sentinel. `admitReprovision`
+        // has already cleared it for a user repair, so this cannot swallow
+        // the click that asked for the host back.
+        if (intent.kind === "background" && (await isHostRemovedByUser())) {
           return { kind: "ok", value: { running: false, version: null } };
         }
         if (await this.isPackagedMacOwned()) {
@@ -1899,6 +2147,66 @@ export class HostController {
         return this.convergeReadyCliOwned(force);
       },
     );
+  }
+
+  /**
+   * The coalesce-key fragment for a reprovision intent. A background job
+   * collapses to one bucket; a user repair is bucketed by the host it names,
+   * percent-encoded so a `:` inside a host id cannot split the key and make
+   * two different targets look like one.
+   */
+  private reprovisionCoalesceKeySuffix(
+    intent: LocalHostMutationIntent,
+  ): string {
+    return intent.kind === "background"
+      ? "background"
+      : `user-repair:${encodeURIComponent(intent.targetHostId)}`;
+  }
+
+  /**
+   * The head-of-lane half of a user-driven reprovision: re-ask the identity
+   * question the IPC handler asked before enqueueing, then clear the removal
+   * sentinel so the reprovision is not swallowed by it.
+   *
+   * Returns an `abandoned` outcome to ABANDON the job, or `null` to proceed.
+   * A background intent is always `null` and touches nothing - the background
+   * paths are byte-for-byte what they were.
+   */
+  private async admitReprovision(
+    intent: LocalHostMutationIntent,
+  ): Promise<AbandonedByGuard | null> {
+    const abandoned = await this.runLaneHeadGuard(intent);
+    if (abandoned !== null) return abandoned;
+    if (intent.kind === "background") return null;
+    // Same rule as `installVersion`: an explicit reprovision means the person
+    // wants the host back on this device, so the sentinel goes. This half is
+    // what makes it a REPROVISION rather than merely a guarded mutation, and
+    // it is why `freePortAndRestart` calls the guard directly instead: a
+    // restart must keep the removed-by-user deferral.
+    if (await isHostRemovedByUser()) {
+      await clearHostRemovedByUser();
+    }
+    return null;
+  }
+
+  /**
+   * The guard half alone: re-ask the caller's identity question now that this
+   * job owns the lane, and abandon if the answer changed while it waited.
+   *
+   * Separate from `admitReprovision` because a guarded mutation is not
+   * necessarily a reprovision. `freePortAndRestart` needs exactly this and
+   * none of the sentinel handling - it kills a recorded PID and frees a
+   * recorded port, so running it against a host that was swapped in while it
+   * queued would kill a process nobody named.
+   */
+  private async runLaneHeadGuard(
+    intent: LocalHostMutationIntent,
+  ): Promise<AbandonedByGuard | null> {
+    if (intent.kind === "background") return null;
+    const verdict = await intent.guard();
+    return verdict.kind === "abandon"
+      ? { kind: "abandoned", message: verdict.message }
+      : null;
   }
 
   private async convergeReadyCliOwned(
@@ -1917,7 +2225,7 @@ export class HostController {
       raw = await this.streamBundled<unknown>(args);
     } catch (err) {
       await this.reloadAfterServiceCycleFailure();
-      return this.classifyEnsureLikeError(err, true);
+      return this.classifyEnsureLikeError(err);
     }
     const result = parseEnsureResult(raw);
     // Fixup B7: a non-throwing result can still carry a post-swap start
@@ -1969,7 +2277,7 @@ export class HostController {
           : ["host", "ensure", "--no-service-register"],
       );
     } catch (err) {
-      return this.classifyEnsureLikeError(err, true);
+      return this.classifyEnsureLikeError(err);
     }
     const result = parseEnsureResult(raw);
     // Bytes-only ensure never starts the service itself - skip the
@@ -1992,7 +2300,8 @@ export class HostController {
         this.reachabilityProbe,
       );
       if (runningRuntimeVersion !== null) {
-        const refreshed = await this.applyPendingLoginItemRevisionIfIdle();
+        const refreshed =
+          await this.applyPendingLoginItemRevisionIfIdle("within-lane-job");
         if (refreshed !== null) return refreshed;
         return {
           kind: "ok",
@@ -2023,21 +2332,15 @@ export class HostController {
     };
   }
 
-  private classifyEnsureLikeError<T>(
-    err: unknown,
-    isConvergeReady: boolean,
-  ): MutationOutcome<T> {
+  private classifyEnsureLikeError<T>(err: unknown): MutationOutcome<T> {
     if (err instanceof TraycerCliError) {
-      if (err.code === CLI_LOCK_BUSY_CODE)
-        return this.lockBusyOutcome<T>(isConvergeReady);
+      if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome<T>();
       if (err.code === HOST_BUSY_CODE) {
-        // Fixup B8: `classifyEnsureLikeError` is only ever called from the
-        // two `convergeReady` branches (both pass `isConvergeReady: true`),
-        // so this used to always fall into the `failed` arm - a healthy
-        // host with active work now shows a fatal gate error on a
-        // reconnect/compat ensure, instead of the pre-refactor busy-keep
-        // outcome (`host-busy`/`running: true`). `isConvergeReady` no
-        // longer distinguishes this branch; restore busy-keep for both.
+        // Fixup B8: a healthy host with active work is a busy-keep
+        // (`host-busy`/`running: true`), never a fatal gate error, on a
+        // reconnect/compat ensure. The `isConvergeReady` flag that once
+        // distinguished this branch is gone entirely - lock-busy now
+        // classifies `deferred` for every caller (see `lockBusyOutcome`).
         return this.hostBusyOutcome<T>("retry-with-force");
       }
       return { kind: "failed", message: err.message };
@@ -2400,22 +2703,20 @@ export class HostController {
             };
           }
 
-          const outcome = await this.enqueueMutation<ApplyStagedOk>(
-            "apply",
-            `apply:${trigger}:${force}`,
-            async () => {
-              if (trigger === "launch" && (await isHostRemovedByUser())) {
-                return {
-                  kind: "deferred",
-                  message: HOST_REMOVED_BY_USER_MESSAGE,
-                };
-              }
-              if (await this.isPackagedMacOwned()) {
-                return this.applyStagedPackagedMac(eligibleStage.fingerprint);
-              }
-              return this.applyStagedCliOwned(force, eligibleStage.fingerprint);
-            },
-          );
+          const outcome = await this.enqueueMutation<
+            MutationOutcome<ApplyStagedOk>
+          >("apply", `apply:${trigger}:${force}`, async () => {
+            if (trigger === "launch" && (await isHostRemovedByUser())) {
+              return {
+                kind: "deferred",
+                message: HOST_REMOVED_BY_USER_MESSAGE,
+              };
+            }
+            if (await this.isPackagedMacOwned()) {
+              return this.applyStagedPackagedMac(eligibleStage.fingerprint);
+            }
+            return this.applyStagedCliOwned(force, eligibleStage.fingerprint);
+          });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
         return {
@@ -2539,8 +2840,7 @@ export class HostController {
     continuation: BusyContinuation,
   ): MutationOutcome<T> {
     if (err instanceof TraycerCliError) {
-      if (err.code === CLI_LOCK_BUSY_CODE)
-        return this.lockBusyOutcome<T>(false);
+      if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome<T>();
       if (err.code === HOST_BUSY_CODE)
         return this.hostBusyOutcome<T>(continuation);
       return { kind: "failed", message: err.message };
@@ -2569,56 +2869,50 @@ export class HostController {
           await this.stageLatest();
           await this.awaitDownloadLaneIdle();
 
-          const outcome = await this.enqueueMutation<ActivateInstalledOk>(
-            "activate",
-            `activate:${force}`,
-            async () => {
-              // A ready update supersedes activation debt - prevents the
-              // restart-old -> stamp -> restart-new double cycle. The reconcile
-              // already ran above; this only re-reads the (now-fresh) state and
-              // performs the apply/activate choreography, no further download.
-              const installed = await readDesktopHostInstallRecord(this.layout);
-              const staged = await readDesktopHostStagedRecord(this.layout);
-              if (
-                deriveUpdateReady(
-                  installed?.version ?? null,
-                  staged?.version ?? null,
-                )
-              ) {
-                const eligibleStage = this.eligibleStage;
-                if (eligibleStage === null) {
-                  return {
-                    kind: "deferred",
-                    message:
-                      "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
-                  };
-                }
-                const applied = (await this.isPackagedMacOwned())
-                  ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
-                  : await this.applyStagedCliOwned(
-                      force,
-                      eligibleStage.fingerprint,
-                    );
-                if (applied.kind === "stage-fingerprint-mismatch") {
-                  return applied;
-                }
-                return applied.kind === "ok"
-                  ? {
-                      kind: "ok",
-                      value: { activated: applied.value.runningActivated },
-                    }
-                  : applied;
+          const outcome = await this.enqueueMutation<
+            MutationOutcome<ActivateInstalledOk>
+          >("activate", `activate:${force}`, async () => {
+            // A ready update supersedes activation debt - prevents the
+            // restart-old -> stamp -> restart-new double cycle. The reconcile
+            // already ran above; this only re-reads the (now-fresh) state and
+            // performs the apply/activate choreography, no further download.
+            const installed = await readDesktopHostInstallRecord(this.layout);
+            const staged = await readDesktopHostStagedRecord(this.layout);
+            if (
+              deriveUpdateReady(
+                installed?.version ?? null,
+                staged?.version ?? null,
+              )
+            ) {
+              const eligibleStage = this.eligibleStage;
+              if (eligibleStage === null) {
+                return {
+                  kind: "deferred",
+                  message:
+                    "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
+                };
               }
-              if (await this.isPackagedMacOwned()) {
-                return this.runLockedMacActivationCycle(
-                  force,
-                  "activate",
-                  false,
-                );
+              const applied = (await this.isPackagedMacOwned())
+                ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
+                : await this.applyStagedCliOwned(
+                    force,
+                    eligibleStage.fingerprint,
+                  );
+              if (applied.kind === "stage-fingerprint-mismatch") {
+                return applied;
               }
-              return this.activateInstalledCliOwned(force);
-            },
-          );
+              return applied.kind === "ok"
+                ? {
+                    kind: "ok",
+                    value: { activated: applied.value.runningActivated },
+                  }
+                : applied;
+            }
+            if (await this.isPackagedMacOwned()) {
+              return this.runLockedMacActivationCycle(force, "activate", false);
+            }
+            return this.activateInstalledCliOwned(force);
+          });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
         return {
@@ -2646,7 +2940,7 @@ export class HostController {
     } catch (err) {
       await this.reloadAfterServiceCycleFailure();
       if (err instanceof TraycerCliError) {
-        if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome(false);
+        if (err.code === CLI_LOCK_BUSY_CODE) return this.lockBusyOutcome();
         if (err.code === HOST_BUSY_CODE)
           return this.hostBusyOutcome("retry-with-force");
       }
@@ -2671,7 +2965,7 @@ export class HostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>> {
-    return this.enqueueMutation<InstallVersionOk>(
+    return this.enqueueMutation<MutationOutcome<InstallVersionOk>>(
       "install",
       `install:${pin}:${force}`,
       async () => {
@@ -2777,11 +3071,17 @@ export class HostController {
 
   // ---- registerService / deregisterService --------------------------------
 
-  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return this.enqueueMutation<ServiceRegistrationOk>(
+  async registerService(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>> {
+    return this.enqueueMutation<GuardedMutationOutcome<ServiceRegistrationOk>>(
       "register",
-      "register",
+      // Intent- and target-discriminated for the same reasons
+      // `convergeReady`'s key is.
+      `register:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
+        const abandoned = await this.admitReprovision(intent);
+        if (abandoned !== null) return abandoned;
         if (await this.isPackagedMacOwned()) {
           const outcome = await withDesktopCliLock(
             {
@@ -2814,7 +3114,7 @@ export class HostController {
               };
             },
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
           const registration = outcome.result;
           if (registration === null) {
             return { kind: "failed", message: "No host installed." };
@@ -2854,7 +3154,14 @@ export class HostController {
         }
         let raw: unknown;
         try {
-          raw = await this.runBundled<unknown>([
+          // Streaming, not the flat-45s JSON wrapper: `host service install`
+          // now runs the post-registration credential provisioning probe (up
+          // to 30s waiting for the host), which stacked on the CLI's 30s
+          // lock wait can exceed any flat bound - and a SIGKILL there
+          // reports a registration that already succeeded as failed. The
+          // idle timeout is re-armed by the command's own progress NDJSON
+          // (`register`, `host-credential`).
+          raw = await this.streamBundled<unknown>([
             "host",
             "service",
             "install",
@@ -2863,7 +3170,7 @@ export class HostController {
         } catch (err) {
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -2887,7 +3194,7 @@ export class HostController {
   }
 
   async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return this.enqueueMutation<ServiceRegistrationOk>(
+    return this.enqueueMutation<MutationOutcome<ServiceRegistrationOk>>(
       "deregister",
       "deregister",
       async () => {
@@ -2901,14 +3208,14 @@ export class HostController {
             },
             async () => unregisterHostLoginItem(),
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
           return { kind: "ok", value: { registered: false } };
         }
         try {
           await this.runBundled<unknown>(["host", "service", "uninstall"]);
         } catch (err) {
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         return { kind: "ok", value: { registered: false } };
@@ -2929,11 +3236,51 @@ export class HostController {
   // `host restart` runs the cooperative shutdown claim, and the busy host
   // that made the user reach for Force restart denies it - the forced
   // restart would report the very declined outcome it exists to override.
-  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return this.enqueueMutation<ActivateInstalledOk>(
+  // Bumped when a respawn lane job completes an actual restart. Coalescing
+  // dedupes identical submissions (same key, still in flight), but the key is
+  // intent- and target-discriminated, so a watched user repair and a
+  // menu/tray background restart for the same slot are DIFFERENT jobs - the
+  // renderer's mutation keys cannot dedupe across BrowserWindows either. The
+  // generation closes that seam at the head of the lane: a respawn admitted
+  // after another respawn already completed a restart that the caller's own
+  // submission predates has its ask already satisfied, and running a second
+  // forced cycle would kill the sessions that just reconnected to the fresh
+  // host.
+  private respawnGeneration = 0;
+
+  async respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+    // Sampled at SUBMISSION, synchronously: a restart completed after this
+    // point satisfies this request; one completed before it does not.
+    const generationAtSubmit = this.respawnGeneration;
+    return this.enqueueMutation<GuardedMutationOutcome<ActivateInstalledOk>>(
       "respawn",
-      "respawn",
+      // Intent- and target-discriminated like the reprovision keys. Two
+      // background respawns still collapse to one restart; a user repair is
+      // its own job so it cannot join a background restart and skip the
+      // guard question below. The cross-key dedupe that this key split gave
+      // up is `respawnGeneration`'s job above.
+      `respawn:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
+        // Guard only - NOT `admitReprovision`. A restart is not a
+        // reprovision: it must keep the removed-by-user deferral below and
+        // clears nothing. Asked at the head of the lane because this intent
+        // QUEUES behind whatever is running - a doctor-recommended restart
+        // can wait minutes behind an install, and the host it named can be
+        // replaced in that window; firing then would force-restart a host
+        // nobody asked about, killing its active sessions. Runs before
+        // `notifyRespawning`, which clears the renderer-facing snapshot - an
+        // abandoned job must leave no trace it was ever admitted.
+        const abandoned = await this.runLaneHeadGuard(intent);
+        if (abandoned !== null) return abandoned;
+        // After the guard, before any effect: identity decides whether this
+        // job may act at all; the generation only decides whether there is
+        // anything left to do. A restart that completed since submission is
+        // this request fulfilled - report it, run nothing.
+        if (this.respawnGeneration !== generationAtSubmit) {
+          return { kind: "ok", value: { activated: true } };
+        }
         // Fixup B14: Remove Traycer may have persisted the removed-by-user
         // sentinel but failed/been interrupted mid-uninstall, leaving
         // remaining bytes on disk - without this check, Restart/Retry would
@@ -2956,6 +3303,11 @@ export class HostController {
           // explicitly rather than leaving a healthy host surfaced as gone.
           if (activation.kind !== "ok") {
             await this.hostLifecycle.reloadSnapshotFromDisk();
+          } else {
+            // Only a COMPLETED restart satisfies later-submitted respawns;
+            // a busy/failed cycle never touched the host, so a queued twin
+            // must still run as the retry it is.
+            this.respawnGeneration += 1;
           }
           return activation;
         }
@@ -2973,7 +3325,7 @@ export class HostController {
           // CLI-lock-busy/failed restart never touched the host either.
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -2986,6 +3338,7 @@ export class HostController {
         } catch (err) {
           return this.failedAfterServiceCycle(err);
         }
+        this.respawnGeneration += 1;
         return { kind: "ok", value: { activated: true } };
       },
     );
@@ -3011,7 +3364,7 @@ export class HostController {
     if (this.mutationStatus !== null) {
       return { kind: "suppressed" };
     }
-    return this.enqueueMutation<ActivateInstalledOk>(
+    return this.enqueueMutation<MutationOutcome<ActivateInstalledOk>>(
       "recoverIfDown",
       "recoverIfDown",
       async () => {
@@ -3039,7 +3392,7 @@ export class HostController {
         } catch (err) {
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -3069,11 +3422,23 @@ export class HostController {
   async freePortAndRestart(
     pid: number | null,
     port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return this.enqueueMutation<ActivateInstalledOk>(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+    return this.enqueueMutation<GuardedMutationOutcome<ActivateInstalledOk>>(
       "freePortAndRestart",
-      `freePortAndRestart:${pid}:${port}`,
+      // Target-discriminated like the reprovision keys: `pid`/`port` alone
+      // name a process, not the host that recorded it, so two repairs from
+      // different hosts could otherwise collide on identical numbers.
+      `freePortAndRestart:${pid}:${port}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
+        // Guard only - NOT `admitReprovision`. This is a restart, so the
+        // removed-by-user deferral stays. What it does need is the identity
+        // re-ask: the queued route waits behind whatever holds the lane, and
+        // `pid`/`port` were recorded against the host as it was THEN. Running
+        // them after a replacement kills a process nobody pointed at, and
+        // frees a port some other process may now hold.
+        const abandoned = await this.runLaneHeadGuard(intent);
+        if (abandoned !== null) return abandoned;
         if (await this.isPackagedMacOwned()) {
           if (pid !== null && port !== null) {
             try {
@@ -3090,7 +3455,7 @@ export class HostController {
                 err instanceof TraycerCliError &&
                 err.code === CLI_LOCK_BUSY_CODE
               )
-                return this.lockBusyOutcome(false);
+                return this.lockBusyOutcome();
               return { kind: "failed", message: describeError(err) };
             }
           }
@@ -3109,7 +3474,7 @@ export class HostController {
         } catch (err) {
           await this.reloadAfterServiceCycleFailure();
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseServiceStartResult(raw);
@@ -3130,7 +3495,7 @@ export class HostController {
   // ---- uninstallHost (Settings; no sentinel) -------------------------------
 
   async uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>> {
-    return this.enqueueMutation<UninstallOk>(
+    return this.enqueueMutation<MutationOutcome<UninstallOk>>(
       "uninstallHost",
       `uninstallHost:${all}`,
       async () => {
@@ -3144,7 +3509,7 @@ export class HostController {
             },
             async () => unregisterHostLoginItem(),
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
         }
         let raw: unknown;
         try {
@@ -3153,7 +3518,7 @@ export class HostController {
           );
         } catch (err) {
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseUninstallResult(raw, all);
@@ -3179,7 +3544,7 @@ export class HostController {
     // they still execute their job body but immediately no-op).
     await markHostRemovedByUser();
     this.abortInFlightDownload();
-    return this.enqueueMutation<RemoveTraycerOk>(
+    return this.enqueueMutation<MutationOutcome<RemoveTraycerOk>>(
       "removeTraycer",
       "removeTraycer",
       async () => {
@@ -3198,7 +3563,7 @@ export class HostController {
             },
             async () => unregisterHostLoginItem(),
           );
-          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          if (outcome.kind === "busy") return this.lockBusyOutcome();
           removedLoginItem = true;
         }
         let raw: unknown;
@@ -3206,7 +3571,7 @@ export class HostController {
           raw = await this.runBundled<unknown>(["host", "uninstall", "--all"]);
         } catch (err) {
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-            return this.lockBusyOutcome(false);
+            return this.lockBusyOutcome();
           return { kind: "failed", message: describeError(err) };
         }
         const result = parseUninstallResult(raw, true);

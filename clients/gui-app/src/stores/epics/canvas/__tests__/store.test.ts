@@ -1368,6 +1368,61 @@ describe("makeSelectTabActivation", () => {
   });
 });
 
+describe("closeConfirmedDeletedChatTiles", () => {
+  it("closes every matching chat tile after a confirmed host deletion without touching same-id peers", () => {
+    const store = useEpicCanvasStore.getState();
+    const firstTabId = store.openEpicTab("epic-deleted-chat", "First");
+    const secondTabId = store.openEpicTab("epic-deleted-chat", "Second");
+    const otherEpicTabId = store.openEpicTab("epic-other", "Other");
+    const targetA: EpicCanvasTileRef = {
+      ...CHAT_A,
+      instanceId: "deleted-chat-a",
+    };
+    const targetB: EpicCanvasTileRef = {
+      ...CHAT_A,
+      instanceId: "deleted-chat-b",
+    };
+    const sameIdOtherHost: EpicCanvasTileRef = {
+      ...CHAT_A,
+      instanceId: "same-id-other-host",
+      hostId: "peer-host",
+    };
+    const sameIdOtherEpic: EpicCanvasTileRef = {
+      ...CHAT_A,
+      instanceId: "same-id-other-epic",
+    };
+    store.openTileInTab(firstTabId, targetA);
+    store.openTileInTab(firstTabId, sameIdOtherHost);
+    store.openTileInTab(firstTabId, SPEC_A);
+    store.openTileInTab(secondTabId, targetB);
+    store.openTileInTab(otherEpicTabId, sameIdOtherEpic);
+
+    store.closeConfirmedDeletedChatTiles(
+      "epic-deleted-chat",
+      CHAT_A.id,
+      TEST_HOST_ID,
+    );
+
+    expect(
+      requireCanvas(firstTabId).tilesByInstanceId[targetA.instanceId],
+    ).toBeUndefined();
+    expect(
+      requireCanvas(secondTabId).tilesByInstanceId[targetB.instanceId],
+    ).toBeUndefined();
+    expect(
+      requireCanvas(firstTabId).tilesByInstanceId[sameIdOtherHost.instanceId],
+    ).toEqual(sameIdOtherHost);
+    expect(
+      requireCanvas(firstTabId).tilesByInstanceId[SPEC_A.instanceId],
+    ).toEqual(SPEC_A);
+    expect(
+      requireCanvas(otherEpicTabId).tilesByInstanceId[
+        sameIdOtherEpic.instanceId
+      ],
+    ).toEqual(sameIdOtherEpic);
+  });
+});
+
 describe("closedTilePayloadsByTabId", () => {
   it("captures a tile payload when the tile is closed via closeCanvasTab", () => {
     const store = useEpicCanvasStore.getState();
@@ -1416,6 +1471,40 @@ describe("closedTilePayloadsByTabId", () => {
         SPEC_A.instanceId
       ]?.pendingCreate,
     ).toBe(false);
+  });
+
+  it("clears pending-create when host-driven ref removal bypasses closeCanvasTab", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pending-host-remove", "Pending Host");
+    const terminal: EpicCanvasTileRef = {
+      id: "term-pending",
+      instanceId: "inst-pending",
+      type: "terminal",
+      name: "Pending create",
+      hostId: TEST_HOST_ID,
+      authority: "host",
+      legacyFallback: {
+        name: "Pending create",
+        titleSource: "default",
+        cwd: "/repo",
+      },
+    };
+    store.markArtifactPendingCreate(terminal.id);
+    store.openTileInTab(tabId, terminal);
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(terminal.id),
+    ).toBe(true);
+
+    store.removeHostTerminalRefs(TEST_HOST_ID, terminal.id);
+
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(terminal.id),
+    ).toBe(false);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        terminal.instanceId
+      ],
+    ).toBeUndefined();
   });
 
   it("discardClosedTilePayload drops a single cached entry", () => {

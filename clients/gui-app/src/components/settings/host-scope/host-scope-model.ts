@@ -4,13 +4,13 @@ import type {
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
   deriveHostHealth,
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
-import type { ViewerReachabilityCheckLike } from "@/components/settings/panels/my-hosts-model";
 
 /**
  * ONE host, as every settings surface should see it.
@@ -47,6 +47,21 @@ export interface HostScopeOption {
    * erases the actual remedy — the fix is an upgrade, not a retry.
    */
   readonly planRestricted: boolean;
+  /**
+   * This machine's own host is being installed or started right now (M5).
+   *
+   * A per-host fact, and it lives here beside `connectable` and `health` for
+   * the same reason they do: every picker must answer "what is going on with
+   * this machine" identically. It was briefly derived inside the row component
+   * instead, which put a `useRunnerHost` read BELOW the boundary every picker
+   * suite mocks — the pickers kept working in production and every one of
+   * those suites threw, which is the shape of a fact living at the wrong
+   * layer.
+   *
+   * Always false for a host that is not this machine: the mutation lane
+   * belongs to the local host controller and says nothing about anyone else's.
+   */
+  readonly settingUp: boolean;
   /** Present in the account's host registry. */
   readonly registered: boolean;
   readonly platform: string | null;
@@ -68,13 +83,36 @@ export interface BuildHostScopeOptionsInput {
   /** Local service truth, used only for the local machine's row. */
   readonly localService: ServiceStatusSnapshot | undefined;
   readonly hasLiveSession: (hostId: string) => boolean;
-  readonly viewerCheck: (hostId: string) => ViewerReachabilityCheckLike | null;
+  /**
+   * Every lease the selection authority has published, as the store holds
+   * them. Looked up PER HOST below rather than taken as an already-resolved
+   * value, because the lookup is the part that has been got wrong before:
+   * sealed probe P12 degraded `useHostLease`'s `find(hostId)` to `leases[0]`
+   * and survived, since every suite seeded exactly one lease and a wrong-host
+   * answer was indistinguishable from a right one. Anything asserting against
+   * this field owes a two-host arrangement.
+   */
+  readonly leases: readonly HostLeaseSnapshot[];
+  /**
+   * Whether the authority has attached at all. Threaded rather than inferred
+   * from `leases.length === 0`, which cannot tell "not attached yet" from
+   * "attached, and this account genuinely has no hosts" — and the two demand
+   * opposite renderings.
+   */
+  readonly authorityAttached: boolean;
   /**
    * The account's plan does not include remote hosts. Their relay URLs still
    * appear in the directory, but attaching is refused server-side, so the route
    * is not usable even though it looks like one.
    */
   readonly remoteHostsPlanRestricted: boolean;
+  /**
+   * The local host controller's mutation lane is busy (install, start,
+   * restart, update). Actor-agnostic by construction — the lane is the
+   * controller's own, so this is true whether the desktop's launch reconciler,
+   * the selection authority's ensure, or a user's Retry asked for it.
+   */
+  readonly localHostSettingUp: boolean;
   readonly nowMs: number;
 }
 
@@ -83,6 +121,7 @@ export function buildHostScopeOptions(
 ): readonly HostScopeOption[] {
   const entries = new Map(input.directory.map((e) => [e.hostId, e]));
   const items = new Map(input.registry.map((i) => [i.hostId, i]));
+  const leases = new Map(input.leases.map((l) => [l.hostId, l]));
   const hostIds = [...new Set([...entries.keys(), ...items.keys()])];
 
   const options = hostIds.map((hostId): HostScopeOption => {
@@ -104,6 +143,7 @@ export function buildHostScopeOptions(
         input.remoteHostsPlanRestricted,
         input.hasLiveSession(hostId),
       ),
+      settingUp: isLocalMachine && input.localHostSettingUp,
       registered: item !== null,
       platform: item?.platform ?? null,
       version: item?.status.appVersion ?? entry?.version ?? null,
@@ -111,8 +151,9 @@ export function buildHostScopeOptions(
         item,
         isLocalMachine,
         hasLiveSession: input.hasLiveSession(hostId),
-        viewerCheck: input.viewerCheck(hostId),
         service: isLocalMachine ? input.localService : undefined,
+        lease: leases.get(hostId) ?? null,
+        authorityAttached: input.authorityAttached,
         // The registry row carries pure liveness; the account's entitlement is
         // this input, the same one the route gates below read. Passing it here
         // is what keeps the health word and the route verdict from disagreeing
@@ -189,28 +230,15 @@ function isAdministrableRoute(
  *
  *   - the CLIENT's own plan gate (`remoteHostsPlanRestricted`) — the route is
  *     live and the server would refuse the attach;
- *   - the ENTRY's own verdict (`hostUnavailability(entry) ===
- *     "plan-restricted"`) — the plan flag stamped on the entry at projection
- *     time says no route exists for this account, whether the host is live or
- *     the liveness read failed.
- *
- * The two agree in steady state (both descend from the same subscription
- * status), and asking both is deliberate belt-and-braces across the moment they
- * could not: the entry carries the plan as of the FETCH, the hook as of this
- * RENDER.
+ *   - the ENTRY's stamped plan (`planAllowsRemote: false` ⇒ `plan-restricted`)
+ *     — the host is alive or unreadable, but this account has no remote route.
  *
  * The old body demanded a dialable entry, which the second case can never
- * satisfy: a plan-gated host is exactly the one the mapper marks not-dialable.
- * So a free-tier user's own host came back non-connectable AND
+ * satisfy: a `local-only` host is exactly the one the mapper marks
+ * not-dialable. So a free-tier user's own host came back non-connectable AND
  * non-plan-restricted, and every surface downstream fell through to its
  * generic connection-failure copy — the upgrade path invisible precisely to
  * the person who needed it.
- *
- * Note what is NOT plan-restricted any more: a plan-gated host the cloud
- * reports `offline`. Its entry verdict is `offline` (dead is dead), and the
- * client-side gate below cannot fire for it either because it is not dialable.
- * That is correct — a switched-off machine is not a billing problem — and it is
- * the case the old wire could not express at all.
  */
 function isPlanRestrictedRoute(
   entry: HostDirectoryEntry | null,
@@ -468,6 +496,10 @@ export function unavailableHostOption(
     isActive: false,
     connectable: false,
     planRestricted: false,
+    // A host the merged list has never heard of is not a machine we are
+    // installing: the mutation lane only ever describes THIS machine, and this
+    // stand-in is by definition some other one.
+    settingUp: false,
     registered: false,
     platform: null,
     version: null,

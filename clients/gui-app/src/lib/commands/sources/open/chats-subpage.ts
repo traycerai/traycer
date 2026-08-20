@@ -16,7 +16,6 @@ import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { displayTitle } from "@/lib/display-title";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
@@ -24,12 +23,18 @@ import {
   openerActionLeaf,
   openerExistingLeaf,
 } from "@/lib/commands/sources/open/open-leaf";
-import { useActiveEpicProjection } from "@/lib/commands/sources/open/use-active-epic-projection";
+import {
+  useActiveEpicHostId,
+  useActiveEpicProjection,
+} from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-subpage";
 import type { CommandContext } from "@/lib/commands/types";
 
 export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
-  const activeHostId = useReactiveActiveHostId();
+  // The host serving the active epic's projection: the fallback a chat with
+  // no recorded host binds to, and the reference a cross-host badge is judged
+  // against. Not the app-wide host - see `useActiveEpicHostId`.
+  const activeHostId = useActiveEpicHostId(ctx.activeEpicId);
   const defaultHostId = activeHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
   const directoryList = useHostDirectoryList();
@@ -63,7 +68,7 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
     const existing = projection.chats.allIds.map((id) => {
       const chat = projection.chats.byId[id];
       // A chat with no recorded hostId falls back to (and thus matches) the
-      // active host, so only a real, differing hostId ever earns a badge.
+      // epic's host, so only a real, differing hostId ever earns a badge.
       // Requires `activeHostId` to be genuinely resolved first - while it's
       // still `null` (boot, host reconnect window) `defaultHostId` would be
       // the `UNKNOWN_HOST_PLACEHOLDER` sentinel, which no real hostId can

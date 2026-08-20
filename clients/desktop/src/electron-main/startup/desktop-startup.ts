@@ -38,12 +38,16 @@ import {
   QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
   runUpdateInstallQuitSequence,
 } from "./update-install-quit";
+import { applyQuitDecision } from "./quit-decision";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
 import {
   applyHostUpdateMenuState,
+  armLocalHostBootOnSignIn,
   refreshHostRegistryIfNotRemoved,
   runLaunchHostConvergeReconcile,
+  signedInGateFromAuthSession,
   type HostUpdateMenuSurface,
+  type SignedInGate,
 } from "./host-launch-converge";
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 import { respawnIfDown } from "./host-health-respawn";
@@ -219,6 +223,7 @@ export interface DesktopStartupTestHooks {
   runWindowPhase(): Promise<{
     readonly hostController: IpcHostController;
     readonly menu: HostUpdateMenuSurface;
+    readonly signedIn: SignedInGate;
   }>;
   runDeferredBackground(): void;
 }
@@ -250,6 +255,8 @@ interface AppServices {
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
   readonly zoomController: WindowZoomController;
+  /** Consent gate for booting the local host; see `armLocalHostBootOnSignIn`. */
+  readonly signedIn: SignedInGate;
 }
 
 interface DeferredStartupPlan {
@@ -257,6 +264,7 @@ interface DeferredStartupPlan {
   readonly services: {
     readonly hostController: IpcHostController;
     readonly menu: HostUpdateMenuSurface;
+    readonly signedIn: SignedInGate;
   };
   runBackground(): void;
 }
@@ -664,6 +672,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     menu,
     windowRegistry,
     zoomController: createdZoomController,
+    signedIn: signedInGateFromAuthSession(authSession),
   };
 }
 
@@ -930,10 +939,16 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
 // caller is `runDesktopStartup`, and it invokes the real reconciliation that
 // determines whether a launch is allowed to apply, activate, or do nothing.
 export function runDeferred<
-  TState,
+  // Constrained to what the teardown registration below needs, and no more:
+  // the generic exists so a test can hand this a light state object, and
+  // `BootState` satisfies this shape structurally.
+  TState extends {
+    readonly bridge: { readonly disposeFns: Array<() => void> } | null;
+  },
   TServices extends {
     readonly hostController: IpcHostController;
     readonly menu: HostUpdateMenuSurface;
+    readonly signedIn: SignedInGate;
   },
 >(
   state: TState,
@@ -941,6 +956,26 @@ export function runDeferred<
   runBackground: (state: TState, services: TServices) => void,
 ): void {
   runBackground(state, services);
+  // Two DIFFERENT actions, deliberately not merged. The reconciler settles the
+  // debt of a host that exists, once; the boot actor gets a host RUNNING -
+  // installing one that never existed if need be - only for a signed-in user,
+  // and keeps retrying until it is (see `armLocalHostBootOnSignIn`). Arming is
+  // synchronous and cheap - it either acts now or waits for the sign-in that
+  // the pre-retirement renderer gate also waited for.
+  //
+  // Its disposer is registered on the bridge's teardown list because the arm
+  // now owns a RETRY TIMER as well as the sign-in subscription, and a settled
+  // arm is not the only way this process ends: a shutdown while the ladder is
+  // still climbing would otherwise leave a live auth-session listener behind.
+  // The timers are `unref`ed and so can never hold the process open; this is
+  // about not leaving a subscription running through teardown. `bridge` is
+  // installed by the window phase, well before this handoff - a null here
+  // (a test plan that never built one) simply keeps today's behaviour.
+  const disposeLocalHostBoot = armLocalHostBootOnSignIn(
+    services.hostController,
+    services.signedIn,
+  );
+  state.bridge?.disposeFns.push(disposeLocalHostBoot);
   void timed("deferred", "host-launch-converge", () =>
     runLaunchHostConvergeReconcile(services.hostController, services.menu),
   );
@@ -1109,8 +1144,12 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
         return activeBridge
           .requestQuitDecision(snapshot)
           .then((decision) => {
-            log.info("[desktop] quit decision resolved", { decision });
-            authorizeQuitAfterFlush();
+            applyQuitDecision(decision, {
+              authorizeQuitAfterFlush,
+              stayOpen: () => {
+                services.quitState.resetQuitting();
+              },
+            });
           })
           .catch((err) => {
             log.warn("[desktop] quit decision failed - staying alive", err);

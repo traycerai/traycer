@@ -156,6 +156,7 @@ describe("<ChatLowerDock />", () => {
       blockId: "tool-1",
       parentTaskId: null,
       scheduledFor: null,
+      individualStopUnavailable: null,
     };
 
     renderDock({
@@ -288,6 +289,7 @@ function renderDock(input: DockInput) {
           heldManagedCommandCount={input.heldManagedCommandCount}
           backgroundStopPendingTaskIds={new Set()}
           backgroundStopAllPending={false}
+          backgroundSessionStopPending={false}
           activeTurnStatus="running"
           canAct
           readOnly={false}
@@ -304,6 +306,7 @@ function renderDock(input: DockInput) {
           onBackgroundItemClick={input.onBackgroundItemClick}
           onBackgroundItemStop={input.onBackgroundItemStop}
           onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
+          onBackgroundSessionStop={() => null}
         />
       </TooltipProvider>
     </TabHostProvider>,

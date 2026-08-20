@@ -54,6 +54,9 @@ import {
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import { queryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { emptyPlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
 import type {
   DesktopProcessMetric,
   DesktopProcessMetricsSnapshot,
@@ -86,8 +89,8 @@ const streamVersionMock = vi.hoisted(() => ({
 
 const activeHostMock = vi.hoisted(() => ({ hostId: null as string | null }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostMock.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostMock.hostId,
 }));
 
 // Partial, not wholesale: the popover re-provides the real
@@ -821,6 +824,7 @@ afterEach(() => {
   globalResourcesUnsupportedMock.unsupported = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
+  queryClient.clear();
 });
 
 describe("ResourceMonitorPopover", () => {
@@ -2326,6 +2330,114 @@ describe("ResourceMonitorPopover", () => {
       expect.objectContaining({ tabId: "tab-closed" }),
       undefined,
     );
+  });
+
+  it("cannot reopen a resource owner after terminal invalidation prunes its closed payload", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    // The canvas store is mocked here, so the real invalidation fanout cannot
+    // reach it. Terminal invalidation having already pruned the tile's closed
+    // payload is the precondition under test - stated directly rather than
+    // written and then deleted, which read as pruning but was a no-op pair.
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {};
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-tombstoned",
+              },
+              harnessId: null,
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.queryByText("Tombstoned Build")).toBeNull();
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^make/,
+    });
+    expect(row.disabled).toBe(true);
+    fireEvent.click(row);
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("cannot reopen a closed terminal while a retained Query tombstone is still present", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {
+      "tile-term-tombstoned": {
+        node: {
+          id: "term-tombstoned",
+          instanceId: "tile-term-tombstoned",
+          type: "terminal",
+          name: "Tombstoned Build",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work/background",
+        },
+        pendingCreate: false,
+      },
+    };
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals("host-1", {
+        kind: "epic",
+        epicId: "epic-2",
+      }),
+      {
+        ...emptyPlainTerminalCollection(),
+        deletedRevisionById: { "term-tombstoned": 2 },
+        projectionSequence: 1,
+      },
+    );
+    expect(
+      canvasMock.state.closedTilePayloadsByTabId["tab-closed"][
+        "tile-term-tombstoned"
+      ],
+    ).toBeDefined();
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-tombstoned",
+              },
+              harnessId: null,
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.queryByText("Tombstoned Build")).toBeNull();
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^make/,
+    });
+    expect(row.disabled).toBe(true);
+    fireEvent.click(row);
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
   });
 
   it("reopens a closed terminal tile of the CURRENT tab through the same-route boundary", async () => {

@@ -53,6 +53,7 @@ describe("workspace folder resolution cache", () => {
         operation: "prepare",
         folderPaths: [fixture.workspacePath],
         path: null,
+        bumpRecency: null,
       });
     });
 
@@ -93,6 +94,7 @@ describe("workspace folder resolution cache", () => {
           operation: "prepare",
           folderPaths: [fixture.workspacePath],
           path: null,
+          bumpRecency: null,
         })
         .then(() => undefined);
     });
@@ -305,15 +307,17 @@ function createFixture(options: WorkspaceFixtureOptions): WorkspaceFixture {
       },
     },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger,
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://traycer.invalid/sign-in",
     authnBaseUrl: "https://traycer.invalid/auth",

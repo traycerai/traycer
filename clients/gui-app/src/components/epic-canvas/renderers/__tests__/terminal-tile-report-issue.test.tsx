@@ -14,7 +14,12 @@ import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 interface TestBootstrapState {
-  reachability: { status: string; hostLabel: string };
+  reachability: {
+    status: string;
+    hostLabel: string;
+    basis: string;
+    unavailability: string | null;
+  };
   createIsError: boolean;
   createError: { readonly message: string } | null;
 }
@@ -23,6 +28,8 @@ const testState = vi.hoisted<TestBootstrapState>(() => ({
   reachability: {
     status: "reachable",
     hostLabel: "Host A",
+    basis: "directory",
+    unavailability: null,
   },
   createIsError: true,
   createError: {
@@ -32,6 +39,8 @@ const testState = vi.hoisted<TestBootstrapState>(() => ({
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => testState.reachability,
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -57,6 +66,22 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
     retry: () => undefined,
     hostHasSession: false,
     hostSessionExited: false,
+  }),
+}));
+
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: "legacy",
+    projection: undefined,
+    viewModel: null,
+    canMutate: false,
+    migrationPending: false,
+    migrationError: null,
+    retryMigration: () => undefined,
+    create: {},
+    ensureRunning: {},
+    rename: {},
+    close: {},
   }),
 }));
 
@@ -116,7 +141,12 @@ describe("<TerminalTile /> bootstrap error report action", () => {
   beforeEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    testState.reachability = { status: "reachable", hostLabel: "Host A" };
+    testState.reachability = {
+      status: "reachable",
+      hostLabel: "Host A",
+      basis: "directory",
+      unavailability: null,
+    };
     testState.createIsError = true;
     testState.createError = {
       message: "secret-token-should-never-render /Users/hostile/path",

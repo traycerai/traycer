@@ -14,6 +14,15 @@ Electron shell around `@traycer-clients/gui-app`. Read with repo-root
 Transport-agnostic: do **not** proxy host RPC. `gui-app` talks to the host's
 localhost HTTP/WS after `LocalHostSnapshot`.
 
+One scoped, sunsetted exception: the v1.2.0 `host.*` maintenance projections
+in `host-management-ipc.ts` ("The maintenance-RPC projections") answer four
+protocol response shapes from main for a LOCAL host too old to serve them
+(negotiated away at handshake). Nothing is proxied — there is no host wire
+surface to forward to; main is the _origin_, because only main can shell the
+bundled CLI and read the on-disk install records the answers come from. The
+block comment there carries the full rationale; delete the lane when the
+fleet floor reaches 1.2.0.
+
 ## Commands
 
 ```bash
@@ -54,7 +63,19 @@ failures.
 
 - Bundle CLI only, not the host. Host lives under `~/.traycer/host/` via CLI.
 - Main entry: `dist/main/index.js`.
-- Preload stays CommonJS and imports only from `src/ipc-contracts/`.
+- Preload stays CommonJS and imports only from `src/ipc-contracts/` — with one
+  governed exception, `electron-preload/selection-authority-bridge.ts`, which
+  also imports the selection-authority **contract parsers** and the
+  **buffered/rotating client** from `clients/shared/host-selection/`. Two
+  reasons, and a new exception needs both: (1) the attach/rotate choreography is
+  identical for the Electron and browser/dev bindings, so a preload-local copy
+  is a second implementation of a protocol that must not drift; (2) parsing at
+  this hop is what makes same-major skew safety structural — renderer domain
+  code never sees an unparsed envelope. The preload is esbuild-bundled to one
+  CommonJS file, so a shared import is inlined and the CommonJS half of the rule
+  is unaffected. Everything else still crosses as plain wire types through
+  `src/ipc-contracts/`; do not read this as licence to move feature logic into
+  preload.
 - Never build `Tray` from `nativeImage.createEmpty()` (invisible tray).
 - No Electron-native SQLite / `better-sqlite3` rebuilds in this shell — host owns
   app-assets DB.

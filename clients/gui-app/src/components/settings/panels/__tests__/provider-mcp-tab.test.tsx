@@ -115,8 +115,8 @@ vi.mock("@/lib/reportable-error-toast", () => ({
   },
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -658,7 +658,7 @@ describe("<ProviderMcpTab />", () => {
     fireEvent.click(
       screen.getByRole("option", { name: /Add a workspace folder/ }),
     );
-    expect(folderActionMocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
+    expect(folderActionMocks.pickAndPrepareFolders).toHaveBeenCalledWith(false);
 
     // The added folder becomes the selection - resolution feeds the picker
     // from the folders store, so `addResolvedFolders` is what makes it a row.

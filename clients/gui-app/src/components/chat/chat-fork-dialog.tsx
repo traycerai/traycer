@@ -136,6 +136,15 @@ export interface ChatForkDialogTarget {
    * carried-question behavior ride the dedicated fields above.
    */
   readonly forkMode: ChatForkMode;
+  /**
+   * The host the picker starts on when the dialog opens: the host the user
+   * picked in the gesture that opened it (the composer's host switcher), or
+   * `null` to start on the source chat's own (tab) host — every per-message
+   * fork entry point. A preselection is a starting point only; the user can
+   * still retarget inside the dialog, and every cross-host gate (build
+   * version, publication) applies to it exactly as to a hand-picked host.
+   */
+  readonly initialHostId: string | null;
 }
 
 interface ChatForkDialogProps {
@@ -192,19 +201,27 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     };
   }, []);
 
+  // The rare case where the source itself is still untitled: there is no name
+  // to inherit, so the dialog defaults to EMPTY instead of baking the
+  // "Untitled agent" render fallback into a permanent stored title. An empty
+  // submit stores "" and the fork is AI-titled from its first message, same
+  // as the automatic fork paths; the input's placeholder says what happens.
+  const sourceUntitled =
+    target !== null && target.sourceChatTitle.trim().length === 0;
   const defaultTitle =
-    target === null
+    target === null || sourceUntitled
       ? ""
       : `${forkModeTitlePrefix(target.forkMode)} - ${displayChatTitle(target.sourceChatTitle)}`;
 
   // Opening resets BOTH the title and the target host: a dialog reopened on a
   // different message must not inherit the last fork's machine any more than it
-  // inherits the last fork's name.
+  // inherits the last fork's name. A target carrying an `initialHostId` (the
+  // host-switch gesture) starts on that host instead of the tab's.
   if (open !== dialogState.open) {
     setDialogState({
       open,
       title: open && target !== null ? defaultTitle : dialogState.title,
-      hostId: open ? tabHostId : dialogState.hostId,
+      hostId: open ? (target?.initialHostId ?? tabHostId) : dialogState.hostId,
     });
   }
   const title = dialogState.title;
@@ -351,9 +368,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // selected one.
   //
   // A refused row is `aria-disabled` (`isHostOptionSelectable` requires an
-  // `available` surface state), so it can never BECOME `selectedHostId`. A probe
-  // gated on the selected host's refusal is therefore unreachable for the row it
-  // is about: it could only ever re-ask about the source host, while the target
+  // `available` surface state), so picking it is not a way it becomes
+  // `selectedHostId` — the one way in is a host-switch preselection
+  // (`initialHostId`), which this probe set covers just the same. A probe
+  // gated on the selected host's refusal would still be wrong for the picked
+  // case: it could only ever re-ask about the source host, while the target
   // wearing the "needs update" word is precisely the one it never touches.
   // Updating that host in place would leave its verdict stale indefinitely,
   // because the reads that would re-handshake are the ones its own refusal
@@ -503,6 +522,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const canSubmit = canSubmitFork({
     target,
     trimmedTitle,
+    sourceUntitled,
     modelResolved,
     hasStagedPreselection: stagedIntentForKey !== null,
     createPending: createChat.isPending,
@@ -789,6 +809,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               }}
               disabled={createChat.isPending}
               aria-label="Fork agent title"
+              placeholder={sourceUntitled ? "Untitled agent" : ""}
             />
           </label>
           <section className="flex min-w-0 flex-col gap-2">
@@ -1013,6 +1034,10 @@ function ChatForkHostCapabilityProbe(props: {
 function canSubmitFork(input: {
   readonly target: ChatForkDialogTarget | null;
   readonly trimmedTitle: string;
+  /** The source chat's stored title is empty - the one case an empty title
+   *  field may submit: it stores "" and the fork is AI-titled on its first
+   *  send, instead of freezing the "Untitled agent" render fallback. */
+  readonly sourceUntitled: boolean;
   readonly modelResolved: boolean;
   readonly hasStagedPreselection: boolean;
   readonly createPending: boolean;
@@ -1028,7 +1053,7 @@ function canSubmitFork(input: {
   readonly requiresStagedPreselection: boolean;
 }): boolean {
   if (input.target === null) return false;
-  if (input.trimmedTitle.length === 0) return false;
+  if (input.trimmedTitle.length === 0 && !input.sourceUntitled) return false;
   if (!input.modelResolved) return false;
   if (input.createPending) return false;
   if (!input.hostClientResolved) return false;

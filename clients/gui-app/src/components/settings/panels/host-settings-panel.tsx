@@ -14,7 +14,11 @@ import { LocalRecoveryDangerZone } from "@/components/settings/host-scope/host-d
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
-import { runFixAction } from "@/components/settings/panels/host-doctor-actions";
+import {
+  fixActionLabel,
+  parseFreePortInput,
+  runFixAction,
+} from "@/components/settings/panels/host-doctor-actions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
@@ -24,13 +28,17 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
+import {
+  toastHostRepairDeclined,
+  toastHostRestartDeclined,
+} from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import type {
   HostDoctorIssue as BridgeDoctorIssue,
   HostInstalledRecord,
   IHostManagement,
+  DoctorRepairIntent,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { ReactNode } from "react";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -52,9 +60,9 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *
  * When a host cannot answer, the page says so and shows what the ACCOUNT
  * REGISTRY already knows — never a hidden local fallback. Restarting a host
- * that is down belongs to `LocalHostGate`, which owns the app-level "your host
- * isn't up" surface; that is app state, not a property of the host you happen
- * to be viewing.
+ * that is down belongs to the window narrator, which owns the app-level "your
+ * host isn't up" surface; that is app state, not a property of the host you
+ * happen to be viewing.
  */
 export function HostSettingsPanel() {
   const scope = useHostScope();
@@ -93,7 +101,10 @@ function HostSettingsPanelInner() {
   // sheet because `IHostManagement` is a property of the SHELL, not of the
   // scoped host, and the sheet must not be able to reach for it by accident for
   // a host on another machine.
-  const localDoctorFix = useLocalDoctorFixMutation(management);
+  const localDoctorFix = useLocalDoctorFixMutation(
+    management,
+    scopedIsLocalMachine ? (scope.hostId ?? null) : null,
+  );
 
   // Keeps a `false` capability answer refutable. See the hook below.
   useOverviewCapabilityProbe(scope);
@@ -115,8 +126,8 @@ function HostSettingsPanelInner() {
   // every host from whatever source can answer for it, and says plainly when
   // that is only the account registry. Creating the first host was never
   // unique to that console anyway — the desktop auto-converges at startup
-  // (`host-launch-converge.ts`) and `LocalHostGate` owns the app-level
-  // "your host is not up" surface with its own Install. What survives of it is
+  // (`host-launch-converge.ts`) and the window narrator owns the app-level
+  // "your host is not up" surface with its own recovery actions. What survives of it is
   // the single VERB above (`localRecoveryZone`), rendered under this gate.
   const unresolved = scope.host === null || scope.status === "vanished";
 
@@ -257,9 +268,14 @@ function renderOverviewBody(input: {
  */
 /**
  * What the bridge fix actually did, carried out of `mutationFn` so the
- * callbacks can tell "applied" from "the host declined to restart". A
- * discriminated pair rather than a bare boolean, because the declined arm is
- * the only one with a message and the applied arm must never carry one.
+ * callbacks can tell "applied" from "nothing was enqueued". A discriminated
+ * pair rather than a bare boolean, because the declined arm is the only one
+ * with a message and the applied arm must never carry one.
+ *
+ * The declined arm is deliberately intent-FREE: it says only that the repair
+ * did not run. Which repair it was is the mutation's own variable, so the
+ * callbacks read it from there rather than from a copy in here that could
+ * disagree with the issue that was actually clicked.
  */
 type LocalDoctorFixOutcome =
   | { readonly applied: true; readonly declinedMessage: null }
@@ -276,8 +292,8 @@ function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
  * failed, no vanished pick) with installed local components has exactly one
  * thing left to offer — removal over the CLI bridge, which needs no host row —
  * and `LocalRecoveryDangerZone`'s contract names this page as the only
- * uninstall surface. Everything else about recovery stays `LocalHostGate`'s
- * job; this is the verb that must not vanish with the row. The caller decides
+ * uninstall surface. Everything else about recovery stays the window
+ * narrator's job; this is the verb that must not vanish with the row. The caller decides
  * whether anything is actually installed — the zone cannot know — so the
  * bridge's install record is the gate, and only the empty-account state asks.
  */
@@ -310,7 +326,32 @@ function useEmptyAccountLocalRecoveryZone(
   return <LocalRecoveryDangerZone />;
 }
 
-function useLocalDoctorFixMutation(management: IHostManagement | null) {
+/**
+ * Which Doctor fix actions are controller LIFECYCLE intents, and therefore
+ * take the refusing dispatch rather than the queueing one. `null` means the
+ * action is a repair for a host that is already down, where waiting behind
+ * whatever is running is the point.
+ */
+function doctorRepairIntentFor(
+  fixAction: string | null,
+): DoctorRepairIntent | null {
+  // Both spellings of "there is no usable host installed" converge.
+  if (fixAction === "host-install" || fixAction === "host-install-latest") {
+    return "converge-ready";
+  }
+  if (fixAction === "service-install") return "register-service";
+  return null;
+}
+
+function useLocalDoctorFixMutation(
+  management: IHostManagement | null,
+  /**
+   * The local host these repairs are for, or `null` when the scoped host is
+   * not this machine. Sent with the two LIFECYCLE repairs so main can refuse
+   * one aimed at a host that has since been replaced.
+   */
+  localHostId: string | null,
+) {
   const queryClient = useQueryClient();
   // `mutationFn` REPORTS the outcome; it does not announce it. Raising the
   // toasts inside it also collapsed "declined" into a resolved promise, so
@@ -327,14 +368,82 @@ function useLocalDoctorFixMutation(management: IHostManagement | null) {
       // same CLI diagnostic — one arrived over the wire and one over the
       // bridge. `runFixAction` reads only `fixAction` and `details`.
       const issueForBridge: BridgeDoctorIssue = issue;
-      const result = await runFixAction(management, issueForBridge);
+      // The two LIFECYCLE repairs take the refusing path. `convergeReady`
+      // converges to LATEST and `registerService` adds a service cycle, and
+      // both QUEUE behind a running controller intent rather than being
+      // refused — so one clicked during a pinned install lands after it and
+      // overrides the version the person chose. This page cannot gate that on
+      // its own: its lifecycle state cannot see a lane the tray or the
+      // background reconciler armed. The remaining repairs keep the queueing
+      // path, which is right for a host that is already down.
+      // Free port + restart is the third repair that must be REFUSED rather
+      // than queued for a sheet someone is watching: it kills the recorded
+      // process and forces a restart, so landing it behind a competing
+      // lifecycle write aims a kill the person approved for one state at
+      // another. The card's own gate cannot close that window — it sees only
+      // what it last rendered — so admission is tested in main, atomically.
+      if (issue.fixAction === "host-free-port-and-restart") {
+        const input = parseFreePortInput(issueForBridge);
+        if (input === null) {
+          throw new Error("Doctor issue is missing a valid conflicting port.");
+        }
+        const dispatch = await management.freePortAndRestartIfIdle({
+          ...input,
+          expectedHostId: localHostId ?? "",
+        });
+        if (dispatch.kind !== "dispatched") {
+          return { applied: false, declinedMessage: dispatch.message };
+        }
+        if (dispatch.outcome.kind !== "ok") {
+          throw new Error(dispatch.outcome.message);
+        }
+        return { applied: true, declinedMessage: null };
+      }
+      const repair = doctorRepairIntentFor(issue.fixAction);
+      if (repair !== null && localHostId !== null) {
+        const dispatch = await management.runDoctorRepairIfIdle({
+          repair,
+          expectedHostId: localHostId,
+        });
+        if (dispatch.kind !== "dispatched") {
+          return { applied: false, declinedMessage: dispatch.message };
+        }
+        if (dispatch.outcome.kind !== "ok") {
+          throw new Error(dispatch.outcome.message);
+        }
+        return { applied: true, declinedMessage: null };
+      }
+      // `localHostId` is null when this page's host is not this machine, and
+      // an empty id is refused by every host that can name itself - the right
+      // answer, since a bridge fix would then be running against a different
+      // computer than the one the report describes.
+      const result = await runFixAction(
+        management,
+        issueForBridge,
+        localHostId ?? "",
+      );
       return result.kind === "declined"
         ? { applied: false, declinedMessage: result.message }
         : { applied: true, declinedMessage: null };
     },
-    onSuccess: (outcome) => {
+    onSuccess: (outcome, issue) => {
       if (!outcome.applied) {
-        toastHostRestartDeclined(outcome.declinedMessage);
+        // WHICH action was refused decides the wording. Before the refusing
+        // repair path existed, `declined` could only ever come from
+        // `restartHost`, so "Host not restarted" was always true; now
+        // `runDoctorRepairIfIdle` refuses Install host and Register service
+        // through the same arm. React Query hands the mutation's own
+        // variables back here, so the intent is read from the issue that was
+        // clicked rather than re-derived or carried in the outcome.
+        const fixAction = issue.fixAction;
+        if (fixAction === "host-start" || fixAction === "host-restart") {
+          toastHostRestartDeclined(outcome.declinedMessage);
+          return;
+        }
+        toastHostRepairDeclined(
+          fixActionLabel(fixAction ?? ""),
+          outcome.declinedMessage,
+        );
         return;
       }
       toast.success("Fix applied");

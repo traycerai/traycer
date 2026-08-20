@@ -77,6 +77,16 @@ type MockState = {
   }>;
   results: Record<string, QueryResult>;
   draining: boolean;
+  // Keyed the same way as `mocks.results` (`resultKey`) - the per-target
+  // queued/fetching registry snapshot `useRateLimitQueueTargetPhase` reads.
+  // Defaults to `null` (not tracked) for any key not present.
+  targetPhases: Record<string, "queued" | "fetching">;
+  forcedTargets: Record<string, boolean>;
+  // Targets whose single delayed follow-up read is spent, so nothing is coming
+  // back to collect an answer we stopped waiting for. Its own fixture rather
+  // than derived from the phase: the whole point is that an IDLE target can be
+  // in either state, and only this one stops the failure being suppressed.
+  followUpExhaustedTargets: Record<string, boolean>;
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -118,6 +128,9 @@ const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
   draining: false,
+  targetPhases: {},
+  forcedTargets: {},
+  followUpExhaustedTargets: {},
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
@@ -163,6 +176,41 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
 }));
 vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
   useIsRateLimitQueueDraining: () => mocks.draining,
+}));
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
+  useRateLimitQueueTargetPhase: (
+    providerId: string,
+    profileId: string | null,
+  ) => mocks.targetPhases[resultKey(providerId, profileId)] ?? null,
+  // Folded from the same fixture the single-target hook reads, so one test
+  // fixture drives the row copy AND the button state consistently. Only
+  // "fetching" counts - a merely QUEUED target must stay clickable so the
+  // click can promote it - and a target NOT in this list can never affect a
+  // control.
+  useAnyRateLimitQueueTargetFetching: (
+    targets: ReadonlyArray<{
+      readonly providerId: string;
+      readonly profileId: string | null;
+    }>,
+  ) =>
+    targets.some(
+      (target) =>
+        mocks.targetPhases[resultKey(target.providerId, target.profileId)] ===
+        "fetching",
+    ),
+  // Read from its own fixture rather than derived from the phase: the point of
+  // the flag is that two targets in the SAME "queued" phase behave
+  // differently, so a mock that inferred it from the phase could not express
+  // the case under test.
+  useIsRateLimitQueueTargetForced: (
+    providerId: string,
+    profileId: string | null,
+  ) => mocks.forcedTargets[resultKey(providerId, profileId)] ?? false,
+  useIsRateLimitReadFollowUpExhausted: (
+    providerId: string,
+    profileId: string | null,
+  ) =>
+    mocks.followUpExhaustedTargets[resultKey(providerId, profileId)] ?? false,
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: (
@@ -227,8 +275,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
 });
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
   useRateLimitQueueScope: () => queueScope,
@@ -778,6 +826,9 @@ beforeEach(() => {
   mocks.configured = [];
   mocks.results = {};
   mocks.draining = false;
+  mocks.targetPhases = {};
+  mocks.forcedTargets = {};
+  mocks.followUpExhaustedTargets = {};
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
@@ -1354,7 +1405,77 @@ describe("<RateLimitPopover /> rail", () => {
     );
   });
 
-  it("does not enqueue open-time refresh for stale multi-profile rows with cached values", () => {
+  it("shows a signed-out message and label for an unauthenticated ambient profile with no cached usage at all", () => {
+    // Distinct from "keeps an unauthenticated ambient row with cached
+    // lastGood data visible" above: here there is no `mocks.results` entry
+    // whatsoever for the ambient key, so `query.data` is `undefined` rather
+    // than a retained `lastGood` reading.
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [unauthenticatedAmbientProfile()],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+
+    renderPopover();
+
+    expect(screen.getByText("Terminal")).toBeTruthy();
+    expect(screen.getByText("signed out")).toBeTruthy();
+    expect(
+      screen.getByText("Signed out — sign in to refresh usage."),
+    ).toBeTruthy();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("shows Queued… copy for one profile row whose target is queued, without affecting a sibling profile's row", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    mocks.targetPhases = {
+      [resultKey("codex", "work-profile")]: "queued",
+    };
+
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    expect(screen.getByText("Queued…")).toBeTruthy();
+    // Only one "Queued…" - the ambient row (untracked) still shows its
+    // ordinary relative-time copy, not a second "Queued…".
+    expect(screen.getAllByText("Queued…")).toHaveLength(1);
+  });
+
+  it("skips open-time refresh only for a row whose summary is fresh AND cached; a stale-summary cached row still enqueues", () => {
+    // The mount hook (`useRefreshProviderRateLimitsOnMount`) now skips ONLY
+    // when the host-persisted summary (`usageUpdatedAt`) is fresh AND a
+    // detailed value is cached - see its own suite's skip matrix. The ambient
+    // row here has both, so it stays passive on open; the work-profile row's
+    // summary is past the freshness window despite carrying a cached value,
+    // so opening the popover still enqueues a pull for it.
     mocks.configured = [
       {
         providerId: "codex",
@@ -1384,7 +1505,12 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: false, profileId: "work-profile" },
+    );
   });
 
   it("draws a divider only between consecutive condensed blocks (no header row)", () => {
@@ -1624,7 +1750,12 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(screen.queryByText("4% used")).toBeNull();
   });
 
-  it("reveals an uncached signed-out provider instead of leaving Overview loading forever", async () => {
+  it("reveals an uncached signed-out provider with its signed-out message instead of leaving Overview loading forever", async () => {
+    // A signed-out, never-cached provider now renders `SignedOutRateLimitMessage`
+    // rather than the cold-state skeleton (production: `signedOutWithoutUsage`
+    // short-circuits before `RateLimitProviderBody`) - the point either way is
+    // that Overview reveals it instead of leaving it stuck behind the combined
+    // "Fetching usage limits" loader forever.
     mocks.configured = [
       {
         providerId: "codex",
@@ -1652,7 +1783,10 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(
       screen.getByText("Codex").closest('[class*="gap-4"]')?.className,
     ).not.toContain("hidden");
-    expect(screen.getByTestId("rate-limit-detail-skeleton")).toBeTruthy();
+    expect(
+      screen.getByText("Signed out — sign in to refresh usage."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("rate-limit-detail-skeleton")).toBeNull();
   });
 
   it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
@@ -1895,12 +2029,16 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
-  it("shows Refreshing instead of an updated timestamp while a refresh is in progress", () => {
+  it("shows Refreshing instead of an updated timestamp while this target is fetching", () => {
+    // The label's `refreshing` state is now driven by this exact target's own
+    // queue-registry phase (`useRateLimitQueueTargetPhase`), not the
+    // lane-wide `draining` flag - see the "queued/fetching" describe block
+    // below for the row-level truthful-copy coverage this replaces.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    mocks.draining = true;
+    mocks.targetPhases = { codex: "fetching" };
     renderPopover();
 
     const label = screen.getByText("Refreshing");
@@ -1908,6 +2046,54 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(label.className).toContain("working-text-shimmer");
     expect(screen.getByTestId("usage-limit-refreshing-dots")).toBeTruthy();
     expect(screen.queryByText(/^Updated /)).toBeNull();
+  });
+
+  it("does not show Refreshing from the lane-wide draining flag alone - only this target's own phase drives it", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    // A DIFFERENT target occupies the shared lane; this provider's own target
+    // is untracked (not queued, not fetching).
+    mocks.draining = true;
+    renderPopover();
+
+    expect(screen.queryByText("Refreshing")).toBeNull();
+    expect(screen.getByText(/^Updated /)).toBeTruthy();
+  });
+
+  it("shows Queued… copy instead of an updated timestamp while this target waits behind another", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.targetPhases = { codex: "queued" };
+    renderPopover();
+
+    expect(screen.getByText("Queued…")).toBeTruthy();
+    expect(screen.queryByText("Refreshing")).toBeNull();
+    expect(screen.queryByText(/^Updated /)).toBeNull();
+  });
+
+  it("shows a signed-out message instead of the usage body for an ambient provider that is signed out with no cached usage", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+    // No `mocks.results` entry at all - `query.data` resolves `undefined`,
+    // the "never even a cached reading" case distinct from the retained
+    // `lastGood` case covered by the rail's own suite above.
+    renderPopover();
+
+    expect(
+      screen.getByText("Signed out — sign in to refresh usage."),
+    ).toBeTruthy();
+    expect(screen.queryByText("4% used")).toBeNull();
+    expect(screen.queryByText("Queued…")).toBeNull();
   });
 
   it("shows a plain error message with no inline retry control when a fetch never succeeded", () => {
@@ -2024,15 +2210,48 @@ describe("<RateLimitPopover /> per-provider states", () => {
 });
 
 describe("<RateLimitPopover /> Refresh all", () => {
-  it("is disabled while the queue is draining", () => {
+  it("is disabled while one of its OWN ephemeral targets is fetching", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.targetPhases = { codex: "fetching" };
+    renderPopover();
+    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
+    expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("stays clickable while its target is merely QUEUED, so the click can promote it", () => {
+    // An enqueue for an already-queued target sets `pending.force = true`.
+    // That promotion is the only thing stopping the pull being skipped by its
+    // second freshness/cool-down check, or reaching the host as `force: false`
+    // and being answered from the gauge cache - so disabling here would make
+    // the click that does that work impossible.
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.targetPhases = { codex: "queued" };
+    renderPopover();
+    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
+    expect((refreshAll as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("stays enabled while the lane drains for a target this button does not refresh", () => {
+    // The dead-control regression: `RefreshIconButton` DISABLES on `refreshing`
+    // and its trigger no-ops while set, with no timeout cap on the external
+    // half - so gating on the lane-wide draining flag meant a background sweep
+    // of a provider this popover isn't even showing turned "Refresh all" off
+    // for that sweep's full response budget.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
     mocks.draining = true;
+    mocks.targetPhases = { "claude-code": "fetching" };
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
-    expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
+    expect((refreshAll as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("is disabled while an httpFetch provider is fetching, even though the ephemeralProcess queue isn't draining", () => {
@@ -2103,16 +2322,37 @@ describe("<RateLimitPopover /> Refresh all", () => {
     ]);
   });
 
-  it("keeps a single ephemeralProcess provider's own refresh button disabled while the queue is draining, even though its own isFetching has already settled", () => {
+  it("keeps a single ephemeralProcess provider's own refresh button disabled while ITS target is fetching, even though its own isFetching has already settled", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = { codex: readyResult(codexReady()) };
-    mocks.draining = true;
+    mocks.targetPhases = { codex: "fetching" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
     expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("leaves a provider's own refresh button live while a DIFFERENT provider's target holds the lane", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+    };
+    mocks.draining = true;
+    mocks.targetPhases = { "claude-code": "fetching" };
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
+    expect((refreshCodex as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("enqueues every ephemeralProcess profile in one parallel refresh batch", () => {
@@ -2361,8 +2601,13 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     // The per-provider refresh only lives in the single-provider detail tab now
     // (item 2 feedback: Overview keeps only the rail's "Refresh all").
     fireEvent.click(screen.getByRole("tab", { name: "Kilo Code" }));
+    // The mount-refresh hook's own cold-start reads (Overview's block plus the
+    // now-mounted detail tab's own instance) already exercise `refetch` before
+    // the click - see its own suite's skip matrix. Isolate the CLICK's effect
+    // by diffing from here, rather than asserting a brittle absolute count.
+    const callsBeforeClick = refetch.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh Kilo Code" }));
-    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(refetch.mock.calls.length).toBe(callsBeforeClick + 1);
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
@@ -2447,7 +2692,8 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
       codex: readyResult(codexReady()),
       [resultKey("codex", "work-profile")]: readyResult(codexReady()),
     };
-    mocks.draining = true;
+    // Only the ambient target is fetching; the managed sibling is idle.
+    mocks.targetPhases = { codex: "fetching" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
 
@@ -2456,18 +2702,31 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
         .getByRole("button", { name: "Refresh Codex" })
         .getAttribute("disabled"),
     ).not.toBeNull();
-    expect(screen.queryByText("Refreshing")).toBeNull();
+    // Exactly one card reports Refreshing - the one actually fetching. The
+    // shared lane must not put the sibling profile into a loading state too.
+    expect(screen.getAllByText("Refreshing")).toHaveLength(1);
   });
 
-  // The queue's `draining` flag is lane-global, not per-provider, so a refresh
-  // on ANY ephemeralProcess provider disables every provider's control in that
-  // lane - not just the one whose fetch is in flight. Deliberate: queue items run
-  // one at a time (each provider click is one parallel profile batch), so this
-  // matches a "refresh round is in progress" mental model rather than "my own
-  // fetch is in flight". See the spinner-state note in
-  // `use-provider-rate-limit-refresh.ts`. Pinned here so the shared disable isn't
-  // mistaken for cross-provider leakage and "fixed" away.
-  it("disables both ephemeralProcess providers' refresh controls while the shared queue drains", () => {
+  // REPLACES a pin that asserted the opposite - that the lane-wide `draining`
+  // flag SHOULD disable every ephemeralProcess control, on the reasoning that
+  // "queue items run one at a time (each provider click is one parallel profile
+  // batch), so this matches a 'refresh round is in progress' mental model".
+  //
+  // That reasoning rested on a premise that no longer holds: draining used to
+  // imply a round the USER started. Background target polling
+  // (`selectBackgroundRateLimitTargets`) now drains the lane on a timer with no
+  // user action at all, so the lane-wide rule silently disabled every control
+  // for a sweep nobody asked for. Combined with `RefreshIconButton` both
+  // disabling AND no-opping its trigger, and no timeout cap on the external
+  // half of `useRefreshSpinner`, one wedged probe held every control dead for
+  // its full response budget - and made the queue's force promotion
+  // unreachable, since the click that promotes a queued pull was blocked in
+  // exactly the state where promoting matters.
+  //
+  // Pinned in the new direction: a control reflects ONLY its own targets. Do
+  // not restore the lane-wide gate without also removing the no-op-while-
+  // disabled behaviour of the trigger.
+  it("leaves each ephemeralProcess provider's control live while only the OTHER provider's targets are in the queue", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -2516,22 +2775,29 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
       "claude-code": readyResult(claudeReady()),
       [resultKey("claude-code", "team-profile")]: readyResult(claudeReady()),
     };
+    // The lane is draining, but only claude-code's targets are actually in it.
     mocks.draining = true;
+    mocks.targetPhases = {
+      "claude-code": "fetching",
+      [resultKey("claude-code", "team-profile")]: "queued",
+    };
     renderPopover();
 
+    // Codex has nothing of its own in the lane: its control stays live, and no
+    // card of its borrows the other provider's loading state.
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
-    expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
+    expect((refreshCodex as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("Refreshing")).toBeNull();
 
+    // Claude Code owns the queued work, so its own control is the one gated -
+    // and its fetching row is the only place "Refreshing" appears.
     fireEvent.click(screen.getByRole("tab", { name: "Claude Code" }));
     const refreshClaude = screen.getByRole("button", {
       name: "Refresh Claude Code",
     });
     expect((refreshClaude as HTMLButtonElement).disabled).toBe(true);
-
-    // The shared lane gates the control, but it must not bleed into the profile
-    // cards' own loading state.
-    expect(screen.queryByText("Refreshing")).toBeNull();
+    expect(screen.getAllByText("Refreshing").length).toBeGreaterThan(0);
   });
 });
 

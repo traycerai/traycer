@@ -19,10 +19,14 @@ import { create } from "zustand";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
+  DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateSnapshot,
+  DesktopAppUpdatesBridge,
   DesktopReportIssueForm,
   DesktopSubmitReportResult,
   DesktopSupportBridge,
@@ -31,6 +35,7 @@ import type {
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
+import type { UnsyncedEditsEntry } from "@/stores/epics/open-epic/session-registry";
 import {
   disposeAllOpenEpicSessions,
   getOpenEpicRegistry,
@@ -292,6 +297,9 @@ function createRunnerHostWithoutPrivateDelivery(
 
 function createBaseRunnerHost(): IRunnerHost {
   return {
+    selectionAuthority: createInertSelectionAuthorityClient(),
+    refreshHostFleet: () => Promise.resolve(),
+    onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
@@ -336,14 +344,6 @@ function createBaseRunnerHost(): IRunnerHost {
       setEpics: () => Promise.resolve(),
       setIndicator: () => Promise.resolve(),
       onEpicSelected: () => ({ dispose: () => undefined }),
-    },
-    hostPicker: {
-      get isOpen() {
-        return false;
-      },
-      requestOpen: () => undefined,
-      requestClose: () => undefined,
-      onChange: () => ({ dispose: () => undefined }),
     },
     workspaceFolders: {
       canPickNatively: true,
@@ -505,6 +505,7 @@ function createDirtyEpicHandle(
     getArtifactRoomId: () => null,
     acquireArtifactBodyLease: () => () => {},
     readArtifactTitle: () => null,
+    detachTransport: () => undefined,
   }));
   return {
     epicId,
@@ -513,6 +514,7 @@ function createDirtyEpicHandle(
     awareness,
     store,
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],
@@ -1048,5 +1050,145 @@ describe("<DesktopDialogHost />", () => {
     ]);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(router.state.location.pathname).toBe("/");
+  });
+
+  describe("update-unsynced confirmation: Confirm re-checks before installing", () => {
+    // The wiring half of `confirmAppUpdateInstall`'s contract: the dialog's
+    // Confirm must route through the door (which re-runs the cross-window
+    // check) and never call `installUpdate()` off the captured rows itself.
+    // The unit suite proves the door's predicate; this proves the button
+    // reaches it. The cross-window answer is stubbed at the seam the door
+    // reads (`window.runnerHost.appLifecycle`).
+    const IDLE: DesktopAppUpdateSnapshot = {
+      sequence: 0,
+      status: "idle",
+      currentVersion: "1.0.0",
+      allowPrerelease: false,
+      latestVersion: null,
+      downloadProgress: null,
+      installBlockedReason: null,
+      installGuidance: null,
+      installInFlight: false,
+      errorMessage: null,
+      lastCheckedAt: null,
+      lastCheckIntent: null,
+    };
+
+    class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
+      readonly installUpdate = vi.fn(() => Promise.resolve(IDLE));
+      getSnapshot(): Promise<DesktopAppUpdateSnapshot> {
+        return Promise.resolve(IDLE);
+      }
+      checkForUpdates(
+        _intent: DesktopAppUpdateCheckIntent,
+      ): Promise<DesktopAppUpdateSnapshot> {
+        return Promise.resolve(IDLE);
+      }
+      setAllowPrerelease(_allow: boolean): Promise<DesktopAppUpdateSnapshot> {
+        return Promise.resolve(IDLE);
+      }
+      downloadUpdate(): Promise<DesktopAppUpdateSnapshot> {
+        return Promise.resolve(IDLE);
+      }
+      onChange(): { dispose(): void } {
+        return { dispose: () => undefined };
+      }
+    }
+
+    interface CrossWindowReport {
+      readonly epics: ReadonlyArray<UnsyncedEditsEntry>;
+      readonly otherWindowsUnknown: boolean;
+    }
+    interface WindowWithLifecycle {
+      runnerHost?: {
+        appLifecycle?: {
+          unsyncableWorkAcrossWindows(): Promise<CrossWindowReport>;
+        };
+      };
+    }
+    function unsyncable(epicId: string, title: string): UnsyncedEditsEntry {
+      return { epicId, title, queueSize: 1, isDirty: true, unsyncable: true };
+    }
+    function mainAnswers(report: CrossWindowReport): void {
+      (window as WindowWithLifecycle).runnerHost = {
+        appLifecycle: {
+          unsyncableWorkAcrossWindows: () => Promise.resolve(report),
+        },
+      };
+    }
+
+    afterEach(() => {
+      delete (window as WindowWithLifecycle).runnerHost;
+    });
+
+    it("re-asks with the fresh rows instead of installing when a new epic was retained since the dialog opened; installs on the second Confirm", async () => {
+      const bridge = new FakeAppUpdatesBridge();
+      const runnerHost = Object.assign(createRunnerHost([], [], []), {
+        appUpdates: bridge,
+      });
+      useDesktopDialogStore.getState().openUpdateUnsyncedConfirm({
+        epics: [unsyncable("e-a", "Alpha")],
+        otherWindowsUnknown: false,
+      });
+      // Between open and Confirm, another window retained "Beta".
+      mainAnswers({
+        epics: [unsyncable("e-a", "Alpha"), unsyncable("e-b", "Beta")],
+        otherWindowsUnknown: false,
+      });
+      renderDesktopDialogHost(runnerHost, "/");
+
+      const dialog = await screen.findByTestId("confirm-destructive-dialog");
+      expect(dialog.textContent).toContain("Alpha");
+      expect(dialog.textContent).not.toContain("Beta");
+
+      fireEvent.click(screen.getByTestId("confirm-action"));
+      await flushDialogEffects();
+
+      // OLD wiring: `installUpdate` fired here off the captured list.
+      expect(bridge.installUpdate).not.toHaveBeenCalled();
+      expect(useDesktopDialogStore.getState().activeDialog).toBe(
+        "update-unsynced-confirm",
+      );
+      expect(
+        useDesktopDialogStore
+          .getState()
+          .updateUnsyncedEpics.map((epic) => epic.epicId),
+      ).toEqual(["e-a", "e-b"]);
+      // The dialog now names what is new, and is no longer pending.
+      const reasked = screen.getByTestId("confirm-destructive-dialog");
+      expect(reasked.textContent).toContain("Beta");
+      expect(
+        screen.getByTestId("confirm-action").hasAttribute("disabled"),
+      ).toBe(false);
+
+      // Second Confirm against an unchanged set installs.
+      fireEvent.click(screen.getByTestId("confirm-action"));
+      await flushDialogEffects();
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+      expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+    });
+
+    it("installs straight away when the fresh check matches what was shown", async () => {
+      const bridge = new FakeAppUpdatesBridge();
+      const runnerHost = Object.assign(createRunnerHost([], [], []), {
+        appUpdates: bridge,
+      });
+      useDesktopDialogStore.getState().openUpdateUnsyncedConfirm({
+        epics: [unsyncable("e-a", "Alpha")],
+        otherWindowsUnknown: false,
+      });
+      mainAnswers({
+        epics: [unsyncable("e-a", "Alpha")],
+        otherWindowsUnknown: false,
+      });
+      renderDesktopDialogHost(runnerHost, "/");
+      await screen.findByTestId("confirm-destructive-dialog");
+
+      fireEvent.click(screen.getByTestId("confirm-action"));
+      await flushDialogEffects();
+
+      expect(bridge.installUpdate).toHaveBeenCalledTimes(1);
+      expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+    });
   });
 });

@@ -56,6 +56,14 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
   useChatSessionHandle: () => state.handle,
 }));
 
+// The tile resolves the snapshot store on its TAB's host (D15). The real
+// `<TabHostProvider>` below supplies the host ID, but resolving a client from it
+// needs the whole host runtime; the query is mocked just below, so the seam is
+// what matters here, not a live client.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
 vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
   useSnapshotDiffQuery: () => ({
     data: undefined,

@@ -45,7 +45,9 @@ export interface RenameTerminalMutationContext {
  * the patch is rolled back with a compare-and-swap guard plus a one-shot
  * mutation-boundary refetch as the authoritative repair.
  *
- * `useTerminalRename` is the default-host convenience wrapper over this hook.
+ * Every caller passes the client of the host that OWNS the session (a tile's
+ * or the Epic session's); the app-wide convenience wrapper that used to
+ * sit beside this hook had no caller left and was removed (PR #1243).
  */
 export function useTerminalRenameFor(
   client: HostClient<HostRpcRegistry> | null,

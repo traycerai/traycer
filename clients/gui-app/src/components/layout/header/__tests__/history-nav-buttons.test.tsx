@@ -35,7 +35,6 @@ function makeRouter(history: RouterHistory): AppRouter {
     context: {
       queryClient: new QueryClient(),
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () => null,
       getHostClient: () => null,
     },
   });
@@ -92,11 +91,7 @@ describe("HistoryNavButtons", () => {
 
     fireEvent.focus(screen.getByRole("button", { name: "Go back" }));
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      `Go back (${formatChordForDisplay(
-        navigator.platform.toLowerCase().includes("mac")
-          ? "mod+arrowleft"
-          : "alt+arrowleft",
-      )})`,
+      `Go back (${formatChordForDisplay("mod+shift+,")})`,
     );
   });
 

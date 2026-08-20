@@ -213,17 +213,19 @@ export function useWorktreeWorkspacesRefresh(args: {
         return context;
       },
       onError: async (error, variables, context) => {
-        // This - not `onSuccess` - is where a host swap usually lands.
-        // `HostClient.bind` snapshots the outgoing host's in-flight jobs and
-        // settles them `authority-superseded`, which the GUI boundary
-        // normalizes to a TanStack cancellation. So the request never
-        // succeeds: without this branch the swap both skips the follow-up
-        // force AND toasts "Couldn't refresh folder details." at a user who
-        // did nothing wrong but change hosts.
+        // A host swap no longer lands here. It used to: `HostClient.bind`
+        // snapshotted the outgoing host's in-flight jobs and settled them
+        // `authority-superseded`, which the GUI boundary normalized to a
+        // TanStack cancellation, so a swap arrived as an error. P4.2 deleted
+        // the slot and with it that supersede - nothing rebinds, so a request
+        // pinned to its host simply finishes, and `onSuccess` is where a move
+        // is noticed now.
         //
-        // Every coordinator control-flow reason arrives this way and none is
-        // a failure (superseded, waiter-cancelled, coordinator-disposed), so
-        // the whole class is silent.
+        // This branch stays for the cancellations that are still real: every
+        // coordinator control-flow reason arrives this way and none is a
+        // failure (superseded, waiter-cancelled, coordinator-disposed), so the
+        // whole class is silent rather than toasting "Couldn't refresh folder
+        // details." at a user who did nothing wrong.
         if (error instanceof CancelledError) {
           await forceAgainstLiveHost(
             context?.hostId ?? null,

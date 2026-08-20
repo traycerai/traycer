@@ -732,6 +732,10 @@ export function useEditableGitDiffSurface(args: {
   });
   const [fullDiffIdentity, setFullDiffIdentity] = useState<string | null>(null);
   const diffQuery = useGitGetFileDiffQuery({
+    // The surface's own client, which is the one addressing `args.hostId` -
+    // both callers (`GitFileDiffPanel`, `BundleInlineDiff`) resolve it from
+    // `useTabHostClient()`. Never the app-wide read (D15).
+    client: args.client,
     hostId: args.hostId,
     runningDir: args.runningDir,
     filePath: args.file.path,

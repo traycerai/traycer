@@ -230,6 +230,7 @@ describe.skipIf(process.platform === "win32")(
           allowSelfInvocation: false,
           noServiceRegister: false,
           ifIdle: false,
+          force: false,
         });
         const pending = command(fakeCtx());
 
@@ -282,6 +283,7 @@ describe.skipIf(process.platform === "win32")(
           allowSelfInvocation: false,
           noServiceRegister: false,
           ifIdle: true,
+          force: false,
         });
         const pending = command(fakeCtx());
 

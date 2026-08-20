@@ -10,6 +10,10 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/runner-host";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import {
+  busyRestartMessage,
+  HOST_CHANGED_DESCRIPTION,
+} from "@/components/host/host-restart-copy";
 import { useHostRestart } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -139,18 +143,6 @@ interface LocalHostRestartFlowProps {
 }
 
 /**
- * Same copy the Settings Overview busy notice renders for the same verdict, so
- * "restart refused because busy" reads identically wherever it surfaces.
- */
-function busyRestartMessage(busySessionCount: number): string {
-  const sessions =
-    busySessionCount === 1
-      ? "1 session is"
-      : `${busySessionCount} sessions are`;
-  return `${sessions} still working on this host. Nothing was interrupted; try again when they finish. Force restart ends them immediately.`;
-}
-
-/**
  * The cooperative RPC failed rather than answering busy. For the menu/tray
  * surfaces this is most often the exact host state the restart action exists
  * to fix - a hung process whose handshake completed long ago - so the failure
@@ -173,11 +165,6 @@ const UNREACHABLE_CLIENT_MESSAGE =
   "Traycer couldn't open a connection to ask this host to stop cleanly - you " +
   "may be signed out, or its credentials may be refreshing. Force restart " +
   "kills the host process and relaunches it, ending whatever it is running.";
-
-/** Shown when the machine's host was replaced while a dialog was open. */
-const HOST_CHANGED_DESCRIPTION =
-  "This machine's host was replaced while this dialog was open, so nothing " +
-  "was stopped. Restart again to check the new host.";
 
 /**
  * The forced bridge respawn, shared by both arms of the flow.
@@ -460,7 +447,9 @@ function CooperativeFirstRestartFlow(
           if (response.outcome === "busy") {
             setForceOffer({
               hostId,
-              message: busyRestartMessage(response.verdict.busySessionCount),
+              // Always `true` on this arm: the offer IS the dialog this sets,
+              // and its Force button is the control the sentence promises.
+              message: busyRestartMessage(response.verdict, true),
             });
             return;
           }

@@ -198,6 +198,20 @@ const testState = vi.hoisted<TestState>(() => ({
   sessionHandleByChatId: {},
 }));
 
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every assertion here
+// is about. Which transport the pin resolves to is a different question, and
+// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
+
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -394,8 +408,8 @@ vi.mock("@/components/ui/sidebar", () => ({
   ),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
 }));
 
 // The row's unreachable-owner lock reads the host directory through
@@ -456,10 +470,6 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutate: testState.archiveMutate,
     mutateAsync: testState.archiveMutateAsync,
     isPending: testState.archiveRowPending,
-  }),
-  useEpicCreateChat: () => ({
-    mutate: testState.createChatMutate,
-    isPending: false,
   }),
   useEpicCreateChatForHostClient: () => ({
     mutate: testState.createChatMutate,
@@ -535,6 +545,8 @@ vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => testState.activeHostClient,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({

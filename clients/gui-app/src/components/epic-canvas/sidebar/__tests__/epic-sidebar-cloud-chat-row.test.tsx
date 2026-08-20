@@ -22,8 +22,8 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * elements, so the open path is verified in the live app instead.
  */
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-a",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-a",
 }));
 
 // Typed against the hook's own union so the stand-in cannot produce a status

@@ -39,7 +39,7 @@ const NO_BARS: ReadonlyArray<HeaderRateLimitBar> = [];
  * The scope is resolved HERE, above both the glyph and the popover, and
  * re-provided as this subtree's `HostRuntimeContext`. That one swap is what
  * re-targets the whole surface: every hook below reaches its host through
- * `useHostClient()` / `useReactiveActiveHostId()`, and both read the binding
+ * `useHostClient()` / `useAddressableHostId()`, and both read the binding
  * from context, so the query keys, the serial fetch queue's scope and the
  * invalidations all move together and cannot end up describing different
  * machines. Nothing outside this subtree moves — picking a host to WATCH is

@@ -10,6 +10,8 @@ import {
   hostResponseFrameSchema,
   hostFatalErrorFrameSchema,
   fatalErrorDetailsSchema,
+  hostRestartIntentSchema,
+  HOST_RESTARTING_FATAL_CODE,
 } from "@traycer/protocol/framework/ws-protocol";
 
 /**
@@ -405,6 +407,93 @@ describe("ws-protocol canonical Zod schemas", () => {
         retryable: "yes",
       };
       expect(fatalErrorDetailsSchema.safeParse(details).success).toBe(false);
+    });
+
+    it("parses a restart tombstone and returns it intact (P1.4 / D5 / M1)", () => {
+      const details = {
+        code: HOST_RESTARTING_FATAL_CODE,
+        reason: "The host is restarting and expects to be back shortly",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+        restartIntent: {
+          tombstoneId: "tombstone-1",
+          expiresAt: 1_700_000_000_000,
+        },
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.restartIntent).toEqual({
+          tombstoneId: "tombstone-1",
+          expiresAt: 1_700_000_000_000,
+        });
+      }
+    });
+
+    it("reads `restartIntent` as undefined on a frame from a host that predates the tombstone", () => {
+      const details = {
+        code: "UNAUTHORIZED" as const,
+        reason: "Invalid token",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.restartIntent).toBeUndefined();
+      }
+    });
+
+    it("is not `.strict()`: an unknown extra key is stripped rather than rejected - the exact mechanism that lets every shipped client tolerate a new additive field", () => {
+      const details = {
+        code: "UNAUTHORIZED",
+        reason: "Invalid token",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        someFutureFieldThisSchemaHasNeverHeardOf: { nested: "value" },
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect("someFutureFieldThisSchemaHasNeverHeardOf" in parsed.data).toBe(
+          false,
+        );
+        expect(parsed.data).toEqual({
+          code: "UNAUTHORIZED",
+          reason: "Invalid token",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+      }
+    });
+  });
+
+  describe("hostRestartIntentSchema", () => {
+    it("accepts a tombstone with a numeric `expiresAt`", () => {
+      const intent = {
+        tombstoneId: "tombstone-1",
+        expiresAt: 1_700_000_000_000,
+      };
+      const parsed = hostRestartIntentSchema.safeParse(intent);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data).toEqual(intent);
+      }
+    });
+
+    it("accepts `expiresAt: null` as a real answer, not a missing field", () => {
+      const intent = { tombstoneId: "tombstone-1", expiresAt: null };
+      const parsed = hostRestartIntentSchema.safeParse(intent);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.expiresAt).toBeNull();
+      }
+    });
+
+    it("rejects an empty `tombstoneId`", () => {
+      const intent = { tombstoneId: "", expiresAt: null };
+      expect(hostRestartIntentSchema.safeParse(intent).success).toBe(false);
     });
   });
 });

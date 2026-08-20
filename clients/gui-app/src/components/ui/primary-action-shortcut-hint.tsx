@@ -5,8 +5,10 @@ import { modLabel } from "@/lib/keybindings/platform";
 export function PrimaryActionShortcutHint() {
   return (
     <KbdGroup aria-hidden>
-      <Kbd>{modLabel()}</Kbd>
-      <Kbd>↵</Kbd>
+      <Kbd className="border-current bg-transparent text-current">
+        {modLabel()}
+      </Kbd>
+      <Kbd className="border-current bg-transparent text-current">↵</Kbd>
     </KbdGroup>
   );
 }

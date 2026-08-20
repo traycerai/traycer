@@ -82,15 +82,30 @@ vi.mock("@/lib/host", async (importActual) => {
 // provider, which throws outside `<HostRuntimeProvider>`.
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => requireHostClient() };
+  return {
+    ...actual,
+    useHostClient: () => requireHostClient(),
+    // The spine must be overridden too: the `importActual` spread would
+    // otherwise hand back the REAL hook, which throws outside a provider.
+    useHostRuntimeClient: () => requireHostClient(),
+  };
 });
 
 vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => feedMode.value,
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => mockLocalHostEntry.hostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => mockLocalHostEntry.hostId,
+}));
+
+// The fixture used to say "which host" by binding one into the client's slot.
+// P4.2 deleted the slot, so the app-wide host is the SELECTION layer's answer
+// and a fixture that never seeds it resolves a requester addressing no host -
+// which fails as a silent no-op (an action that marks nothing read), not as a
+// missing method.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => mockLocalHostEntry.hostId,
 }));
 
 vi.mock("sonner", () => ({
@@ -135,9 +150,11 @@ function createHarness(
   const requestCount = { value: 0 };
   const cloudMarkRead: CloudMarkReadStub = { calls: [], mode: "applied" };
   let requestId = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -161,11 +178,10 @@ function createHarness(
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
-  hostClientRef.current = client;
+  hostClientRef.current = spine.createRequester(mockLocalHostEntry);
   useAuthStore.setState({
     contextMetadata: { userId: "user-a", username: "user-a" },
   });

@@ -59,8 +59,8 @@ const state = vi.hoisted((): FindTestState => ({
   },
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => state.activeHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => state.activeHostId,
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({

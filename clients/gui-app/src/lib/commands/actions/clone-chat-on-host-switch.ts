@@ -1,9 +1,7 @@
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  classifyHostRequestFailure,
-  type HostRpcError,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { classifyRecoverableForkFailure } from "@/lib/chats/recoverable-fork-refusal";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
@@ -19,20 +17,12 @@ import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
-/**
- * Which of the two client-visible ways a latest-checkpoint fork request can
- * fail this flow recovers from, if any - see the module doc below for what
- * each one means and why both retry identically.
- */
-function classifyRecoverableForkFailure(
-  error: HostRpcError,
-): "no-checkpoint" | "host-too-old" | null {
-  if (error.code === "E_FORK_CHECKPOINT_UNAVAILABLE") return "no-checkpoint";
-  if (classifyHostRequestFailure(error).kind === "downgrade-unsupported") {
-    return "host-too-old";
-  }
-  return null;
-}
+// `classifyRecoverableForkFailure` - which of the two client-visible ways a
+// latest-checkpoint fork request can fail this flow recovers from, if any -
+// lives in `lib/chats/recoverable-fork-refusal.ts` rather than here, so the
+// shared `epic.createChat` error toast can stay silent on exactly the failures
+// this flow retries on. Two seams, one classifier, deliberately: see that
+// module for why duplicating it fails silently.
 
 /**
  * Clone-not-migrate flow for switching a chat tab's bound host: chat tabs
@@ -86,6 +76,13 @@ export interface CloneChatOnHostSwitchArgs {
    */
   readonly sourceOwnerUserId: string | null;
   readonly sourceHostId: string;
+  /** The source chat's RAW stored title from the local projection - `""` for
+   *  a still-untitled source, never the rendered "Untitled agent" fallback.
+   *  Decorated into the clone's stamped title by {@link cloneChatTitle};
+   *  passed client-side (not left to the host's fork-seed gap-fill) so the
+   *  title survives the settings-only retry, where no fork seed exists at
+   *  all. */
+  readonly sourceTitle: string;
   readonly targetHostId: string;
   readonly directory: IHostDirectoryService;
   readonly createChat: CreateChatCommand;
@@ -120,18 +117,50 @@ export interface CloneChatOnHostSwitchArgs {
   readonly navigateNestedFocus: NavigateNestedFocus | null;
 }
 
+/**
+ * The title stamped on the clone: the manual fork dialog's `Fork - ` prefix
+ * (a clone IS a fork, and the sidebar should say so) plus the target host's
+ * label, which is the one fact that tells two clones of the same chat onto
+ * different machines apart. A still-untitled source stays `""` so the clone
+ * remains eligible for AI titling on its first send, exactly like a fresh
+ * chat; a target that has vanished from the directory (the flow proceeds
+ * anyway, into ambient fallback) just drops the label.
+ */
+export function cloneChatTitle(
+  sourceTitle: string,
+  targetHostLabel: string | null,
+): string {
+  if (sourceTitle.trim() === "") return "";
+  return targetHostLabel === null
+    ? `Fork - ${sourceTitle}`
+    : `Fork - ${sourceTitle} (${targetHostLabel})`;
+}
+
+/** See the title computation in {@link cloneChatOnHostSwitch} for why this
+ *  swallows instead of propagating. */
+function lookupHostLabelOrNull(
+  directory: IHostDirectoryService,
+  hostId: string,
+): string | null {
+  try {
+    return directory.findById(hostId)?.label ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function cloneChatOnHostSwitch(
   args: CloneChatOnHostSwitchArgs,
 ): CancelFn {
-  args.directory.selectById(args.targetHostId);
-  // Whatever the line above actually selected (the target normally; unchanged
-  // when the target has vanished from the directory - that arm deliberately
-  // still proceeds, into ambient fallback). Captured so the dispatch below
-  // can tell "the user moved the active host while we were resolving" apart
-  // from "nothing changed": the create mutation stamps the ACTIVE host at
-  // mutate time, so dispatching after an uncancelled move would create the
-  // chat on a host the open intent does not name.
-  const selectedHostIdAtStart = args.directory.getSelected()?.hostId ?? null;
+  // Fixed once for both attempts: the fork attempt and the settings-only
+  // retry must land under the same name. The label lookup is best-effort -
+  // a directory seam that throws must end this flow through the settings
+  // resolution's own catch arm (-> onCloneFailed), not as a synchronous
+  // throw out of this call; the title just drops the label.
+  const title = cloneChatTitle(
+    args.sourceTitle,
+    lookupHostLabelOrNull(args.directory, args.targetHostId),
+  );
 
   let cancelled = false;
   let innerCancel: CancelFn | null = null;
@@ -141,23 +170,18 @@ export function cloneChatOnHostSwitch(
     forkSource: CreateChatMutationInput["forkSource"] | null,
   ): void => {
     if (cancelled) return;
-    // The user can move the active host while settings resolution (or the
-    // settings-only retry) is in flight, from a surface that never cancels
-    // this flow - and the create mutation stamps the ACTIVE host at mutate
-    // time. A selection that moved since this flow started would land the
-    // clone on a host the open intent does not name, so the flow ends as a
-    // failure instead of creating on the wrong machine.
-    if (
-      (args.directory.getSelected()?.hostId ?? null) !== selectedHostIdAtStart
-    ) {
-      args.onCloneFailed();
-      return;
-    }
+    // No app-wide-selection guard any more (redesign P1.2, D6): the clone
+    // does not move the app, and `createChat` is the TARGET host's mutation,
+    // which validates the client it is about to send on against the
+    // `hostId` this request names. A failover mid-resolution can no longer
+    // land the clone on the wrong machine, because nothing about where it
+    // lands is read from the app-wide selection.
     innerCancel = openNewChatInActiveTile({
       epicId: args.epicId,
       tabId: args.tabId,
       hostId: args.targetHostId,
       worktreeIntent: null,
+      title,
       settings,
       forkSource,
       source: "direct_ui",

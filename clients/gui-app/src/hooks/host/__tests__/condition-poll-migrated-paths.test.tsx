@@ -74,9 +74,11 @@ function createPathFixture(handlers: {
 }) {
   const queryClient = createAppQueryClient();
   let requestSeq = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -86,13 +88,13 @@ function createPathFixture(handlers: {
       handlers: handlers as never,
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "tok-1",
     }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   hostClientMock.current = client;
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>

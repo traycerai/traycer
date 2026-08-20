@@ -10,6 +10,7 @@ import type {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { BoundedTileLoad } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
@@ -100,6 +101,9 @@ export function PrDetailBody(props: {
   readonly prNumber: number;
   readonly isActive: boolean;
 }): ReactNode {
+  // The tile's bound host - the one `usePrDetailSubscription` subscribes
+  // through, so the one whose silence the bounded load is about.
+  const detailTabHostId = useTabHostId();
   const subscription = usePrDetailSubscription({
     epicId: props.epicId,
     githubHost: props.githubHost,
@@ -134,17 +138,28 @@ export function PrDetailBody(props: {
         />
       );
     }
+    // Invariant 6: this spinner had no end. The tile's reachability gate
+    // catches a host the directory dropped; a host that stays listed while its
+    // detail stream never delivers landed exactly here, forever.
     return (
-      <div
-        className="flex h-full min-h-0 flex-1 items-center justify-center px-3 py-6"
-        data-testid="pr-detail-loading"
-      >
-        <AgentSpinningDots
-          testId="pr-detail-loading-dots"
-          variant="dots"
-          className="size-5 text-muted-foreground"
-        />
-      </div>
+      <BoundedTileLoad
+        hostId={detailTabHostId}
+        subject="pull-request"
+        onRetry={refresh.trigger}
+        testId="pr-detail-load"
+        fallback={
+          <div
+            className="flex h-full min-h-0 flex-1 items-center justify-center px-3 py-6"
+            data-testid="pr-detail-loading"
+          >
+            <AgentSpinningDots
+              testId="pr-detail-loading-dots"
+              variant="dots"
+              className="size-5 text-muted-foreground"
+            />
+          </div>
+        }
+      />
     );
   }
 

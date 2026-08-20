@@ -3,6 +3,7 @@ import type {
   ProviderRateLimits,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
+import { isTransientRateLimitUnavailableReason } from "@traycer/protocol/host";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -25,24 +26,19 @@ export type RateLimitUsageResponse = ResponseOfMethod<
 >;
 
 /**
- * Reasons a provider-pull can fail that are transient - a fetch problem on
- * THIS attempt, not a statement about the account's capability to ever report
- * usage. `usage_fetch_failed` is the CLI usage-HTTP-fetch failure the Claude
- * usage-limit fix's protocol ticket split out (e.g. a server-side 429 on
- * Anthropic's `/api/oauth/usage` with a multi-minute penalty window);
- * `timeout`/`connection_failed` are the probe-level analogues. Every other
- * reason (`rate_limits_not_available`, `cli_not_found`, etc.) is authoritative
- * - it says something about the account/setup, not "try again shortly" - so a
- * retained last-good reading must NOT survive alongside one of those.
+ * Whether a provider-pull failure is transient - a fetch problem on THIS
+ * attempt, not a statement about the account's capability to ever report usage
+ * - so a retained last-good reading may survive alongside it.
+ *
+ * Delegates to the protocol's own classifier rather than repeating the reason
+ * set: the host's gauge cache retains its last known reading under exactly this
+ * rule, and a renderer that disagreed about which reasons are transient would
+ * dim a reading the host had already replaced (or blank one it still holds).
+ * Re-exported under this module's name so the retention rule reads locally at
+ * the call sites below.
  */
-const TRANSIENT_UNAVAILABLE_REASONS: ReadonlySet<RateLimitUnavailableReason> =
-  new Set(["usage_fetch_failed", "timeout", "connection_failed"]);
-
-export function isTransientUnavailableReason(
-  reason: RateLimitUnavailableReason,
-): boolean {
-  return TRANSIENT_UNAVAILABLE_REASONS.has(reason);
-}
+export const isTransientUnavailableReason =
+  isTransientRateLimitUnavailableReason;
 
 function canRetainPreviousRateLimits(
   previous: ProviderRateLimitEnvelope | undefined,

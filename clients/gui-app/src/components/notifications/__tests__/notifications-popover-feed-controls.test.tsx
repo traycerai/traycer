@@ -21,6 +21,7 @@ import {
 } from "@tanstack/react-router";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import {
   __resetAppLocalNotificationsStoreForTests,
@@ -54,15 +55,25 @@ import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-ca
 import { useNotificationCenterGeometry } from "@/hooks/notifications/use-notification-center-geometry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
+const reconnectEngine = createHostReconnectEngine();
+
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
+/**
+ * `createRequesterForHostId` is not optional decoration: production resolves
+ * the app-wide host through the spine's id-pinned requester (redesign P4.2),
+ * so a stub without it takes the subject down at first render rather than
+ * failing an assertion. One host per fixture means the requester IS the
+ * client, which is what makes the self-return honest here.
+ */
+interface StubHostClient {
+  readonly request: typeof hostRequestMock;
+  readonly getActiveHostId: () => string | null;
+  readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
+}
+
 const hostBindingState = vi.hoisted(() => ({
-  current: null as {
-    readonly hostClient: {
-      readonly request: typeof hostRequestMock;
-      readonly getActiveHostId: () => string | null;
-    };
-  } | null,
+  current: null as { readonly hostClient: StubHostClient } | null,
 }));
 
 const activeHostIdRef = vi.hoisted(() => ({
@@ -83,8 +94,8 @@ vi.mock("@/lib/host", async (importActual) => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdRef.value,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdRef.value,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -125,13 +136,17 @@ function openGlobalStream(): {
   readonly seed: (entries: ReadonlyArray<NotificationEntry>) => void;
 } {
   let current: NotificationsStreamCallbacks | null = null;
-  openNotificationsStream((callbacks) => {
-    current = callbacks;
-    return {
-      applyUpdate: () => {},
-      close: () => {},
-    };
-  }, null);
+  openNotificationsStream(
+    reconnectEngine,
+    (callbacks) => {
+      current = callbacks;
+      return {
+        applyUpdate: () => {},
+        close: () => {},
+      };
+    },
+    null,
+  );
   return {
     seed: (entries) => {
       if (current === null) throw new Error("stream factory not invoked");
@@ -402,12 +417,12 @@ function makeDomRect(width: number, height: number): DOMRect {
 }
 
 function bindHostClient(): void {
-  hostBindingState.current = {
-    hostClient: {
-      request: hostRequestMock,
-      getActiveHostId: () => mockLocalHostEntry.hostId,
-    },
+  const hostClient: StubHostClient = {
+    request: hostRequestMock,
+    getActiveHostId: () => mockLocalHostEntry.hostId,
+    createRequesterForHostId: () => hostClient,
   };
+  hostBindingState.current = { hostClient };
 }
 
 function setScrollTop(scrollEl: HTMLElement, scrollTop: number): void {
@@ -1994,6 +2009,100 @@ describe("NotificationsPopover feed controls (T05)", () => {
       expect(revealed).toHaveLength(1);
       expect(revealed[0]?.[1]).toEqual({ count_bucket: "2-5" });
       trackSpy.mockRestore();
+    });
+  });
+
+  describe("keyboard traversal", () => {
+    /** The feed id of the row that currently holds focus, if any. */
+    function focusedRowId(): string | undefined {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return undefined;
+      return active.dataset.notificationId;
+    }
+
+    function seedTraversalFeed(): void {
+      applyHostSnapshot({
+        entries: [
+          hostPrompt("prompt", 100),
+          hostDone("done-unread", 90, null),
+          hostDone("done-read", 80, 10),
+        ],
+        summary: { unreadCount: 2, attentionCount: 1 },
+        recentCursor: null,
+        attentionCursor: null,
+      });
+      // Read AND payload-less: nothing inside this row is focusable, so it is
+      // exactly the row a control-focusing traversal would silently skip.
+      useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+      useAppLocalNotificationsStore.getState().upsert({
+        id: "sys-read",
+        updatedAt: 70,
+        readAt: 75,
+        kind: "stream.transport.error",
+        sourceRef: "sys-read",
+        payload: null,
+        message: "Worktree failed",
+        detail: null,
+      });
+    }
+
+    it("walks every row with Down/Up and wraps at both ends", async () => {
+      seedTraversalFeed();
+      renderPopover();
+
+      await screen.findByText("Needs attention");
+      const shell = screen.getByTestId("notifications-popover");
+      const ids = notificationIds(screen.getAllByTestId("notification-entry"));
+      expect(ids).toHaveLength(4);
+
+      for (const id of ids) {
+        fireEvent.keyDown(shell, { key: "ArrowDown" });
+        expect(focusedRowId()).toBe(id);
+      }
+      // Past the last row, back to the first.
+      fireEvent.keyDown(shell, { key: "ArrowDown" });
+      expect(focusedRowId()).toBe(ids[0]);
+      // And back off the top to the last.
+      fireEvent.keyDown(shell, { key: "ArrowUp" });
+      expect(focusedRowId()).toBe(ids[ids.length - 1]);
+
+      fireEvent.keyDown(shell, { key: "Home" });
+      expect(focusedRowId()).toBe(ids[0]);
+      fireEvent.keyDown(shell, { key: "End" });
+      expect(focusedRowId()).toBe(ids[ids.length - 1]);
+    });
+
+    it("reaches a read row that has no focusable control of its own", async () => {
+      seedTraversalFeed();
+      renderPopover();
+
+      await screen.findByText("Needs attention");
+      const shell = screen.getByTestId("notifications-popover");
+      const rows = screen.getAllByTestId("notification-entry");
+      const unfocusable = rows.find(
+        (row) => row.dataset.notificationId === "app-local:sys-read",
+      );
+      if (unfocusable === undefined) throw new Error("missing app-local row");
+      expect(unfocusable.querySelector("button")).toBeNull();
+
+      const visited = new Set<string | undefined>();
+      for (let step = 0; step < rows.length; step += 1) {
+        fireEvent.keyDown(shell, { key: "ArrowDown" });
+        visited.add(focusedRowId());
+      }
+      expect(visited.has("app-local:sys-read")).toBe(true);
+    });
+
+    it("leaves modified arrows to the rest of the app", async () => {
+      seedTraversalFeed();
+      renderPopover();
+
+      await screen.findByText("Needs attention");
+      const shell = screen.getByTestId("notifications-popover");
+      fireEvent.keyDown(shell, { key: "ArrowDown", metaKey: true });
+      expect(focusedRowId()).toBeUndefined();
+      fireEvent.keyDown(shell, { key: "ArrowDown", altKey: true });
+      expect(focusedRowId()).toBeUndefined();
     });
   });
 });

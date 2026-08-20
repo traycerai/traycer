@@ -28,7 +28,6 @@ function makeRouter(history: RouterHistory): AppRouter {
     context: {
       queryClient: new QueryClient(),
       getAuthSnapshot: () => useAuthStore.getState(),
-      getActiveHostId: () => null,
       getHostClient: () => null,
     },
   });
@@ -89,6 +88,25 @@ describe("KeybindingProvider in-app back/forward", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(goSpy).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the default mod+shift+, history navigation", () => {
+    const router = renderProviderWith(brandedHistory());
+    const goSpy = vi.spyOn(router.history, "go").mockImplementation(() => {});
+    const modifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+    const event = new KeyboardEvent("keydown", {
+      code: "Comma",
+      key: ",",
+      shiftKey: true,
+      ...modifier,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(goSpy).toHaveBeenCalledWith(-1);
   });
 
   it("dispatches mod+Arrow history navigation outside editable fields", () => {

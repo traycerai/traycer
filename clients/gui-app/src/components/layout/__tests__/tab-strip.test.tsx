@@ -354,6 +354,7 @@ function buildHeaderEpicHandle(
     awareness: awareness as never,
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
+    detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],

@@ -1,4 +1,6 @@
 import type { Editor } from "@tiptap/core";
+import type { MinimapSide } from "@/stores/settings/settings-store";
+import { resolveMinimapVisibleItemCapacity } from "@/components/minimap/minimap-track-geometry";
 import {
   useCallback,
   useEffect,
@@ -25,6 +27,7 @@ export interface ArtifactHeadingMetrics {
   readonly activeIndex: number | null;
   /** Measured safe gutter; `0` makes the pointer target inert. */
   readonly hitStripWidth: number;
+  readonly maxVisibleItems: number;
   readonly scrollToIndex: (index: number) => void;
 }
 
@@ -56,8 +59,9 @@ export function useArtifactHeadingMetrics(input: {
   readonly scroller: HTMLElement | null;
   /** Invoked by the tile's own scroll handler - no second scroll listener. */
   readonly refreshRef: RefObject<() => void>;
+  readonly side: MinimapSide;
 }): ArtifactHeadingMetrics {
-  const { editor, scroller, refreshRef } = input;
+  const { editor, refreshRef, scroller, side } = input;
   const [outline, setOutline] = useState<
     ReadonlyArray<ArtifactHeadingOutlineEntry>
   >(() =>
@@ -65,6 +69,7 @@ export function useArtifactHeadingMetrics(input: {
   );
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [hitStripWidth, setHitStripWidth] = useState(0);
+  const [maxVisibleItems, setMaxVisibleItems] = useState(2);
   const positionsRef = useRef<ReadonlyArray<number>>([]);
   const topsRef = useRef<ReadonlyArray<number>>([]);
   const frameRef = useRef<number | null>(null);
@@ -91,14 +96,18 @@ export function useArtifactHeadingMetrics(input: {
       scroller,
       positions: positionsRef.current,
     });
-    setHitStripWidth(
-      resolveArtifactHeadingHitStripWidth({
-        contentLeft: editor.view.dom.getBoundingClientRect().left,
-        scrollerLeft: scroller.getBoundingClientRect().left,
-      }),
+    const contentRect = editor.view.dom.getBoundingClientRect();
+    const scrollerRect = scroller.getBoundingClientRect();
+    const gutter =
+      side === "left"
+        ? contentRect.left - scrollerRect.left
+        : scrollerRect.right - contentRect.right;
+    setHitStripWidth(resolveArtifactHeadingHitStripWidth(gutter));
+    setMaxVisibleItems(
+      resolveMinimapVisibleItemCapacity(scroller.clientHeight),
     );
     refreshActive();
-  }, [editor, refreshActive, scroller]);
+  }, [editor, refreshActive, scroller, side]);
 
   /**
    * The queued frame must run the LATEST measure, not the one that happened to
@@ -208,5 +217,11 @@ export function useArtifactHeadingMetrics(input: {
     [scroller],
   );
 
-  return { outline, activeIndex, hitStripWidth, scrollToIndex };
+  return {
+    outline,
+    activeIndex,
+    hitStripWidth,
+    maxVisibleItems,
+    scrollToIndex,
+  };
 }

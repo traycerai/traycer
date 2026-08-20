@@ -26,6 +26,7 @@ import {
   hostListItemToDirectoryEntry,
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import {
   __resetAppLocalNotificationsStoreForTests,
@@ -72,14 +73,26 @@ import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notific
  */
 const PLAN_ALLOWS_REMOTE = true;
 
+const reconnectEngine = createHostReconnectEngine();
+
 const hostRequestMock = vi.hoisted(() => vi.fn());
+
+/**
+ * `createRequesterForHostId` is not optional decoration: production resolves
+ * the app-wide host through the spine's id-pinned requester (redesign P4.2),
+ * so a stub without it takes the subject down at first render rather than
+ * failing an assertion. One host per fixture means the requester IS the
+ * client, which is what makes the self-return honest here.
+ */
+interface StubHostClient {
+  readonly request: typeof hostRequestMock;
+  readonly getActiveHostId: () => string | null;
+  readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
+}
 
 const hostBindingState = vi.hoisted(() => ({
   current: null as {
-    readonly hostClient: {
-      readonly request: typeof hostRequestMock;
-      readonly getActiveHostId: () => string | null;
-    };
+    readonly hostClient: StubHostClient;
     readonly directory?: {
       readonly findById: (hostId: string) => typeof mockLocalHostEntry | null;
       readonly selectById: (hostId: string) => void;
@@ -111,8 +124,8 @@ vi.mock("@/lib/host", async (importActual) => {
   };
 });
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => activeHostIdRef.value,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdRef.value,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -563,11 +576,13 @@ function resetPopoverFilters(): void {
 }
 
 function bindHostClient(): void {
+  const hostClient: StubHostClient = {
+    request: hostRequestMock,
+    getActiveHostId: () => mockLocalHostEntry.hostId,
+    createRequesterForHostId: () => hostClient,
+  };
   hostBindingState.current = {
-    hostClient: {
-      request: hostRequestMock,
-      getActiveHostId: () => mockLocalHostEntry.hostId,
-    },
+    hostClient,
     directory: {
       findById: (hostId: string) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
@@ -586,12 +601,14 @@ function bindHostClient(): void {
  * `applyHostSnapshot` so `byId` rows stay rendered. */
 function simulateHostDisconnect(): void {
   activeHostIdRef.value = null;
-  hostBindingState.current = {
-    hostClient: {
-      request: hostRequestMock,
-      getActiveHostId: () => null,
-    },
+  // The requester answers `null` too - a disconnect is the client addressing
+  // no host, which is exactly what an unresolved id-pinned requester reports.
+  const hostClient: StubHostClient = {
+    request: hostRequestMock,
+    getActiveHostId: () => null,
+    createRequesterForHostId: () => hostClient,
   };
+  hostBindingState.current = { hostClient };
   useHostNotificationsStore.getState().markSummaryUnknown();
 }
 
@@ -1207,23 +1224,27 @@ describe("NotificationsPopover", () => {
     };
     const { router } = buildRouterWithCapture(captured, () => undefined);
 
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          {
-            id: "ts-row",
-            createdAt: twoMinutesAgo,
-            readAt: null,
-            event: {
-              kind: NOTIFICATION_EVENT_TYPES.INVITED,
-              epicId: "epic-alpha",
-              actorName: "Alice",
+    openNotificationsStream(
+      reconnectEngine,
+      (callbacks) => {
+        act(() => {
+          seedEntries(callbacks, [
+            {
+              id: "ts-row",
+              createdAt: twoMinutesAgo,
+              readAt: null,
+              event: {
+                kind: NOTIFICATION_EVENT_TYPES.INVITED,
+                epicId: "epic-alpha",
+                actorName: "Alice",
+              },
             },
-          },
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
+          ]);
+        });
+        return { applyUpdate: () => {}, close: () => {} };
+      },
+      null,
+    );
 
     renderRouter(router);
 
@@ -1408,14 +1429,18 @@ describe("NotificationsPopover", () => {
   });
 
   it("renders navigable unread rows with one primary button and sibling mark-read, never nested buttons", async () => {
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          threadEntry("route-1", "epic-xyz", "art-7", "thread-9"),
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
+    openNotificationsStream(
+      reconnectEngine,
+      (callbacks) => {
+        act(() => {
+          seedEntries(callbacks, [
+            threadEntry("route-1", "epic-xyz", "art-7", "thread-9"),
+          ]);
+        });
+        return { applyUpdate: () => {}, close: () => {} };
+      },
+      null,
+    );
 
     const captured: TargetCapture = {
       epicId: null,
@@ -1455,21 +1480,25 @@ describe("NotificationsPopover", () => {
       ],
       { unreadCount: 2, attentionCount: 1 },
     );
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          threadEntryWithState({
-            id: "collab",
-            epicId: "epic-1",
-            artifactId: "art-1",
-            threadId: "thread-1",
-            createdAt: 60,
-            readAt: null,
-          }),
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
+    openNotificationsStream(
+      reconnectEngine,
+      (callbacks) => {
+        act(() => {
+          seedEntries(callbacks, [
+            threadEntryWithState({
+              id: "collab",
+              epicId: "epic-1",
+              artifactId: "art-1",
+              threadId: "thread-1",
+              createdAt: 60,
+              readAt: null,
+            }),
+          ]);
+        });
+        return { applyUpdate: () => {}, close: () => {} };
+      },
+      null,
+    );
 
     const captured: TargetCapture = {
       epicId: null,
@@ -1687,14 +1716,18 @@ describe("NotificationsPopover", () => {
     const onNavigate = vi.fn();
     const { router } = buildRouterWithCapture(captured, onNavigate);
 
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          threadEntry("route-1", "epic-xyz", "art-7", "thread-9"),
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
+    openNotificationsStream(
+      reconnectEngine,
+      (callbacks) => {
+        act(() => {
+          seedEntries(callbacks, [
+            threadEntry("route-1", "epic-xyz", "art-7", "thread-9"),
+          ]);
+        });
+        return { applyUpdate: () => {}, close: () => {} };
+      },
+      null,
+    );
 
     renderRouter(router);
 
@@ -1718,6 +1751,49 @@ describe("NotificationsPopover", () => {
         .getState()
         .entries.find((item) => item.id === "route-1")?.readAt,
     ).toBeTypeOf("number");
+  });
+
+  it("activates the same target from Enter on a keyboard-focused row", async () => {
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const onNavigate = vi.fn();
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+
+    openNotificationsStream(
+      reconnectEngine,
+      (callbacks) => {
+        act(() => {
+          seedEntries(callbacks, [
+            threadEntry("route-key", "epic-key", "art-8", "thread-3"),
+          ]);
+        });
+        return { applyUpdate: () => {}, close: () => {} };
+      },
+      null,
+    );
+
+    renderRouter(router);
+
+    // The row itself is the arrow-key focus target, so Enter on it must do
+    // what clicking its body button does - not nothing.
+    const entry = await screen.findByTestId("notification-entry");
+    entry.focus();
+    expect(document.activeElement).toBe(entry);
+
+    await act(async () => {
+      fireEvent.keyDown(entry, { key: "Enter" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(captured.epicId).toBe("epic-key");
+    expect(captured.focusArtifactId).toBe("art-8");
+    expect(captured.focusThreadId).toBe("thread-3");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
   });
 
   it("navigates a TUI completion row to its terminal agent", async () => {
@@ -1780,15 +1856,19 @@ describe("NotificationsPopover", () => {
     };
     const { router } = buildRouterWithCapture(captured, () => undefined);
 
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          threadEntry("all-1", "epic-1", "art-1", "thread-1"),
-          threadEntry("all-2", "epic-2", "art-2", "thread-2"),
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
+    openNotificationsStream(
+      reconnectEngine,
+      (callbacks) => {
+        act(() => {
+          seedEntries(callbacks, [
+            threadEntry("all-1", "epic-1", "art-1", "thread-1"),
+            threadEntry("all-2", "epic-2", "art-2", "thread-2"),
+          ]);
+        });
+        return { applyUpdate: () => {}, close: () => {} };
+      },
+      null,
+    );
 
     renderRouter(router);
 
@@ -1889,14 +1969,18 @@ describe("NotificationsPopover", () => {
 
   it("on activation success closes the center, marks read, and analytics stay category-only", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          threadEntry("route-success", "epic-xyz", "art-7", "thread-9"),
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
+    openNotificationsStream(
+      reconnectEngine,
+      (callbacks) => {
+        act(() => {
+          seedEntries(callbacks, [
+            threadEntry("route-success", "epic-xyz", "art-7", "thread-9"),
+          ]);
+        });
+        return { applyUpdate: () => {}, close: () => {} };
+      },
+      null,
+    );
 
     const onNavigate = vi.fn();
     const captured: TargetCapture = {

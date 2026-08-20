@@ -1556,6 +1556,11 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(rejection).toMatchObject({
       message: expect.stringContaining("--takeover"),
     });
+    // Also steers toward the cheaper fix when the caller just wants the
+    // Desktop-managed host running again - no ownership change needed.
+    expect(rejection).toMatchObject({
+      message: expect.stringContaining("traycer host restart"),
+    });
     expect(rejection).not.toMatchObject({
       message: expect.stringContaining("no-service-register"),
     });
@@ -1631,9 +1636,15 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await expect(
         controller.stop(label, { force: false }),
       ).resolves.toBeUndefined();
+      // The third argument is the RESTART INTENT the host acts on: a plain
+      // stop must say `"shutdown"`, or the host would publish a restart
+      // tombstone and every attached window would sit in
+      // `restarting-expected` for the full episode waiting for a host that is
+      // not coming back.
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
         label.environment,
         "stop",
+        "shutdown",
       );
       // Only the advisory ownership probe ran - no kill, no bootout.
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
@@ -1764,8 +1775,13 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
       await expect(controller.restart(label)).resolves.toBeUndefined();
+      // ...and the restart half says `"restart"`, which is the whole point:
+      // it is what lets the host tell every client the outage is deliberate.
+      // The two call sites must DIFFER - an intent hardcoded the same in both
+      // places would pass a presence-only assertion.
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
         label.environment,
+        "restart",
         "restart",
       );
       expect(calls.map((c) => c.args[0])).toEqual(["print", "kickstart"]);
@@ -2009,9 +2025,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         agentLabelId: `${label.id}.agent`,
         cooperativeStop: "stopped",
       });
+      // Takeover retires Desktop's registration rather than relaunching it,
+      // so nothing is coming back under this identity.
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
         label.environment,
         "takeover",
+        "shutdown",
       );
       expect(calls.map((c) => c.args[0])).toEqual([
         "print",

@@ -11,7 +11,9 @@
  */
 import { useMemo } from "react";
 import { getBasename } from "@/lib/path/cross-platform-path";
-import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { openerSubpageLeaf } from "@/lib/commands/sources/open/open-leaf";
 import {
@@ -37,7 +39,12 @@ function makeRunSubpage(
 export function useSearchOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const bindingsQuery = useWorktreeListBindingsForEpic({
+  // The epic's worktree bindings are host-local records of the host serving
+  // the epic - read them there (`useActiveEpicHostId`), not from whichever
+  // host the app points at.
+  const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const bindingsQuery = useWorktreeListBindingsForEpicForClient({
+    client: useHostClientForHostId(activeEpicHostId),
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
   });

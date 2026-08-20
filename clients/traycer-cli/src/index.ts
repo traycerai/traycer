@@ -92,6 +92,12 @@ import { serviceUninstallCommand } from "./commands/service-uninstall";
 import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
+import {
+  isRunningFromWellKnownSlot,
+  refreshWellKnownSlotForSupervisedStart,
+  refreshWellKnownSlotIfStale,
+  wellKnownSlotRefreshHasConverged,
+} from "./store/well-known-cli";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
 import { finishAndExit, markProcessFatal } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
@@ -204,6 +210,167 @@ export function buildProgram(): Command {
   return buildProgramWithAgentRoles(readFeatureSettingsSync().agentRoles);
 }
 
+// Upkeep, never a gate: a command must run whatever the slot's state is, so
+// every outcome here is logged and swallowed. `stageWellKnownCliBinary`
+// reports filesystem trouble as a `failed` OUTCOME rather than throwing, so
+// that case needs its own branch - logging it as a success would hide the
+// one situation where the service really is pinned to stale bytes.
+//
+// Returns whether the binary THIS process is executing is the one that was
+// just replaced. On POSIX a rename leaves the running image on its old
+// inode, so such a process keeps running the previous version's code no
+// matter what now sits at the path it was launched from - see the caller for
+// why that matters for the supervised entry specifically.
+async function refreshCliSlotBeforeCommand(
+  supervised: boolean,
+): Promise<boolean> {
+  const logger = createCliLogger(config.environment);
+  try {
+    // Asked BEFORE the refresh, and the ordering is the entire point.
+    //
+    // Afterwards the question cannot be answered at all in the case that
+    // matters most. A slot left as a SYMLINK by an older Desktop resolves to
+    // some other binary A, and `process.execPath` reports A because Node
+    // resolves symlinks when it reports the running executable. The refresh
+    // then replaces that link with a real copy - which is exactly what it
+    // should do - and a comparison made after the fact sees A's path against
+    // a freshly written file and concludes this process was not the one
+    // replaced. It was. The supervisor would go on running A until something
+    // restarted the service, which is the stale-supervisor failure this whole
+    // change exists to end, reached through the fix for it.
+    //
+    // Before the refresh both sides still resolve to A, so they match.
+    //
+    // Only the supervised entry acts on the answer, so only it pays for the
+    // two `realpath` calls; every other command skips them entirely.
+    const launchedFromSlot = supervised
+      ? await isRunningFromWellKnownSlot(config.environment)
+      : false;
+    // The supervised entry waits for the lock; an ordinary command does not.
+    // See `refreshWellKnownSlotForSupervisedStart` for why the cost of losing
+    // this race is not symmetric between the two.
+    const refreshed = await (supervised
+      ? refreshWellKnownSlotForSupervisedStart(config.environment)
+      : refreshWellKnownSlotIfStale(config.environment));
+    if (refreshed === null) return false;
+    if (refreshed.staged === "failed") {
+      logger.warn("CLI well-known slot refresh failed", {
+        environment: config.environment,
+        wellKnownPath: refreshed.wellKnownPath,
+        errorName: refreshed.errorName,
+        errorMessage: refreshed.errorMessage,
+      });
+      return false;
+    }
+    if (refreshed.staged === "deferred-busy") {
+      // Logged rather than swallowed, and logged loudest for the supervised
+      // entry: this is the one state where a long-lived host process is about
+      // to run bytes nobody verified, so when that turns up in a report the
+      // reason should already be in the log rather than inferred. Proceeding
+      // is still correct - a supervisor that cannot start because another
+      // process holds a lock is a worse outcome than one running last week's
+      // CLI, and the next command or restart repairs it.
+      logger.warn(
+        "CLI well-known slot refresh deferred - the CLI lock is held",
+        {
+          environment: config.environment,
+          wellKnownPath: refreshed.wellKnownPath,
+          supervised,
+        },
+      );
+      return false;
+    }
+    logger.info("CLI well-known slot refreshed", {
+      environment: config.environment,
+      staged: refreshed.staged,
+    });
+    // Only `staged` publishes a replacement; `already-well-known` and
+    // `not-applicable` leave the running binary exactly where it was. The
+    // supervision gate is already inside `launchedFromSlot` - hard-wired
+    // false for non-supervised runs above - so this return is the ONLY
+    // encoding of "only host start restarts"; do not re-add a supervised
+    // check at the call site.
+    if (refreshed.staged !== "staged" || !launchedFromSlot) return false;
+    // `staged` alone is not licence to exit for a relaunch. Staging is
+    // allowed to lose two best-effort writes (the mtime mirror and the
+    // `.source.json` record), and on a volume that persistently loses both
+    // the relaunched process would find the slot unprovably fresh, stage
+    // again, and exit again - a supervisor restart loop copying ~100 MB per
+    // lap with the host never up. Asking the planner "would you copy again
+    // right now?" is the terminating condition: only a NO makes the restart
+    // safe, and a YES means the durable state cannot express freshness, so
+    // this process must keep running its stale-but-working bytes instead.
+    const converged = await wellKnownSlotRefreshHasConverged(
+      config.environment,
+    );
+    if (!converged) {
+      logger.warn(
+        "CLI slot was staged but freshness did not persist - continuing on the running binary instead of restarting",
+        { environment: config.environment, supervised },
+      );
+      return false;
+    }
+    return true;
+  } catch (cause) {
+    logger.warn("CLI well-known slot refresh threw", {
+      environment: config.environment,
+      errorName: errorFromUnknown(cause).name,
+      errorMessage: errorFromUnknown(cause).message,
+    });
+    return false;
+  }
+}
+
+interface ArgvCommandPath {
+  // Index of the `--` terminator within the command-relative slice, or -1.
+  readonly separatorIndex: number;
+  // Command-relative tokens preceding any `--`, options included.
+  readonly beforeSeparator: readonly string[];
+  // Those tokens with option spellings dropped: the command path proper.
+  readonly commandPath: readonly string[];
+}
+
+// Which command an argv selects: positional tokens ahead of any `--`, with
+// option tokens dropped. `commandOffset` is 2 for a Node-style argv, or
+// whatever `commandOffsetFor` reports for a commander `ParseOptions`.
+//
+// Single-sourced deliberately. Both callers decide WHICH COMMAND an argv
+// names, and they have to agree: if the rule drifted, the restart guard and
+// the `host update --version` rewrite would disagree about what
+// `traycer host start` is, and only one of them would be right. A comment
+// asking two copies to stay identical is not a mechanism - this is.
+function argvCommandPath(
+  argv: readonly string[],
+  commandOffset: number,
+): ArgvCommandPath {
+  const commandArgs = argv.slice(commandOffset);
+  const separatorIndex = commandArgs.indexOf("--");
+  const beforeSeparator =
+    separatorIndex === -1 ? commandArgs : commandArgs.slice(0, separatorIndex);
+  return {
+    separatorIndex,
+    beforeSeparator,
+    commandPath: beforeSeparator.filter((token) => !token.startsWith("-")),
+  };
+}
+
+// Whether this argv selects the long-lived supervised entry, `host start`.
+//
+// Against a Node-style argv (offset 2), which is what the script entry below
+// always passes. Exported for the same reason `isTraycerCliEntrypoint` is: so
+// the matrix can be pinned by unit test rather than by spawning a subprocess.
+export function argvSelectsSupervisedHostStart(
+  argv: readonly string[],
+): boolean {
+  const { commandPath } = argvCommandPath(argv, 2);
+  return commandPath[0] === "host" && commandPath[1] === "start";
+}
+
+// Sysexits' EX_TEMPFAIL: "try again later". Chosen over 1 so an operator
+// reading the supervisor's log can tell a deliberate restart-me exit from a
+// genuine startup failure, and so `Restart=on-failure` units still restart.
+const EXIT_RESTART_INTO_REFRESHED_SLOT = 75;
+
 export function buildProgramWithAgentRoles(
   agentRolesEnabled: boolean,
 ): Command {
@@ -296,11 +463,10 @@ function rewriteHostUpdateVersion(
   options: ParseOptions | null,
 ): string[] {
   const commandOffset = commandOffsetFor(options);
-  const commandArgs = argv.slice(commandOffset);
-  const separatorIndex = commandArgs.indexOf("--");
-  const beforeSeparator =
-    separatorIndex === -1 ? commandArgs : commandArgs.slice(0, separatorIndex);
-  const commandPath = beforeSeparator.filter((token) => !token.startsWith("-"));
+  const { separatorIndex, beforeSeparator, commandPath } = argvCommandPath(
+    argv,
+    commandOffset,
+  );
   if (commandPath[0] !== "host" || commandPath[1] !== "update") {
     return [...argv];
   }
@@ -618,11 +784,15 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--allow-self-invocation",
-        "Dev only: register the current (non-packaged) CLI as the service command.",
+        "Dev only: register an interpreter-run (non-packaged) CLI as the service command. Packaged binaries always self-register when nothing else resolves.",
       )
       .option(
         "--no-service-register",
         "Install the host without registering it as an OS service (the caller registers the service).",
+      )
+      .option(
+        "--force",
+        "Install even if the host has work in progress: skip the cooperative shutdown claim and kill the host process before the swap. Running terminal sessions and in-flight agent work are killed.",
       )
       // Hidden: the CLI-owned pin gate (Doctor's controller-driven install
       // path), not a user-facing switch - see commands/host-install.ts.
@@ -667,6 +837,7 @@ function registerHostCommands(program: Command): void {
           // `serviceRegister: false`.
           noServiceRegister: opts.serviceRegister === false,
           ifIdle: opts.ifIdle === true,
+          force: opts.force === true,
         })(ctx);
       };
     },
@@ -696,7 +867,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--allow-self-invocation",
-        "Dev only: register the current (non-packaged) CLI as the service command.",
+        "Dev only: register an interpreter-run (non-packaged) CLI as the service command. Packaged binaries always self-register when nothing else resolves.",
       )
       .option(
         "--no-service-register",
@@ -704,7 +875,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--force",
-        "Restart the host even if it has work in progress (skips the busy check).",
+        "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       ),
     (opts) => {
       const explicitVersion =
@@ -744,7 +915,7 @@ function registerHostCommands(program: Command): void {
       .description("Apply the staged host update over the current install")
       .option(
         "--force",
-        "Apply even if the host has work in progress (skips the busy check).",
+        "Apply even if the host has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
       .addOption(
         new Option(
@@ -859,7 +1030,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--force",
-        "Update the host even if it has work in progress (skips the busy check).",
+        "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
       )
       // The option users actually type is `--version <version>`, rewritten to
       // the hidden spelling above before Commander parses (root `--version`
@@ -1111,7 +1282,7 @@ function registerServiceCommands(host: Command): void {
       )
       .option(
         "--allow-self-invocation",
-        "Dev only: register the current (non-packaged) CLI as the service command.",
+        "Dev only: register an interpreter-run (non-packaged) CLI as the service command. Packaged binaries always self-register when nothing else resolves.",
       )
       .option(
         "--takeover",
@@ -2217,88 +2388,167 @@ if (isTraycerCliEntrypoint(entryArgv)) {
     environment: config.environment,
     argvLength: process.argv.length,
   });
-  program.parseAsync(process.argv).catch(async (err) => {
-    if (err instanceof CommanderError) {
-      const jsonMode = argvRequestsJson(program);
-      // Help (`--help`) and version (`--version`) flow through exitOverride
-      // with exitCode 0. In human mode commander already streamed the text
-      // to stdout; in --json mode that text was buffered (see the `write`
-      // override) so we wrap it in a single `result/ok` envelope rather than
-      // leaking raw prose onto an NDJSON stream.
-      if (err.exitCode === 0) {
-        entryLogger.debug("Commander handled informational exit", {
-          json: jsonMode,
-          commanderCode: err.code,
-          exitCode: err.exitCode,
+  // Keep the well-known CLI slot pointing at the anchored binary, BEFORE
+  // commander parses anything.
+  //
+  // The slot is what the host daemon shells and what registered services
+  // launch, but the only code that re-stages it sits on service REGISTRATION
+  // paths. A channel whose upgrade replaces the executable without
+  // re-registering - winget, whose portable manifest cannot run a
+  // post-install hook at all - would otherwise leave both running the
+  // previous version indefinitely, up to a protocol-incompatible one, no
+  // matter how much the user exercises the CLI in between.
+  //
+  // Here rather than in a `preAction` hook, which was the earlier placement
+  // and had a hole exactly where this cohort steps: commander resolves
+  // `--version` and `--help` during option handling and exits before any
+  // hook runs, and `traycer --version` is precisely what someone runs to
+  // confirm a winget upgrade landed. The real executable would report the
+  // new version while the slot stayed on the old one - and a command
+  // launched FROM that stale slot cannot repair it, because with no manifest
+  // the slot is its own authority. Running before `parseAsync` covers every
+  // invocation, informational exits included.
+  //
+  // Affordable there because the refresh self-guards: an interpreter run
+  // (dev, tests) returns before touching the filesystem, and an unchanged
+  // install costs a small manifest read and two stats. Awaited rather than
+  // fired and forgotten - a copy racing process exit would be interrupted on
+  // every short command and never complete.
+  // Straight-line awaits inside ONE async function, not a floating promise
+  // chain: the sequencing IS the point (nothing may parse until the slot is
+  // settled), and a `void ...then()` spelling of the same order has already
+  // been misread once as parsing racing the refresh. Not top-level await,
+  // although the source is ESM - the npm distribution bundles this entry to
+  // CJS, where TLA cannot compile. So exactly one `void` remains, on the
+  // whole entry: the `catch` below is terminal for every expected failure,
+  // and `installProcessFailureHandlers` above is the backstop for anything
+  // that escapes it.
+  const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
+  const runEntry = async (): Promise<void> => {
+    try {
+      const replacedRunningBinary =
+        await refreshCliSlotBeforeCommand(supervisedStart);
+      // The refresh repaired the slot for everything that launches from it
+      // NEXT, but this process is still executing the bytes it started with:
+      // a rename leaves the running image on its old inode. For a short
+      // command that is harmless - it finishes in a moment. For `host start`
+      // it is not, because that process is the long-lived service, and
+      // nothing would replace it until the next restart, which may be weeks.
+      //
+      // So exit and let the supervisor start us again, now from the repaired
+      // slot. Exiting cannot loop: the very next run finds the slot already
+      // mirroring its source and refreshes nothing, so `replacedRunningBinary`
+      // is false and this branch is not reached again. Deliberately not a
+      // re-exec - proxying a supervised process would put this CLI between
+      // the service manager and the host for the life of the service, and
+      // signal delivery for graceful shutdown is not worth re-implementing to
+      // save one restart.
+      // No `&& supervisedStart` here on purpose: `refreshCliSlotBeforeCommand`
+      // can only return true for a supervised start (its launched-from-slot
+      // answer is hard-wired false otherwise), and a second copy of that gate
+      // would be a second place for the rule to drift.
+      if (replacedRunningBinary) {
+        entryLogger.warn("CLI restarting into the refreshed well-known slot", {
+          environment: config.environment,
+          execPath: process.execPath,
+          exitCode: EXIT_RESTART_INTO_REFRESHED_SLOT,
         });
-        if (jsonMode) {
+        // One line to stderr, because a human can be on this path too: a
+        // hand-typed `traycer host start` from the slot is indistinguishable
+        // from a supervised launch by argv, and without this the command
+        // exits 75 with an empty terminal - the only trace a log file the
+        // operator has no reason to open. A supervisor's log captures the
+        // line harmlessly.
+        writeStderr(
+          "traycer: the CLI was refreshed to a newer build; restarting host start from the updated binary. If you ran this by hand, run 'traycer host start' again.\n",
+        );
+        process.exit(EXIT_RESTART_INTO_REFRESHED_SLOT);
+      }
+      await program.parseAsync(process.argv);
+    } catch (err) {
+      if (err instanceof CommanderError) {
+        const jsonMode = argvRequestsJson(program);
+        // Help (`--help`) and version (`--version`) flow through exitOverride
+        // with exitCode 0. In human mode commander already streamed the text
+        // to stdout; in --json mode that text was buffered (see the `write`
+        // override) so we wrap it in a single `result/ok` envelope rather than
+        // leaking raw prose onto an NDJSON stream.
+        if (err.exitCode === 0) {
+          entryLogger.debug("Commander handled informational exit", {
+            json: jsonMode,
+            commanderCode: err.code,
+            exitCode: err.exitCode,
+          });
+          if (jsonMode) {
+            const event = {
+              type: "result",
+              status: "ok",
+              data: { output: commanderStdoutBuffer.trimEnd() },
+              timestamp: new Date().toISOString(),
+            };
+            writeStdout(`${JSON.stringify(event)}\n`);
+          }
+          // `--help` under `--json` wraps the whole help text in one line;
+          // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
+          await finishAndExit(0);
+        } else {
+          // Parse failure. In --json mode emit the runner's NDJSON error
+          // envelope so downstream consumers see a coded `result/error`;
+          // in human mode commander already wrote the message to stderr
+          // (via the configureOutput passthrough above).
+          entryLogger.warn("Commander parse failed", {
+            json: jsonMode,
+            commanderCode: err.code,
+            exitCode: err.exitCode || 1,
+          });
+          if (jsonMode) {
+            const event = {
+              type: "result",
+              status: "error",
+              error: {
+                code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+                // Commander prefixes its messages with "error: "; strip it so
+                // the envelope's `message` is clean (the `error` wrapper and
+                // `code` already convey severity).
+                message: err.message.replace(/^error:\s*/i, ""),
+                details: { commanderCode: err.code },
+              },
+              timestamp: new Date().toISOString(),
+            };
+            writeStdout(`${JSON.stringify(event)}\n`);
+          }
+          await finishAndExit(err.exitCode || 1);
+        }
+      } else {
+        const error = errorFromUnknown(err);
+        entryLogger.error(
+          "CLI entrypoint failed outside Commander",
+          { exitCode: 1 },
+          error,
+        );
+        Sentry.captureException(err);
+        if (argvRequestsJson(program)) {
           const event = {
             type: "result",
-            status: "ok",
-            data: { output: commanderStdoutBuffer.trimEnd() },
+            status: "error",
+            error: {
+              code: CLI_ERROR_CODES.UNEXPECTED,
+              message: "Unexpected CLI failure. See the CLI log for details.",
+              details: null,
+            },
             timestamp: new Date().toISOString(),
           };
           writeStdout(`${JSON.stringify(event)}\n`);
+        } else {
+          writeStderr(
+            `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
+          );
         }
-        // `--help` under `--json` wraps the whole help text in one line;
-        // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
-        await finishAndExit(0);
-        return;
+        await finishAndExit(1);
       }
-      // Parse failure. In --json mode emit the runner's NDJSON error
-      // envelope so downstream consumers see a coded `result/error`;
-      // in human mode commander already wrote the message to stderr
-      // (via the configureOutput passthrough above).
-      entryLogger.warn("Commander parse failed", {
-        json: jsonMode,
-        commanderCode: err.code,
-        exitCode: err.exitCode || 1,
-      });
-      if (jsonMode) {
-        const event = {
-          type: "result",
-          status: "error",
-          error: {
-            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-            // Commander prefixes its messages with "error: "; strip it so
-            // the envelope's `message` is clean (the `error` wrapper and
-            // `code` already convey severity).
-            message: err.message.replace(/^error:\s*/i, ""),
-            details: { commanderCode: err.code },
-          },
-          timestamp: new Date().toISOString(),
-        };
-        writeStdout(`${JSON.stringify(event)}\n`);
-      }
-      await finishAndExit(err.exitCode || 1);
-      return;
     }
-    const error = errorFromUnknown(err);
-    entryLogger.error(
-      "CLI entrypoint failed outside Commander",
-      { exitCode: 1 },
-      error,
-    );
-    Sentry.captureException(err);
-    if (argvRequestsJson(program)) {
-      const event = {
-        type: "result",
-        status: "error",
-        error: {
-          code: CLI_ERROR_CODES.UNEXPECTED,
-          message: "Unexpected CLI failure. See the CLI log for details.",
-          details: null,
-        },
-        timestamp: new Date().toISOString(),
-      };
-      writeStdout(`${JSON.stringify(event)}\n`);
-    } else {
-      writeStderr(
-        `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
-      );
-    }
-    await finishAndExit(1);
-  });
+  };
+  void runEntry();
 }
 
 let fatalExitInProgress = false;

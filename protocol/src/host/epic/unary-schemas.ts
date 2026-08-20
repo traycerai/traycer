@@ -170,7 +170,13 @@ export interface TaskAssociations {
   workspaces: UserTaskWorkspace[];
 }
 
-export const taskFiltersSchema = z.object({
+// The pre-@1.3 filter shape, shared by every minor from @1.0 through @1.2 -
+// they must all resolve to the SAME schema instance, or the registry's
+// compatibility validator reads the newer field as one an older minor
+// "drops". `hostId` here is the WORKSPACE-association
+// host (it pairs with `workspacePath`), NOT the chat-host filter added in
+// @1.3 - the two dimensions answer different questions and must stay distinct.
+export const taskFiltersSchemaPre13 = z.object({
   query: z.string().optional(),
   taskType: taskTypeSchema.optional(),
   repoIdentifier: z.string().optional(),
@@ -182,6 +188,26 @@ export const taskFiltersSchema = z.object({
   workspacePath: z.string().optional(),
   hostId: z.string().optional(),
   organizationId: z.string().optional(),
+});
+export type TaskFiltersPre13 = z.infer<typeof taskFiltersSchemaPre13>;
+
+/**
+ * `chatHostIds` filters tasks by the hosts that own CHATS in them
+ * (`chats.owner_host_id`), which is what "this task is on that machine" means
+ * to a person: agents live on a host, and a task acquires a host when a chat
+ * is created there. Deliberately not the workspace association above - a
+ * workspace is bound at create and never follows the work.
+ *
+ * Scoped to the caller's OWN live chats. A collaborator's host is a machine
+ * the caller cannot name - their host directory has never seen it - and
+ * surfacing which machine a teammate works on is an association nothing else
+ * in the product exposes. It also sidesteps duplicate chat ids, which the
+ * real readers resolve by an owner-precedence tiebreak that an aggregate
+ * cannot reproduce.
+ */
+export const taskFiltersSchema = taskFiltersSchemaPre13.extend({
+  chatHostIds: z.array(z.string()).optional(),
+  chatHostMatchMode: taskRepoMatchModeSchema.optional(),
 });
 export type TaskFilters = z.infer<typeof taskFiltersSchema>;
 
@@ -499,25 +525,48 @@ export type TaskLight = z.infer<typeof taskLightSchema>;
 export const listTaskLightSchemaV10 = taskLightSchema;
 export type ListTaskLightV10 = z.infer<typeof listTaskLightSchemaV10>;
 
-export const listTaskLightSchema = taskLightSchema.extend({
+export const listTaskLightSchemaPre13 = taskLightSchema.extend({
   pinned: z.boolean().optional(),
+});
+export type ListTaskLightPre13 = z.infer<typeof listTaskLightSchemaPre13>;
+
+/**
+ * `chatHostIds` are the hosts owning the CALLER'S OWN live chats in this task
+ * - the same scope the `chatHostIds` filter and the `chatHosts` facet apply,
+ * evaluated per row. It is what lets a client re-apply the host filter
+ * locally: to cached rows while a request is in flight, and to rows it fetched
+ * by id (which never passed through the server's filter at all).
+ *
+ * Absent, not `[]`, on a row from a peer that predates the field - the
+ * distinction matters, because `[]` is a truthful "none of my chats anywhere"
+ * and would let a local predicate confidently filter the row OUT.
+ */
+export const listTaskLightSchema = listTaskLightSchemaPre13.extend({
+  chatHostIds: z.array(z.string()).optional(),
 });
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
 export const listTasksRequestSchemaV11 = z.object({
   limit: z.number(),
   cursor: z.string().optional(),
-  filters: taskFiltersSchema.nullable(),
+  filters: taskFiltersSchemaPre13.nullable(),
   sort: listTasksSortSchemaV11.optional(),
   extensionPhaseVersion: z.string(),
   extensionEpicVersion: z.string(),
 });
-export const listTasksRequestSchema = listTasksRequestSchemaV11.extend({
+export const listTasksRequestSchemaPre13 = listTasksRequestSchemaV11.extend({
   sort: listTasksSortSchema.optional(),
+});
+export type ListTasksRequestPre13 = z.infer<typeof listTasksRequestSchemaPre13>;
+
+export const listTasksRequestSchema = listTasksRequestSchemaPre13.extend({
+  filters: taskFiltersSchema.nullable(),
 });
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;
 
-export const listTasksFacetsSchema = z.object({
+// The pre-@1.3 facet shape, shared by @1.0/@1.1/@1.2 - see the filter note
+// above on why every older minor must point at this one instance.
+export const listTasksFacetsSchemaPre13 = z.object({
   repos: z.array(
     z.object({
       repoIdentifier: taskRepoIdentifierSchema,
@@ -537,20 +586,47 @@ export const listTasksFacetsSchema = z.object({
     }),
   ),
 });
+export type ListTasksFacetsPre13 = z.infer<typeof listTasksFacetsSchemaPre13>;
+
+export const listTasksFacetsSchema = listTasksFacetsSchemaPre13.extend({
+  // Optional rather than required: the whole facets object is already
+  // first-page-only, and a host that upgrades ahead of the cloud tier would
+  // otherwise fail the response parse instead of degrading to "no counts".
+  chatHosts: z
+    .array(
+      z.object({
+        hostId: z.string(),
+        count: z.number(),
+      }),
+    )
+    .optional(),
+});
 export type ListTasksFacets = z.infer<typeof listTasksFacetsSchema>;
 
 export const listTasksResponseSchemaV10 = z.object({
   tasks: z.array(listTaskLightSchemaV10),
   nextCursor: z.string().optional(),
   hasMore: z.boolean(),
-  facets: listTasksFacetsSchema.optional(),
+  facets: listTasksFacetsSchemaPre13.optional(),
 });
 export type ListTasksResponseV10 = z.infer<typeof listTasksResponseSchemaV10>;
 
-export const listTasksResponseSchema = z.object({
-  tasks: z.array(listTaskLightSchema),
+export const listTasksResponseSchemaPre13 = z.object({
+  tasks: z.array(listTaskLightSchemaPre13),
   nextCursor: z.string().optional(),
   hasMore: z.boolean(),
+  facets: listTasksFacetsSchemaPre13.optional(),
+});
+export type ListTasksResponsePre13 = z.infer<
+  typeof listTasksResponseSchemaPre13
+>;
+
+// BOTH members move to their @1.3 shapes. Extending only `facets` leaves
+// `tasks` on the frozen pre-1.3 row, and since zod STRIPS unknown keys, every
+// row's `chatHostIds` would be silently discarded at response validation -
+// the field would simply never arrive, with nothing failing.
+export const listTasksResponseSchema = listTasksResponseSchemaPre13.extend({
+  tasks: z.array(listTaskLightSchema),
   facets: listTasksFacetsSchema.optional(),
 });
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
@@ -584,14 +660,15 @@ export type RecordEpicViewedResponse = z.infer<
   typeof recordEpicViewedResponseSchema
 >;
 
-// ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
+// ─── Batch task context (epic.getTaskContexts@1.0+) ──────────────────────────
 // Optional (non-floor) capability: resolve a small set of task ids to list-row
 // shapes for title/context (e.g. worktree owner titles). Old hosts fail only
 // this call with E_HOST_UNSUPPORTED; callers degrade to cache-only resolution.
 //
-// `null` in the response map means deleted OR not permitted to the requester —
-// indistinguishable by design. Clients render both the same way (e.g. muted
-// "Owner unresolved").
+// v1.0's `null` response row was ambiguous: a deleted task, an inaccessible
+// task, and a failed cloud lookup all looked identical. v1.1 makes that
+// distinction explicit. Its `unknown` arm deliberately preserves uncertainty
+// rather than licensing destructive client reconciliation.
 
 export const GET_TASK_CONTEXTS_MAX_IDS = 50;
 
@@ -602,10 +679,83 @@ export type GetTaskContextsRequest = z.infer<
   typeof getTaskContextsRequestSchema
 >;
 
+export const getTaskContextsResponseSchemaV10 = z.object({
+  tasks: z.record(z.string(), listTaskLightSchemaPre13.nullable()),
+});
+export type GetTaskContextsResponseV10 = z.infer<
+  typeof getTaskContextsResponseSchemaV10
+>;
+
+export const taskContextUnknownReasonSchema = z.enum([
+  "legacy",
+  "not-found-or-not-permitted",
+  "transport",
+  "server",
+  "auth",
+  "denied",
+  "unexpected-response",
+]);
+export type TaskContextUnknownReason = z.infer<
+  typeof taskContextUnknownReasonSchema
+>;
+
+export const taskContextResolutionSchemaPre12 = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("found"),
+    task: listTaskLightSchemaPre13,
+  }),
+  z.object({
+    status: z.literal("confirmed-absent"),
+  }),
+  z.object({
+    status: z.literal("unknown"),
+    reason: taskContextUnknownReasonSchema,
+  }),
+]);
+
+export const taskContextResolutionSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("found"),
+    task: listTaskLightSchema,
+  }),
+  z.object({
+    status: z.literal("confirmed-absent"),
+  }),
+  z.object({
+    status: z.literal("unknown"),
+    reason: taskContextUnknownReasonSchema,
+  }),
+]);
+export type TaskContextResolution = z.infer<typeof taskContextResolutionSchema>;
+
+// Older-host values are parsed by their v1.0 schema and upgraded at the
+// transport boundary. Canonical v1.1 data therefore stays exhaustive here:
+// accepting the all-optional legacy list shape would let malformed v1.1 arms
+// parse as an empty task.
+export const taskContextResultSchema = taskContextResolutionSchema;
+export type TaskContextResult = TaskContextResolution;
+
+export function isFoundTaskContext(
+  result: TaskContextResult | undefined,
+): result is Extract<TaskContextResolution, { status: "found" }> {
+  return result?.status === "found";
+}
+
+export function isConfirmedAbsentTaskContext(
+  result: TaskContextResult | undefined,
+): result is Extract<TaskContextResolution, { status: "confirmed-absent" }> {
+  return result?.status === "confirmed-absent";
+}
+
+export const getTaskContextsResponseSchemaPre12 = z.object({
+  tasks: z.record(z.string(), taskContextResolutionSchemaPre12),
+});
+export type GetTaskContextsResponsePre12 = z.infer<
+  typeof getTaskContextsResponseSchemaPre12
+>;
+
 export const getTaskContextsResponseSchema = z.object({
-  // Per-id: ListTaskLight when readable, null when deleted or not permitted
-  // (indistinguishable by design).
-  tasks: z.record(z.string(), listTaskLightSchema.nullable()),
+  tasks: z.record(z.string(), taskContextResultSchema),
 });
 export type GetTaskContextsResponse = z.infer<
   typeof getTaskContextsResponseSchema

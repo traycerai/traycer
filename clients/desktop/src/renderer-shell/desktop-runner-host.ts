@@ -19,6 +19,12 @@ import type {
   HostUninstallResult,
   HostRestartRequestResult,
   InstallVersionOk,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  DoctorRepairIntent,
   MutationOutcome,
   NotificationFeedSource,
   NotificationForegroundAppLocal,
@@ -28,7 +34,6 @@ import type {
   TraycerUninstallResult,
   FreePortAndRestartInput,
   IHostManagement,
-  IHostPicker,
   IHostTray,
   IFileDropHost,
   IMigrationHost,
@@ -43,6 +48,7 @@ import type {
   IZoomHost,
   LocalHostSnapshot,
   MigrationRunningSnapshot,
+  RegisteredHostsChange,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -52,6 +58,10 @@ import type {
   TraycerShellConfigSetInput,
   TraycerShellProbeResult,
 } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponse,
+} from "../ipc-contracts/host-management-types";
 import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
@@ -81,6 +91,7 @@ export type {
   Vibrancy as DesktopVibrancy,
 };
 
+import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
@@ -206,6 +217,9 @@ export interface DesktopPreloadBridge {
   onLocalHostChange(handler: (snapshot: LocalHostSnapshot | null) => void): {
     dispose: () => void;
   };
+  onRegisteredHostsChange(handler: (push: RegisteredHostsChange) => void): {
+    dispose: () => void;
+  };
   onSystemResumed(handler: () => void): { dispose: () => void };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
@@ -215,11 +229,6 @@ export interface DesktopPreloadBridge {
     onEpicSelected(handler: (epicId: string) => void): {
       dispose: () => void;
     };
-  };
-  hostPicker: {
-    requestOpen(): Promise<void>;
-    requestClose(): Promise<void>;
-    onChange(handler: (isOpen: boolean) => void): { dispose: () => void };
   };
   workspaceFolders: {
     pickFolders(): Promise<readonly string[]>;
@@ -239,6 +248,13 @@ export interface DesktopPreloadBridge {
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
+  /**
+   * The preload-built client of the main-process selection authority. It
+   * already carries this load's engine-issued `attachSeq` and its own
+   * buffering, so the renderer only has to attach and subscribe.
+   */
+  selectionAuthority: SelectionAuthorityClient;
+  refreshSelectionFleet: () => Promise<void>;
 }
 
 export interface DesktopFileDropsBridge {
@@ -280,8 +296,11 @@ export interface DesktopHostManagementBridge {
   restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
-  runDoctor(): Promise<HostDoctorReport>;
+  runDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostDoctorReport>;
   availableVersions(
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
@@ -292,9 +311,37 @@ export interface DesktopHostManagementBridge {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
   freePortAndRestart(
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<FreePortAndRestartInput>;
+  freePortAndRestartIfIdle(
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  maintenanceUpdateCheck(
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
+  ): Promise<HostUpdateCheckResponse>;
+  maintenanceDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostGetInstallationInfoResponse>;
+  maintenanceInstallVersion(input: {
+    readonly version: string;
+    readonly force: boolean;
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceInstallDispatch>;
+  restartHostIfIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostRestartRequestResult>;
+  runDoctorRepairQueued(input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }): Promise<QueuedDoctorRepairResult>;
+  runDoctorRepairIfIdle(input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }): Promise<DoctorRepairDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -578,7 +625,6 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState;
-  readonly hostPicker: IHostPicker;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
   readonly windows: DesktopWindowsBridge;
@@ -595,6 +641,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
+  readonly selectionAuthority: SelectionAuthorityClient;
+  private readonly refreshSelectionFleet: () => Promise<void>;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -617,6 +665,12 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
+    // Passed straight through: the client instance, its issued attach
+    // generation and its buffering all belong to the preload load, so
+    // re-wrapping it here could only add a second identity for the same
+    // generation.
+    this.selectionAuthority = options.bridge.selectionAuthority;
+    this.refreshSelectionFleet = options.bridge.refreshSelectionFleet;
     this.zoom = {
       ladder: options.bridge.zoom.ladder,
       get: () => options.bridge.zoom.get(),
@@ -696,7 +750,6 @@ export class DesktopRunnerHost implements IRunnerHost {
         toDisposable(this.bridge.trayState.onEpicSelected(handler)),
     };
 
-    this.hostPicker = this.buildHostPicker();
     this.workspaceFolders = {
       canPickNatively: true,
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
@@ -753,14 +806,28 @@ export class DesktopRunnerHost implements IRunnerHost {
       clearRemoval: () => managementBridge.clearRemoval(),
       restartHost: () => managementBridge.restartHost(),
       getHostLogs: (input) => managementBridge.getHostLogs(input),
-      runDoctor: () => managementBridge.runDoctor(),
+      runDoctor: (input) => managementBridge.runDoctor(input),
       availableVersions: (input) => managementBridge.availableVersions(input),
       installedRecord: () => managementBridge.installedRecord(),
       registerService: () => managementBridge.registerService(),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
+      freePortAndRestartIfIdle: (input) =>
+        managementBridge.freePortAndRestartIfIdle(input),
       cliManifest: () => managementBridge.cliManifest(),
+      maintenanceUpdateCheck: (input) =>
+        managementBridge.maintenanceUpdateCheck(input),
+      maintenanceDoctor: (input) => managementBridge.maintenanceDoctor(input),
+      maintenanceInstallationInfo: (input) =>
+        managementBridge.maintenanceInstallationInfo(input),
+      maintenanceInstallVersion: (input) =>
+        managementBridge.maintenanceInstallVersion(input),
+      restartHostIfIdle: (input) => managementBridge.restartHostIfIdle(input),
+      runDoctorRepairQueued: (input) =>
+        managementBridge.runDoctorRepairQueued(input),
+      runDoctorRepairIfIdle: (input) =>
+        managementBridge.runDoctorRepairIfIdle(input),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };
@@ -781,6 +848,20 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   requestMicrophoneAccess(): Promise<"granted" | "denied"> {
     return this.bridge.requestMicrophoneAccess();
+  }
+
+  refreshHostFleet(): Promise<void> {
+    return this.refreshSelectionFleet();
+  }
+
+  /**
+   * Desktop OWNS the registry cadence, so this is never null here: main runs
+   * one `GET /api/v3/hosts` for the whole app and fans the rows out (P4.1/F22).
+   */
+  onRegisteredHostsChange(
+    handler: (push: RegisteredHostsChange) => void,
+  ): Disposable | null {
+    return toDisposable(this.bridge.onRegisteredHostsChange(handler));
   }
 
   openMicrophoneSettings(): Promise<void> {
@@ -914,39 +995,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     }
     this.localHostHandlers.clear();
     this.systemResumedHandlers.clear();
-  }
-
-  private buildHostPicker(): IHostPicker {
-    const state: { open: boolean } = { open: false };
-    const handlers = new Set<(isOpen: boolean) => void>();
-    this.bridgeSubscriptions.push(
-      this.bridge.hostPicker.onChange((next) => {
-        state.open = next;
-        for (const handler of handlers) {
-          handler(next);
-        }
-      }),
-    );
-    const bridge = this.bridge;
-    return {
-      get isOpen(): boolean {
-        return state.open;
-      },
-      requestOpen(): void {
-        void bridge.hostPicker.requestOpen();
-      },
-      requestClose(): void {
-        void bridge.hostPicker.requestClose();
-      },
-      onChange(handler: (isOpen: boolean) => void): Disposable {
-        handlers.add(handler);
-        return {
-          dispose: () => {
-            handlers.delete(handler);
-          },
-        };
-      },
-    };
   }
 }
 

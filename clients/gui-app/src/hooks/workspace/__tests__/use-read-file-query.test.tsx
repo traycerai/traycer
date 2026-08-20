@@ -16,9 +16,20 @@ function createFixture(initialContent: string) {
   let content = initialContent;
   let calls = 0;
   let requestSeq = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  // The SPINE: it owns the messenger, coordinator and request context, and
+  // addresses no host of its own. The subject gets a requester pinned to a
+  // host id below, which is how every consumer reaches a host since P4.2
+  // deleted the active slot.
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    // REQUIRED, not decoration. `captureAuthority` re-resolves a requester's
+    // entry against the live directory and refuses one it cannot find, so a
+    // requester built without this rejects every request as a stale binding.
+    // `bind()` used to satisfy that lookup through the client's own
+    // slot-reading fallback; with the slot gone the fixture supplies it.
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -39,10 +50,10 @@ function createFixture(initialContent: string) {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}

@@ -6,6 +6,7 @@ import type {
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { isFoundTaskContext } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
@@ -98,6 +99,53 @@ describe("removeDeletedEpicsFromCloudTaskCaches", () => {
     expect(
       queryClient.getQueryData<ListTasksResponse>(otherUserKey)?.tasks,
     ).toHaveLength(1);
+  });
+
+  it("keeps the chat-host facet group when deleting, decrementing its counts", () => {
+    // The group's PRESENCE is a sentinel: `useHistoryQuery` reads a missing
+    // `chatHosts` as proof the server never applied the host filter and
+    // withholds every row. Rebuilding facets without it would strand a
+    // host-filtered list in "can't filter by host here" - permanently, since
+    // these entries never refetch on their own.
+    const queryClient = new QueryClient();
+    const key = cloudEpicTasksQueryKey(
+      "host-a",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData<ListTasksResponse>(key, {
+      tasks: [
+        {
+          ...taskLight("epic-a", "Alpha", "traycer/gui-app", "user-1"),
+          chatHostIds: ["host-a", "host-b"],
+        },
+        {
+          ...taskLight("epic-b", "Beta", "traycer/server", "user-1"),
+          chatHostIds: ["host-b"],
+        },
+      ],
+      hasMore: false,
+      facets: {
+        repos: [],
+        workspaces: [],
+        ownershipScopes: [{ value: "mine", count: 2 }],
+        chatHosts: [
+          { hostId: "host-a", count: 1 },
+          { hostId: "host-b", count: 2 },
+        ],
+      },
+    });
+
+    removeDeletedEpicsFromCloudTaskCaches(
+      queryClient,
+      { hostId: null, userId: "user-1" },
+      ["epic-a"],
+    );
+
+    // host-a lost its only task and drops out; host-b keeps the survivor.
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(key)?.facets?.chatHosts,
+    ).toEqual([{ hostId: "host-b", count: 1 }]);
   });
 });
 
@@ -202,13 +250,13 @@ describe("updateEpicTitleInCloudTaskCaches", () => {
     });
     queryClient.setQueryData<GetTaskContextsResponse>(batchKey, {
       tasks: {
-        "epic-a": listTaskLight("epic-a", "Alpha", "user-1"),
-        "epic-b": listTaskLight("epic-b", "Beta", "user-1"),
+        "epic-a": foundTask(listTaskLight("epic-a", "Alpha", "user-1")),
+        "epic-b": foundTask(listTaskLight("epic-b", "Beta", "user-1")),
       },
     });
     queryClient.setQueryData<GetTaskContextsResponse>(otherUserBatchKey, {
       tasks: {
-        "epic-a": listTaskLight("epic-a", "Alpha", "user-2"),
+        "epic-a": foundTask(listTaskLight("epic-a", "Alpha", "user-2")),
       },
     });
 
@@ -224,31 +272,22 @@ describe("updateEpicTitleInCloudTaskCaches", () => {
         .getQueryData<ListTasksResponse>(listKey)
         ?.tasks.map((task) => task.epic?.light?.title),
     ).toEqual(["Renamed Alpha"]);
-    expect(
-      queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
-        "epic-a"
-      ]?.epic?.light?.title,
-    ).toBe("Renamed Alpha");
-    expect(
-      queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
-        "epic-b"
-      ]?.epic?.light?.title,
-    ).toBe("Beta");
-    expect(
-      queryClient.getQueryData<GetTaskContextsResponse>(otherUserBatchKey)
-        ?.tasks["epic-a"]?.epic?.light?.title,
-    ).toBe("Alpha");
+    expect(taskTitleAt(queryClient, batchKey, "epic-a")).toBe("Renamed Alpha");
+    expect(taskTitleAt(queryClient, batchKey, "epic-b")).toBe("Beta");
+    expect(taskTitleAt(queryClient, otherUserBatchKey, "epic-a")).toBe("Alpha");
   });
 });
 
 describe("updateEpicTitleInTaskContextsCaches", () => {
-  it("leaves null batch entries untouched", () => {
+  it("leaves unknown batch entries untouched", () => {
     const queryClient = new QueryClient();
     const batchKey = hostQueryKeys.epicTaskContexts("host-a", "user-1", [
       "epic-missing",
     ]);
     queryClient.setQueryData<GetTaskContextsResponse>(batchKey, {
-      tasks: { "epic-missing": null },
+      tasks: {
+        "epic-missing": { status: "unknown", reason: "transport" },
+      },
     });
 
     updateEpicTitleInTaskContextsCaches(
@@ -260,7 +299,9 @@ describe("updateEpicTitleInTaskContextsCaches", () => {
 
     expect(
       queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks,
-    ).toEqual({ "epic-missing": null });
+    ).toEqual({
+      "epic-missing": { status: "unknown", reason: "transport" },
+    });
   });
 });
 
@@ -287,13 +328,13 @@ describe("setEpicPinnedInCloudTaskCaches", () => {
     });
     queryClient.setQueryData<GetTaskContextsResponse>(batchKey, {
       tasks: {
-        "epic-a": listTaskLight("epic-a", "Alpha", "user-1"),
-        "epic-b": listTaskLight("epic-b", "Beta", "user-1"),
+        "epic-a": foundTask(listTaskLight("epic-a", "Alpha", "user-1")),
+        "epic-b": foundTask(listTaskLight("epic-b", "Beta", "user-1")),
       },
     });
     queryClient.setQueryData<GetTaskContextsResponse>(otherUserBatchKey, {
       tasks: {
-        "epic-a": listTaskLight("epic-a", "Alpha", "user-2"),
+        "epic-a": foundTask(listTaskLight("epic-a", "Alpha", "user-2")),
       },
     });
 
@@ -307,20 +348,9 @@ describe("setEpicPinnedInCloudTaskCaches", () => {
     expect(
       queryClient.getQueryData<ListTasksResponse>(listKey)?.tasks[0]?.pinned,
     ).toBe(true);
-    expect(
-      queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
-        "epic-a"
-      ]?.pinned,
-    ).toBe(true);
-    expect(
-      queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
-        "epic-b"
-      ]?.pinned,
-    ).toBe(false);
-    expect(
-      queryClient.getQueryData<GetTaskContextsResponse>(otherUserBatchKey)
-        ?.tasks["epic-a"]?.pinned,
-    ).toBe(false);
+    expect(taskPinnedAt(queryClient, batchKey, "epic-a")).toBe(true);
+    expect(taskPinnedAt(queryClient, batchKey, "epic-b")).toBe(false);
+    expect(taskPinnedAt(queryClient, otherUserBatchKey, "epic-a")).toBe(false);
   });
 });
 
@@ -381,4 +411,32 @@ function listTaskLight(
     ...taskLight(id, title, "traycer/gui-app", createdBy),
     pinned: false,
   };
+}
+
+function foundTask(
+  task: ListTaskLight,
+): GetTaskContextsResponse["tasks"][string] {
+  return { status: "found", task };
+}
+
+function taskTitleAt(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  taskId: string,
+): string | undefined {
+  const resolution =
+    queryClient.getQueryData<GetTaskContextsResponse>(queryKey)?.tasks[taskId];
+  return isFoundTaskContext(resolution)
+    ? resolution.task.epic?.light?.title
+    : undefined;
+}
+
+function taskPinnedAt(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  taskId: string,
+): boolean | undefined {
+  const resolution =
+    queryClient.getQueryData<GetTaskContextsResponse>(queryKey)?.tasks[taskId];
+  return isFoundTaskContext(resolution) ? resolution.task.pinned : undefined;
 }

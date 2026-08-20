@@ -19,27 +19,38 @@ export function ComposerRunSettingsPersistLifecycleBridge(
   props: ComposerRunSettingsPersistLifecycleBridgeProps,
 ): ReactNode {
   const status = useAuthStore((state) => state.status);
-  const email = useAuthStore((state) => state.profile?.email ?? null);
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  // Only to name the pre-userId key for one-time adoption; NOT an identity.
+  const legacyEmail = useAuthStore((state) => state.profile?.email ?? null);
 
-  const onTransition = useCallback((transition: AuthIdentityTransition) => {
-    if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
-      retargetPersistedStore({
+  const onTransition = useCallback(
+    (transition: AuthIdentityTransition) => {
+      if (
+        transition.kind === "signedIn" ||
+        transition.kind === "userSwitched"
+      ) {
+        retargetPersistedStore({
+          store: useComposerRunSettingsStore,
+          name: composerRunSettingsKey(transition.userId),
+          // Never the anonymous bucket: a null email must not adopt shared state into an account.
+          legacyName:
+            legacyEmail === null ? null : composerRunSettingsKey(legacyEmail),
+        });
+        return;
+      }
+      // signedOut: wipe the current user's bucket and reset to anonymous. Unlike
+      // the Epic canvas (which the desktop windows bridge projects per-window),
+      // composer run-settings have no desktop-side owner, so this localStorage
+      // bridge owns the per-user bucket on every platform - including desktop.
+      clearAndResetPersistedStore({
         store: useComposerRunSettingsStore,
-        name: composerRunSettingsKey(transition.email),
+        anonymousName: composerRunSettingsKey(null),
       });
-      return;
-    }
-    // signedOut: wipe the current user's bucket and reset to anonymous. Unlike
-    // the Epic canvas (which the desktop windows bridge projects per-window),
-    // composer run-settings have no desktop-side owner, so this localStorage
-    // bridge owns the per-user bucket on every platform - including desktop.
-    clearAndResetPersistedStore({
-      store: useComposerRunSettingsStore,
-      anonymousName: composerRunSettingsKey(null),
-    });
-  }, []);
+    },
+    [legacyEmail],
+  );
 
-  useAuthIdentityTransition(status, email, onTransition);
+  useAuthIdentityTransition(status, userId, onTransition);
 
   return <>{props.children}</>;
 }

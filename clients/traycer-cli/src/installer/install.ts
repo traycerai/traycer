@@ -25,6 +25,7 @@ import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { createOwnedTempDir } from "../store/owned-temp";
 import { hostHomeDir, hostInstallDir, ensureHostHomeDir } from "../store/paths";
 import { extractHostSource, resolveHostExecutable } from "./extract";
+import { preserveLegacyProviders } from "./legacy-providers";
 import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
 import {
@@ -239,6 +240,7 @@ export async function stageHostInstallSource(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     await extractHostSource({
       source: staging.archivePath,
@@ -562,6 +564,7 @@ export async function commitInstallFromSource(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     logger.info("Host install running lifecycle before swap", {
       environment: opts.environment,
@@ -576,6 +579,7 @@ export async function commitInstallFromSource(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   await atomicSwap({
     environment: opts.environment,
@@ -601,6 +605,7 @@ export async function commitInstallFromSource(
       percent: null,
       bytes: null,
       totalBytes: null,
+      workUnits: null,
     });
     logger.info("Host install running lifecycle after swap", {
       environment: opts.environment,
@@ -712,8 +717,24 @@ async function stageLocalFile(opts: StageLocalOptions): Promise<StageResult> {
       percent: null,
       bytes: null,
       totalBytes: sourceStat.size,
+      workUnits: null,
     });
-    archiveSha256 = await hashFileSha256(opts.sourcePath);
+    // Report the position as it hashes. `bytes`/`totalBytes` are a REAL measured
+    // position, so this stage needs no `workUnits` - a synthetic counter would be
+    // discarding an available truth for a proxy. Throttling is left to the
+    // consumer: the desktop coalesces progress into one lane and the renderer
+    // reads the latest value, so an event per chunk costs a merge rather than a
+    // render.
+    archiveSha256 = await hashFileSha256(opts.sourcePath, (bytesHashed) => {
+      opts.onProgress({
+        stage: "verify",
+        message: `hashing ${opts.sourcePath}`,
+        percent: null,
+        bytes: bytesHashed,
+        totalBytes: sourceStat.size,
+        workUnits: null,
+      });
+    });
     sizeBytes = sourceStat.size;
     logger.info("Host install hashed local archive source", {
       environment: opts.environment,
@@ -762,6 +783,7 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
   const { entry, asset } = await client.resolveAsset(
     opts.versionRequest,
@@ -779,6 +801,7 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
     percent: 0,
     bytes: 0,
     totalBytes: asset.sizeBytes,
+    workUnits: null,
   });
   const verified = await client.downloadAndVerify(entry, asset, (progress) => {
     const percent =
@@ -791,6 +814,7 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
       percent,
       bytes: progress.downloadedBytes,
       totalBytes: progress.totalBytes,
+      workUnits: null,
     });
   });
   logger.info("Host install registry archive verified", {
@@ -1058,6 +1082,12 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     });
   }
   if (targetExists) {
+    // Carry the outgoing install's bundled provider packs into the new
+    // install BEFORE the old dir is invalidated - a slim host archive ships
+    // no coding-agent CLIs, and these bytes are what keeps every provider
+    // runnable until its registry pack downloads (see legacy-providers.ts).
+    // Best-effort by its own contract; it never fails the install.
+    await preserveLegacyProviders(trash, target, logger);
     // Layered invalidation (rename-to-`.dead-*` -> sidecar-unlink ->
     // recursive-rm -> accept-and-log), not a plain `rm`: mirrors
     // `download-stage.ts`'s `replaceStagedDir`, which creates and discards

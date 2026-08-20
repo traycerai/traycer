@@ -1,15 +1,18 @@
 import { execFile, spawn } from "node:child_process";
 import { log } from "../app/logger";
 import {
+  CLI_INVOCATION_PROBE_TIMEOUT_MS,
   cliBinaryName,
   discoverCli,
   resolveBundledCliPath,
 } from "./cli-discovery";
 
 /**
- * Fixup A8: every lock-taking CLI command (`host service install/uninstall`,
- * `host stamp-runtime`, `host free-port`, `host uninstall [--all]`, `host
- * restart`, `host apply`, `host install`, `host ensure`, ...) waits up to
+ * Fixup A8: every lock-taking CLI command this wrapper still carries
+ * (`host service uninstall`, `host stamp-runtime`, `host free-port`,
+ * `host purge-stage`, `host uninstall [--all]`; the long-running mutations -
+ * install / apply / ensure / restart / service install - stream instead)
+ * waits up to
  * `waitMs: 30_000` internally on the shared `cli-lock` before terminally
  * throwing `E_CLI_LOCK_BUSY` (every `withCliLock` call site under
  * `traycer-cli/src/commands/`). `runTraycerCliJsonWithInvocation` used to
@@ -20,8 +23,24 @@ import {
  * install/staged/pid record, the single most dangerous defect class in
  * this ticket. Must exceed the CLI's own lock wait with real margin for
  * process spawn + stdio/IPC overhead, never merely match it.
+ *
+ * This bound only fits commands whose post-lock work is quick. `host
+ * service install` is no longer one of them - it follows registration with
+ * a credential-provisioning probe that can wait up to 30s for the host, so
+ * lock wait + installer + probe can legitimately exceed any flat total.
+ * Its call sites use `streamBundled` (idle-timeout, re-armed by the
+ * command's progress NDJSON) instead.
  */
 const CLI_JSON_TIMEOUT_MS = 45_000;
+
+/**
+ * Streaming-path counterpart to the run path's 1 MiB `maxBuffer`: the cap on
+ * a single unterminated stdout "line". Real NDJSON events are tiny; a line
+ * that grows past this without a newline is a runaway child, killed rather
+ * than accumulated (see the stdout handler in
+ * `streamTraycerCliJsonWithInvocation`).
+ */
+const STREAM_LINE_CAP_BYTES = 1024 * 1024;
 
 /**
  * Structured error thrown when the CLI subprocess exits non-zero or emits
@@ -87,6 +106,10 @@ export type NdjsonEvent =
       readonly bytes: number | null;
       readonly totalBytes: number | null;
       readonly message: string | null;
+      // Monotonic count of completed units of work within the stage (archive
+      // entries). Absent from any CLI predating it, which the parser below
+      // normalises to `null` like every other numeric.
+      readonly workUnits: number | null;
     }
   | {
       readonly type: "result";
@@ -126,7 +149,10 @@ export interface TraycerCliInvocation {
 }
 
 export async function resolveTraycerCliInvocation(): Promise<TraycerCliInvocation> {
-  const discovered = await discoverCli();
+  // The impatient deadline: this runs on every CLI invocation, status polls
+  // included, and nothing it decides can change who owns the slot - an
+  // unvetted candidate here only means this call uses the bundled binary.
+  const discovered = await discoverCli(CLI_INVOCATION_PROBE_TIMEOUT_MS);
   if (discovered.kind !== "none") {
     return { command: discovered.binaryPath, args: [] };
   }
@@ -562,7 +588,15 @@ async function streamTraycerCliJsonWithInvocation<T>(
     let sawTerminalOk = false;
     let terminalError: TraycerCliError | null = null;
     let abortError: TraycerCliError | null = null;
-    let timeoutError: TraycerCliError | null = null;
+    // Set when THIS wrapper killed the child for misbehaving - an idle wedge
+    // or an unterminated-line flood. Deliberately NEVER set once a terminal
+    // envelope has been parsed: the envelope is the work's outcome and
+    // `close` must report it, exactly as the run path salvages the envelope
+    // out of execFile's own timeout kill. Without that gate, a child that
+    // delivered `E_CLI_LOCK_BUSY` (or ok!) and then wedged in teardown
+    // would surface as a contentless timeout - degrading Desktop's
+    // lock-busy `deferred` contract to a generic failure.
+    let killError: TraycerCliError | null = null;
     let settled = false;
     const cleanupAbortListener = (): void => {
       if (opts.signal !== null) {
@@ -576,16 +610,21 @@ async function streamTraycerCliJsonWithInvocation<T>(
       // Keep this stream promise pending until `close`, just like explicit
       // cancellation, so Remove Traycer's download-drain cannot launch an
       // uninstall while the child is still exiting.
-      timeoutError = new TraycerCliError(
-        {
-          message: `traycer-cli produced no output for ${opts.idleTimeoutMs}ms (${augmentedArgs.join(" ")})`,
-          code: null,
-          details: null,
-          exitCode: null,
-          stderrTail,
-        },
-        null,
-      );
+      if (!sawTerminalOk && terminalError === null) {
+        killError = new TraycerCliError(
+          {
+            message: appendStderrSummary(
+              `traycer-cli produced no output for ${opts.idleTimeoutMs}ms (${augmentedArgs.join(" ")})`,
+              stderrTail,
+            ),
+            code: null,
+            details: null,
+            exitCode: null,
+            stderrTail,
+          },
+          null,
+        );
+      }
       try {
         child.kill("SIGKILL");
       } catch {
@@ -597,7 +636,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     // mode every line the CLI writes is an event, so a child emitting
     // anything else is not evidence of progress.
     const armIdleTimer = (): void => {
-      if (settled || abortError !== null || timeoutError !== null) return;
+      if (settled || abortError !== null || killError !== null) return;
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(onIdleTimeout, opts.idleTimeoutMs);
     };
@@ -615,7 +654,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     // but this promise settles only after `close` so a follow-on uninstall
     // cannot race a child still holding or promoting files.
     const onAbort = (): void => {
-      if (settled || abortError !== null || timeoutError !== null) return;
+      if (settled || abortError !== null || killError !== null) return;
       clearIdleTimer();
       abortError = new TraycerCliError(
         {
@@ -689,6 +728,36 @@ async function streamTraycerCliJsonWithInvocation<T>(
         );
         opts.onEvent(event);
       }
+      // Parity with the run path's 1 MiB `maxBuffer` anti-runaway guard: an
+      // unterminated "line" past any real NDJSON event's size is a defective
+      // child, and unparsed bytes deliberately never re-arm the idle timer -
+      // so without this cap a newline-free flood pumps heap in this process
+      // for the full idle window before anything kills it.
+      if (
+        !settled &&
+        abortError === null &&
+        killError === null &&
+        stdoutBuffer.length > STREAM_LINE_CAP_BYTES
+      ) {
+        if (!sawTerminalOk && terminalError === null) {
+          killError = new TraycerCliError(
+            {
+              message: `traycer-cli emitted an unterminated ${stdoutBuffer.length}-byte stdout line (${augmentedArgs.join(" ")})`,
+              code: null,
+              details: null,
+              exitCode: null,
+              stderrTail,
+            },
+            null,
+          );
+        }
+        stdoutBuffer = "";
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore - already exited
+        }
+      }
     });
 
     child.stderr.setEncoding("utf8");
@@ -697,7 +766,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     });
 
     child.on("error", (err) => {
-      if (settled || abortError !== null || timeoutError !== null) return;
+      if (settled || abortError !== null || killError !== null) return;
       settled = true;
       clearIdleTimer();
       cleanupAbortListener();
@@ -729,8 +798,8 @@ async function streamTraycerCliJsonWithInvocation<T>(
         reject(abortError);
         return;
       }
-      if (timeoutError !== null) {
-        reject(timeoutError);
+      if (killError !== null) {
+        reject(killError);
         return;
       }
       if (terminalError !== null) {
@@ -748,14 +817,50 @@ async function streamTraycerCliJsonWithInvocation<T>(
         );
         return;
       }
-      // Checked after the abort/timeout paths above: those kill the child
+      // A completed terminal `ok` line is the outcome, even if the process
+      // then exited non-zero OR was killed. The runner emits that line and
+      // calls its terminator on the very next statement (traycer-cli's
+      // runner.ts), so nothing meaningful runs afterwards that a later exit
+      // code or kill could be reporting - what arrives behind it describes
+      // the CLI's own teardown, not the work. `traycer host doctor` is the
+      // intentional non-zero case (ok envelope + exitCode 1 whenever an
+      // issue is error/fatal), the win32 SEA teardown abort was the
+      // accidental one (int#4840), and this wrapper's own idle kill of a
+      // child wedged in teardown is the signal-carrying one - all three
+      // used to surface here as a failed operation after it had already
+      // succeeded. Checked BEFORE the signal branch below for that reason.
+      //
+      // Keyed on `sawTerminalOk` - a positive test for the tolerated
+      // condition - rather than on "the exit code was non-zero, try to
+      // recover". A run that exits non-zero WITHOUT a terminal ok still
+      // fails below, exactly as before. `runTraycerCliJsonWithInvocation`
+      // has made the same call on the non-streaming path since it shipped.
+      if (sawTerminalOk) {
+        if (
+          (typeof exitCode === "number" && exitCode !== 0) ||
+          signal !== null
+        ) {
+          log.warn("[traycer-cli] non-zero exit after a successful result", {
+            args: augmentedArgs,
+            exitCode,
+            signal,
+            stderrTail: stderrTail.slice(-512),
+          });
+        }
+        resolve({ data: terminalResult as T });
+        return;
+      }
+      // Checked after the abort/kill paths above: those kill the child
       // themselves and already carry a more specific cause, so only a kill
       // this process did not ask for reaches here.
       if (signal !== null) {
         reject(
           new TraycerCliError(
             {
-              message: `traycer-cli was killed by ${signal}: ${augmentedArgs.join(" ")}`,
+              message: appendStderrSummary(
+                `traycer-cli was killed by ${signal}: ${augmentedArgs.join(" ")}`,
+                stderrTail,
+              ),
               code: null,
               details: null,
               exitCode,
@@ -766,38 +871,14 @@ async function streamTraycerCliJsonWithInvocation<T>(
         );
         return;
       }
-      // A completed terminal `ok` line is the outcome, even if the process
-      // then exited non-zero. The runner emits that line and calls its
-      // terminator on the very next statement (traycer-cli's runner.ts), so
-      // nothing meaningful runs afterwards that a later exit code could be
-      // reporting - a non-zero code arriving behind it describes the CLI's
-      // own teardown, not the work. `traycer host doctor` is the intentional
-      // case (ok envelope + exitCode 1 whenever an issue is error/fatal), and
-      // the win32 SEA teardown abort was the accidental one (int#4840): both
-      // used to surface here as a failed install/update/`host ensure` after
-      // the operation had already succeeded.
-      //
-      // Keyed on `sawTerminalOk` - a positive test for the tolerated
-      // condition - rather than on "the exit code was non-zero, try to
-      // recover". A run that exits non-zero WITHOUT a terminal ok still
-      // fails below, exactly as before. `runTraycerCliJsonWithInvocation`
-      // has made the same call on the non-streaming path since it shipped.
-      if (sawTerminalOk) {
-        if (typeof exitCode === "number" && exitCode !== 0) {
-          log.warn("[traycer-cli] non-zero exit after a successful result", {
-            args: augmentedArgs,
-            exitCode,
-            stderrTail: stderrTail.slice(-512),
-          });
-        }
-        resolve({ data: terminalResult as T });
-        return;
-      }
       if (typeof exitCode === "number" && exitCode !== 0) {
         reject(
           new TraycerCliError(
             {
-              message: `traycer-cli exited with code ${exitCode}: ${augmentedArgs.join(" ")}`,
+              message: appendStderrSummary(
+                `traycer-cli exited with code ${exitCode}: ${augmentedArgs.join(" ")}`,
+                stderrTail,
+              ),
               code: null,
               details: null,
               exitCode,
@@ -813,7 +894,10 @@ async function streamTraycerCliJsonWithInvocation<T>(
       reject(
         new TraycerCliError(
           {
-            message: `traycer-cli emitted no terminal result for: ${augmentedArgs.join(" ")}`,
+            message: appendStderrSummary(
+              `traycer-cli emitted no terminal result for: ${augmentedArgs.join(" ")}`,
+              stderrTail,
+            ),
             code: null,
             details: null,
             exitCode,
@@ -847,6 +931,14 @@ function parseNdjsonEvent(value: unknown): NdjsonEvent | null {
           ? obj.totalBytes
           : null,
       message: typeof obj.message === "string" ? obj.message : null,
+      // An older bundled CLI omits this entirely; the same numeric guard the
+      // other three use turns that into `null`, so skew degrades to the
+      // pre-field behaviour instead of breaking. That is the whole
+      // forward-compatibility story for this field.
+      workUnits:
+        typeof obj.workUnits === "number" && Number.isFinite(obj.workUnits)
+          ? obj.workUnits
+          : null,
     };
   }
   if (type === "result") {

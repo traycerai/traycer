@@ -54,7 +54,8 @@ export function useRunTargetHost(
     return {
       hostId,
       queryClient,
-      request: (_hostId, method, params) => client.request(method, params),
+      request: (_hostId, method, params, responseTimeoutMs) =>
+        client.requestWithResponseTimeout(method, params, responseTimeoutMs),
     };
   }, [client, readiness.hostId, readiness.isReady, queryClient]);
 

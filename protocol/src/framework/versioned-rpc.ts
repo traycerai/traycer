@@ -8,6 +8,7 @@ import {
   toUnknownKeyTree,
   describeAdditivityViolation,
   findAdditivityViolation,
+  findAdditivityViolationAllowingUnionArmReplacement,
   rootAdditivityViolation,
   findBreakingChange,
   toJsonSchemaFingerprint,
@@ -482,11 +483,11 @@ function assertSchemaCompatibility(
         // same minor. Require it to be load-bearing.
         if (responseGrowthGated && strictResponseViolation === null) {
           throw new Error(
-            `Minor ${major}.${currentMinor} for method '${method}' declares \`responseGrowthProjectionGated\` but its response has no value growth over ${major}.${previousMinor}; remove the annotation`,
+            `Minor ${major}.${currentMinor} for method '${method}' declares \`responseGrowthProjectionGated\` but its response has no value growth or union-arm replacement over ${major}.${previousMinor}; remove the annotation`,
           );
         }
         const responseViolation = responseGrowthGated
-          ? findAdditivityViolation(
+          ? findAdditivityViolationAllowingUnionArmReplacement(
               previous.response,
               current.response,
               "lenient",

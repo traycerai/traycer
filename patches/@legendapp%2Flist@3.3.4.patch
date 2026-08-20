@@ -1,0 +1,136 @@
+diff --git a/react.js b/react.js
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..0506bf22787780b57e82e72aaa6772fde6bf508f 100644
+--- a/react.js
++++ b/react.js
+@@ -1143,6 +1143,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
+   }
+   return true;
+ }
++var MAX_CACHED_ESTIMATE_TO_AVERAGE_RATIO = 2;
+ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
+   var _a3, _b, _c, _d;
+   const state = ctx.state;
+@@ -1158,8 +1159,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+   }
+   let size;
+   const renderedSize = sizes.get(key);
+-  if (preferCachedSize) {
+-    if (renderedSize !== void 0) {
++  let itemType;
++  let averageSizeForType;
++  if (preferCachedSize && renderedSize !== void 0) {
++    // Cached sizes for never-measured items are estimates, not measurements.
++    // Reuse them for positional stability unless the live type average proves
++    // that the estimate is grossly stale.
++    if (useAverageSize && !scrollingTo) {
++      itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
++      averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
++    }
++    const cachedSizeMatchesAverage = averageSizeForType === void 0 || renderedSize <= averageSizeForType * MAX_CACHED_ESTIMATE_TO_AVERAGE_RATIO && renderedSize >= averageSizeForType / MAX_CACHED_ESTIMATE_TO_AVERAGE_RATIO;
++    if (!useAverageSize || scrollingTo || cachedSizeMatchesAverage) {
+       return renderedSize;
+     }
+   }
+@@ -1168,9 +1179,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+     setSize(ctx, key, size, notifyTotalSize);
+     return size;
+   }
+-  const itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
++  itemType != null ? itemType : itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
+   if (useAverageSize && !scrollingTo) {
+-    const averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
++    averageSizeForType != null ? averageSizeForType : averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
+     if (averageSizeForType !== void 0) {
+       size = roundSize(averageSizeForType);
+     }
+@@ -4806,6 +4817,11 @@ function updateItemSizesBatch(ctx, measurements) {
+ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   var _a3, _b;
+   const state = ctx.state;
++  // A zero cross-axis is a hidden/collapsed layout, not an item measurement.
++  // Keep a pending scroll-anchor-reset key until a real measurement drains it.
++  if ((state.props.horizontal ? sizeObj.height : sizeObj.width) <= 0) {
++    return {};
++  }
+   const userScrollAnchorReset = state.userScrollAnchorReset;
+   const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
+   const {
+@@ -7053,8 +7069,9 @@ var ScheduledWork = class {
+   cancel(key) {
+     const work = this.work.get(key);
+     if (work) {
+       this.work.delete(key);
+-      work[1](work[0]);
++      const [handle, cancel] = work;
++      cancel(handle);
+     }
+   }
+   has(key) {
+diff --git a/react.mjs b/react.mjs
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..bbcb12ff5924185b1b4a8a85ab7e32fff24848bf 100644
+--- a/react.mjs
++++ b/react.mjs
+@@ -1122,6 +1122,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
+   }
+   return true;
+ }
++var MAX_CACHED_ESTIMATE_TO_AVERAGE_RATIO = 2;
+ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
+   var _a3, _b, _c, _d;
+   const state = ctx.state;
+@@ -1137,8 +1138,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+   }
+   let size;
+   const renderedSize = sizes.get(key);
+-  if (preferCachedSize) {
+-    if (renderedSize !== void 0) {
++  let itemType;
++  let averageSizeForType;
++  if (preferCachedSize && renderedSize !== void 0) {
++    // Cached sizes for never-measured items are estimates, not measurements.
++    // Reuse them for positional stability unless the live type average proves
++    // that the estimate is grossly stale.
++    if (useAverageSize && !scrollingTo) {
++      itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
++      averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
++    }
++    const cachedSizeMatchesAverage = averageSizeForType === void 0 || renderedSize <= averageSizeForType * MAX_CACHED_ESTIMATE_TO_AVERAGE_RATIO && renderedSize >= averageSizeForType / MAX_CACHED_ESTIMATE_TO_AVERAGE_RATIO;
++    if (!useAverageSize || scrollingTo || cachedSizeMatchesAverage) {
+       return renderedSize;
+     }
+   }
+@@ -1147,9 +1158,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+     setSize(ctx, key, size, notifyTotalSize);
+     return size;
+   }
+-  const itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
++  itemType != null ? itemType : itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
+   if (useAverageSize && !scrollingTo) {
+-    const averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
++    averageSizeForType != null ? averageSizeForType : averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
+     if (averageSizeForType !== void 0) {
+       size = roundSize(averageSizeForType);
+     }
+@@ -4785,6 +4796,11 @@ function updateItemSizesBatch(ctx, measurements) {
+ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   var _a3, _b;
+   const state = ctx.state;
++  // A zero cross-axis is a hidden/collapsed layout, not an item measurement.
++  // Keep a pending scroll-anchor-reset key until a real measurement drains it.
++  if ((state.props.horizontal ? sizeObj.height : sizeObj.width) <= 0) {
++    return {};
++  }
+   const userScrollAnchorReset = state.userScrollAnchorReset;
+   const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
+   const {
+@@ -7032,8 +7048,9 @@ var ScheduledWork = class {
+   cancel(key) {
+     const work = this.work.get(key);
+     if (work) {
+       this.work.delete(key);
+-      work[1](work[0]);
++      const [handle, cancel] = work;
++      cancel(handle);
+     }
+   }
+   has(key) {

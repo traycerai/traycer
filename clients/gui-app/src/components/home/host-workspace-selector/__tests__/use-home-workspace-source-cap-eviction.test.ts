@@ -7,7 +7,12 @@ import { useHomeWorkspaceSource } from "../use-home-workspace-source";
 // unbound). The second test below pre-seeds the global bucket under
 // TEST_HOST_ID and expects a freshly-created draft to inherit it, so this
 // must resolve to the SAME host id `useHomeWorkspaceSource` is given below.
+// The landing draft's workspace bucket resolves through `activeHostIdOrNull`
+// (the authority projection) since P4.2/D17 retired the spine's active slot.
+// Both are pinned to the same host so the bucket this suite stages into and
+// the one the store reads back cannot drift apart.
 vi.mock("@/lib/host/runtime", () => ({
+  activeHostIdOrNull: () => "host-a",
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: () => "host-a" },
   }),

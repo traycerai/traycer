@@ -49,6 +49,8 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ hostClient: requireHostClient() }),
   useHostClient: () => requireHostClient(),
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => requireHostClient(),
   useAuthService: () => mockAuth,
 }));
 
@@ -58,11 +60,20 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 }));
 
 // Per G8 the provider binds to the LOCAL host, so these two hooks replace
-// `useReactiveActiveHostId` + `useWsStreamClient`. No stream client: in cloud
+// `useAddressableHostId` + `useWsStreamClient`. No stream client: in cloud
 // mode the provider opens no local stream anyway, and the two consumption
 // triggers are deliberately independent of the relay.
 vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
   useReactiveLocalHostEntry: () => mockLocalHostEntry,
+}));
+
+// The fixture used to say "which host" by binding one into the client's slot.
+// P4.2 deleted the slot, so the app-wide host is the SELECTION layer's answer
+// and a fixture that never seeds it resolves a requester addressing no host -
+// which fails as a silent no-op (rows that never get marked read), not as a
+// missing method.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => mockLocalHostEntry.hostId,
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
@@ -161,9 +172,11 @@ async function cloudMarkReadHandler(): Promise<void> {
 
 function createHostClient(): HostClient<HostRpcRegistry> {
   let requestId = 0;
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -193,11 +206,10 @@ function createHostClient(): HostClient<HostRpcRegistry> {
       },
     }),
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
-  return client;
+  return spine.createRequester(mockLocalHostEntry);
 }
 
 /** One visible cloud row. `severity` is what decides consumption; a

@@ -42,24 +42,64 @@ const activeHostEntry = vi.hoisted(() => ({
   transportDialability: "dialable" as const,
 }));
 
-const activeHostClient = vi.hoisted(() => ({
-  // The remote-aware owner identity key (R-1) reads the full active entry, not
-  // just its id, so the fake must answer `getActiveHost` too - with the real
-  // entry, matching `resolveHostById` below rather than contradicting it.
-  getActiveHost: () => activeHostEntry,
-  getActiveHostId: () => "default-host",
-  getRequestContext: () => null,
-  getRequestContextUserId: () => null,
-  onChange: () => () => undefined,
-  request: () => Promise.resolve({}),
-  resolveHostById: (hostId: string) =>
+const activeHostClient = vi.hoisted(() => {
+  const client = {
+    // The remote-aware owner identity key (R-1) reads the full active entry, not
+    // just its id, so the fake must answer `getActiveHost` too - with the real
+    // entry, matching `resolveHostById` below rather than contradicting it.
+    getActiveHost: () => activeHostEntry,
+    getActiveHostId: () => "default-host",
+    getRequestContext: () => null,
+    getRequestContextUserId: () => null,
+    onChange: () => () => undefined,
+    request: () => Promise.resolve({}),
+    resolveHostById: (hostId: string) =>
+      hostId === activeHostEntry.hostId ? activeHostEntry : null,
+    // Redesign P4.2's introduced symbol: `useAddressableHostId` resolves the
+    // effective host through an id-pinned requester now that the active slot is
+    // gone, so a hand-rolled client that does not answer this throws on the
+    // first render that reaches the hook - here, transitively, via the sidebar
+    // rail. Added under an explicit grant rather than by P4.2's own sweep so
+    // this file keeps one writer; the line belongs to their class and their
+    // census, and is attributed there.
+    //
+    // SELF-RETURNING, and only honestly so because this fixture has exactly ONE
+    // host: the requester for `default-host` IS this client. A fixture with a
+    // second host would have to resolve per id, and returning `this` would then
+    // hand back a client addressing the wrong machine.
+    createRequesterForHostId: (): unknown => null,
+  };
+  client.createRequesterForHostId = () => client;
+  return client;
+});
+
+// ONE hoisted opener, not a fresh closure per render. This suite is the one
+// that hung for over nine minutes during P2.4 — a synchronous render loop
+// starves the event loop, so `--testTimeout` cannot fire and the run simply
+// stops terminating — and an unstable opener is exactly the dep churn that
+// feeds that shape. The mechanism was fixed at its owner (the provider's
+// presentation writes are idempotent by value), so this is the fixture no
+// longer contradicting the contract of the hook it doubles, not a live fix.
+// Full rationale: `lib/registries/__tests__/chat-session-registry.test.ts`.
+const refuseDurableTransport = vi.hoisted(() => () => {
+  throw new Error("the Epic stream override must prevent socket creation");
+});
+const hostDirectory = vi.hoisted(() => ({
+  findById: (hostId: string) =>
     hostId === activeHostEntry.hostId ? activeHostEntry : null,
+  onChange: () => ({ dispose: () => undefined }),
 }));
 
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => () => {
-    throw new Error("the Epic stream override must prevent socket creation");
-  },
+  useDurableStreamTransportFactory: () => refuseDurableTransport,
+}));
+
+vi.mock("@/hooks/host/use-host-stream-client-for", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-stream-client-for")
+  >()),
+  useHostStreamClientFor: () => null,
+  useHostStreamClientBindingFor: () => null,
 }));
 
 // Spread the real module rather than enumerate the three exports this suite
@@ -78,6 +118,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     }),
     useHostBinding: () => ({ hostClient: activeHostClient }),
     useHostClient: () => activeHostClient,
+    useHostDirectory: () => hostDirectory,
   };
 });
 
@@ -91,8 +132,21 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     }),
     useHostBinding: () => ({ hostClient: activeHostClient }),
     useHostClient: () => activeHostClient,
+    // An `importOriginal` spread hands back the REAL spine hook, which throws
+    // outside a provider; `useHostRuntimeClient` is a separate export since
+    // redesign P2.1 and must be overridden explicitly.
+    useHostRuntimeClient: () => activeHostClient,
+    useHostDirectory: () => hostDirectory,
   };
 });
+
+// `EpicSessionProvider` resolves its host through the selection authority's
+// derived pointer (selection model §1), whose store only a mounted kernel
+// bridge writes - no component test mounts one. Seed it with the same id
+// `activeHostClient.getActiveHostId()` answers, so both scopes agree.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "default-host",
+}));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => {
@@ -106,6 +160,10 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     }
     return { status: "reachable" as const, hostLabel: hostId };
   },
+  resolvedHostLabel: (r: {
+    readonly status: string;
+    readonly hostLabel: string;
+  }) => (r.status === "checking" ? null : r.hostLabel),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({

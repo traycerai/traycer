@@ -122,6 +122,12 @@ import {
   type DesktopAppProcessGroupUsage,
   type DesktopAppResourceUsage,
 } from "@/lib/resources/desktop-app-resource-usage";
+import { queryClient } from "@/lib/query-client";
+import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
+import {
+  rejectClosedPlainTerminalRestore,
+  retainedPlainTerminalTombstoneBlocksClosedRestore,
+} from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
@@ -1110,7 +1116,7 @@ function resolveResourceMonitorHostReading(input: {
 }): ResourceMonitorHostReading {
   // ONE value answers "which machine is this reading about", and it answers it
   // for both the data and the actions. Deriving the kill target from a second
-  // reader of the active host — `useReactiveActiveHostId`, which this used to
+  // reader of the active host — `useAddressableHostId`, which this used to
   // call — is what let the two disagree: on an ambient host swap it moved to
   // the new machine a commit before the stream transport did, so the panel
   // showed the old host's processes with kills aimed at the new one. That
@@ -1243,7 +1249,13 @@ function ResourceMonitorPanel(props: {
     ],
   );
 
-  const canvasIndex = useMemo(() => buildCanvasResourceIndex(canvas), [canvas]);
+  const tombstoneEvidence = usePlainTerminalTombstoneEvidence();
+  const canvasIndex = useMemo(() => {
+    // Not read by the builder directly - it is the Query-side input the
+    // builder's tombstone gate reads, so the index has to re-derive with it.
+    void tombstoneEvidence;
+    return buildCanvasResourceIndex(canvas);
+  }, [canvas, tombstoneEvidence]);
   const recordByOwner = useMemo(() => buildRecordByOwner(canvas), [canvas]);
   const epicTitleById = useMemo(() => buildEpicTitleById(tasks), [tasks]);
   const taskRows = useMemo(
@@ -3935,6 +3947,51 @@ function filterOwnerProcessRowsForSearch(
   };
 }
 
+/**
+ * Retained-tombstone evidence that `buildCanvasResourceIndex` consults through
+ * `retainedPlainTerminalTombstoneBlocksClosedRestore`. It lives in Query, not
+ * in the canvas snapshot, so the index has to observe it separately: a
+ * tombstone that arrives before its presentation fanout leaves the closed-tile
+ * row visible while `openResourceOwner` already rejects it, which reads to the
+ * user as a click that does nothing. Only the tombstoned ids and the live
+ * revision that could overtake them are folded in, so an ordinary projection
+ * tick does not churn the index.
+ */
+function plainTerminalTombstoneEvidence(): string {
+  const parts: string[] = [];
+  for (const [queryKey, collection] of queryClient.getQueriesData<
+    PlainTerminalCollection | undefined
+  >({
+    predicate: (query) => query.queryKey[2] === "terminal.plain.list",
+  })) {
+    if (collection === undefined) continue;
+    for (const [terminalId, revision] of Object.entries(
+      collection.deletedRevisionById,
+    )) {
+      const live = collection.terminalsById[terminalId]?.record.revision ?? -1;
+      parts.push(
+        `${String(queryKey[1])}:${terminalId}:${String(revision)}:${String(live)}`,
+      );
+    }
+  }
+  return parts.sort().join("|");
+}
+
+function subscribeToPlainTerminalTombstones(
+  onStoreChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe(onStoreChange);
+}
+
+function usePlainTerminalTombstoneEvidence(): string {
+  // A string snapshot, so an unrelated cache event re-derives it but does not
+  // re-render. This panel only mounts while the popover is open.
+  return useSyncExternalStore(
+    subscribeToPlainTerminalTombstones,
+    plainTerminalTombstoneEvidence,
+  );
+}
+
 function buildCanvasResourceIndex(
   canvas: CanvasResourceSnapshot,
 ): CanvasResourceIndex {
@@ -4002,6 +4059,15 @@ function buildCanvasResourceIndex(
     )) {
       const node = payload?.node;
       if (node === undefined || !isOwnerNodeRef(node)) continue;
+      if (
+        retainedPlainTerminalTombstoneBlocksClosedRestore({
+          queryClient,
+          epicId: tab.epicId,
+          node,
+        })
+      ) {
+        continue;
+      }
       const ownerKind = resourceOwnerKindForRef(node);
       if (ownerKind === null) continue;
       const key = ownerKey(tab.epicId, ownerKind, node.id);
@@ -4137,6 +4203,15 @@ function openResourceOwner(args: {
   // from the resource snapshot or an artifact record.
   const closedTile = args.row.closedTile;
   if (closedTile !== null) {
+    if (
+      rejectClosedPlainTerminalRestore({
+        queryClient,
+        epicId: snapshot.owner.epicId,
+        node: closedTile.node,
+      })
+    ) {
+      return false;
+    }
     commitOwnerFocus({
       epicId: snapshot.owner.epicId,
       tabId: closedTile.tabId,

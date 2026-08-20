@@ -1,14 +1,21 @@
 import { log } from "../app/logger";
-import type { ConvergeReadyOk, MutationOutcome } from "./host-controller-types";
+import type {
+  ConvergeReadyOk,
+  MutationOutcome,
+  PendingRevisionCaller,
+} from "./host-controller-types";
 
 // `HostController.convergeReadyPackagedMac`'s already-reachable branch only
 // gets a chance to apply a deferred LaunchAgent revision
-// (`applyPendingLoginItemRevisionIfIdle`) once per renderer-triggered
-// `convergeReady` call - and the renderer's `local-host-gate.tsx` fires that
-// exactly once per mount, gated by a ref that never resets. So a marker left
-// behind because the host was busy at that single check sits inert for the
-// rest of the session; the user would need to fully relaunch the app before
-// the refreshed plist (e.g. the 8,192 descriptor limit) ever takes effect.
+// (`applyPendingLoginItemRevisionIfIdle`) once per `convergeReady` call - and
+// those are rare by design. The renderer's once-per-mount call was retired in
+// P1.3 (and its gate deleted in P3.4): what remains is this process's own
+// launch reconciler, firing once at startup, the selection authority's
+// ensure when derivation wants a local host that is down, and whatever the
+// user asks for by hand. So a marker left behind because the host was busy at
+// that single startup check sits inert for the rest of the session; the user
+// would need to fully relaunch the app before the refreshed plist (e.g. the
+// 8,192 descriptor limit) ever takes effect.
 //
 // This monitor closes that gap: it ticks on a bounded interval and hands off
 // to `HostController.applyPendingLoginItemRevisionIfIdle()` directly -
@@ -37,7 +44,9 @@ const MAX_REFRESH_ATTEMPTS_WITHOUT_SUCCESS = 3;
  * standing up every other `HostController` method.
  */
 export interface PendingLoginItemRevisionMonitorHostController {
-  applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null>;
+  applyPendingLoginItemRevisionIfIdle(
+    caller: PendingRevisionCaller,
+  ): Promise<MutationOutcome<ConvergeReadyOk> | null>;
   isPendingRevisionRefreshQuarantined(): boolean;
 }
 
@@ -78,7 +87,9 @@ export function startPendingLoginItemRevisionMonitor(
     ticking = true;
     try {
       const outcome =
-        await deps.hostController.applyPendingLoginItemRevisionIfIdle();
+        await deps.hostController.applyPendingLoginItemRevisionIfIdle(
+          "outside-lane",
+        );
       if (disposed) return;
       if (outcome === null) {
         // Nothing to do this tick (no marker, not reachable, busy, or a

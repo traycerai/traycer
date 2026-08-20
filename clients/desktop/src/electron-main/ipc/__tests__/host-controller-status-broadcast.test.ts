@@ -59,6 +59,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
   >();
   let statusReads = 0;
   const base: FakeHostController = {
+    lifecycleAdmissionBlock: null,
     status: fakeStatus(null),
     getStatusError: null,
     getStatusCallCount(): number {
@@ -97,6 +98,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
         bytes: null,
         totalBytes: null,
         message: null,
+        workUnits: null,
       };
       for (const listener of progressListeners) listener(progress);
     },

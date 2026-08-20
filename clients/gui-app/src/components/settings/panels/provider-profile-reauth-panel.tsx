@@ -35,6 +35,21 @@ function noop(): void {}
 interface ProviderProfileReauthPanelProps {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  /** Settles a reconnect of the SAME account without the acknowledgment card.
+   *  The profile is already authenticated and persisted by the time the flow
+   *  reaches `identity` - the card only asks the user to confirm something
+   *  that already happened - so a caller whose surface exists purely for the
+   *  sign-in (the edit dialog opened *to* sign this profile in) passes a
+   *  handler here and closes itself, rather than handing back a form whose
+   *  only exit is Cancel.
+   *
+   *  `null` keeps the card, and is right for a caller with unfinished
+   *  business of its own - the "Switch account" entry, whose name/color edits
+   *  stay uncommitted until "Save changes". A CHANGED account keeps the card
+   *  either way: its amber notice is the only thing that tells the user the
+   *  profile was rebound to a different account. */
+  readonly onSameAccountReconnected:
+    ((profile: ProviderProfile) => void) | null;
   readonly onCancel: () => void;
   readonly onDone: () => void;
 }
@@ -42,6 +57,7 @@ interface ProviderProfileReauthPanelProps {
 export function ProviderProfileReauthPanel({
   state,
   profile,
+  onSameAccountReconnected,
   onCancel,
   onDone,
 }: ProviderProfileReauthPanelProps): ReactNode {
@@ -51,10 +67,22 @@ export function ProviderProfileReauthPanel({
   const cancelLogin = useProvidersCancelLogin();
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
+  // The `profile` prop is LIVE, and it turns over mid-flow:
+  // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row into
+  // the `providers.list` cache, and query-core awaits that before the flow's
+  // own per-call `onSuccess` settles the step. So by the first render of the
+  // settled step this prop already describes whoever just signed in - it can
+  // be neither the "before" side of the changed-account comparison (which
+  // would then compare the new account against itself and always call it
+  // unchanged) nor the basis for "are we signing this profile in, or switching
+  // its account" (which would flip its own copy the instant it succeeded).
+  // Freeze the row as it was on entry; it is the only record of who this
+  // profile was when the user started, and everything below wants exactly it.
+  const [entryProfile] = useState(profile);
   const flow = useProviderProfileLoginFlow({
     mode: "reauth",
     providerId: state.providerId,
-    existingProfileId: profile.profileId,
+    existingProfileId: entryProfile.profileId,
     loginCapability: state.loginCapability,
     startLogin,
     awaitLogin,
@@ -69,6 +97,7 @@ export function ProviderProfileReauthPanel({
   });
   const [emailRevealed, setEmailRevealed] = useState(false);
   const startedRef = useRef(false);
+  const handedOffRef = useRef(false);
 
   const showWaiting =
     flow.state.kind === "start" ||
@@ -77,7 +106,14 @@ export function ProviderProfileReauthPanel({
   const showIdentity = flow.state.kind === "identity";
   const identityChanged =
     flow.state.kind === "identity" &&
-    !sameProfileIdentity(profile, flow.state.profile);
+    !sameProfileIdentity(entryProfile, flow.state.profile);
+  const handingOff =
+    onSameAccountReconnected !== null && showIdentity && !identityChanged;
+  // Suppressed from the render, not just skipped afterwards: the hand-off
+  // runs in an effect, so the card would otherwise paint for a frame - and
+  // stay painted for the caller's exit animation - before vanishing. A card
+  // that appears only to fade out reads as a step the user missed.
+  const showIdentityCard = showIdentity && !handingOff;
 
   const start = useCallback((): void => {
     flow.start({ label: null, shareSkillsAndPlugins: false });
@@ -100,16 +136,32 @@ export function ProviderProfileReauthPanel({
     start();
   }, [start]);
 
+  // One-shot on its own ref, not on the dep list: the caller's handler is an
+  // inline closure, so deps alone would re-fire this on every render the
+  // caller takes to unmount - one duplicate toast apiece. Nothing resets it,
+  // because the only route back into `identity` is "Sign in again", which is
+  // exactly the correction this should settle (wrong account -> retry -> the
+  // original account back = nothing left to ask about).
+  //
+  // No re-test of the state kind or the handler: `handingOff` is a const alias
+  // for `kind === "identity"` plus the null check, and narrows both below.
+  useEffect(() => {
+    if (!handingOff) return;
+    if (handedOffRef.current) return;
+    handedOffRef.current = true;
+    onSameAccountReconnected(flow.state.profile);
+  }, [flow.state, handingOff, onSameAccountReconnected]);
+
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
       <div>
         <div className="text-ui-sm font-medium text-foreground">
-          {profile.auth.status === "unauthenticated"
+          {entryProfile.auth.status === "unauthenticated"
             ? "Signing in"
             : "Switching account"}
         </div>
         <p className="mt-0.5 text-ui-xs text-muted-foreground">
-          {profile.auth.status === "unauthenticated"
+          {entryProfile.auth.status === "unauthenticated"
             ? "Reconnect this profile. Its name and color will not change."
             : "The profile name and color will not change."}
         </p>
@@ -117,9 +169,9 @@ export function ProviderProfileReauthPanel({
 
       <ProviderProfileReauthState
         flow={flow}
-        profile={profile}
+        entryProfile={entryProfile}
         showWaiting={showWaiting}
-        showIdentity={showIdentity}
+        showIdentity={showIdentityCard}
         identityChanged={identityChanged}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
@@ -135,7 +187,7 @@ export function ProviderProfileReauthPanel({
 
 function ProviderProfileReauthState({
   flow,
-  profile,
+  entryProfile,
   showWaiting,
   showIdentity,
   identityChanged,
@@ -148,7 +200,10 @@ function ProviderProfileReauthState({
   onDone,
 }: {
   readonly flow: ProviderProfileLoginFlow;
-  readonly profile: ProviderProfile;
+  /** The row as it was when the panel mounted - see the freeze at the call
+   *  site. The live prop describes the account that just signed in, so it
+   *  cannot narrate what this profile "was". */
+  readonly entryProfile: ProviderProfile;
   readonly showWaiting: boolean;
   readonly showIdentity: boolean;
   readonly identityChanged: boolean;
@@ -190,10 +245,10 @@ function ProviderProfileReauthState({
             <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-ui-xs text-amber-900 dark:text-amber-200">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
               <span>
-                {profile.label} is now signed in as{" "}
+                {entryProfile.label} is now signed in as{" "}
                 {profileIdentityCopy(flow.state.profile)} (was{" "}
-                {profileIdentityCopy(profile)}). Sign in again if this is not
-                the intended account.
+                {profileIdentityCopy(entryProfile)}). Sign in again if this is
+                not the intended account.
               </span>
             </div>
           ) : null}
@@ -251,6 +306,10 @@ function ProviderProfileReauthActions({
   readonly onDone: () => void;
 }): ReactNode {
   if (showWaiting) return null;
+  // Nothing to act on - the settled-and-handing-off frame, whose card is
+  // suppressed above. Without this the row still reserves its gap under an
+  // empty footer while the caller unmounts.
+  if (!showIdentity && flow.state.kind !== "failed") return null;
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">

@@ -141,6 +141,7 @@ function controllableSession(): ControllableSession {
       availability.add(listener);
       return () => availability.delete(listener);
     },
+    subscribeReadinessLost: () => () => undefined,
     terminalFatal: () => session.fatal,
     close: () => {
       closeCalls += 1;

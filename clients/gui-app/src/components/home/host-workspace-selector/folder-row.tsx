@@ -1,4 +1,11 @@
-import { FileSliders, Folder, Pin, Trash2, TriangleAlert } from "lucide-react";
+import {
+  CircleMinus,
+  FileSliders,
+  Folder,
+  Pin,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -26,13 +33,14 @@ export function FolderRow(props: {
   /** Collision boundary for nested popovers (in-epic rows live in a popover). */
   readonly boundaryEl: HTMLElement | null;
   readonly readOnly: boolean;
+  readonly moveToRecent: boolean;
 }) {
   const { item } = props;
   const runPath = workspaceRunPath(item);
 
   return (
     <div
-      className="group col-span-full grid min-w-0 grid-cols-subgrid items-center"
+      className="group col-span-full grid min-w-0 grid-cols-subgrid items-center @max-[28rem]:gap-y-0.5 @max-[28rem]:pb-1"
       data-testid="folder-row"
       data-path={item.displayPath}
     >
@@ -102,6 +110,7 @@ export function FolderRow(props: {
         boundaryEl={props.boundaryEl}
         uncommittedByPath={props.uncommittedByPath}
         onEditEnvironment={props.onEditEnvironment}
+        moveToRecent={props.moveToRecent}
       />
     </div>
   );
@@ -117,6 +126,7 @@ function FolderRowBody(props: {
   readonly boundaryEl: HTMLElement | null;
   readonly uncommittedByPath: ReadonlyMap<string, number>;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly moveToRecent: boolean;
 }) {
   const { item } = props;
 
@@ -128,7 +138,7 @@ function FolderRowBody(props: {
   if (item.unresolved) {
     return (
       <>
-        <div className="col-[3/5] flex min-w-0 items-center gap-2">
+        <div className="col-[3/5] flex min-w-0 items-center gap-2 @max-[28rem]:col-[2/3] @max-[28rem]:row-start-2">
           <span
             className="min-w-0 truncate text-ui-sm text-muted-foreground"
             data-testid="folder-row-not-available"
@@ -151,6 +161,7 @@ function FolderRowBody(props: {
           item={item}
           readOnly={props.readOnly}
           onEditEnvironment={props.onEditEnvironment}
+          moveToRecent={props.moveToRecent}
         />
       </>
     );
@@ -163,7 +174,7 @@ function FolderRowBody(props: {
     return (
       <>
         <div
-          className="col-[3/5] flex min-w-0 items-center gap-2 text-ui-sm text-muted-foreground"
+          className="col-[3/5] flex min-w-0 items-center gap-2 text-ui-sm text-muted-foreground @max-[28rem]:col-[2/3] @max-[28rem]:row-start-2"
           data-testid="folder-row-loading"
         >
           <AgentSpinningDots
@@ -177,6 +188,7 @@ function FolderRowBody(props: {
           item={item}
           readOnly={props.readOnly}
           onEditEnvironment={props.onEditEnvironment}
+          moveToRecent={props.moveToRecent}
         />
       </>
     );
@@ -184,21 +196,26 @@ function FolderRowBody(props: {
 
   return (
     <>
-      <FolderLocationControl
-        item={item}
-        uncommittedByPath={props.uncommittedByPath}
-        boundaryEl={props.boundaryEl}
-        readOnly={props.readOnly}
-      />
-      <FolderBranchControl
-        item={item}
-        boundaryEl={props.boundaryEl}
-        readOnly={props.readOnly}
-      />
+      <div className="min-w-0 @max-[28rem]:col-[2/3] @max-[28rem]:row-start-2">
+        <FolderLocationControl
+          item={item}
+          uncommittedByPath={props.uncommittedByPath}
+          boundaryEl={props.boundaryEl}
+          readOnly={props.readOnly}
+        />
+      </div>
+      <div className="min-w-0 @max-[28rem]:col-[2/3] @max-[28rem]:row-start-3">
+        <FolderBranchControl
+          item={item}
+          boundaryEl={props.boundaryEl}
+          readOnly={props.readOnly}
+        />
+      </div>
       <FolderRowActions
         item={item}
         readOnly={props.readOnly}
         onEditEnvironment={props.onEditEnvironment}
+        moveToRecent={props.moveToRecent}
       />
     </>
   );
@@ -209,13 +226,14 @@ function FolderRowActions(props: {
   readonly item: WorkspaceRunItem;
   readonly readOnly: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly moveToRecent: boolean;
 }) {
   if (props.readOnly) return null;
   const { item } = props;
   const showEnvironment = !item.unresolved && !item.metadataPending;
   return (
     <span
-      className="col-start-5 grid shrink-0 grid-cols-2 items-center justify-self-end gap-0.5"
+      className="col-start-5 grid shrink-0 grid-cols-2 items-center justify-self-end gap-0.5 @max-[28rem]:col-start-3 @max-[28rem]:row-start-1"
       data-testid="folder-row-actions"
     >
       <span className="inline-flex size-6 items-center justify-center">
@@ -224,7 +242,7 @@ function FolderRowActions(props: {
         ) : null}
       </span>
       <span className="inline-flex size-6 items-center justify-center">
-        <RemoveFolderButton item={item} />
+        <RemoveFolderButton item={item} moveToRecent={props.moveToRecent} />
       </span>
     </span>
   );
@@ -358,21 +376,38 @@ function MakePrimaryButton(props: { readonly item: WorkspaceRunItem }) {
   );
 }
 
-function RemoveFolderButton(props: { readonly item: WorkspaceRunItem }) {
+function RemoveFolderButton(props: {
+  readonly item: WorkspaceRunItem;
+  readonly moveToRecent: boolean;
+}) {
   const { item } = props;
+  const removeIcon = props.moveToRecent ? (
+    <CircleMinus className="size-3.5" />
+  ) : (
+    <Trash2 className="size-3.5" />
+  );
   // Always rendered AND always visible (even for a single folder). The
   // last-folder / active-owner guard is the per-item `removeDisabled` (with a
   // tooltip), not a hidden button — so the delete option is always discoverable.
   const button = (
     <button
       type="button"
-      aria-label={`Remove ${item.displayName}`}
+      aria-label={
+        props.moveToRecent
+          ? `Move ${item.displayName} to Recent`
+          : `Remove ${item.displayName}`
+      }
       data-testid="folder-remove"
       disabled={
         item.onRemove === null || item.removePending || item.removeDisabled
       }
       onClick={item.onRemove ?? undefined}
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-[var(--fc-opacity,0.7)] outline-none transition-[opacity,color,background-color] hover:bg-destructive/10 hover:text-destructive hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:text-muted-foreground/60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60 disabled:hover:opacity-[var(--fc-opacity,0.7)]"
+      className={cn(
+        "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-[var(--fc-opacity,0.7)] outline-none transition-[opacity,color,background-color] hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:text-muted-foreground/60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60 disabled:hover:opacity-[var(--fc-opacity,0.7)]",
+        props.moveToRecent
+          ? "hover:bg-accent/50 hover:text-foreground"
+          : "hover:bg-destructive/10 hover:text-destructive",
+      )}
     >
       {item.removePending ? (
         <AgentSpinningDots
@@ -381,7 +416,7 @@ function RemoveFolderButton(props: { readonly item: WorkspaceRunItem }) {
           variant="dots"
         />
       ) : (
-        <Trash2 className="size-3.5" />
+        removeIcon
       )}
     </button>
   );
@@ -394,6 +429,18 @@ function RemoveFolderButton(props: { readonly item: WorkspaceRunItem }) {
         align={undefined}
       >
         <span className="inline-flex shrink-0">{button}</span>
+      </TooltipWrapper>
+    );
+  }
+  if (props.moveToRecent) {
+    return (
+      <TooltipWrapper
+        label="Move to Recent"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        {button}
       </TooltipWrapper>
     );
   }

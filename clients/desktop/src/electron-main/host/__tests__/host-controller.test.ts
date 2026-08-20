@@ -107,6 +107,7 @@ import {
   runBundledTraycerCliJson,
   streamBundledTraycerCliJson,
   TraycerCliError,
+  type NdjsonEvent,
 } from "../../cli/traycer-cli";
 import { prereleaseUpdatesEnabled } from "../../app/update-preferences";
 import {
@@ -128,8 +129,10 @@ import {
 } from "../host-controller";
 import {
   HOST_REMOVED_BY_USER_MESSAGE,
+  type LifecycleAdmissionBlock,
   type MutationLaneStatus,
   type MutationProgress,
+  type ReprovisionGuardVerdict,
 } from "../host-controller-types";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
 import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
@@ -481,10 +484,12 @@ describe("headline: convergeReady during an in-flight mutation resolves, never r
     await flushMicrotasks();
 
     let convergeSettled = false;
-    const convergePromise = controller.convergeReady(false).then((outcome) => {
-      convergeSettled = true;
-      return outcome;
-    });
+    const convergePromise = controller
+      .convergeReady(false, { kind: "background" })
+      .then((outcome) => {
+        convergeSettled = true;
+        return outcome;
+      });
     await flushMicrotasks();
 
     // Both calls are still pending - `convergeReady` is queued, not rejected.
@@ -560,10 +565,10 @@ describe("mutation lane: wait-never-reject", () => {
       data: { activated: true },
     });
 
-    const first = await controller.respawn();
+    const first = await controller.respawn({ kind: "background" });
     expect(first.kind).toBe("failed");
 
-    const second = await controller.respawn();
+    const second = await controller.respawn({ kind: "background" });
     expect(second.kind).toBe("ok");
   });
 
@@ -592,9 +597,9 @@ describe("mutation lane: wait-never-reject", () => {
     });
 
     await Promise.all([
-      controller.respawn(),
+      controller.respawn({ kind: "background" }),
       controller.applyStaged("manual", false),
-      controller.respawn(),
+      controller.respawn({ kind: "background" }),
     ]);
 
     expect(maxConcurrentHolders).toBe(1);
@@ -645,6 +650,7 @@ describe("mutation lane: wait-never-reject", () => {
         bytes: 50,
         totalBytes: 100,
         message: "applying",
+        workUnits: null,
       });
       return {
         data: {
@@ -693,7 +699,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -735,6 +741,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 50,
         totalBytes: 100,
         message: "applying",
+        workUnits: null,
       });
       // A watchdog heartbeat: liveness only, every numeric field null.
       opts.onEvent({
@@ -744,6 +751,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: null,
+        workUnits: null,
       });
       return {
         data: {
@@ -811,6 +819,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: 45,
         totalBytes: 100,
         message: "downloading host 1.8.0",
+        workUnits: null,
       });
       opts.onEvent({
         type: "progress",
@@ -819,6 +828,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "retrying host archive shortly",
+        workUnits: null,
       });
       opts.onEvent({
         type: "progress",
@@ -827,6 +837,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
         bytes: null,
         totalBytes: null,
         message: "extracting host 1.8.0",
+        workUnits: null,
       });
       return {
         data: {
@@ -844,13 +855,117 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
     expect(outcome.kind).toBe("ok");
     expect(progresses).toEqual([
       expect.objectContaining({ stage: "download", percent: 45 }),
+      // The tick carries EVERYTHING forward, stage included. This is the arm
+      // that protects what Mi-1 exists for, and the one a careless scoping of
+      // the carry-forward breaks.
       expect.objectContaining({
         stage: "download",
         percent: 45,
+        bytes: 45,
+        totalBytes: 100,
         message: "retrying host archive shortly",
+        workUnits: null,
       }),
-      expect.objectContaining({ stage: "extract", percent: 45 }),
+      // ...and a GENUINE transition carries nothing. This assertion used to read
+      // `percent: 45`, pinning the leak as though it were intended - incidentally,
+      // since this test's subject is the `stage` guard and not the numbers. It was
+      // the only thing in the suite that noticed they leaked, and it agreed with
+      // them.
+      expect.objectContaining({
+        stage: "extract",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+      }),
     ]);
+  });
+
+  it("a genuine stage transition blanks the bar instead of inheriting a COMPLETED download's numbers", async () => {
+    // THE SHIPPED DEFECT, in the shape a user meets it. On every registry
+    // install: download climbs to 100% with bytes == totalBytes, extract
+    // announces with all three null, the stage transitions correctly - and every
+    // number is inherited. So the card sat at a FULL progress bar reading
+    // "800 MB of 800 MB", under "Setting up Traycer Host…", for the whole
+    // multi-minute extract.
+    //
+    // A full bar reads as FINISHED, not as working, which makes it the worst of
+    // the three fields. Blanking is not a regression: the new stage has no
+    // measured position yet, and an honest empty beats an inherited lie.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const progresses: MutationProgress[] = [];
+    const unsubscribeProgress = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      // A download that RAN TO COMPLETION - the case that produced the full bar.
+      opts.onEvent({
+        type: "progress",
+        stage: "download",
+        percent: 100,
+        bytes: 838_860_800,
+        totalBytes: 838_860_800,
+        message: "downloading host 1.8.0",
+        workUnits: null,
+      });
+      opts.onEvent({
+        type: "progress",
+        stage: "extract",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: "extracting host 1.8.0",
+        workUnits: null,
+      });
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: null,
+        },
+      };
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+    unsubscribeProgress();
+
+    expect(outcome.kind).toBe("ok");
+    // Positive first: the download's own numbers DID land, so the absences below
+    // are not satisfied by a lane that never reported anything.
+    expect(progresses[0]).toEqual(
+      expect.objectContaining({
+        stage: "download",
+        percent: 100,
+        bytes: 838_860_800,
+        totalBytes: 838_860_800,
+      }),
+    );
+    expect(progresses[1]).toEqual(
+      expect.objectContaining({
+        stage: "extract",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: "extracting host 1.8.0",
+        workUnits: null,
+      }),
+    );
   });
 });
 
@@ -1004,8 +1119,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
     });
 
     const [first, second] = await Promise.all([
-      controller.respawn(),
-      controller.respawn(),
+      controller.respawn({ kind: "background" }),
+      controller.respawn({ kind: "background" }),
     ]);
 
     expect(restartCalls).toBe(1);
@@ -1067,8 +1182,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
       return { data: { activated: true } };
     });
 
-    await controller.respawn();
-    await controller.respawn();
+    await controller.respawn({ kind: "background" });
+    await controller.respawn({ kind: "background" });
 
     expect(restartCalls).toBe(2);
   });
@@ -1103,7 +1218,7 @@ describe("two lanes: mutation vs download independence", () => {
       return {};
     });
 
-    const respawnPromise = controller.respawn();
+    const respawnPromise = controller.respawn({ kind: "background" });
     await flushMicrotasks();
 
     const stageLatestPromise = controller.stageLatest();
@@ -1170,7 +1285,7 @@ describe("two lanes: mutation vs download independence", () => {
 
     // A mutation starts WHILE the probe above is still pending, and stays
     // active (gated on restartGate).
-    const respawnPromise = controller.respawn();
+    const respawnPromise = controller.respawn({ kind: "background" });
     await flushMicrotasks();
 
     probeGate.resolve(undefined);
@@ -1240,7 +1355,9 @@ describe("two lanes: mutation vs download independence", () => {
     const applyPromise = controller.applyStaged("manual", false);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false);
+    const convergePromise = controller.convergeReady(false, {
+      kind: "background",
+    });
     // The download is still gated (unresolved) while convergeReady reaches
     // its own CLI call - real fs reads (readRunningHostIdentity et al.) are
     // in the path first, so poll rather than assume a fixed number of
@@ -1305,7 +1422,9 @@ describe("two lanes: mutation vs download independence", () => {
     const activatePromise = controller.activateInstalled(false);
     await downloadStarted.promise;
 
-    const convergePromise = controller.convergeReady(false);
+    const convergePromise = controller.convergeReady(false, {
+      kind: "background",
+    });
     await vi.waitFor(() => {
       if (!ensureCalled) throw new Error("ensure not reached yet");
     });
@@ -1463,7 +1582,7 @@ describe("desktop-held cli-lock: two-process test", () => {
     // avoids a scheduler race where a cold `bun run` has not reached its
     // first lock attempt before Desktop's own retry timer wakes.
     await waitForFile(join(barrierDir, "cli-lock-acquired"));
-    const registerPromise = controller.registerService();
+    const registerPromise = controller.registerService({ kind: "background" });
     await waitForFile(join(barrierDir, "cli-exit"));
     const cliExit = JSON.parse(
       readFileSync(join(barrierDir, "cli-exit"), "utf8"),
@@ -1528,7 +1647,7 @@ describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)"
       return { outcome: "stamped" };
     });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     expect(runBundledTraycerCliJson).toHaveBeenCalledTimes(1);
@@ -1574,7 +1693,7 @@ describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup
       throw new Error("failed to seed a held lock for this test");
     }
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("deferred");
     await held.handle.release();
@@ -1582,20 +1701,23 @@ describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup
 });
 
 // ---------------------------------------------------------------------------
-// Fixup B3: lock-contention terminal contract has 3 outcome classes, not the
-// single "deferred" `runLockedMacActivationCycle` used to hardcode
-// regardless of caller - manual intents (`respawn`, above) resolve
-// "deferred"; `convergeReady` must resolve "failed" + a Retry-worded message
-// (the renderer's gate UI), because it is reached from the live "connecting
-// to host" gate, not a background/manual surface that can just wait quietly.
-// The bug: `convergeReadyPackagedMac`'s OWN activation cycle (reached after
-// its `ensure` CLI call, not the ensure call itself) fed the shared
-// `runLockedMacActivationCycle` helper the same hardcoded `false` every
-// other caller used, so lock contention hit during THIS phase surfaced the
-// manual "deferred" message on the gate instead of "failed" + Retry.
+// Lock-contention terminal contract: ONE class, `deferred`, for every
+// mutation - convergeReady included. This SUPERSEDES fixup B3, which split
+// convergeReady off to "failed" + a Retry-worded message for the renderer's
+// live "connecting to host" gate. That gate's automatic converge is retired
+// (D14/C5); convergeReady's launch-time caller is now the selection
+// authority's ensure - a background actor - and the engine turns a `failed`
+// completion into a 30s dead-lease cooldown, i.e. the "No host is
+// available" modal over a healthy machine whose lock the desktop's own
+// launch reconcile happened to hold. A held lock means nothing ran and
+// nothing was learned about the host; the surviving manual surfaces
+// (Settings converge, doctor) throw the outcome message whatever its kind.
+// What this pin still protects from B3's era: contention during the
+// packaged-mac ACTIVATION CYCLE (after the ensure CLI call) resolves
+// cleanly - no hang, no throw.
 // ---------------------------------------------------------------------------
-describe("lock-contention terminal contract: convergeReady classifies busy as failed+Retry (fixup B3)", () => {
-  it("convergeReady on packaged macOS resolves failed+Retry (not deferred) when the desktop lock is held during the activation cycle", async () => {
+describe("lock-contention terminal contract: convergeReady defers like every other mutation (supersedes fixup B3)", () => {
+  it("convergeReady on packaged macOS resolves deferred when the desktop lock is held during the activation cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newControllerWithLockTiming(
       "production",
@@ -1626,12 +1748,11 @@ describe("lock-contention terminal contract: convergeReady classifies busy as fa
     // force: true - skips the "noop && !force" early return (same as B6's
     // force test above) so this genuinely reaches the locked activation
     // cycle's desktop-lock acquisition instead of short-circuiting first.
-    const outcome = await controller.convergeReady(true);
-
-    expect(outcome).toMatchObject({
-      kind: "failed",
-      message: expect.stringContaining("Retry"),
+    const outcome = await controller.convergeReady(true, {
+      kind: "background",
     });
+
+    expect(outcome.kind).toBe("deferred");
     await held.handle.release();
   });
 });
@@ -2551,7 +2672,7 @@ describe("yank/apply ordering", () => {
       return { data: {} };
     });
 
-    const restart = controller.respawn();
+    const restart = controller.respawn({ kind: "background" });
     await vi.waitFor(() => {
       // `--force` distinguishes respawn (the explicit force path - the
       // Settings Force-restart offer, tray restart) from the cooperative
@@ -2801,7 +2922,7 @@ describe("platform matrix", () => {
       data: { action: "installed", version: "1.8.0", runtimeVersion: null },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -2820,7 +2941,7 @@ describe("platform matrix", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    await controller.convergeReady(true);
+    await controller.convergeReady(true, { kind: "background" });
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -2832,10 +2953,12 @@ describe("platform matrix", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
-    await cliController.registerService();
-    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.arrayContaining(["host", "service", "install"]),
+    await cliController.registerService({ kind: "background" });
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["host", "service", "install"]),
+      }),
     );
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -2844,10 +2967,388 @@ describe("platform matrix", () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
     const macController = newController("production");
-    await macController.registerService();
+    await macController.registerService({ kind: "background" });
     expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
+  });
+
+  // ---- user-repair reprovision intent -------------------------------------
+  //
+  // These pin the half of a Doctor lifecycle repair that the IPC handler
+  // deliberately does NOT do. Both repair routes hand the controller a
+  // `user-repair` intent instead of clearing the sentinel and checking
+  // identity themselves — the queued one because its wait is unbounded, the
+  // watched one because an await between its lane test and its submit would
+  // reopen the window the test exists to close.
+
+  it("a user-repair converge clears the removal sentinel at the head of the lane", async () => {
+    // The bug this closes: `convergeReady` short-circuits to
+    // ok/{running:false} while the sentinel is set, so "Install host" on a
+    // removed host reported "Fix applied" having installed nothing.
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+    expect(await isHostRemovedByUser()).toBe(true);
+
+    const outcome = await controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    // Not merely "the sentinel is gone afterwards" — the converge must have
+    // actually RUN. A short-circuit would also leave kind "ok".
+    expect(await isHostRemovedByUser()).toBe(false);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+    expect(outcome.kind).toBe("ok");
+  });
+
+  it("a BACKGROUND converge still obeys the removal sentinel", async () => {
+    // The other half of the same contract, and the reason the intent exists
+    // rather than an unconditional clear: the reconciler and launch
+    // convergence must leave a removed host removed.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
+
+    expect(await isHostRemovedByUser()).toBe(true);
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: false, version: null },
+    });
+  });
+
+  it("a user-repair whose guard abandons mutates nothing", async () => {
+    // The host was replaced while the repair waited in the lane. Nothing may
+    // run — and critically the sentinel must NOT be cleared, since clearing
+    // it is itself a write against whichever host is now current.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const outcome = await controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () =>
+        Promise.resolve({ kind: "abandon", message: "host changed" }),
+    });
+
+    // `abandoned`, not `failed`: the refusal classification travels in the
+    // settled outcome so every coalesced waiter reads the same verdict, and
+    // so the Doctor console can render it as "declined" instead of counting
+    // it toward its recurrence lock.
+    expect(outcome).toEqual({ kind: "abandoned", message: "host changed" });
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  it("the guard is asked at the head of the lane, not when the repair is submitted", async () => {
+    // The whole point of moving the check into the controller. The repair is
+    // submitted while an install holds the lane; the guard must not run until
+    // that install has finished and this job reaches the head.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const installGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await installGate.promise;
+      return { data: { action: "noop", version: "1.7.0" } };
+    });
+    const occupy = controller.convergeReady(false, { kind: "background" });
+
+    let guardAsked = false;
+    const repair = controller.registerService({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "proceed" });
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+    });
+    expect(guardAsked).toBe(false);
+
+    installGate.resolve();
+    await occupy;
+    await repair;
+    expect(guardAsked).toBe(true);
+  });
+
+  it("a user-repair does not coalesce onto a background job of the same shape", async () => {
+    // Coalescing is keyed on the intent for this reason: a repair that joined
+    // a background converge would inherit its policy and silently skip both
+    // the guard and the sentinel clear — the same shape as the pending-login-
+    // item bug where the joiner's policy was discarded.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const background = controller.convergeReady(false, { kind: "background" });
+    let guardAsked = false;
+    const repair = controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "proceed" });
+      },
+    });
+
+    expect(await background).toEqual({
+      kind: "ok",
+      value: { running: false, version: null },
+    });
+    await repair;
+    // Had they coalesced, the repair would have resolved the background
+    // job's short-circuit and never asked.
+    expect(guardAsked).toBe(true);
+    expect(await isHostRemovedByUser()).toBe(false);
+  });
+
+  it("two coalesced user-repairs for the same host both receive the guard's refusal", async () => {
+    // Two windows submit the identical repair for the same host; the second
+    // JOINS the first's in-flight job, so only the first intent's guard ever
+    // runs. The refusal must ride the SHARED settled outcome — as the
+    // `abandoned` arm — because any state parked with one caller is dead for
+    // the other, which would then misread the result as a genuine failure
+    // and count it toward the Doctor console's recurrence lock.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const guardGate = deferred<ReprovisionGuardVerdict>();
+    const first = controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => guardGate.promise,
+    });
+    let secondGuardAsked = false;
+    const second = controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        secondGuardAsked = true;
+        return Promise.resolve({ kind: "proceed" });
+      },
+    });
+
+    guardGate.resolve({ kind: "abandon", message: "host changed" });
+    await expect(first).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    await expect(second).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    // Proves the two really were ONE job — the joiner's own guard never ran.
+    expect(secondGuardAsked).toBe(false);
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+  });
+
+  it("a queued user-repair restart asks its guard at the head of the lane and abandons after a host swap", async () => {
+    // A restart queues exactly like the reprovisions, so the identity
+    // question must be answered when the restart is about to FIRE, not when
+    // it was submitted: the host it named can be replaced while it waits
+    // behind an install, and a forced restart against the replacement kills
+    // sessions nobody asked about.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const installGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await installGate.promise;
+      return { data: { action: "noop", version: "1.7.0" } };
+    });
+    const occupy = controller.convergeReady(false, { kind: "background" });
+
+    let guardAsked = false;
+    const restart = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "abandon", message: "host changed" });
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+    });
+    expect(guardAsked).toBe(false);
+
+    installGate.resolve();
+    await occupy;
+    await expect(restart).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    expect(guardAsked).toBe(true);
+    // The restart itself never ran — the only CLI traffic was the converge
+    // that occupied the lane.
+    const restartCalls = vi
+      .mocked(streamBundledTraycerCliJson)
+      .mock.calls.filter((call) => call[0].args.includes("restart"));
+    expect(restartCalls).toEqual([]);
+  });
+
+  it("a user-repair respawn does not coalesce onto a background respawn", async () => {
+    // Same rule as the converge twin: joining the background job would hand
+    // the repair that job's guard-free policy. Keyed apart, the user repair
+    // runs as its own lane job and its guard is actually consulted.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const restartGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await restartGate.promise;
+      return { data: { activated: true } };
+    });
+    const background = controller.respawn({ kind: "background" });
+    let guardAsked = false;
+    const repair = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "abandon", message: "host changed" });
+      },
+    });
+
+    restartGate.resolve();
+    await expect(background).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    // Had they coalesced, the repair would have resolved the background
+    // restart's outcome and never asked.
+    await expect(repair).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    expect(guardAsked).toBe(true);
+  });
+
+  it("a user-repair respawn keeps the removed-by-user deferral and clears nothing", async () => {
+    // A restart is NOT a reprovision. Even asked for by a person, it defers
+    // on the removal sentinel — only Install host / Register service mean
+    // "give me the host back", so only they clear it.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const outcome = await controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_REMOVED_BY_USER_MESSAGE,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+  });
+
+  it("a respawn admitted after another respawn already restarted answers restarted without a second cycle", async () => {
+    // The coalesce key is intent-discriminated, so a watched user repair and
+    // a menu/tray background restart for the same slot are DIFFERENT lane
+    // jobs — the seam `respawnGeneration` closes. Without it the second
+    // forced cycle fires immediately after the first and kills the sessions
+    // that just reconnected to the fresh host.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const restartGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await restartGate.promise;
+      return { data: { activated: true } };
+    });
+    const watched = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+    const background = controller.respawn({ kind: "background" });
+
+    restartGate.resolve();
+    await expect(watched).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    await expect(background).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    // ONE actual restart: the second job reported the first's completed
+    // cycle as its own fulfilment instead of running another.
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("a FAILED respawn does not satisfy its queued twin — the twin still runs as the retry", async () => {
+    // Only a COMPLETED restart bumps the generation. A busy/failed cycle
+    // never touched the host, so the queued twin must run rather than
+    // report a restart that never happened.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({ data: { activated: true } });
+    const first = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+    const second = controller.respawn({ kind: "background" });
+
+    await expect(first).resolves.toEqual({
+      kind: "failed",
+      message: expect.stringContaining("boom"),
+    });
+    await expect(second).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(2);
   });
 
   it("F8b: CLI registerService treats a readiness timeout as non-converged and never reports registration success", async () => {
@@ -2864,11 +3365,13 @@ describe("platform matrix", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.arrayContaining(["host", "service", "install"]),
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["host", "service", "install"]),
+      }),
     );
   });
 
@@ -2879,16 +3382,19 @@ describe("platform matrix", () => {
       runtimeVersion: null,
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
-      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
-      return {
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
         installGeneration: "service-install-command-generation",
         runtimeVersion: null,
         runtimeWasNull: true,
-      };
+      },
+    });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
+      return {};
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -2906,7 +3412,7 @@ describe("platform matrix", () => {
       runtimeVersion: "1.7.0",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toMatchObject({
       kind: "failed",
@@ -2929,7 +3435,7 @@ describe("platform matrix", () => {
       return {};
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -2949,7 +3455,7 @@ describe("platform matrix", () => {
     // Deliberately no `writeInstallRecord` - simulates a concurrent
     // terminal uninstall winning the lock first.
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toEqual({ kind: "failed", message: "No host installed." });
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -2958,13 +3464,12 @@ describe("platform matrix", () => {
   it("dev environment threads --allow-self-invocation into the CLI-owned service install", async () => {
     const controller = newController("dev");
     writeInstallRecord("dev", { version: "1.7.0", runtimeVersion: "1.7.0" });
-    await controller.registerService();
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
-      "host",
-      "service",
-      "install",
-      "--allow-self-invocation",
-    ]);
+    await controller.registerService({ kind: "background" });
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["host", "service", "install", "--allow-self-invocation"],
+      }),
+    );
   });
 
   it("removeTraycer ordering: sentinel is persisted before the login-item unregister and the CLI uninstall run", async () => {
@@ -3372,7 +3877,9 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       },
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("ok");
     expect(stampCalls).toHaveLength(1);
@@ -3643,7 +4150,9 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       },
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("failed");
   });
@@ -3674,7 +4183,9 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("failed");
   });
@@ -3703,7 +4214,9 @@ describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
       new TraycerCliError("E_HOST_BUSY", "host busy"),
     );
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome).toEqual({
       kind: "busy",
@@ -3769,7 +4282,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3798,7 +4311,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3821,7 +4334,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure"] }),
@@ -3846,7 +4359,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure"] }),
@@ -3870,7 +4383,7 @@ describe("Windows bundled-host --from fallback", () => {
       data: { running: true, version: "1.7.0", action: "noop" },
     });
 
-    await controller.convergeReady(false);
+    await controller.convergeReady(false, { kind: "background" });
 
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "ensure"] }),
@@ -3906,7 +4419,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
     removePidMetadata("production");
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(hasUnappliedPendingLoginItemRevision).not.toHaveBeenCalled();
   });
 
@@ -3915,7 +4430,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     const controller = newController("production");
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
 
@@ -3929,7 +4446,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
 
@@ -3940,7 +4459,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
@@ -3948,7 +4468,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // Quarantined for the rest of the session - a second tick skips even
     // the pre-flight re-read.
     vi.mocked(readHostLoginItemStatus).mockClear();
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(readHostLoginItemStatus).not.toHaveBeenCalled();
   });
 
@@ -3969,7 +4491,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "failed",
@@ -4007,18 +4530,18 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "ok",
       value: { running: true, version: "1.7.0" },
     });
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
-      "host",
-      "service",
-      "install",
-      "--takeover",
-    ]);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["host", "service", "install", "--takeover"],
+      }),
+    );
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
 
@@ -4026,7 +4549,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // already killed the running host once. A later attempt (e.g. the
     // monitor's next 30s tick) must not run the disruptive cycle again for
     // the same terminal outcome.
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second).toBeNull();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -4041,11 +4565,12 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
-    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
       new Error("takeover exploded"),
     );
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "failed",
@@ -4082,7 +4607,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "pid metadata never appeared",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "failed",
@@ -4097,7 +4623,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second?.kind).toBe("ok");
     expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
   });
@@ -4143,13 +4670,15 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       throw new Error("failed to seed a held lock for this test");
     }
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toBeNull();
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
     expect(registerHostLoginItem).not.toHaveBeenCalled();
 
     await held.handle.release();
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second?.kind).toBe("ok");
   });
 
@@ -4171,12 +4700,14 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toBeNull();
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
 
     vi.mocked(registerHostLoginItem).mockResolvedValueOnce("enabled");
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second).toEqual({
       kind: "ok",
       value: { running: true, version: "1.7.0" },
@@ -4201,7 +4732,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toEqual({
       kind: "ok",
       value: { running: true, version: "1.7.0" },
@@ -4220,7 +4752,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toEqual({
       kind: "ok",
       value: { running: false, version: null },
@@ -4281,7 +4814,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       return {};
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome?.kind).toBe("ok");
 
     expect(stampCalls).toHaveLength(1);
@@ -4312,7 +4846,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
     expect(outcome).toEqual({
       kind: "ok",
       value: { running: true, version: "1.7.0" },
@@ -4334,7 +4870,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -4369,7 +4906,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       },
     });
 
-    const refreshPromise = controller.applyPendingLoginItemRevisionIfIdle();
+    const refreshPromise =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     // Real fs reads precede the disruptive step (readRunningRuntimeVersion,
     // probeHostBusyVerdict, the lock acquisition, readRunningHostIdentity,
     // readDesktopHostInstallRecord) - poll rather than a fixed microtask
@@ -4401,7 +4939,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
-    const refresh = controller.applyPendingLoginItemRevisionIfIdle();
+    const refresh =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await flushMicrotasks();
 
     expect(await controller.awaitMutationLaneIdle(20)).toBe(false);
@@ -4437,8 +4976,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
 
     const [first, second] = await Promise.all([
-      controller.applyPendingLoginItemRevisionIfIdle(),
-      controller.applyPendingLoginItemRevisionIfIdle(),
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
     ]);
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
@@ -4452,7 +4991,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // The slot clears once settled - a later, independent call can still
     // run its own cycle rather than being stuck joined forever.
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-    const third = await controller.applyPendingLoginItemRevisionIfIdle();
+    const third =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(third).toEqual(expected);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
   });
@@ -4488,11 +5028,12 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // starts the cycle, then convergeReadyPackagedMac reaches its reentrant
     // public caller while that cycle is still in flight.
     const refresh = vi.spyOn(controller, "applyPendingLoginItemRevisionIfIdle");
-    const monitorTick = controller.applyPendingLoginItemRevisionIfIdle();
+    const monitorTick =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("revision cycle did not start");
     });
-    const convergence = controller.convergeReady(false);
+    const convergence = controller.convergeReady(false, { kind: "background" });
     await vi.waitFor(() => {
       // A reachability probe is only an earlier asynchronous prerequisite.
       // Wait for the real production join edge: the reentrant caller has
@@ -4543,7 +5084,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       },
     );
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -4571,7 +5113,7 @@ describe("respawn (fixup B14)", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     await markHostRemovedByUser();
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome).toEqual({
       kind: "deferred",
@@ -4602,7 +5144,7 @@ describe("respawn (fixup B14)", () => {
       new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("deferred");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
@@ -4645,7 +5187,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    const outcome = await controller.convergeReady(false);
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("ok");
     expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
@@ -4737,7 +5281,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
     });
 
-    await expect(controller.convergeReady(false)).resolves.toMatchObject({
+    await expect(
+      controller.convergeReady(false, { kind: "background" }),
+    ).resolves.toMatchObject({
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
     });
@@ -4768,7 +5314,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       reason: "ready",
     });
 
-    await expect(controller.convergeReady(false)).resolves.toMatchObject({
+    await expect(
+      controller.convergeReady(false, { kind: "background" }),
+    ).resolves.toMatchObject({
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
     });
@@ -4800,11 +5348,308 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     });
 
     await expect(
-      controller.applyPendingLoginItemRevisionIfIdle(),
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
     ).resolves.toMatchObject({
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
     });
+  });
+
+  it("lifecycleAdmissionBlock is login-item-refresh only after prechecks pass, then null once the cycle settles", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    const registerGate = deferred<"enabled">();
+    let registerCalled = false;
+    vi.mocked(registerHostLoginItem).mockImplementation(async () => {
+      registerCalled = true;
+      return registerGate.promise;
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "noop",
+        running: true,
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      },
+    });
+
+    const refreshPromise =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    await vi.waitFor(() => {
+      if (!registerCalled) throw new Error("register not reached yet");
+    });
+    expect(controller.lifecycleAdmissionBlock).toEqual({
+      kind: "login-item-refresh",
+    } satisfies LifecycleAdmissionBlock);
+
+    registerGate.resolve("enabled");
+    await refreshPromise;
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+  });
+
+  it("lifecycleAdmissionBlock stays null while uncoalesced prechecks are pending", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const reachabilityGate = deferred<boolean>();
+    const controller = newControllerWithReachability(
+      "production",
+      async () => reachabilityGate.promise,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+
+    const refresh =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    await flushMicrotasks();
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+
+    reachabilityGate.resolve(false);
+    await refresh;
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+  });
+
+  it("a tick that bails on no marker never raises lifecycleAdmissionBlock", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+  });
+
+  it("an outside-lane tick defers when the mutation lane owns an intent, without raising login-item-refresh", async () => {
+    // Discriminator: without reverse admission the monitor would commit a
+    // bootout behind an already-accepted install. The check and the
+    // commitment flag share one synchronous stretch, so the block stays
+    // `{kind:"mutation"}` rather than flipping to login-item-refresh.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    const installGate = deferred<{ data: unknown }>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("install")) return installGate.promise;
+      return { data: {} };
+    });
+
+    const installPromise = controller.installVersion("1.8.0", false);
+    await vi.waitFor(() => {
+      const block = controller.lifecycleAdmissionBlock;
+      if (block === null || block.kind !== "mutation") {
+        throw new Error("expected the mutation lane to be occupied");
+      }
+    });
+
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    expect(outcome).toBeNull();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+    expect(controller.lifecycleAdmissionBlock).toMatchObject({
+      kind: "mutation",
+    });
+
+    installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await installPromise;
+  });
+
+  it("a within-lane-job caller still runs the cycle while the mutation lane is occupied", async () => {
+    // convergeReady reaches the cycle from inside its own lane job; a
+    // blanket lane check would refuse the caller of the job itself.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const installGate = deferred<{ data: unknown }>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("install")) return installGate.promise;
+      return { data: {} };
+    });
+
+    const installPromise = controller.installVersion("1.8.0", false);
+    await vi.waitFor(() => {
+      const block = controller.lifecycleAdmissionBlock;
+      if (block === null || block.kind !== "mutation") {
+        throw new Error("expected the mutation lane to be occupied");
+      }
+    });
+
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("within-lane-job");
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    });
+
+    installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await installPromise;
+  });
+
+  it("convergeReady's noop path still applies a pending revision via within-lane-job", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "noop",
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      },
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.convergeReady(false, {
+      kind: "background",
+    });
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    });
+  });
+
+  async function occupyInstallAndParkOutsideRevision(input: {
+    readonly joiner: "outside-lane" | "within-lane-job";
+  }) {
+    // Probe starts resolved so install can occupy the lane; flipped to a
+    // pending promise before the outside tick so that tick parks in
+    // `readRunningRuntimeVersion` (the first uncoalesced await) with the
+    // D1 slot already populated.
+    const probeResult: { current: Promise<boolean> } = {
+      current: Promise.resolve(true),
+    };
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newControllerWithReachability(
+      "production",
+      async () => probeResult.current,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const installGate = deferred<{ data: unknown }>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("install")) return installGate.promise;
+      return { data: {} };
+    });
+
+    const installPromise = controller.installVersion("1.8.0", false);
+    await vi.waitFor(() => {
+      const block = controller.lifecycleAdmissionBlock;
+      if (block === null || block.kind !== "mutation") {
+        throw new Error("expected the mutation lane to be occupied");
+      }
+    });
+
+    const reachabilityGate = deferred<boolean>();
+    probeResult.current = reachabilityGate.promise;
+    const outside =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    await flushMicrotasks();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+
+    const joined = controller.applyPendingLoginItemRevisionIfIdle(input.joiner);
+    reachabilityGate.resolve(true);
+    return {
+      outside,
+      joined,
+      installPromise,
+      installGate,
+      registerCalls: () => vi.mocked(registerHostLoginItem).mock.calls.length,
+    };
+  }
+
+  it("a within-lane joiner upgrades an in-flight outside tick still in prechecks so the cycle runs", async () => {
+    // Discriminator: before the coalescing upgrade, the parked outside tick
+    // kept its own `outside-lane` policy, saw the mutation lane the JOINER
+    // occupies, and returned null — a cycle refusing because of the caller
+    // waiting on it. Red against f705b8eb^ (join returned the in-flight
+    // promise as-is).
+    const parked = await occupyInstallAndParkOutsideRevision({
+      joiner: "within-lane-job",
+    });
+    const expected = {
+      kind: "ok" as const,
+      value: { running: true, version: "1.7.0" },
+    };
+    expect(await parked.joined).toEqual(expected);
+    expect(await parked.outside).toEqual(expected);
+    expect(parked.registerCalls()).toBe(1);
+
+    parked.installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await parked.installPromise;
+  });
+
+  it("an outside-lane joiner of a parked outside tick still defers while the mutation lane is occupied", async () => {
+    // Pin against applying the upgrade unconditionally: an outside joiner
+    // must not widen what the cycle may do. Same interleaving as the
+    // within-lane upgrade pin; only the joiner's owner policy changes.
+    const parked = await occupyInstallAndParkOutsideRevision({
+      joiner: "outside-lane",
+    });
+    expect(await parked.joined).toBeNull();
+    expect(await parked.outside).toBeNull();
+    expect(parked.registerCalls()).toBe(0);
+
+    parked.installGate.resolve({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    await parked.installPromise;
   });
 });
 
@@ -4927,7 +5772,9 @@ describe("Class B CLI-owned caller publication", () => {
     });
     configureRestartAndStamp();
 
-    await expect(controller.respawn()).resolves.toMatchObject({
+    await expect(
+      controller.respawn({ kind: "background" }),
+    ).resolves.toMatchObject({
       kind: "ok",
       value: { activated: true },
     });
@@ -4960,7 +5807,7 @@ describe("Class B CLI-owned caller publication", () => {
     configureRestartAndStamp();
 
     await expect(
-      controller.freePortAndRestart(null, null),
+      controller.freePortAndRestart(null, null, { kind: "background" }),
     ).resolves.toMatchObject({
       kind: "ok",
       value: { activated: true },
@@ -4983,7 +5830,7 @@ describe("recoverIfDown", () => {
     const gate = deferred<{ data: unknown }>();
     vi.mocked(streamBundledTraycerCliJson).mockReturnValueOnce(gate.promise);
 
-    const respawnPromise = controller.respawn();
+    const respawnPromise = controller.respawn({ kind: "background" });
     await flushMicrotasks();
 
     const recovered = await controller.recoverIfDown();
@@ -5152,7 +5999,9 @@ describe("freePortAndRestart (CLI-owned)", () => {
       outcome: "stamped",
     });
 
-    const outcome = await controller.freePortAndRestart(null, null);
+    const outcome = await controller.freePortAndRestart(null, null, {
+      kind: "background",
+    });
 
     expect(outcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -5229,7 +6078,9 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.registerService()).kind).toBe("ok");
+    expect(
+      (await controller.registerService({ kind: "background" })).kind,
+    ).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 
@@ -5253,7 +6104,9 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "ready",
     });
 
-    expect((await controller.registerService()).kind).toBe("ok");
+    expect(
+      (await controller.registerService({ kind: "background" })).kind,
+    ).toBe("ok");
     expect(waitForHostReady).toHaveBeenCalledWith(
       expect.any(Number),
       getHostFsLayout("production").pidMetadataFile,
@@ -5270,7 +6123,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.respawn()).kind).toBe("ok");
+    expect((await controller.respawn({ kind: "background" })).kind).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 
@@ -5294,7 +6147,10 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.freePortAndRestart(null, null)).kind).toBe("ok");
+    expect(
+      (await controller.freePortAndRestart(null, null, { kind: "background" }))
+        .kind,
+    ).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 
@@ -5304,10 +6160,12 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
-    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
-      installGeneration: "already-stamped-generation",
-      runtimeVersion: "1.7.0",
-      runtimeWasNull: false,
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        installGeneration: "already-stamped-generation",
+        runtimeVersion: "1.7.0",
+        runtimeWasNull: false,
+      },
     });
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
@@ -5317,7 +6175,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toMatchObject({
       kind: "failed",
@@ -5352,7 +6210,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toMatchObject({
       kind: "failed",
@@ -5389,7 +6247,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       reason: "timeout",
     });
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
@@ -5408,7 +6266,10 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       new Error("ensure failed after side effects"),
     );
 
-    expect((await convergeController.convergeReady(false)).kind).toBe("failed");
+    expect(
+      (await convergeController.convergeReady(false, { kind: "background" }))
+        .kind,
+    ).toBe("failed");
     expect(convergeLifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
 
     const applyLifecycle = fakeHostLifecycle();
@@ -5517,7 +6378,7 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValueOnce({
       data: { activated: true },
     });
-    const respawnOutcome = await controller.respawn();
+    const respawnOutcome = await controller.respawn({ kind: "background" });
     expect(respawnOutcome.kind).toBe("ok");
 
     // Fixup C2: the title's own claim - "no durable pending-pin state" -
@@ -5576,7 +6437,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
         reason: "ready",
       });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     // The retry is a FULL cycle - a second register, not a second wait on
@@ -5589,7 +6450,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     const controller = stagePackagedMacWorld();
     vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -5628,7 +6489,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
       return NOT_READY;
     });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     // The point of the guard: no second bootout, no second wait.
@@ -5643,7 +6504,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     // host being evicted, still answering because teardown has not finished.
     // Reachable, and worth nothing as evidence.
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     expect(waitForHostReady).toHaveBeenCalledTimes(2);
@@ -5661,7 +6522,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
         : "enabled",
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -5706,10 +6567,12 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(TAKEOVER_ARGV);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: TAKEOVER_ARGV }),
+    );
     // The futile-retry pin: `not-found` is sticky for this SMAppService
     // session, so neither the S8 wrapper nor the fallback may re-run the
     // register cycle.
@@ -5723,11 +6586,11 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
   it("activation cycle: a failing takeover surfaces one terminal message naming the status and the manual escape hatch", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
-    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
       new Error("takeover exploded"),
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -5747,14 +6610,14 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
   it("activation cycle: a takeover denied by a busy host is deferred - retry-later information, not a reportable failure", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
-    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
       new TraycerCliError(
         "E_HOST_BUSY",
         "service install --takeover: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
       ),
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("deferred");
     if (outcome.kind === "deferred") {
@@ -5781,7 +6644,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       reason: "pid metadata never appeared",
     });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -5794,10 +6657,12 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
 
-    const outcome = await controller.registerService();
+    const outcome = await controller.registerService({ kind: "background" });
 
     expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
-    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(TAKEOVER_ARGV);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: TAKEOVER_ARGV }),
+    );
   });
 
   it("requires-approval NEVER escalates to the takeover - the toggle is the user's alone", async () => {
@@ -5820,8 +6685,10 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
         : "enabled",
     );
 
-    const respawnOutcome = await controller.respawn();
-    const registerOutcome = await controller.registerService();
+    const respawnOutcome = await controller.respawn({ kind: "background" });
+    const registerOutcome = await controller.registerService({
+      kind: "background",
+    });
 
     expect(respawnOutcome.kind).toBe("failed");
     expect(registerOutcome.kind).toBe("failed");
@@ -5840,12 +6707,150 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     // resurrect the exact registration the user just removed.
     vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
       expect(outcome.message).toBe(HOST_REMOVED_BY_USER_MESSAGE);
     }
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
+  });
+});
+
+// Fixup E: `mutationEpoch` ownership. `streamBundled` captures
+// `(mutationEpoch, mutationStatus !== null)` at spawn time, and only
+// publishes a progress event through `setMutationProgress` when BOTH the
+// spawning call was inside the mutation lane AND the epoch is still the one
+// captured at spawn. `enqueueMutation` bumps the epoch at mutation start and
+// end. Two things must hold:
+//   (1) a `streamBundled` call made while NO mutation is active (e.g. the
+//       `applyPendingLoginItemRevisionIfIdle` takeover recovery path, which
+//       deliberately runs outside `enqueueMutation`) must never alter an
+//       unrelated mutation's published progress, even if that mutation
+//       starts and is still active when the out-of-lane call's progress
+//       events arrive.
+//   (2) a normal in-lane call still publishes its progress exactly as
+//       before.
+describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
+  it("a streamBundled call spawned OUTSIDE the mutation lane never publishes progress into an unrelated mutation that starts while it is still running", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-registered");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const takeoverGate = deferred<{ data: unknown }>();
+    const restartGate = deferred<{ data: unknown }>();
+    // A plain `let` reassigned only inside the mock's closure loses its
+    // narrowed (non-null) type at every read in this outer scope - TS's
+    // control-flow analysis does not trace assignments made from inside a
+    // nested function expression. Holding it as an object property sidesteps
+    // that: property narrowing is re-evaluated from each guard, not frozen
+    // to the variable's initializer.
+    const takeoverEvents: { onEvent: ((event: NdjsonEvent) => void) | null } = {
+      onEvent: null,
+    };
+
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("--takeover")) {
+        takeoverEvents.onEvent = opts.onEvent;
+        return takeoverGate.promise;
+      }
+      if (opts.args.includes("restart")) {
+        return restartGate.promise;
+      }
+      return { data: {} };
+    });
+
+    const progresses: MutationProgress[] = [];
+    const unsubscribe = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+
+    // `applyPendingLoginItemRevisionIfIdle` runs OUTSIDE `enqueueMutation` -
+    // no mutation is active when its takeover call spawns, so `streamBundled`
+    // captures `spawnedInLane = false`. That is exactly what the `caller`
+    // argument now names, so this call passes `"outside-lane"`: it is subject
+    // to reverse admission and defers to a mutation that takes the lane.
+    const refreshPromise =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
+    await vi.waitFor(() => {
+      if (takeoverEvents.onEvent === null) {
+        throw new Error("takeover streamBundled call not reached yet");
+      }
+    });
+
+    // A completely unrelated mutation starts while the out-of-lane takeover
+    // call above is still in flight - `respawn`'s own restart call is gated
+    // too, so its mutation stays active for the assertion below.
+    const respawnPromise = controller.respawn({ kind: "background" });
+    await flushMicrotasks();
+
+    if (takeoverEvents.onEvent === null) {
+      throw new Error("takeoverEvents.onEvent was never captured");
+    }
+    takeoverEvents.onEvent({
+      type: "progress",
+      stage: "register",
+      percent: 50,
+      bytes: null,
+      totalBytes: null,
+      message: "registering host-credential",
+      workUnits: null,
+    });
+    await flushMicrotasks();
+
+    // The active mutation is `respawn`'s, not the out-of-lane takeover's -
+    // the progress event must not have landed anywhere.
+    expect(progresses).toHaveLength(0);
+
+    restartGate.resolve({ data: { activated: true } });
+    await respawnPromise;
+    takeoverGate.resolve({ data: {} });
+    await refreshPromise;
+    unsubscribe();
+  });
+
+  it("a normal in-lane streamBundled call still publishes its progress events", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const progresses: MutationProgress[] = [];
+    const unsubscribe = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      opts.onEvent({
+        type: "progress",
+        stage: "restart",
+        percent: 10,
+        bytes: null,
+        totalBytes: null,
+        message: "restarting",
+        workUnits: null,
+      });
+      return { data: { activated: true } };
+    });
+
+    const outcome = await controller.respawn({ kind: "background" });
+    unsubscribe();
+
+    expect(outcome.kind).toBe("ok");
+    expect(progresses).toEqual([
+      expect.objectContaining({ stage: "restart", percent: 10 }),
+    ]);
   });
 });

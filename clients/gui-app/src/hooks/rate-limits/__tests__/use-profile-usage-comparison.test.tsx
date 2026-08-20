@@ -93,9 +93,11 @@ function buildHostScope(
   readonly scope: RunTargetHost;
   readonly requestSpy: RateLimitUsageHandler;
 } {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = { ...mockLocalHostEntry, hostId };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -104,10 +106,10 @@ function buildHostScope(
       },
     }),
   });
-  client.bind({ ...mockLocalHostEntry, hostId });
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  const client = spine.createRequester(entry);
   const scope: RunTargetHost = {
     hostId,
     client,
@@ -336,6 +338,7 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-managed",
+        force: true,
       },
     ]);
   });
@@ -369,6 +372,7 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-a",
+        force: true,
       },
     ]);
   });
@@ -483,6 +487,9 @@ describe("useProfileUsageComparison", () => {
         accountContext: DEFAULT_ACCOUNT_CONTEXT,
         providerId: "claude-code",
         profileId: "p-tab",
+        // `force` rides the WIRE request only; the query key below stays
+        // force-less so manual and automatic pulls share one cache entry.
+        force: true,
       },
     ]);
     expect(

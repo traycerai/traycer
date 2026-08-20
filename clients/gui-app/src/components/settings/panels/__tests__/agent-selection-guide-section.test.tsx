@@ -85,8 +85,8 @@ const guideMocks = vi.hoisted(
   }),
 );
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => guideMocks.activeHostId,
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => guideMocks.activeHostId,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({

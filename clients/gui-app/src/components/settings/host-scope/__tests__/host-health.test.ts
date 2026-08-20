@@ -6,13 +6,13 @@ import type {
 import { deriveHostHealth } from "@/components/settings/host-scope/host-health";
 
 /**
- * `stopped` and `not-installed` are the only two health states a person can
- * ACT on — Start, or Install — and for a long time nothing could produce
- * them: `useHostScope` passed `undefined` for the installed record, so
- * `deriveStatus` could only answer `running` or nothing, and a stopped local
- * host fell through to its registry connectivity and read "Offline · last
- * seen 3h ago". True about the cloud's answer, useless to someone whose host
- * is sitting right there with a Start button one click away.
+ * `stopped` and `not-installed` are the two health states that name what this
+ * machine's own host is doing about itself — being restarted, or being
+ * installed — and for a long time nothing could produce them: `useHostScope`
+ * passed `undefined` for the installed record, so `deriveStatus` could only
+ * answer `running` or nothing, and a stopped local host fell through to its
+ * registry connectivity and read "Offline · last seen 3h ago". True about the
+ * cloud's answer, useless to someone whose host is sitting right there.
  *
  * Nothing covered `deriveHostHealth` at all, which is how that shipped.
  */
@@ -40,23 +40,55 @@ function registryItem(connectivity: HostConnectivity): HostListItem {
 }
 
 /**
- * The account axis, supplied by the caller: `connectivity` is pure liveness on
- * the wire, and whether the plan includes remote hosts is an account fact this
- * surface combines with it. These cases describe an entitled account unless
- * they say otherwise.
+ * No lease, authority not attached — i.e. the DTO is the only evidence there
+ * is. That is deliberately the base for this file: everything below is about
+ * the LOCAL-SERVICE and CLOUD-DTO steps of the precedence, which are only
+ * reached once the lease step has declined. The lease step's own behaviour
+ * (including that these two values must never be read as death) is covered in
+ * `host-health-lease.test.ts`.
  */
-const PLAN_ALLOWS_REMOTE = true;
-const PLAN_GATED = false;
-
 const BASE = {
   item: registryItem("offline"),
   hasLiveSession: false,
-  viewerCheck: null,
-  planAllowsRemote: PLAN_ALLOWS_REMOTE,
+  lease: null,
+  authorityAttached: false,
+  planAllowsRemote: true,
   nowMs: NOW_MS,
 };
 
 describe("deriveHostHealth — the two actionable local states", () => {
+  it("says update-required, not Online, for a RUNNING local host whose lease is dead(incompatible)", () => {
+    // The process being right here answers LIVENESS - but incompatibility is
+    // not a liveness claim: the host runs AND this app cannot speak to it.
+    // Reading it as Online hid the one affordance that fixes it (the update
+    // action gates on `update-required`).
+    const health = deriveHostHealth({
+      ...BASE,
+      isLocalMachine: true,
+      authorityAttached: true,
+      lease: {
+        hostId: "host-local",
+        status: "dead",
+        dead: {
+          reason: "incompatible",
+          detail: {
+            code: "HOST_INCOMPATIBLE",
+            hostVersion: "1.0.0",
+            minSupportedVersion: "2.0.0",
+          },
+        },
+      },
+      service: {
+        state: "running",
+        version: "1.0.0",
+        listenUrl: "ws://127.0.0.1:1",
+        pid: 4242,
+      },
+    });
+
+    expect(health.state).toBe("update-required");
+  });
+
   it("says Stopped, not Offline, for an installed local host that is not running", () => {
     const health = deriveHostHealth({
       ...BASE,
@@ -144,7 +176,18 @@ describe("deriveHostHealth — the two actionable local states", () => {
 });
 
 describe("deriveHostHealth — connectivity mapping for a remote row", () => {
-  it("maps connectable to Online, live", () => {
+  /**
+   * F26. `connectable` is a cloud lease with a 15-minute TTL and nothing in
+   * this app has dialled the machine, so the row states the report rather than
+   * asserting liveness — and, more importantly, draws NO green dot.
+   *
+   * The dot is the part this pins hardest. `deriveHostPresence` has always
+   * carried the invariant "no green dot without live evidence", and its own
+   * `connectable` arm violated it by naming the stale lease as live evidence.
+   * A host that died dirty therefore kept a green Online for up to a quarter of
+   * an hour, extended further by the 60s keep-warm linger.
+   */
+  it("maps a never-dialled connectable host to Reported reachable, with NO live dot", () => {
     const health = deriveHostHealth({
       ...BASE,
       item: registryItem("connectable"),
@@ -152,19 +195,20 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
       service: undefined,
     });
 
-    expect(health.state).toBe("online");
-    expect(health.label).toBe("Online");
-    expect(health.live).toBe(true);
+    expect(health.state).toBe("reported-reachable");
+    expect(health.label).toBe("Reported reachable");
+    // The overclaim, in both of its forms.
+    expect(health.label).not.toBe("Online");
+    expect(health.live).toBe(false);
+    // Not a fault either — nothing is wrong, we simply have not looked.
+    expect(health.tone).toBe("idle");
   });
 
-  it("maps a plan-gated LIVE host to local-only, labelled Local only, and never Offline", () => {
-    // The state and its copy are unchanged; only what produces them moved.
-    // It used to be a wire word (`connectivity: "local-only"`), which is what
-    // hid liveness behind billing.
+  it("maps a plan-gated connectable host to Local only, and never Offline", () => {
     const health = deriveHostHealth({
       ...BASE,
       item: registryItem("connectable"),
-      planAllowsRemote: PLAN_GATED,
+      planAllowsRemote: false,
       isLocalMachine: false,
       service: undefined,
     });
@@ -175,36 +219,6 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     expect(health.live).toBe(false);
     // Not a fault: idle tone, not warn.
     expect(health.tone).toBe("idle");
-  });
-
-  it("maps a plan-gated host with a BLIND liveness read to local-only too", () => {
-    const health = deriveHostHealth({
-      ...BASE,
-      item: registryItem("unknown"),
-      planAllowsRemote: PLAN_GATED,
-      isLocalMachine: false,
-      service: undefined,
-    });
-
-    expect(health.state).toBe("local-only");
-    expect(health.label).toBe("Local only");
-  });
-
-  it("maps a plan-gated OFFLINE host to Offline with its last-seen detail — dead is dead", () => {
-    // The upgrade remedy is wrong for a machine that is switched off, and the
-    // last-seen line is exactly what an offline row needs. Under the old wire
-    // this row read "Local only" forever for a free-tier account.
-    const health = deriveHostHealth({
-      ...BASE,
-      item: registryItem("offline"),
-      planAllowsRemote: PLAN_GATED,
-      isLocalMachine: false,
-      service: undefined,
-    });
-
-    expect(health.state).toBe("offline");
-    expect(health.label).toBe("Offline");
-    expect(health.detail).toContain("Last seen");
   });
 
   it("maps unknown to Status unknown, and never Offline", () => {
@@ -237,20 +251,6 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     const health = deriveHostHealth({
       ...BASE,
       item: registryItem("offline"),
-      isLocalMachine: false,
-      hasLiveSession: true,
-      service: undefined,
-    });
-
-    expect(health.state).toBe("online");
-    expect(health.live).toBe(true);
-  });
-
-  it("lets live-session evidence outrank the plan gate too — the surviving session is firsthand proof", () => {
-    const health = deriveHostHealth({
-      ...BASE,
-      item: registryItem("connectable"),
-      planAllowsRemote: PLAN_GATED,
       isLocalMachine: false,
       hasLiveSession: true,
       service: undefined,

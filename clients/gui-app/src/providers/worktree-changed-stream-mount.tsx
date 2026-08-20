@@ -5,7 +5,7 @@ import {
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 import {
   createWorktreeChangedInvalidationScheduler,
@@ -16,7 +16,7 @@ import {
 export function WorktreeChangedStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("worktree.changed");
-  const hostId = useReactiveActiveHostId();
+  const hostId = useAddressableHostId();
   const queryClient = useQueryClient();
 
   useEffect(() => {

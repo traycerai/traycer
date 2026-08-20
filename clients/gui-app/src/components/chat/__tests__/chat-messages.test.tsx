@@ -51,6 +51,8 @@ import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-key";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
@@ -850,6 +852,7 @@ describe("ChatMessages scroll policy", () => {
       chatTurnMinimapSide: "right",
       quoteReplyEnabled: false,
     });
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
 
   afterEach(() => {
@@ -858,6 +861,7 @@ describe("ChatMessages scroll policy", () => {
     // Do not restoreAllMocks - it clears module mocks for isMac / activity store.
     platformMock.isMac = true;
     tileLiveness.live = false;
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setLegendListScrollContainerScrollHeightOverride(null);
     useSettingsStore.setState({ chatTurnMinimapSide: "right" });
     // Ticket 15: dual-key durable entries survive tab-key cleanup - clear the
@@ -1087,6 +1091,81 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().scrollTop).toBe(afterUp);
     });
 
+    it("maps macOS Command-Up and Command-Down to absolute transcript boundaries", async () => {
+      const messages = makeTranscript(20);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "kbd-mac-command-boundaries",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      expect(scrollNode.scrollTop).toBeGreaterThan(0);
+      const commandUp = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(commandUp);
+      });
+
+      expect(commandUp.defaultPrevented).toBe(true);
+      expect(scrollNode.scrollTop).toBe(0);
+      fireEvent.scroll(scrollNode);
+      await waitFor(() => {
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+      });
+
+      const next = appendAssistant(messages, "command-up-stream", 50_000);
+      rerenderMessages(next);
+      await settleLegendList();
+      expect(scrollNode.scrollTop).toBe(0);
+
+      const commandDown = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(commandDown);
+      });
+
+      expect(commandDown.defaultPrevented).toBe(true);
+      expect(scrollNode.scrollTop).toBe(maxScrollTopFor(scrollNode));
+    });
+
+    it("leaves a macOS command-arrow chord to a custom keybinding", async () => {
+      useKeybindingStore.setState({
+        bindings: {
+          ...getDefaultBindings(),
+          "app.sidebar.toggle": "mod+arrowup",
+        },
+      });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "kbd-custom-command-boundary",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      const before = scrollNode.scrollTop;
+      const commandUp = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(commandUp);
+      });
+
+      expect(commandUp.defaultPrevented).toBe(false);
+      expect(scrollNode.scrollTop).toBe(before);
+    });
+
     it("does not claim arrows when the target is an input/textarea/combobox", async () => {
       const messages = makeTranscript(8);
       renderChatMessages({ messages, scrollStateKey: "kbd-owner-key" });
@@ -1106,6 +1185,18 @@ describe("ChatMessages scroll policy", () => {
           }),
         );
       });
+      expect(getScrollNode().scrollTop).toBe(scrollBefore);
+
+      const commandUp = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        input.dispatchEvent(commandUp);
+      });
+      expect(commandUp.defaultPrevented).toBe(false);
       expect(getScrollNode().scrollTop).toBe(scrollBefore);
 
       act(() => {
@@ -2395,74 +2486,28 @@ describe("ChatMessages scroll policy", () => {
     // used here (see the outer `afterEach`'s own comment: it would clear the
     // file's `vi.mock` module mocks for isMac / activity store).
 
-    it("stays visible but leaves a narrow epic canvas transcript interactive", async () => {
+    it("keeps a compact interactive rail in a narrow tiled pane", async () => {
       const messages = makeTranscript(20);
       renderChatMessages({ messages, scrollStateKey: "always-on-minimap" });
-      // The rail stays painted as an orientation aid, but its transparent hit
-      // strip must not cover transcript text when the centered content column
-      // consumes the full pane width.
       mockNarrowTranscriptWidth(420);
       await settleLegendList();
 
-      const rail = screen.getByTestId("chat-turn-minimap");
-      const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
-      expect(rail.classList).toContain("opacity-100");
-      expect(rail.classList).not.toContain("opacity-0");
-      expect(hitStrip.hasAttribute("inert")).toBe(true);
-      expect(hitStrip.getAttribute("aria-hidden")).toBe("true");
-      expect(hitStrip.classList.contains("pointer-events-none")).toBe(true);
-      expect(hitStrip.tabIndex).toBe(-1);
-      expect(
-        screen.queryByRole("button", { name: "Message minimap" }),
-      ).toBeNull();
-    });
-
-    it("navigates from the painted narrow rail through the real transcript viewport", async () => {
-      const messages = makeTranscript(20);
-      renderChatMessages({
-        messages,
-        scrollStateKey: "narrow-painted-minimap-click",
-      });
-      mockNarrowTranscriptWidth(420);
-      await settleLegendList();
-
-      const interactionRegion = document.querySelector<HTMLElement>(
-        "[data-chat-turn-minimap-interaction-region]",
+      const hitStrip = await waitFor(() =>
+        screen.getByRole("button", { name: "Message minimap" }),
       );
-      if (interactionRegion === null) {
-        throw new Error("expected minimap interaction region");
-      }
-      vi.spyOn(interactionRegion, "getBoundingClientRect").mockReturnValue({
-        x: 420,
-        y: 100,
-        width: 0,
-        height: 200,
-        top: 100,
-        left: 420,
-        right: 420,
-        bottom: 300,
-        toJSON: () => ({}),
-      });
-      const list = legendListRefHolder.current;
-      if (list === null) throw new Error("expected LegendListRef");
-      const scrollToIndex = vi.spyOn(list, "scrollToIndex");
-      const transcriptTarget = screen.getByTestId("mock-message-message-10");
-      const click = new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        clientX: 419,
-        clientY: 100,
-      });
-
-      act(() => {
-        transcriptTarget.dispatchEvent(click);
-      });
-
-      expect(click.defaultPrevented).toBe(true);
-      await waitFor(() => expect(scrollToIndex).toHaveBeenCalled());
+      expect(hitStrip).toBe(screen.getByTestId("chat-turn-minimap-hit-strip"));
+      expect(Number.parseFloat(hitStrip.style.width)).toBeGreaterThan(0);
+      const ticks = screen.getAllByTestId("chat-turn-minimap-tick");
+      expect(ticks.length).toBeGreaterThan(0);
+      expect(ticks[0].hasAttribute("data-minimap-rail-tick")).toBe(true);
       expect(
-        screen.getByTestId("chat-turn-minimap-hit-strip").hasAttribute("inert"),
-      ).toBe(true);
+        ticks.filter((tick) => tick.getAttribute("data-active") === "true"),
+      ).toHaveLength(1);
+
+      fireEvent.mouseEnter(
+        screen.getByRole("group", { name: "Message minimap controls" }),
+      );
+      expect(screen.getByTestId("chat-turn-minimap-card")).toBeTruthy();
     });
 
     it("stays interactive at the harness's default pane width", async () => {
@@ -2470,13 +2515,13 @@ describe("ChatMessages scroll policy", () => {
       renderChatMessages({ messages, scrollStateKey: "m3b-usable-hit-strip" });
       await settleLegendList();
 
-      const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
-      expect(hitStrip.hasAttribute("inert")).toBe(false);
-      expect(hitStrip.getAttribute("aria-hidden")).toBeNull();
-      expect(hitStrip.classList.contains("pointer-events-auto")).toBe(true);
-      expect(screen.getByRole("button", { name: "Message minimap" })).toBe(
-        hitStrip,
+      const hitStrip = await waitFor(() =>
+        screen.getByRole("button", { name: "Message minimap" }),
       );
+      expect(hitStrip).toBe(screen.getByTestId("chat-turn-minimap-hit-strip"));
+      expect(Number.parseFloat(hitStrip.style.width)).toBeGreaterThan(0);
+      hitStrip.focus();
+      expect(document.activeElement).toBe(hitStrip);
     });
 
     it("does not mount the minimap when its placement is hidden", async () => {
@@ -2492,16 +2537,15 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  // O2 (ticket 16 listener consolidation, F8): proves the FULL production
-  // chain end to end - a real LegendList scroll -> ChatTimeline's own
-  // `onScroll` -> ChatMessages's `handleScroll` ->
-  // `minimapInViewRefreshRef.current()` -> the minimap's `updateInView` ->
-  // the strip's `data-in-view` dataset write. chat-turn-minimap.test.tsx's
-  // own pins call `inViewRefreshRef.current()` directly (proving the
-  // minimap's OWN contract in isolation); this one is the wiring pin that a
-  // deleted link anywhere in that chain would fail.
-  describe("minimap in-view highlighting via the real scroll chain (O2, ticket 16)", () => {
-    it("updates minimap strip in-view state through a real fireEvent.scroll, not a direct inViewRefreshRef call", async () => {
+  // O2 (ticket 16 listener consolidation): proves the FULL production chain
+  // end to end - a real LegendList scroll -> ChatTimeline's own `onScroll` ->
+  // ChatMessages's `handleScroll` -> `minimapInViewRefreshRef.current()` ->
+  // the rail's current tick. chat-turn-minimap.test.tsx's own pins call
+  // `inViewRefreshRef.current()` directly (the minimap's contract in
+  // isolation); this one is the wiring pin that a deleted link anywhere in
+  // that chain would fail.
+  describe("minimap current tick via the real scroll chain (O2, ticket 16)", () => {
+    it("updates the current rail tick through a real fireEvent.scroll, not a direct inViewRefreshRef call", async () => {
       const messages = makeCompletedTranscript(12);
       renderChatMessages({
         messages,
@@ -2519,28 +2563,32 @@ describe("ChatMessages scroll policy", () => {
         expect(screen.getByTestId("chat-turn-minimap")).toBeTruthy();
       });
 
-      const firstUserStrip = (): Element | null =>
+      const activeTick = (): Element | null =>
         document.querySelector(
-          '[data-chat-turn-minimap-strip][data-message-id="message-0"]',
+          '[data-testid="chat-turn-minimap-tick"][data-active="true"]',
         );
-      const lastUserStrip = (): Element | null =>
-        document.querySelector(
-          '[data-chat-turn-minimap-strip][data-message-id="message-10"]',
-        );
+      const messageIndex = (id: string | null | undefined): number =>
+        Number((id ?? "").slice("message-".length));
 
-      // Parked at scrollTop 0: the first user turn is in view, the last is not.
+      let parkedId: string | null = null;
       await waitFor(() => {
-        expect(firstUserStrip()?.getAttribute("data-in-view")).toBe("true");
-        expect(lastUserStrip()?.getAttribute("data-in-view")).toBe("false");
+        const tick = activeTick();
+        expect(tick?.hasAttribute("data-minimap-rail-tick")).toBe(true);
+        const id = tick?.getAttribute("data-message-id") ?? null;
+        expect(id).toBeTruthy();
+        parkedId = id;
       });
 
       // Scroll deep into real (non-fake-ceiling) content - well below the
-      // ~540px natural max for this 12-row/90px-shim transcript.
+      // ~540px natural max for this 12-row/90px-shim transcript. Equal-overlap
+      // ties keep the earlier query, so this asserts a later current tick,
+      // not a specific last-row id.
       await fireScrollTopAndFlush(500);
 
       await waitFor(() => {
-        expect(lastUserStrip()?.getAttribute("data-in-view")).toBe("true");
-        expect(firstUserStrip()?.getAttribute("data-in-view")).toBe("false");
+        const nextId = activeTick()?.getAttribute("data-message-id");
+        expect(nextId).toBeTruthy();
+        expect(messageIndex(nextId)).toBeGreaterThan(messageIndex(parkedId));
       });
     });
   });
@@ -2795,6 +2843,7 @@ describe("ChatMessages scroll policy", () => {
             blockId: "bg-1",
             parentTaskId: null,
             scheduledFor: null,
+            individualStopUnavailable: null,
           } satisfies BackgroundItem,
         ],
         scrollRequest: {

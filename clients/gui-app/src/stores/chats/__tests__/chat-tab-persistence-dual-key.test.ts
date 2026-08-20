@@ -1,6 +1,6 @@
 /**
  * Ticket 15 (decision #29): dual-key persistence pins - unit-level coverage
- * for the scroll cache, the other six registries, eviction, multi-view, and
+ * for the scroll cache, the other five registries, eviction, multi-view, and
  * stale-anchor nearest-neighbor. Component-level streaming / composer-resize
  * / restore-first pins live in chat-messages.test.tsx.
  *
@@ -55,13 +55,6 @@ import {
   useSubagentOpenStore,
 } from "@/stores/chats/subagent-open-store";
 import { useChatScopedOpenStoreDualKeySeed } from "@/stores/chats/chat-scoped-open-store-dual-key";
-import {
-  evictChatTurnMinimapActiveEntries,
-  evictChatTurnMinimapActiveEntriesForEpic,
-  promoteChatTurnMinimapActiveEntryToDurable,
-  restoreChatTurnMinimapActiveEntry,
-  saveChatTurnMinimapActiveEntry,
-} from "@/stores/chats/chat-turn-minimap-active-entry-store";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 import { evictTileFindUi, useTileFindStore } from "@/stores/tile-find";
 import {
@@ -131,7 +124,7 @@ function createNoopAdapter(tileInstanceId: string): TileFindAdapter {
 // (`evictChatTabPersistenceForChat` tombstones by EXACT chat-key, terminal
 // until something re-opens that exact identity - ticket 15 review round 3).
 const DELETE_SINGLE_CHAT = "chat-t15-delete-single";
-const DELETE_ALL_SEVEN_CHAT = "chat-t15-delete-all-seven";
+const DELETE_ALL_REGISTRIES_CHAT = "chat-t15-delete-all-registries";
 
 function clearEpicDurableStateForTests(epicId: string): void {
   // Ticket 15 review round 3: uses the individual (non-tombstoning) evict
@@ -145,7 +138,6 @@ function clearEpicDurableStateForTests(epicId: string): void {
   evictToolOpenStoresForEpic(epicId);
   evictSubagentOpenStoresForEpic(epicId);
   evictTileFindUiForEpic(epicId);
-  evictChatTurnMinimapActiveEntriesForEpic(epicId);
 }
 
 beforeEach(() => {
@@ -172,9 +164,8 @@ afterEach(() => {
     "reg-tool",
     "reg-sub",
     "reg-find",
-    "reg-minimap",
     "delete-single-a",
-    "delete-all-seven-a",
+    "delete-all-registries-a",
     "f2-close-a",
     "f2-reopen-a",
     "f2-multi-a",
@@ -187,7 +178,6 @@ afterEach(() => {
     evictChatTabState([id]);
     evictA2AOpenStores([id]);
     evictActivityGroupOpenStores([id]);
-    evictChatTurnMinimapActiveEntries([id]);
     evictTileFindUi([id]);
     toolOpenInitializedScopes.delete(id);
     subagentOpenInitializedScopes.delete(id);
@@ -436,7 +426,7 @@ describe("ticket 15 dual-key scroll cache", () => {
   });
 });
 
-describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulated promotion)", () => {
+describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", () => {
   it("scroll cache: reopen-after-close restores free-scrolling", () => {
     const messages = makeMessages(3);
     const closed = chatIdIdentity("reg-scroll");
@@ -595,18 +585,12 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
     ).toBe("");
   });
 
-  it("minimap active entry: reopen-after-close restores active message id via the sweep's promotion", () => {
-    const closed = chatIdIdentity("reg-minimap");
-    saveChatTurnMinimapActiveEntry(closed, "message-2");
-    promoteChatTurnMinimapActiveEntryToDurable(closed);
-    evictChatTurnMinimapActiveEntries([closed.tileInstanceId]);
-    expect(
-      restoreChatTurnMinimapActiveEntry(chatIdIdentity("reopen-new")),
-    ).toBe("message-2");
-  });
-
-  it("orchestrated chat-delete eviction clears all seven durable registries (ticket 15 review F7)", () => {
-    const id = identity("delete-all-seven-a", EPIC, DELETE_ALL_SEVEN_CHAT);
+  it("orchestrated chat-delete eviction clears every durable registry (ticket 15 review F7)", () => {
+    const id = identity(
+      "delete-all-registries-a",
+      EPIC,
+      DELETE_ALL_REGISTRIES_CHAT,
+    );
     const messages = makeMessages(2);
     saveChatTabState({
       identity: id,
@@ -635,23 +619,20 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
       isEligible: true,
       adapter: findAdapter,
     });
-    useTileFindStore.getState().setQuery(id.tileInstanceId, "seven");
+    useTileFindStore.getState().setQuery(id.tileInstanceId, "all");
     promoteTileFindUiToDurable(id);
-    saveChatTurnMinimapActiveEntry(id, "message-0");
-    promoteChatTurnMinimapActiveEntryToDurable(id);
 
     evictChatTabState([id.tileInstanceId]);
     evictA2AOpenStores([id.tileInstanceId]);
     evictActivityGroupOpenStores([id.tileInstanceId]);
     evictTileFindUi([id.tileInstanceId]);
-    evictChatTurnMinimapActiveEntries([id.tileInstanceId]);
 
-    // Sanity: before the chat-delete call, durable genuinely has all seven -
+    // Sanity: before the chat-delete call, every durable registry has data -
     // otherwise the assertions below would pass vacuously.
     const preDeleteReopen = identity(
       "reopen-pre-delete",
       EPIC,
-      DELETE_ALL_SEVEN_CHAT,
+      DELETE_ALL_REGISTRIES_CHAT,
     );
     expect(peekSavedChatTabState(preDeleteReopen) !== null).toBe(true);
     expect(
@@ -664,9 +645,6 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
     ).toBe(true);
     expect(toolOpenDurableCache.get(preDeleteReopen)?.has("t")).toBe(true);
     expect(subagentOpenDurableCache.get(preDeleteReopen)?.has("u")).toBe(true);
-    expect(restoreChatTurnMinimapActiveEntry(preDeleteReopen)).toBe(
-      "message-0",
-    );
     useTileFindStore.getState().registerTarget({
       tileInstanceId: "reopen-pre-delete-find",
       contentId: id.chatId,
@@ -680,11 +658,11 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
     expect(
       useTileFindStore.getState().uiByTileInstanceId["reopen-pre-delete-find"]
         ?.query,
-    ).toBe("seven");
+    ).toBe("all");
 
     evictChatTabPersistenceForChat({ epicId: id.epicId, chatId: id.chatId });
 
-    const reopened = identity("reopen-new", EPIC, DELETE_ALL_SEVEN_CHAT);
+    const reopened = identity("reopen-new", EPIC, DELETE_ALL_REGISTRIES_CHAT);
     expect(peekSavedChatTabState(reopened) !== null).toBe(false);
     expect(
       getOrCreateA2AOpenStore(reopened).getState().sentOpenIds.has("s"),
@@ -694,7 +672,6 @@ describe("ticket 15 dual-key across all seven registries (round 3: sweep-simulat
     ).toBe(false);
     expect(toolOpenDurableCache.get(reopened)).toBeUndefined();
     expect(subagentOpenDurableCache.get(reopened)).toBeUndefined();
-    expect(restoreChatTurnMinimapActiveEntry(reopened)).toBeNull();
     useTileFindStore.getState().registerTarget({
       tileInstanceId: "reopen-post-delete-find",
       contentId: id.chatId,
@@ -898,7 +875,7 @@ function closeOrderChatRef(instanceId: string, chatId: string): EpicNodeRef {
   };
 }
 
-describe("ticket 15 review round 4: real close order across all seven registries drives the ACTUAL canvas sweep (F3/finding 5)", () => {
+describe("ticket 15 review round 4: real close order drives the canvas sweep (F3/finding 5)", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
@@ -912,7 +889,7 @@ describe("ticket 15 review round 4: real close order across all seven registries
     const chatId = "chat-t15-close-order-real";
     const messages = makeMessages(4);
 
-    // --- View B opens, writes across all seven registries, then closes via
+    // --- View B opens, writes across every registry, then closes via
     // the REAL canvas close path.
     const tabB = useEpicCanvasStore.getState().openEpicTab(epicId, "View B");
     useEpicCanvasStore
@@ -963,7 +940,6 @@ describe("ticket 15 review round 4: real close order across all seven registries
       adapter: createNoopAdapter(viewB.tileInstanceId),
     });
     useTileFindStore.getState().setQuery(viewB.tileInstanceId, "query-b");
-    saveChatTurnMinimapActiveEntry(viewB, "message-b");
 
     useEpicCanvasStore.getState().closeTabsForEpics([epicId]);
 
@@ -1042,7 +1018,6 @@ describe("ticket 15 review round 4: real close order across all seven registries
       adapter: createNoopAdapter(viewA.tileInstanceId),
     });
     useTileFindStore.getState().setQuery(viewA.tileInstanceId, "query-a");
-    saveChatTurnMinimapActiveEntry(viewA, "message-a");
 
     useEpicCanvasStore.getState().closeTabsForEpics([epicId]);
 
@@ -1090,6 +1065,5 @@ describe("ticket 15 review round 4: real close order across all seven registries
       useTileFindStore.getState().uiByTileInstanceId["close-order-reopen-find"]
         ?.query,
     ).toBe("query-a");
-    expect(restoreChatTurnMinimapActiveEntry(reopenedA)).toBe("message-a");
   });
 });

@@ -93,7 +93,7 @@ const harness = {
 
 let requestSeq = 0;
 const queryClient = createAppQueryClient();
-const hostClient = new HostClient({
+const spine = new HostClient({
   registry: hostRpcRegistry,
   invalidator: createHostQueryInvalidator(queryClient),
   messenger: new MockHostMessenger({
@@ -128,8 +128,11 @@ const hostClient = new HostClient({
       },
     },
   }),
+  findHostById: (hostId) =>
+    hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
 });
-hostClient.bind(mockLocalHostEntry);
+// `bind()` died with the active slot (D17): address via a requester.
+const hostClient = spine.createRequester(mockLocalHostEntry);
 hostClient.setRequestContext(
   createRendererContextFixture({ bearerToken: "token" }),
 );

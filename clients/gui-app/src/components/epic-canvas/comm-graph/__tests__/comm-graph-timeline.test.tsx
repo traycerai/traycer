@@ -52,8 +52,15 @@ vi.mock("@/providers/use-resolved-theme", () => ({
   }),
 }));
 
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-a",
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-a",
+}));
+
+// The Epic session resolves its host through the selection authority's derived
+// pointer (selection model §1), not the active-host projection above - seed the
+// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-a",
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -431,6 +438,21 @@ describe("CommGraphTile projection", () => {
         screen.getByTestId(`comm-graph-node-${LATE_CHAT_ID}`),
       ).toBeDefined();
     });
+  });
+
+  it("keeps a held playback cursor static while paused", async () => {
+    await renderTile();
+    deliverSnapshot([
+      halfEdge({ id: 1, timestamp: 100 }),
+      message({ id: 2, timestamp: 200 }),
+    ]);
+
+    await seekToIndex(0);
+
+    await waitFor(() => {
+      expect(pulsingOf(CHAT_ID)).toBe("false");
+    });
+    expect(screen.getByRole("button", { name: "Play timeline" })).toBeDefined();
   });
 
   it("pulses a row that ARRIVES while live, without flashing the initial snapshot", async () => {

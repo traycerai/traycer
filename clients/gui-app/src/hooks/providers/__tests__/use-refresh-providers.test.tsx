@@ -27,6 +27,8 @@ const runtimeMock = vi.hoisted(() => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => runtimeMock.client,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => runtimeMock.client,
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -72,10 +74,12 @@ describe("useRefreshProviders", () => {
   it("resets a capped providers episode before active and tab-scoped forceAuthRefresh", async () => {
     const queryClient = createAppQueryClient();
     let requestSeq = 0;
-    const client = new HostClient<HostRpcRegistry>({
+    const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
       schedulingPolicy: hostRpcSchedulingPolicy,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => {
@@ -90,14 +94,13 @@ describe("useRefreshProviders", () => {
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
+    spine.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
         bearerToken: "tok-1",
       }),
     );
-    runtimeMock.client = client;
+    runtimeMock.client = spine.createRequester(mockLocalHostEntry);
     const queryKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
       mockLocalHostEntry.hostId,
       "providers.list",

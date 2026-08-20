@@ -1,6 +1,7 @@
 import {
   memo,
   type ReactNode,
+  type RefObject,
   useCallback,
   useEffect,
   useMemo,
@@ -42,6 +43,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   Tooltip,
   TooltipContent,
@@ -78,13 +80,16 @@ import {
   DEFAULT_SORT,
 } from "@/components/home/data/home-page.data";
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
+import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
+import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   useHistoryQuery,
   type HistoryFacets,
+  type HistoryFetchResult,
 } from "@/hooks/home/use-history-query";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
@@ -308,6 +313,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
   });
+  const { chatHostFilterSupported, chatHostFilterUnsupported } =
+    useChatHostFilterGate(hostId, data);
   const availableRepos = data?.availableRepos ?? EMPTY_REPOS;
   const availableWorkspaces = data?.availableWorkspaces ?? EMPTY_WORKSPACES;
   const facets = data?.facets;
@@ -384,6 +391,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // candidate.
   const [sweepEpicIds, setSweepEpicIds] =
     useState<ReadonlyArray<string> | null>(null);
+  const sweepHostClient = useHostClientForHostId(null);
   const requestSweep = useCallback(
     (epicId: string) => {
       if (!selectionEnabled) return;
@@ -511,6 +519,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const showPageSearch = variant === "page";
   const showToolbarSearch = variant === "picker";
 
+  // ArrowDown out of the search box walks the results; ArrowUp off the first
+  // row lands back in the query. At most one of the two search placements is
+  // ever mounted, so a single ref covers whichever one is live.
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const keyboardNav = useHistoryListKeyboardNav(searchInputRef, listRef);
+
   return (
     <TooltipProvider>
       <section
@@ -522,10 +537,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       >
         {showPageSearch ? (
           <PanelSearchInput
+            inputRef={searchInputRef}
             value={search.query}
             onChange={(next) => {
               updateSearch({ query: next });
             }}
+            onKeyDown={keyboardNav.onSearchKeyDown}
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
             placement="page"
@@ -535,10 +552,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           leading={
             showToolbarSearch ? (
               <PanelSearchInput
+                inputRef={searchInputRef}
                 value={search.query}
                 onChange={(next) => {
                   updateSearch({ query: next });
                 }}
+                onKeyDown={keyboardNav.onSearchKeyDown}
                 isFetching={isFetching}
                 focusOnMount={props.autoFocusSearch}
                 placement="toolbar"
@@ -587,6 +606,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           search={search}
           onSearchChange={updateSearch}
           facets={facets}
+          chatHostFilterSupported={chatHostFilterSupported}
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
@@ -596,6 +616,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               isPending={isPending}
               isFetching={isFetching}
               hasActiveFilters={hasActiveFilters}
+              chatHostFilterUnsupported={chatHostFilterUnsupported}
               items={items}
               onRetry={handleRetry}
               selectionMode={selectionMode}
@@ -615,6 +636,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
               worktreesByEpicId={worktreesByEpicId}
               openEpicIds={openEpicIdSet}
+              listRef={listRef}
+              onRowKeyDown={keyboardNav.onRowKeyDown}
             />
           </div>
         </NotificationIndicatorsProvider>
@@ -634,6 +657,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       />
       <SweepWorktreesDialog
         epicIds={sweepEpicIds}
+        // The Epics list is app chrome: its sweep proves and sweeps the
+        // app-wide host's worktrees (the following client - `null` resolves
+        // to the effective host's requester, the same seam the landing
+        // composer's following state uses).
+        hostClient={sweepHostClient}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
           if (!open) setSweepEpicIds(null);
@@ -644,10 +672,33 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   );
 }
 
+/**
+ * The two chat-host gate answers the panel needs, kept together because they
+ * are two faces of one decision: whether to OFFER the filter, and whether the
+ * rows in hand were withheld because it could not be applied.
+ *
+ * "unknown" (no handshake yet) stays OFFERABLE. The manifest fills in on the
+ * first RPC to the host, and hiding the section until then would make it
+ * flicker in on every cold open. A filter actually issued against a host that
+ * turns out to be too old is caught by the fail-closed arm in
+ * `useHistoryQuery`, which withholds rows rather than showing them unfiltered.
+ */
+function useChatHostFilterGate(
+  hostId: string | null,
+  data: HistoryFetchResult | undefined,
+): { chatHostFilterSupported: boolean; chatHostFilterUnsupported: boolean } {
+  const support = useChatHostFilterSupport(hostId);
+  return {
+    chatHostFilterSupported: support !== "unsupported",
+    chatHostFilterUnsupported: data?.chatHostFilterUnsupported ?? false,
+  };
+}
+
 function hasActiveHistoryFilters(search: HistorySearchState): boolean {
   return (
     search.repos.length > 0 ||
     search.workspaces.length > 0 ||
+    search.chatHosts.length > 0 ||
     search.ownershipScopes.length > 0 ||
     (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
     search.query.trim().length > 0
@@ -655,15 +706,18 @@ function hasActiveHistoryFilters(search: HistorySearchState): boolean {
 }
 
 interface PanelSearchInputProps {
+  /** Owned by the panel body so ArrowUp off the first row can return here. */
+  readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly value: string;
   readonly onChange: (next: string) => void;
+  readonly onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
   readonly placement: "page" | "toolbar";
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const { inputRef } = props;
   // Defer the focus to the next frame so it lands after Radix Dialog's
   // own mount focus-trap runs (the modal host wraps this surface). A
   // synchronous focus here would be clobbered by the dialog's
@@ -677,7 +731,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [focusOnMount]);
+  }, [focusOnMount, inputRef]);
   return (
     <div
       className={cn(
@@ -704,6 +758,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
+          onKeyDown={props.onKeyDown}
           placeholder="Search by title, repo, branch, or PR"
           aria-label="Search tasks"
         />
@@ -771,6 +826,7 @@ interface PanelChromeBarProps {
   readonly search: HistorySearchState;
   readonly onSearchChange: (patch: HistorySearchPatch) => void;
   readonly facets: HistoryFacets | undefined;
+  readonly chatHostFilterSupported: boolean;
   readonly refresh: PanelRefreshControls;
 }
 
@@ -866,6 +922,7 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               search={props.search}
               onSearchChange={props.onSearchChange}
               facets={props.facets}
+              chatHostFilterSupported={props.chatHostFilterSupported}
             />
             {props.showSelection ? (
               <Button
@@ -922,11 +979,35 @@ function describeDeleteTitle(
   return `Delete "${matchTitle}"?`;
 }
 
+/**
+ * Shown when a host filter is active but the serving peer cannot apply it, so
+ * the rows were withheld. Deliberately NOT an empty-history message: the
+ * account's tasks exist, this client just declined to show a list it could not
+ * honestly call filtered.
+ */
+function EpicsListChatHostFilterUnsupported(): ReactNode {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-[min(4rem,12vh)] text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-chat-host-filter-unsupported"
+    >
+      <p className="font-medium text-foreground">
+        Can&apos;t filter by host here
+      </p>
+      <p className="max-w-full">
+        This host is running a version that doesn&apos;t support the host
+        filter. Update it, or clear the host filter to see your tasks.
+      </p>
+    </div>
+  );
+}
+
 interface EpicsListBodyProps {
   readonly error: Error | null;
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
+  readonly chatHostFilterUnsupported: boolean;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -949,6 +1030,9 @@ interface EpicsListBodyProps {
     readonly WorktreeHostEntryV12[]
   >;
   readonly openEpicIds: ReadonlySet<string>;
+  /** Anchors the arrow-key traversal: DOM order inside it is row order. */
+  readonly listRef: RefObject<HTMLUListElement | null>;
+  readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
@@ -957,6 +1041,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isPending,
     isFetching,
     hasActiveFilters,
+    chatHostFilterUnsupported,
     items,
     onRetry,
     selectionMode,
@@ -976,6 +1061,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     openInNewWindowAvailable,
     worktreesByEpicId,
     openEpicIds,
+    listRef,
+    onRowKeyDown,
   } = props;
 
   if (error !== null) {
@@ -983,6 +1070,11 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   }
   if (isPending) {
     return <EpicsListLoading />;
+  }
+  // Ahead of every other empty state: the rows were WITHHELD, not absent, and
+  // "No tasks yet" would be an outright false statement about the account.
+  if (chatHostFilterUnsupported) {
+    return <EpicsListChatHostFilterUnsupported />;
   }
   if (items.length === 0 && !hasActiveFilters) {
     return (
@@ -1000,7 +1092,11 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   return (
     <>
       {items.length > 0 ? (
-        <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
+        <ul
+          ref={listRef}
+          className="flex flex-col gap-2"
+          data-testid="epics-list-rows"
+        >
           {items.map((item) => (
             <EpicsListRow
               key={item.id}
@@ -1019,6 +1115,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               openInNewWindowAvailable={openInNewWindowAvailable}
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
               isOpen={openEpicIds.has(item.epicId)}
+              onRowKeyDown={onRowKeyDown}
             />
           ))}
         </ul>
@@ -1093,6 +1190,8 @@ interface EpicsListRowProps {
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isOpen: boolean;
+  /** Arrow-key traversal, bound to whichever control covers the whole card. */
+  readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
 
 function HistoryRowTrailingMetadata(props: {
@@ -1161,6 +1260,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     openInNewWindowAvailable,
     worktrees,
     isOpen,
+    onRowKeyDown,
   } = props;
   const isPhase = item.taskType === "phase";
   const rowSweep = useHistoryRowSweep({
@@ -1353,6 +1453,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       deleteDisabledTooltip={deleteDisabledTooltip}
       onToggleSelection={toggleEpicSelection}
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
+      onRowKeyDown={onRowKeyDown}
     />
   ) : (
     <Link
@@ -1367,7 +1468,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         focusTileInstanceId: undefined,
       }}
       onClick={openEpicRow}
+      onKeyDown={onRowKeyDown}
       aria-label={`Open task ${displayTitle}`}
+      data-history-row-target=""
       className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     />
   );
@@ -1781,14 +1884,17 @@ function HistorySelectionOverlay(props: {
   readonly onBlockUnavailableDelete: (
     event: React.MouseEvent<HTMLElement>,
   ) => void;
+  readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }): ReactNode {
   if (props.canDeleteItem) {
     return (
       <button
         type="button"
         aria-label={`Toggle selection for ${historyItemDisplayTitle(props.item)}`}
+        data-history-row-target=""
         className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={props.onToggleSelection}
+        onKeyDown={props.onRowKeyDown}
       />
     );
   }
@@ -1799,8 +1905,10 @@ function HistorySelectionOverlay(props: {
           type="button"
           aria-disabled="true"
           aria-label={`Cannot select ${historyItemDisplayTitle(props.item)}`}
+          data-history-row-target=""
           className="absolute inset-0 cursor-not-allowed rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={props.onBlockUnavailableDelete}
+          onKeyDown={props.onRowKeyDown}
         />
       </TooltipTrigger>
       <TooltipContent>{props.deleteDisabledTooltip}</TooltipContent>

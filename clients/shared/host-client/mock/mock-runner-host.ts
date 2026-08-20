@@ -6,7 +6,6 @@ import type {
   DeviceFlowSession,
   HostRestartRequestResult,
   IDeviceFlowHost,
-  IHostPicker,
   IHostManagement,
   INotificationHost,
   NotificationFeedSource,
@@ -20,6 +19,7 @@ import type {
   ITraycerCli,
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
+  RegisteredHostsChange,
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
@@ -59,6 +59,20 @@ import {
 } from "../../auth/auth-validation";
 import type { AuthIdentityValidationResult } from "../../auth/auth-validation-types";
 import type { HostDirectoryEntry } from "../host-directory";
+import type { SelectionAuthorityClient } from "../../host-selection/selection-authority-contract";
+import {
+  createInProcessSelectionAuthority,
+  inertLocalHostOutageSignal,
+  InMemoryAuthorityIdentitySource,
+  InMemoryHostFleetSource,
+  InMemoryPreferredHostStore,
+  type InProcessSelectionAuthority,
+} from "../../host-selection/in-process-selection-authority";
+import {
+  createIncrementingIncarnationIds,
+  silentAuthorityLog,
+  systemAuthorityClock,
+} from "../../host-selection/selection-authority-engine";
 import {
   fetchRegisteredHostsViaHttp,
   type HostListFetchResult,
@@ -172,10 +186,65 @@ export class MockRunnerHost implements IRunnerHost {
   private localHost: LocalHostSnapshot | null;
   /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
   private readonly explicitLastKnownLocalHostId: string | null | undefined;
+  /**
+   * The in-window selection authority (D16 browser/dev binding) and the two
+   * ports that drive it. They are fields rather than constructor locals so a
+   * dev shell or test can move the fleet (`setHosts`) and the identity
+   * (`setSelectionIdentity`) and watch the authority react exactly as it
+   * would on desktop.
+   */
+  readonly selectionFleet = new InMemoryHostFleetSource({
+    revision: 0,
+    identityGeneration: 0,
+    localHostId: null,
+    hosts: [],
+  });
+  readonly selectionIdentity = new InMemoryAuthorityIdentitySource(null);
+  /** Identity-scoped preferred-host persistence for the in-window authority. */
+  readonly selectionPreferredStore = new InMemoryPreferredHostStore();
+  private readonly selectionAuthorityMount: InProcessSelectionAuthority;
+  readonly selectionAuthority: SelectionAuthorityClient;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
+  /**
+   * The authority runs IN-WINDOW here, so membership changes reach it through
+   * the fleet source directly and there is no stale main-process copy to
+   * invalidate (F6's gap is a consequence of the process split, not of the
+   * design). Republishing the current snapshot keeps the call meaningful
+   * rather than making it a lie: a caller that says "membership changed" still
+   * gets one atomic fleet transaction out of it.
+   */
+  /**
+   * `null`: this shell owns no registry cadence, so a consumer keeps its own
+   * timer - the same answer the browser/dev topology gives, and the reason the
+   * capability is nullable rather than assumed.
+   *
+   * The handler parameter is declared even though this implementation ignores
+   * it, and that is not decoration: dropping it makes the MEMBER's type
+   * `() => Disposable | null`, which no longer accepts a handler-taking
+   * function, so a test that installs a pushing shell on the instance - the
+   * only way to exercise the push path against this mock - fails to type-check
+   * at the assignment. Matching the interface's arity keeps the substitution
+   * legal.
+   */
+  onRegisteredHostsChange(
+    handler: (push: RegisteredHostsChange) => void,
+  ): Disposable | null {
+    void handler;
+    return null;
+  }
+
+  refreshHostFleet(): Promise<void> {
+    const current = this.selectionFleet.snapshot();
+    this.selectionFleet.publish(
+      current.identityGeneration,
+      current.localHostId,
+      current.hosts,
+    );
+    return Promise.resolve();
+  }
+
   readonly tray: MockTrayState = new MockTrayState();
-  readonly hostPicker: MockHostPicker = new MockHostPicker();
   readonly workspaceFolders: IWorkspaceFoldersHost = {
     // The mock stands in for a desktop-style shell with a native dialog.
     canPickNatively: true,
@@ -225,6 +294,53 @@ export class MockRunnerHost implements IRunnerHost {
     this.localHost = options.localHost;
     this.explicitLastKnownLocalHostId = options.lastKnownLocalHostId;
     this.hosts = options.hosts;
+    // Browser/dev topology (D16): the SAME authority engine mounted in the
+    // single window behind the in-process adapter. Nothing about the rules
+    // changes here - one reporter, the engine's own allocator, the same
+    // claim and atomic-inventory semantics - which is what keeps the two
+    // bindings from drifting.
+    this.selectionAuthorityMount = createInProcessSelectionAuthority({
+      fleet: this.selectionFleet,
+      identity: this.selectionIdentity,
+      // MIRRORS `createDesktopLocalHostEnsurePort`. When this shell has host
+      // management, D14's ensure goes where the real one goes - through
+      // `convergeReady` - because that call IS the observable event. A mock
+      // that answered `ok` directly satisfied the engine while leaving the
+      // provisioning invisible to anything watching the controller, so a test
+      // asserting "the authority started the host" could not see it happen
+      // even when it did.
+      //
+      // With no management there is no controller to ask, and the answer is
+      // read off the FIXTURE rather than being a constant: a mock built WITH a
+      // `localHost` snapshot is modelling a shell whose host is already
+      // running, so the ensure has nothing to do. Refusing there used to be
+      // invisible, because the engine only asked when the local lease was
+      // already `dead`; once P1.3's F3(b) ruling let derivation ask for a
+      // NEVER-DIALED local host too, the constant refusal fired on every such
+      // mock at boot, drove the local lease to `dead` for the retry cooldown
+      // (registry §5's ∅ made real), and left `effectiveHostId` null - so the
+      // window unbound its host client and every gate/compat surface in the
+      // gui-app suite hung on a probe that could no longer run. `localHost ===
+      // null` is the only shape that genuinely cannot provision.
+      localHostEnsure: {
+        // THE DEFERRAL IS LOAD-BEARING, not style. This authority is being
+        // constructed right here, and its constructor derives immediately -
+        // which calls `ensureReady()` SYNCHRONOUSLY, before the assignment of
+        // `this.hostManagement` further down this same constructor has run.
+        // An inline read would see `undefined` on the very first ensure, which
+        // is the cold-start one that matters most. One microtask puts the read
+        // after the constructor completes.
+        ensureReady: () =>
+          Promise.resolve().then(() => this.ensureLocalHostReady()),
+      },
+      localOutage: inertLocalHostOutageSignal,
+      preferredStore: this.selectionPreferredStore,
+      clock: systemAuthorityClock,
+      newIncarnationId: createIncrementingIncarnationIds(),
+      log: silentAuthorityLog,
+    });
+    this.selectionAuthority = this.selectionAuthorityMount.client;
+    this.publishSelectionFleet();
     this.workspaceFolderPickerPaths =
       options.workspaceFolderPickerPaths === undefined
         ? []
@@ -247,6 +363,37 @@ export class MockRunnerHost implements IRunnerHost {
     // Access-only (§3): the mock mirrors the desktop IPC, which no longer
     // refreshes on a failed lookup — the spend routes through `tokenStore.rotate`.
     return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
+  }
+
+  /**
+   * D14's local ensure for this shell - see the port's own note at the
+   * authority mount for why it is deferred and why the no-management answer
+   * reads the fixture. Kept as a method rather than a closure so that
+   * ordering constraint has one place to be explained.
+   */
+  private async ensureLocalHostReady(): Promise<
+    { ok: true } | { ok: false; reason: string; deferred: boolean }
+  > {
+    const management = this.hostManagement;
+    if (management === null) {
+      return this.localHost === null
+        ? {
+            ok: false,
+            reason: "local-provisioning-unavailable",
+            deferred: false,
+          }
+        : { ok: true };
+    }
+    const outcome = await management.convergeReady(false);
+    if (outcome.kind === "ok") return { ok: true };
+    // Mirrors `createDesktopLocalHostEnsurePort`: a busy lane and a busy host
+    // are deferrals (nothing dead-worthy was learned); everything else ran
+    // and concluded.
+    return {
+      ok: false,
+      reason: outcome.kind,
+      deferred: outcome.kind === "deferred" || outcome.kind === "busy",
+    };
   }
 
   listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {
@@ -305,7 +452,12 @@ export class MockRunnerHost implements IRunnerHost {
   ): Promise<MintHostCredentialFetchResult> {
     // The caller's own bearer: the mint is not step-up gated, so this double
     // must not substitute a retained step-up credential either.
-    return mintHostCredentialViaHttp(this.authnBaseUrl, bearerToken, request);
+    return mintHostCredentialViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      request,
+      null,
+    );
   }
 
   requestStepUpChallenge(
@@ -652,6 +804,7 @@ export class MockRunnerHost implements IRunnerHost {
 
   setLocalHost(snapshot: LocalHostSnapshot | null): void {
     this.localHost = snapshot;
+    this.publishSelectionFleet();
     for (const handler of this.localHostHandlers) {
       handler(snapshot);
     }
@@ -666,6 +819,50 @@ export class MockRunnerHost implements IRunnerHost {
 
   setHosts(hosts: readonly HostDirectoryEntry[]): void {
     this.hosts = hosts;
+    this.publishSelectionFleet();
+  }
+
+  /**
+   * Republishes the authority's fleet from the mock's directory state.
+   *
+   * Only identity and membership cross: the directory entries carry a
+   * dialability verdict, and projecting it here would hand the authority a
+   * cloud-shaped liveness signal that invariant 5 forbids it to hold. The
+   * `mock` kind counts as remote - it is not this machine's own host.
+   *
+   * The local host is always a member once known, even when it is absent
+   * from `this.hosts` (the mock's separate multi-host directory list): on
+   * desktop the local machine reports its own fleet membership directly, not
+   * through the registered-hosts directory, so a caller that only sets
+   * `localHost`/`hosts: []` to boot a single-host suite must still get a
+   * real local candidate rather than an empty fleet the authority can never
+   * derive an effective host from.
+   */
+  private publishSelectionFleet(): void {
+    const localHostId = this.getLocalHostIdForSelection();
+    const hosts = this.hosts.map((entry) => ({
+      hostId: entry.hostId,
+      kind:
+        entry.hostId === localHostId ? ("local" as const) : ("remote" as const),
+    }));
+    if (
+      localHostId !== null &&
+      !hosts.some((entry) => entry.hostId === localHostId)
+    ) {
+      hosts.push({ hostId: localHostId, kind: "local" as const });
+    }
+    this.selectionFleet.publish(
+      this.selectionIdentity.current().generation,
+      localHostId,
+      hosts,
+    );
+  }
+
+  private getLocalHostIdForSelection(): string | null {
+    if (this.explicitLastKnownLocalHostId !== undefined) {
+      return this.explicitLastKnownLocalHostId;
+    }
+    return this.localHost?.hostId ?? null;
   }
 
   setWorkspaceFolderPickerPaths(paths: readonly string[]): void {
@@ -1024,50 +1221,5 @@ export class MockDeviceFlowSession implements DeviceFlowSession {
       handler(result);
     }
     this.handlers.clear();
-  }
-}
-
-/**
- * In-memory `IHostPicker`. Tracks open/closed state and fires `onChange`
- * on every transition; `gui-app` tests drive open/close via the public
- * request methods, mirroring the real shell contract.
- */
-export class MockHostPicker implements IHostPicker {
-  private open = false;
-  private readonly handlers = new Set<(isOpen: boolean) => void>();
-
-  get isOpen(): boolean {
-    return this.open;
-  }
-
-  requestOpen(): void {
-    if (this.open) {
-      return;
-    }
-    this.open = true;
-    this.emit();
-  }
-
-  requestClose(): void {
-    if (!this.open) {
-      return;
-    }
-    this.open = false;
-    this.emit();
-  }
-
-  onChange(handler: (isOpen: boolean) => void): Disposable {
-    this.handlers.add(handler);
-    return {
-      dispose: () => {
-        this.handlers.delete(handler);
-      },
-    };
-  }
-
-  private emit(): void {
-    for (const handler of this.handlers) {
-      handler(this.open);
-    }
   }
 }

@@ -3,8 +3,6 @@ import type {
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamClient } from "./i-stream-client";
-import type { IStreamSession } from "./i-stream-session";
-import type { ParamsOf } from "./ws-stream-client";
 import type { StreamMethodSupport } from "./ws-stream-client";
 
 /**
@@ -23,15 +21,9 @@ import type { StreamMethodSupport } from "./ws-stream-client";
 export interface IHostStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > extends IStreamClient<Registry> {
-  /**
-   * Opens a stream whose params are read immediately before every wire
-   * subscribe, including reconnects. Dynamic resume cursors use this instead
-   * of freezing the cursor that happened to be current at session creation.
-   */
-  subscribeWithParamsProvider<Method extends keyof Registry & string>(
-    method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
-  ): IStreamSession;
+  // `subscribeWithParamsProvider` is inherited from `IStreamClient`: it is a
+  // subscribe-shaped capability, and the typed wrappers that use it depend on
+  // that narrower seam.
   close(reason: string): void;
   isClosed(): boolean;
   /** The reason recorded at close, or `null` while still open. */
@@ -84,8 +76,8 @@ export interface IHostStreamClient<
    * Positive host-recovery evidence: fires when a session (re)opens after a
    * drop or a stall-length silent gap - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
-   * points. Consumers drive `HostClient.notifyAvailabilityRecovered()` off it
-   * so stranded unary queries refetch. `RemoteStreamClient` delegates to
+   * points. Consumers drive `HostClient.notifyHostAvailabilityRecovered(hostId)`
+   * off it so stranded unary queries refetch. `RemoteStreamClient` delegates to
    * `RemoteSession.subscribeAvailabilityRecovered`, which fires at EVERY
    * ready boundary - including the clean first open, because a remote
    * session's first dial races (and strands) the very queries that created

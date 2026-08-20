@@ -210,9 +210,18 @@ interface ChatForkMutationOptions {
 }
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const entry = {
+    hostId,
+    label: hostId,
+    kind: "local" as const,
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
     // `useHostQuery` is mocked wholesale below, so this messenger's handlers
     // are never actually invoked - this just needs to be a real, distinct
     // `HostClient` instance to key `dialogMocks.providersByClient` by.
@@ -222,15 +231,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
       handlers: {},
     }),
   });
-  client.bind({
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
-    version: "0.0.0-mock",
-    transportDialability: "dialable",
-  });
-  return client;
+  return spine.createRequester(entry);
 }
 
 // The tab's own host client (`useHostClientForHostId("tab-host-id")`'s
@@ -335,6 +336,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
     seedIntentOverride: null,
     carriedInterviews: "settled",
     forkMode: "plain",
+    initialHostId: null,
   };
 }
 

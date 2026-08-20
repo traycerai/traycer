@@ -19,6 +19,7 @@ import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-worksp
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 
 const prepareMutateAsync = vi.fn();
+const recordRecent = vi.fn();
 const nativePickFolders = vi.fn();
 const toastMock = vi.fn();
 let canPickNatively = true;
@@ -26,6 +27,7 @@ let canPickNatively = true;
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: () => ({
     mutateAsync: prepareMutateAsync,
+    mutate: recordRecent,
   }),
 }));
 
@@ -56,17 +58,18 @@ const REMOTE_HOST: HostDirectoryEntry = {
 };
 
 function makeBoundClient(): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) =>
+      hostId === REMOTE_HOST.hostId ? REMOTE_HOST : null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "request-1",
       handlers: {},
     }),
   });
-  client.bind(REMOTE_HOST);
-  return client;
+  return spine.createRequester(REMOTE_HOST);
 }
 
 function makeWrapper() {
@@ -94,6 +97,7 @@ function pickedHostIdOf(requestPick: Mock): string | null {
 describe("pickAndPrepareFolders shell routing for a remote host", () => {
   beforeEach(() => {
     prepareMutateAsync.mockReset();
+    recordRecent.mockReset();
     nativePickFolders.mockReset();
     toastMock.mockReset();
     canPickNatively = true;
@@ -117,7 +121,7 @@ describe("pickAndPrepareFolders shell routing for a remote host", () => {
       () => useWorkspaceFolderActionsForClient(client),
       { wrapper: makeWrapper() },
     );
-    await result.current.pickAndPrepareFolders();
+    await result.current.pickAndPrepareFolders(false);
     // Pinned to the dispatch host, not merely the caller's client: an
     // app-wide client could switch hosts while the dialog is open.
     expect(pickedHostIdOf(requestPick)).toBe(REMOTE_HOST.hostId);
@@ -125,10 +129,12 @@ describe("pickAndPrepareFolders shell routing for a remote host", () => {
       operation: "prepare",
       folderPaths: ["/remote/projects/app"],
       path: null,
+      bumpRecency: null,
     });
     // No native dialog, and none of the old "switch to the local host" copy.
     expect(nativePickFolders).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
+    expect(recordRecent).not.toHaveBeenCalled();
   });
 
   it("dialog-less shells route through the picker with the bound client and prepare the pick", async () => {
@@ -141,7 +147,7 @@ describe("pickAndPrepareFolders shell routing for a remote host", () => {
       () => useWorkspaceFolderActionsForClient(client),
       { wrapper: makeWrapper() },
     );
-    await result.current.pickAndPrepareFolders();
+    await result.current.pickAndPrepareFolders(false);
     // The picker received exactly the requester's (host-bound) client...
     expect(requestPick).toHaveBeenCalledTimes(1);
     // Pinned to the dispatch host, not merely the caller's client: an
@@ -152,6 +158,7 @@ describe("pickAndPrepareFolders shell routing for a remote host", () => {
       operation: "prepare",
       folderPaths: ["/remote/projects/app"],
       path: null,
+      bumpRecency: null,
     });
     expect(nativePickFolders).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
@@ -165,8 +172,37 @@ describe("pickAndPrepareFolders shell routing for a remote host", () => {
       () => useWorkspaceFolderActionsForClient(makeBoundClient()),
       { wrapper: makeWrapper() },
     );
-    const outcome = await result.current.pickAndPrepareFolders();
+    const outcome = await result.current.pickAndPrepareFolders(false);
     expect(outcome).toBeNull();
     expect(prepareMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("records prepared workspace attachments only when the caller opts in", async () => {
+    canPickNatively = false;
+    useRemoteFolderPickerStore.setState({
+      requestPick: vi.fn().mockResolvedValue("/remote/projects/app"),
+    });
+    prepareMutateAsync.mockResolvedValue({
+      folders: [
+        {
+          workspacePath: "/remote/projects/app",
+          workspaceName: "app",
+          repoIdentifier: null,
+        },
+      ],
+      repoIdentifiers: [],
+    });
+    const { result } = renderHook(
+      () => useWorkspaceFolderActionsForClient(makeBoundClient()),
+      { wrapper: makeWrapper() },
+    );
+
+    await result.current.pickAndPrepareFolders(true);
+
+    expect(recordRecent).toHaveBeenCalledWith({
+      path: "/remote/projects/app",
+      bumpRecency: true,
+      failureFeedback: "silent",
+    });
   });
 });

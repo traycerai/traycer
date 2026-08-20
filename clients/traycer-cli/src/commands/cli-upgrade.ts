@@ -28,6 +28,7 @@ import {
 import type { Environment } from "../runner/environment";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
+import { stageWellKnownCliBinary } from "../store/well-known-cli";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { withCliLock } from "../store/cli-lock";
 
@@ -142,6 +143,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           percent: null,
           bytes: null,
           totalBytes: null,
+          workUnits: null,
         });
         const versions = await fetchCliVersions();
         const targetVersion = args.targetVersion ?? versions.latest;
@@ -219,6 +221,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           percent: 0,
           bytes: 0,
           totalBytes: asset.sizeBytes,
+          workUnits: null,
         });
         try {
           await downloadToFile({
@@ -236,6 +239,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
                     : null,
                 bytes: downloadedBytes,
                 totalBytes,
+                workUnits: null,
               }),
             onHeartbeat: (heartbeat) =>
               ctx.progress({
@@ -251,6 +255,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
                 // renderer holds the last real download values.
                 bytes: null,
                 totalBytes: null,
+                workUnits: null,
               }),
             signal: null,
           });
@@ -295,6 +300,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           percent: null,
           bytes: null,
           totalBytes: null,
+          workUnits: null,
         });
         const swap = await tryReplaceLiveBinary({
           environment: ctx.runtime.environment,
@@ -399,6 +405,7 @@ async function tryReplaceLiveBinary(opts: {
       environment: opts.environment,
       strategy: "rename",
     });
+    await refreshWellKnownSlot(opts.environment, opts.livePath, opts.logger);
     return { status: "replaced", errorMessage: null };
   } catch (err) {
     const code =
@@ -435,7 +442,7 @@ async function tryReplaceLiveBinary(opts: {
         // cross-volume copy would otherwise install corrupt bytes - the
         // rename path is byte-for-byte safe but copyFile is not.
         if (opts.expectedSha256 !== null) {
-          const actual = await hashFileSha256(opts.livePath);
+          const actual = await hashFileSha256(opts.livePath, null);
           if (actual !== opts.expectedSha256) {
             opts.logger.error(
               "CLI upgrade post-copy hash mismatch",
@@ -479,6 +486,11 @@ async function tryReplaceLiveBinary(opts: {
           environment: opts.environment,
           strategy: "copy",
         });
+        await refreshWellKnownSlot(
+          opts.environment,
+          opts.livePath,
+          opts.logger,
+        );
         return { status: "replaced", errorMessage: null };
       } catch (copyErr) {
         if (copyErr instanceof CliError) throw copyErr;
@@ -516,6 +528,31 @@ async function tryReplaceLiveBinary(opts: {
         stagedBinaryPath: opts.stagedBinaryPath,
       },
       exitCode: 1,
+    });
+  }
+}
+
+// Live CLI bytes just changed at `livePath`; refresh the well-known slot
+// so it keeps serving the current binary. The slot is a byte COPY (see
+// `stageWellKnownCliBinary` for why it is not a symlink), so every writer
+// of live CLI bytes must re-stage it - a stale copy is what the host
+// daemon would keep shelling for doctor / update. Best-effort like every
+// other slot write: a failure leaves the previous slot contents serving,
+// which is the accepted stale-but-functional worst case.
+async function refreshWellKnownSlot(
+  environment: Environment,
+  livePath: string,
+  logger: ILogger,
+): Promise<void> {
+  const staged = await stageWellKnownCliBinary({
+    environment,
+    binaryPath: livePath,
+  });
+  if (staged.staged === "failed") {
+    logger.warn("CLI upgrade well-known slot refresh failed", {
+      environment,
+      errorName: staged.errorName,
+      errorMessage: staged.errorMessage,
     });
   }
 }

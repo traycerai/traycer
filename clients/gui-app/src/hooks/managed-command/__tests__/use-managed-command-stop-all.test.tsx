@@ -31,6 +31,8 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => hostClient,
+  // The SPINE, a separate export since redesign P2.1.
+  useHostRuntimeClient: () => hostClient,
   useHostDirectory: () => ({
     findById: () => (directoryState.available ? mockLocalHostEntry : null),
   }),
@@ -100,18 +102,20 @@ beforeEach(() => {
       },
     },
   });
-  hostClient = new HostClient<HostRpcRegistry>({
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger,
   });
-  hostClient.bind(mockLocalHostEntry);
-  hostClient.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({
       origin: "renderer",
       bearerToken: "stop-all-token",
     }),
   );
+  hostClient = spine.createRequester(mockLocalHostEntry);
 });
 
 afterEach(() => {

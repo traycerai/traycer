@@ -75,6 +75,7 @@ import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
 import { registerHostManagementIpc } from "./host-management-ipc";
 import { registerHostControllerStatusBroadcast } from "./host-controller-status-broadcast";
+import { registerSelectionAuthorityIpc } from "./selection-authority-ipc";
 import { registerMigrationIpc } from "./migration-ipc";
 import { registerSupportIpc } from "./support-ipc";
 import { registerTraycerCliIpc } from "./traycer-cli-ipc";
@@ -95,11 +96,14 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  GuardedMutationOutcome,
   HostControllerStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  LocalHostMutationIntent,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
@@ -359,8 +363,20 @@ export interface IpcHostLifecycle {
  * `implements` needed.
  */
 export interface IpcHostController {
+  /**
+   * The lifecycle admission verdict sampled synchronously, for a handler that
+   * must test it and submit in one stretch. `getStatus()` carries the lane
+   * half but only after awaiting disk reads, which is already too late to
+   * decide whether submitting would QUEUE behind a running intent — and it
+   * cannot see the pending-login-item revision cycle at all, which this
+   * includes. Deliberately the ONLY admission surface exposed here.
+   */
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
   getStatus(): Promise<HostControllerStatus>;
-  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  convergeReady(
+    force: boolean,
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
     trigger: ApplyStagedTrigger,
@@ -373,16 +389,21 @@ export interface IpcHostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>>;
-  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  registerService(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
-  respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
+  respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
   >;
   freePortAndRestart(
     pid: number | null,
     port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
   removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
   isPendingRevisionRefreshQuarantined(): boolean;
@@ -428,6 +449,14 @@ export type RunnerIpcBridgeOptions =
 interface FreshSnapshotWaiter {
   readonly windowId: string;
   readonly resolve: (snapshot: UnsyncedEditsSnapshot) => void;
+  /**
+   * Settles the same promise as "did not answer" - the shape
+   * `requestFreshUnsyncedSnapshotForWindow`'s own timeout branch produces
+   * (cached ambient snapshot, `fresh: false`). `resolve` above always means
+   * the renderer actually replied, so dispose()/`pruneClosedWindowState()`
+   * cannot reuse it without lying about freshness; they call this instead.
+   */
+  readonly resolveStale: () => void;
 }
 
 /**
@@ -451,7 +480,6 @@ export class RunnerIpcBridge {
     channel: string;
     listener: (event: IpcMainEvent, ...args: unknown[]) => void;
   }> = [];
-  private hostPickerOpen = false;
   // Set when a browser-return deep link arrives before any renderer window
   // exists; drained to the MRU window once one registers. Coalesced to a single
   // flag - the signal is a payload-free nudge, so repeated arrivals collapse.
@@ -505,6 +533,10 @@ export class RunnerIpcBridge {
     registerHostIpc(this);
     registerHostManagementIpc(this);
     registerHostControllerStatusBroadcast(this);
+    // After the status broadcast: the selection authority's local
+    // expected-outage signal subscribes to the tick source that module owns
+    // rather than standing up a second poll loop.
+    registerSelectionAuthorityIpc(this);
     registerMigrationIpc(this);
     registerTraycerCliIpc(this);
     // Platform IPC (recent docs, window effects, diagnostics, etc.) is wired
@@ -707,10 +739,51 @@ export class RunnerIpcBridge {
   requestFreshUnsyncedSnapshot(
     timeoutMs: number,
   ): Promise<UnsyncedEditsSnapshot> {
-    const requests = this.windowRegistry.records().map((record) => {
-      return this.requestFreshUnsyncedSnapshotForWindow(record, timeoutMs);
-    });
-    return Promise.all(requests).then(() => this.getUnsyncedEditsSnapshot());
+    return this.requestFreshUnsyncedSnapshotWithFidelity(timeoutMs).then(
+      (result) => result.snapshot,
+    );
+  }
+
+  /**
+   * `requestFreshUnsyncedSnapshot` plus the one fact it discards: whether
+   * EVERY window actually answered.
+   *
+   * The fan-out above resolves a non-answering window with its cached ambient
+   * row, which is the right default for the quit path - that path is racing an
+   * OS shutdown and a stale row is strictly better than blocking on a wedged
+   * renderer. It is the wrong default for a caller that has to decide whether
+   * destroying work is authorized, because a silent fallback is
+   * indistinguishable from a window that genuinely holds nothing, and the two
+   * lead to opposite decisions.
+   *
+   * So the fallback is reported rather than hidden, and the caller decides
+   * what it means. `installUpdate()` treats it as unknown-and-therefore-ask;
+   * see `unsyncableWorkAcrossWindows`.
+   */
+  requestFreshUnsyncedSnapshotWithFidelity(timeoutMs: number): Promise<{
+    readonly snapshot: UnsyncedEditsSnapshot;
+    readonly anyWindowStale: boolean;
+  }> {
+    // Only windows that have MOUNTED the lifecycle bridge are asked - the same
+    // gate `requestQuitDecision` applies. A window that never pushed a
+    // snapshot (the readiness gate is blocking it, or it is on the sign-in
+    // route) has no `AppShell`, so no Epic canvas and no session to hold
+    // unsynced work; asking it anyway made it time out on EVERY install click
+    // for the rest of the session and report `otherWindowsUnknown` for a
+    // window that structurally could not hold anything - fail-closed in the
+    // wrong direction. Once ready, a window stays in the set until it closes,
+    // so a window that mounted and later blanks is still asked (and times
+    // out honestly).
+    const requests = this.windowRegistry
+      .records()
+      .filter((record) => this.appLifecycleReadyWindowIds.has(record.windowId))
+      .map((record) => {
+        return this.requestFreshUnsyncedSnapshotForWindow(record, timeoutMs);
+      });
+    return Promise.all(requests).then((results) => ({
+      snapshot: this.getUnsyncedEditsSnapshot(),
+      anyWindowStale: results.some((result) => !result.fresh),
+    }));
   }
 
   /**
@@ -796,18 +869,11 @@ export class RunnerIpcBridge {
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
     );
-  }
-
-  getHostPickerOpen(): boolean {
-    return this.hostPickerOpen;
-  }
-
-  setHostPickerOpen(next: boolean): void {
-    if (this.hostPickerOpen === next) {
-      return;
-    }
-    this.hostPickerOpen = next;
-    this.fanOut(RunnerHostEvent.hostPickerChange, next);
+    // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
+    // armed past dispose() would either fire its setTimeout against a bridge
+    // that no longer owns any IPC handlers, or hang the awaiting caller
+    // forever if the timer is cleared without settling the promise.
+    this.settleFreshSnapshotWaitersAsStale(() => true);
   }
 
   handleInvoke(
@@ -902,12 +968,27 @@ export class RunnerIpcBridge {
     return records.length === 1 ? records[0].windowId : null;
   }
 
+  /**
+   * `fresh` distinguishes "this window answered" from "this window did not,
+   * and the cached ambient row stood in for it". Both resolve with a usable
+   * snapshot; only the first is evidence about the window's CURRENT state.
+   */
   requestFreshUnsyncedSnapshotForWindow(
     record: IpcWindowRecord,
     timeoutMs: number,
-  ): Promise<UnsyncedEditsSnapshot> {
+  ): Promise<{
+    readonly snapshot: UnsyncedEditsSnapshot;
+    readonly fresh: boolean;
+  }> {
     const requestId = randomUUID();
-    return new Promise<UnsyncedEditsSnapshot>((resolve) => {
+    const cachedFallback = (): {
+      readonly snapshot: UnsyncedEditsSnapshot;
+      readonly fresh: boolean;
+    } => ({
+      snapshot: this.unsyncedEditsSnapshots.get(record.windowId) ?? [],
+      fresh: false,
+    });
+    return new Promise((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
@@ -919,7 +1000,7 @@ export class RunnerIpcBridge {
           fallbackCount:
             this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
         });
-        resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
+        resolve(cachedFallback());
       }, timeoutMs);
       this.freshSnapshotWaiters.set(requestId, {
         windowId: record.windowId,
@@ -927,7 +1008,14 @@ export class RunnerIpcBridge {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          resolve(snapshot);
+          resolve({ snapshot, fresh: true });
+        },
+        resolveStale: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.freshSnapshotWaiters.delete(requestId);
+          resolve(cachedFallback());
         },
       });
       if (
@@ -948,7 +1036,7 @@ export class RunnerIpcBridge {
           fallbackCount:
             this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
         });
-        resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
+        resolve(cachedFallback());
       }
     });
   }
@@ -1115,6 +1203,13 @@ export class RunnerIpcBridge {
       (waiter) => !liveWindowIds.has(waiter.windowId),
       new Error("Quit interception window closed before resolving"),
     );
+    // A fresh-snapshot request targets one window; if that window closed
+    // before answering, no reply is ever coming and the waiter would
+    // otherwise sit armed until its own timeout - same gap the line above
+    // closes for quit-decision waiters.
+    this.settleFreshSnapshotWaitersAsStale(
+      (waiter) => !liveWindowIds.has(waiter.windowId),
+    );
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1158,6 +1253,25 @@ export class RunnerIpcBridge {
     }
     this.quitDecisionWaiters.length = 0;
     this.quitDecisionWaiters.push(...retained);
+  }
+
+  /**
+   * `rejectQuitDecisionWaiters`'s counterpart for fresh-snapshot requests.
+   * `resolveStale()` (not `reject`) because a fresh-snapshot request has a
+   * well-defined "did not answer" value - the cached ambient snapshot - so
+   * there is no error to propagate, only a freshness fact to report.
+   * Snapshotted to an array first since `resolveStale()` deletes its own
+   * entry from `freshSnapshotWaiters`, which would otherwise mutate the Map
+   * mid-iteration.
+   */
+  private settleFreshSnapshotWaitersAsStale(
+    predicate: (waiter: FreshSnapshotWaiter) => boolean,
+  ): void {
+    for (const waiter of Array.from(this.freshSnapshotWaiters.values())) {
+      if (predicate(waiter)) {
+        waiter.resolveStale();
+      }
+    }
   }
 }
 

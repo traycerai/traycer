@@ -202,6 +202,22 @@ describe("useWorktreeWorkspacesRefresh", () => {
     });
     // Summary force lands, branch list still held: refresh must NOT report
     // done yet. The held read is the one the user is looking at.
+    //
+    // The `waitForHeldRequest` line is load-bearing and is not decoration on
+    // the `waitFor` below it. `expect(settled).toBe(false)` is a NEGATIVE
+    // assertion, so it only means anything once the thing that must block the
+    // settle is provably in flight - and `isRefreshing` does not establish
+    // that: it goes true the moment refresh starts, before the branch read is
+    // even issued. Gating on it alone left `settled` racing the very request
+    // it is about, and it failed under parallel-shard CI load while passing in
+    // isolation. Every other hold in this file already gates on
+    // `waitForHeldRequest`; this was the one that did not.
+    //
+    // Added as an EXTRA line rather than as a replacement, deliberately: the
+    // assertions after the release are themselves timing-sensitive, and
+    // reordering these two moved the failure down to line ~226 instead of
+    // removing it.
+    await fixture.waitForHeldRequest("branch", 1);
     await waitFor(() => {
       expect(rendered.result.current.refresh.isRefreshing).toBe(true);
     });
@@ -213,9 +229,18 @@ describe("useWorktreeWorkspacesRefresh", () => {
     });
 
     expect(settled).toBe(true);
-    expect(rendered.result.current.refresh.isRefreshing).toBe(false);
+    // `waitFor`, not a bare read: the promise settling and React committing
+    // the cleared flag are two different events, and asserting the flag
+    // synchronously off the promise raced them. It stayed green only because
+    // nothing awaited in between - adding the `waitForHeldRequest` gate above
+    // was enough to flip it, which is precisely how little it took.
+    await waitFor(() => {
+      expect(rendered.result.current.refresh.isRefreshing).toBe(false);
+    });
     // The spinner cleared and the deleted branch is already gone - the two
-    // facts that were allowed to disagree before.
+    // facts that were allowed to disagree before. This one stays a BARE read
+    // on purpose: it is the simultaneity claim the test exists for, so it must
+    // hold at the moment the spinner clears, not merely converge later.
     expect(rendered.result.current.branches).toEqual(["main"]);
   });
 
@@ -324,34 +349,13 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // cold-only cache - stale, and refetching re-serves the same stale value.
     // Only a force against B moves it.
     //
-    // The fixture rebinds on EVERY forced read, so a chase would never end;
-    // exactly two is what proves the follow-up is bounded to one.
-    const fixture = createFixture();
-    fixture.swapHostOnEachForcedRead();
-    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
-      wrapper: fixture.Wrapper,
-    });
-
-    await waitFor(() => {
-      expect(rendered.result.current.branch).toBe("feature/login");
-    });
-
-    fixture.setDiskOnly({ branch: "main", resolvedAt: 7_000 });
-    await act(async () => {
-      await rendered.result.current.refresh.refresh();
-    });
-
-    expect(fixture.forcedCalls().length).toBe(2);
-  });
-
-  it("recovers from a host swap that ABORTS the read, and stays silent about it", async () => {
-    // The dominant host-swap path, and the one `onSuccess` alone cannot see.
-    // `HostClient.bind` snapshots the outgoing host's in-flight jobs and
-    // settles them `authority-superseded`, which the GUI boundary turns into a
-    // TanStack cancellation - so the request FAILS. Without handling it in
-    // `onError`, switching hosts mid-refresh skipped the follow-up force and
-    // toasted "Couldn't refresh folder details." at a user who did nothing but
-    // change hosts.
+    // The swap happens explicitly here, in the test body between awaits, not
+    // from inside the mock's RPC handler (redesign P4.2): under the requester
+    // contract an in-flight request has already captured its entry, so a
+    // handler-interior move is both inexpressible and irrelevant now - "the
+    // host moved" is a NEW pinned requester the picker only sees once it
+    // re-renders. Exactly two forced calls is what proves the follow-up is
+    // bounded to one hop.
     const fixture = createFixture();
     const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
       wrapper: fixture.Wrapper,
@@ -367,22 +371,104 @@ describe("useWorktreeWorkspacesRefresh", () => {
     act(() => {
       inFlight = rendered.result.current.refresh.refresh();
     });
-    // First force is in flight under the host that will leave.
     await fixture.waitForHeldRequest("forced", 1);
+
     act(() => {
       fixture.swapHost();
+      rendered.rerender();
     });
-    // Follow-up force against the host now on screen is also held (hold is
-    // still armed), so wait for that successive arrival before releasing.
-    await fixture.waitForHeldRequest("forced", 2);
+
     await act(async () => {
       fixture.releaseHeldReads();
       await inFlight;
     });
 
-    // One force per host: the aborted one under the host that left, and the
-    // follow-up under the host now on screen.
     expect(fixture.forcedCalls().length).toBe(2);
+  });
+
+  it("stays silent on a cancellation that is NOT a host move, and starts no chase", async () => {
+    // The `onError` CancelledError arm, on the trigger that still produces it.
+    //
+    // This case used to drive a HOST SWAP, because `HostClient.bind` snapshotted
+    // the outgoing host's in-flight jobs and settled them `authority-superseded`.
+    // Redesign P2.1 deleted that: a host becoming effective is no longer a
+    // lifecycle event for the host that left, so a swap mid-refresh now lets the
+    // in-flight read finish and lands in `onSuccess` - which carries the SAME
+    // `forceAgainstLiveHost` call, so the follow-up survives and is covered by
+    // "forces again against the host the user switched to, and stops there".
+    //
+    // What P2.1 did NOT delete is the cancellation class itself, and this arm is
+    // its only cover. `setRequestContext` still aborts the bound host's in-flight
+    // work on an identity transition - deliberately, because a credential change
+    // must not let work issued under the old identity keep running - so an auth
+    // change mid-refresh is now the plainest live producer. It is also the one
+    // the fixture already speaks: `client` is exposed and the context fixture is
+    // already imported, so nothing here reaches for new fixture surface. (A
+    // same-host TRANSPORT move reaches the same arm, but pinning it would couple
+    // this test to whichever fields `sameHostTransport` happens to compare -
+    // machinery P4.1/P4.2 will move.)
+    //
+    // The claim, and it is a different one than before: a cancellation with the
+    // host UNMOVED is silent AND spawns nothing. `forceAgainstLiveHost` returns
+    // early when the live host still equals the one the request started under,
+    // so there is no second force to find - the toast must not fire and the
+    // chase must not start.
+    const fixture = createFixture();
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS, true), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.branch).toBe("feature/login");
+    });
+
+    fixture.setDiskOnly({ branch: "main", resolvedAt: 7_000 });
+    fixture.holdForcedReads();
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh.refresh();
+    });
+    await fixture.waitForHeldRequest("forced", 1);
+
+    // The identity transition. A DIFFERENT context reference is what makes this
+    // a transition rather than a same-user rotation (which mutates the lease in
+    // place and deliberately does not abort anything).
+    act(() => {
+      fixture.client.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-2",
+        }),
+      );
+    });
+
+    // NOT released first, and that ordering IS the discriminator. The abort is
+    // ASYNCHRONOUS - `cancelThenAbortAll` waits on the invalidator's
+    // `cancelHostScope` before aborting the coordinator job - so releasing here
+    // would let the held read settle normally and win the race, and the test
+    // would pass without a cancellation ever occurring. Awaiting the in-flight
+    // refresh FIRST means only the abort can settle it: if the cancellation
+    // stops firing, this await never returns and the case times out rather
+    // than quietly passing.
+    await act(async () => {
+      await inFlight;
+    });
+    fixture.releaseHeldReads();
+
+    // THE DISCRIMINATOR, and it is the only assertion here that can tell the
+    // subject apart from its own null hypothesis. `onSuccess` is what writes
+    // the forced response into the entry the picker renders from, so a read
+    // that was CANCELLED leaves the pre-refresh branch on screen while a read
+    // that merely settled would have moved it to the disk value. Written down
+    // because the silence assertions below are true of BOTH outcomes: a
+    // successful held read also makes exactly one forced call and also raises
+    // no toast, so on their own they pass whether or not the cancellation this
+    // test is named for ever happened. Measured, not assumed - without this
+    // line the trigger can be deleted outright and the test still passes.
+    expect(rendered.result.current.branch).toBe("feature/login");
+    // Exactly the one force that was cancelled: the host never moved, so no
+    // follow-up is owed and none is made.
+    expect(fixture.forcedCalls().length).toBe(1);
     expect(toastSpy).not.toHaveBeenCalled();
   });
 
@@ -489,10 +575,12 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("sets verifyFailed when the one-hop post-host-change force fails", async () => {
-    // A→B cancel path: the outer refresh settles as CancelledError (no
-    // verifyFailed), then forceAgainstLiveHost fires against B. If THAT hop
-    // fails, the footer must still show the failure state — toast alone left
-    // it silently idle.
+    // A→B path: A's held read settles normally (redesign P4.2 deleted the
+    // active-slot cancellation `HostClient.bind` used to trigger, so there is
+    // no CancelledError here - `onSuccess` is what notices the host moved),
+    // then forceAgainstLiveHost fires against B. If THAT hop fails, the
+    // footer must still show the failure state — toast alone left it
+    // silently idle.
     //
     // Arm order matters: failNextForced is checked BEFORE holdForced in the
     // fixture. Arming fail before A's request starts makes A reject
@@ -516,11 +604,14 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // A is held. NOW arm B to fail so the one-hop follow-up rejects.
     await fixture.waitForHeldRequest("forced", 1);
     fixture.failNextForcedRead(new Error("host B unreachable"));
-    // Abort the in-flight force under A; onError hands work to
-    // forceAgainstLiveHost against B, which fails immediately (failNext is
-    // checked before hold).
+    // Swap to a NEW pinned requester for B and re-render so the picker (and
+    // `forceAgainstLiveHost`'s `client` closure) observes it before A's held
+    // read is released - the requester swap itself does not touch A's
+    // already-dispatched request (failNext is checked before hold, so B's
+    // follow-up fails immediately once it fires).
     act(() => {
       fixture.swapHost();
+      rendered.rerender();
     });
     await act(async () => {
       fixture.releaseHeldReads();
@@ -629,8 +720,6 @@ function createFixture(): {
   readonly calls: () => ReadonlyArray<unknown>;
   readonly forcedCalls: () => ReadonlyArray<unknown>;
   readonly hostQueryKeys: () => ReadonlyArray<string>;
-  /** Rebinds the client mid-request, as switching the active host would. */
-  readonly swapHostOnEachForcedRead: () => void;
   /** Switches the active host once, exactly as the host picker does. */
   readonly swapHost: () => void;
   /**
@@ -689,9 +778,6 @@ function createFixture(): {
   let holdForced = false;
   let holdBranches = false;
   let failNextForced: Error | null = null;
-  // Bounded so a regression that chases the host forever fails the count
-  // assertion instead of spinning the suite.
-  let swapsLeft = 0;
   const heldByKind: Record<HeldRequestKind, Array<() => void>> = {
     cacheOnly: [],
     forced: [],
@@ -765,14 +851,6 @@ function createFixture(): {
             failNextForced = null;
             return Promise.reject(error);
           }
-          if (swapsLeft > 0) {
-            swapsLeft -= 1;
-            client.bind(
-              client.getActiveHostId() === mockLocalHostEntry.hostId
-                ? mockRemoteHostEntry
-                : mockLocalHostEntry,
-            );
-          }
           const settle = (): {
             readonly workspaces: WorktreeWorkspaceSummaryV15[];
             readonly scriptsAtRefs: never[];
@@ -822,22 +900,38 @@ function createFixture(): {
       },
     },
   });
-  const client = new HostClient<HostRpcRegistry>({
+  // A requester pinned to a known row (migration recipe, redesign P4.2):
+  // `findHostById` is what both `createRequester` calls below re-resolve the
+  // live entry through, and it is REQUIRED - without it every request on a
+  // pinned client rejects as a stale binding, surfacing as absent data rather
+  // than an error naming a client.
+  const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     messenger,
+    findHostById: (hostId) => {
+      if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+      if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
+      return null;
+    },
   });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
+  spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
+  // Reassigned by `swapHost` rather than rebound in place - the active slot
+  // `HostClient.bind` used to mutate is gone (redesign P4.2), so "the host
+  // moved" is now expressed as a NEW pinned requester, and the picker only
+  // observes it once the test explicitly re-renders with the new reference.
+  let client = spine.createRequester(mockLocalHostEntry);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
     </QueryClientProvider>
   );
   return {
-    client,
+    get client() {
+      return client;
+    },
     Wrapper,
     calls: () => calls,
     forcedCalls: () =>
@@ -848,15 +942,11 @@ function createFixture(): {
           "forceRefresh" in params &&
           params.forceRefresh === true,
       ),
-    swapHostOnEachForcedRead: () => {
-      swapsLeft = 6;
-    },
     swapHost: () => {
-      client.bind(
+      client =
         client.getActiveHostId() === mockLocalHostEntry.hostId
-          ? mockRemoteHostEntry
-          : mockLocalHostEntry,
-      );
+          ? spine.createRequester(mockRemoteHostEntry)
+          : spine.createRequester(mockLocalHostEntry);
     },
     branchInCacheFor: (paths) => {
       // Built with the hook's own key builders, so the assertion cannot drift

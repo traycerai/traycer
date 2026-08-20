@@ -91,6 +91,7 @@ export async function runDeviceAuthFlow(
     percent: null,
     bytes: null,
     totalBytes: null,
+    workUnits: null,
   });
 
   // Best-effort: open the one-click link locally. On a headless box the spawn
@@ -142,7 +143,7 @@ export async function runDeviceAuthFlow(
   // path with the desktop app. `signIn` is unconditional and clears any
   // tombstone - exactly the semantics an interactive sign-in needs.
   const persisted = await runWithCliStore((store) =>
-    withCommitRetry(() => store.signIn(credentials, false, null)),
+    withCommitRetry(() => store.signIn(credentials, false, null), null),
   );
   if (persisted.outcome !== "applied") {
     throw cliError({

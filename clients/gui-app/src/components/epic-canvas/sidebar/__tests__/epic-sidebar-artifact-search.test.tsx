@@ -69,9 +69,29 @@ vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
     return harness.result;
   },
 }));
-vi.mock("@/lib/host", () => ({ useHostClient: () => ({}) }));
-vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => harness.hostId,
+// The two host reads this box makes, mocked as DISTINGUISHABLE pairs. The
+// search box is a sidebar - outside every tile `TabHostProvider` - and both of
+// its reads belong to the Epic SESSION: the client the search runs on, and the
+// id that binds every opened hit's tile for life. They used to come from two
+// different sources (`useHostClient()` and `useAddressableHostId()` beside
+// it), so a re-point that left the sidebar live searched one machine and
+// opened the results as tiles bound to another.
+//
+// The ambient pair is still mocked, with different values, so a regression to
+// either one fails on the VALUE rather than on an absence.
+const clients = vi.hoisted(() => ({
+  ambient: { label: "ambient-client" },
+  session: { label: "session-client" },
+}));
+vi.mock("@/lib/host", () => ({ useHostClient: () => clients.ambient }));
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-ambient",
+}));
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => clients.session,
+}));
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => harness.hostId,
 }));
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => ({ store: { getState: () => ({}) } }),
@@ -336,6 +356,21 @@ describe("ArtifactSearchBox", () => {
     expect(screen.getByTestId("epic-artifact-search-loading")).toBeTruthy();
     expect(harness.lastArgs?.enabled).toBe(true);
     expect(harness.lastArgs?.query).toBe("auth");
+  });
+
+  it("searches on the Epic session's client, not the ambient one", () => {
+    harness.result = loadingResult();
+    renderBox({
+      tabId: DEFAULT_TAB_ID,
+      searchQuery: "auth",
+      debouncedQuery: "auth",
+      epicId: "epic-1",
+    });
+    // Identity, and both directions: the second line is what fails if someone
+    // restores `useHostClient()` here, since that mock returns a real object
+    // and would satisfy a bare "a client was passed" assertion.
+    expect(harness.lastArgs?.client).toBe(clients.session);
+    expect(harness.lastArgs?.client).not.toBe(clients.ambient);
   });
 
   it("renders ranked results without redundant match-source badges and announces the count", () => {
