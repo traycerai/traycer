@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   argvSelectsSupervisedHostStart,
+  canonicalBinaryPath,
   isTraycerCliEntrypoint,
 } from "../index";
 
@@ -131,4 +141,97 @@ describe("argvSelectsSupervisedHostStart", () => {
   it.each(CASES)("$name -> $expected", ({ argv, expected }) => {
     expect(argvSelectsSupervisedHostStart(argv)).toBe(expected);
   });
+});
+
+// The restart decision compares the running binary against the slot that was
+// just republished. Getting that comparison wrong is silent in both
+// directions - a missed restart leaves the supervised host running the
+// previous CLI forever, which is the exact bug this whole change exists to
+// fix - so the spellings that must reduce to one path are pinned here.
+describe("canonicalBinaryPath", () => {
+  let work: string;
+
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), "traycer-cli-canonical-path-"));
+  });
+
+  afterEach(() => {
+    rmSync(work, { recursive: true, force: true });
+  });
+
+  it("reduces two spellings of the same existing file to one path", async () => {
+    const binary = join(work, "traycer");
+    writeFileSync(binary, "binary bytes");
+    const indirect = join(work, "sub", "..", "traycer");
+    mkdirSync(join(work, "sub"), { recursive: true });
+
+    expect(await canonicalBinaryPath(indirect)).toBe(
+      await canonicalBinaryPath(binary),
+    );
+  });
+
+  // A path that cannot be realpath-ed must not throw - and on POSIX this is
+  // the NORMAL case for the running image right after the slot is replaced,
+  // not an exotic one: the rename can leave `process.execPath` naming an
+  // unlinked inode. Throwing here would take out the restart decision with
+  // it.
+  it("falls back to a resolved path when the file cannot be realpath-ed", async () => {
+    const missing = join(work, "never-existed", "traycer");
+
+    expect(await canonicalBinaryPath(missing)).toBe(resolve(missing));
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reduces a symlink alias to the file it points at",
+    async () => {
+      const binary = join(work, "traycer");
+      writeFileSync(binary, "binary bytes");
+      const alias = join(work, "traycer-alias");
+      symlinkSync(binary, alias);
+
+      expect(await canonicalBinaryPath(alias)).toBe(
+        await canonicalBinaryPath(binary),
+      );
+    },
+  );
+
+  // Windows path comparison is case-insensitive, and neither `resolve` nor a
+  // JS-level `realpath` normalizes case - so `C:\Users\...` from
+  // `process.execPath` and `c:\users\...` built from `homedir()` would
+  // compare unequal and silently skip the restart. Driven against a
+  // non-existent path on purpose: that exercises the `resolve` fallback,
+  // which is the branch a real Windows run takes when the running image has
+  // just been replaced.
+  it("folds case on win32, so two spellings of one Windows path agree", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (descriptor === undefined) {
+      throw new Error("process.platform descriptor missing");
+    }
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+    try {
+      const upper = join(work, "BIN", "Traycer.exe");
+      const lower = join(work, "bin", "traycer.exe");
+
+      expect(await canonicalBinaryPath(upper)).toBe(
+        await canonicalBinaryPath(lower),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does NOT fold case off win32, where two spellings are two different files",
+    async () => {
+      const upper = join(work, "BIN", "Traycer");
+      const lower = join(work, "bin", "traycer");
+
+      expect(await canonicalBinaryPath(upper)).not.toBe(
+        await canonicalBinaryPath(lower),
+      );
+    },
+  );
 });

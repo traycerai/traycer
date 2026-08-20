@@ -14,6 +14,7 @@ import {
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { config } from "./config";
 import { resolveCliVersion } from "./cli-version";
@@ -206,6 +207,39 @@ export function buildProgram(): Command {
   return buildProgramWithAgentRoles(readFeatureSettingsSync().agentRoles);
 }
 
+// One path in a form two spellings of the same file both reduce to.
+//
+// By SPELLING, deliberately, where the rest of this change compares inode
+// identity. Inode identity would answer the wrong question here: the slot has
+// just been republished by `rename`, so the running image is on the old inode
+// while the path now leads to a new one - the two are guaranteed to differ
+// precisely when the answer should be yes. What is being asked is whether the
+// binary this process was launched FROM is the one that got replaced, and
+// that is a question about the path.
+//
+// A bare string compare gets it wrong on Windows in two ways, both of which
+// silently skip the restart and leave the supervised host on stale bytes:
+// `process.execPath` and a path built from `homedir()` routinely differ in
+// case (`C:\Users` vs `c:\users`), and either side can arrive in 8.3 short
+// form (`PROGRA~1`). `realpath` collapses the short form; case-folding covers
+// the rest, since Windows path comparison is case-insensitive and neither
+// `resolve` nor `realpath` reliably normalizes case there. POSIX is
+// case-sensitive and must NOT be folded.
+//
+// Falling back to `resolve` when `realpath` throws is load-bearing rather
+// than defensive: on POSIX the running image may already have been unlinked
+// by the very rename this is asking about, and an unlinked path cannot be
+// realpath-ed.
+//
+// Exported for the same reason `isTraycerCliEntrypoint` and
+// `argvSelectsSupervisedHostStart` are: the interesting cases here are
+// platform-conditional, and pinning them by unit test beats spawning a
+// subprocess on an OS the suite may not be running on.
+export async function canonicalBinaryPath(path: string): Promise<string> {
+  const canonical = await realpath(path).catch(() => resolve(path));
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
 // Upkeep, never a gate: a command must run whatever the slot's state is, so
 // every outcome here is logged and swallowed. `stageWellKnownCliBinary`
 // reports filesystem trouble as a `failed` OUTCOME rather than throwing, so
@@ -235,9 +269,12 @@ async function refreshCliSlotBeforeCommand(): Promise<boolean> {
       environment: config.environment,
       staged: refreshed.staged,
     });
+    // Only `staged` publishes a replacement; `already-well-known` and
+    // `not-applicable` leave the running binary exactly where it was.
+    if (refreshed.staged !== "staged") return false;
     return (
-      refreshed.staged === "staged" &&
-      resolve(process.execPath) === resolve(refreshed.wellKnownPath)
+      (await canonicalBinaryPath(process.execPath)) ===
+      (await canonicalBinaryPath(refreshed.wellKnownPath))
     );
   } catch (cause) {
     logger.warn("CLI well-known slot refresh threw", {
@@ -249,21 +286,48 @@ async function refreshCliSlotBeforeCommand(): Promise<boolean> {
   }
 }
 
-// Whether this argv selects the long-lived supervised entry, `host start`.
+interface ArgvCommandPath {
+  // Index of the `--` terminator within the command-relative slice, or -1.
+  readonly separatorIndex: number;
+  // Command-relative tokens preceding any `--`, options included.
+  readonly beforeSeparator: readonly string[];
+  // Those tokens with option spellings dropped: the command path proper.
+  readonly commandPath: readonly string[];
+}
+
+// Which command an argv selects: positional tokens ahead of any `--`, with
+// option tokens dropped. `commandOffset` is 2 for a Node-style argv, or
+// whatever `commandOffsetFor` reports for a commander `ParseOptions`.
 //
-// Uses the same "drop option tokens, read the command path" rule as
-// `rewriteHostUpdateVersion`, against a Node-style argv (offset 2), which is
-// what the script entry below always passes. Exported for the same reason
-// `isTraycerCliEntrypoint` is: so the matrix can be pinned by unit test
-// rather than by spawning a subprocess.
-export function argvSelectsSupervisedHostStart(
+// Single-sourced deliberately. Both callers decide WHICH COMMAND an argv
+// names, and they have to agree: if the rule drifted, the restart guard and
+// the `host update --version` rewrite would disagree about what
+// `traycer host start` is, and only one of them would be right. A comment
+// asking two copies to stay identical is not a mechanism - this is.
+function argvCommandPath(
   argv: readonly string[],
-): boolean {
-  const commandArgs = argv.slice(2);
+  commandOffset: number,
+): ArgvCommandPath {
+  const commandArgs = argv.slice(commandOffset);
   const separatorIndex = commandArgs.indexOf("--");
   const beforeSeparator =
     separatorIndex === -1 ? commandArgs : commandArgs.slice(0, separatorIndex);
-  const commandPath = beforeSeparator.filter((token) => !token.startsWith("-"));
+  return {
+    separatorIndex,
+    beforeSeparator,
+    commandPath: beforeSeparator.filter((token) => !token.startsWith("-")),
+  };
+}
+
+// Whether this argv selects the long-lived supervised entry, `host start`.
+//
+// Against a Node-style argv (offset 2), which is what the script entry below
+// always passes. Exported for the same reason `isTraycerCliEntrypoint` is: so
+// the matrix can be pinned by unit test rather than by spawning a subprocess.
+export function argvSelectsSupervisedHostStart(
+  argv: readonly string[],
+): boolean {
+  const { commandPath } = argvCommandPath(argv, 2);
   return commandPath[0] === "host" && commandPath[1] === "start";
 }
 
@@ -364,11 +428,10 @@ function rewriteHostUpdateVersion(
   options: ParseOptions | null,
 ): string[] {
   const commandOffset = commandOffsetFor(options);
-  const commandArgs = argv.slice(commandOffset);
-  const separatorIndex = commandArgs.indexOf("--");
-  const beforeSeparator =
-    separatorIndex === -1 ? commandArgs : commandArgs.slice(0, separatorIndex);
-  const commandPath = beforeSeparator.filter((token) => !token.startsWith("-"));
+  const { separatorIndex, beforeSeparator, commandPath } = argvCommandPath(
+    argv,
+    commandOffset,
+  );
   if (commandPath[0] !== "host" || commandPath[1] !== "update") {
     return [...argv];
   }

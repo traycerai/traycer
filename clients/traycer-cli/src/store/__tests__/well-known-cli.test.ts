@@ -1,10 +1,12 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -602,13 +604,11 @@ describe("stageWellKnownCliBinary", () => {
   // install home exists yet, so this call is the first writer of the whole
   // `~/.traycer/cli` chain. A bare `mkdir(dirname(wellKnownPath), {
   // recursive: true })` (no explicit mode) would create that entire chain
-  // at the process umask - typically 0o755 - and neither this call nor a
-  // later `ensureCliInstallHomeDir` repairs the mode of a directory that
-  // already exists, so the install home would stay world-traversable for
-  // the life of the install. `stageWellKnownCliBinary` now calls
-  // `ensureCliInstallHomeDir` (mode 0o700) BEFORE the recursive mkdir, so
-  // both the install home and its `bin` subdir must land at 0o700 even
-  // though this single invocation created every directory in the chain.
+  // at the process umask - typically 0o755 - leaving the install home
+  // world-traversable for the life of the install. `stageWellKnownCliBinary`
+  // creates the install home through `ensureCliInstallHomeDir` BEFORE the bin
+  // directory, so both must land at 0o700 even though this single invocation
+  // created every directory in the chain.
   it.skipIf(process.platform === "win32")(
     "creates the CLI install home directory (and its bin subdir) at mode 0o700 when nothing under it exists yet",
     async () => {
@@ -627,6 +627,41 @@ describe("stageWellKnownCliBinary", () => {
       const installHomeDir = cliInstallHomeDir(ENVIRONMENT);
       expect(statSync(installHomeDir).mode & 0o777).toBe(0o700);
       const binDir = dirname(wellKnownCliBinaryPath(ENVIRONMENT));
+      expect(statSync(binDir).mode & 0o777).toBe(0o700);
+    },
+  );
+
+  // The population the test above CANNOT reach, and the one that matters
+  // more: a machine that already has a CLI install. `mkdir` applies its mode
+  // only to directories it actually creates, so on every pre-existing install
+  // - anything staged before the 0o700 default, or a home Desktop created
+  // first at the process umask - the mode is whatever the first writer chose
+  // and a create-only fix never touches it. Since that directory holds the
+  // credentials file, hardening only fresh machines would leave the users who
+  // already have credentials on disk exactly where they were.
+  it.skipIf(process.platform === "win32")(
+    "repairs an EXISTING install home and bin directory from 0o755 to 0o700",
+    async () => {
+      const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+        await import("../well-known-cli");
+      const { cliInstallHomeDir } = await import("../paths");
+      const installHomeDir = cliInstallHomeDir(ENVIRONMENT);
+      const binDir = dirname(wellKnownCliBinaryPath(ENVIRONMENT));
+      mkdirSync(binDir, { recursive: true });
+      // Pre-existing install, world-traversable, exactly as an older CLI (or
+      // a bare umask-mode mkdir) would have left it.
+      chmodSync(installHomeDir, 0o755);
+      chmodSync(binDir, 0o755);
+      const target = join(workHome, "real-binary");
+      writeFileSync(target, "binary bytes");
+
+      const result = await stageWellKnownCliBinary({
+        environment: ENVIRONMENT,
+        binaryPath: target,
+      });
+
+      expect(result.staged).toBe("staged");
+      expect(statSync(installHomeDir).mode & 0o777).toBe(0o700);
       expect(statSync(binDir).mode & 0o777).toBe(0o700);
     },
   );
@@ -837,6 +872,131 @@ describe("refreshWellKnownSlotIfStale", () => {
 
     expect(result?.staged).toBe("staged");
     expect(readFileSync(wellKnownPath, "utf8")).toBe("CCCCCCCCCC");
+  });
+
+  // The shape no metadata comparison can see, and the reason the record
+  // stores inode identity rather than only size and mtime.
+  //
+  // This is a REAL upgrade shape, not a contrived one: rpm and dpkg both
+  // restore the archive's recorded mtime onto the file they install, and two
+  // builds of the same SEA routinely pad to the same length - so a same-size
+  // upgrade can reproduce BOTH numbers the record used to hold. Everything
+  // here is arranged to make that happen deliberately: identical length,
+  // identical mtime pinned onto the replacement, published by `rename` the
+  // way every package manager installs. Only `ino`/`dev` differ, and if the
+  // record does not carry them the slot is declared current forever and the
+  // service stays on the previous CLI.
+  it.skipIf(process.platform === "win32")(
+    "packaged, the source is atomically replaced by a same-size file carrying the SAME mtime: re-stages",
+    async () => {
+      seaState.current = true;
+      const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+        await import("../well-known-cli");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      mkdirSync(dirname(wellKnownPath), { recursive: true });
+      writeFileSync(wellKnownPath, "AAAAAAAAAA");
+      const running = join(workHome, "running-binary");
+      writeFileSync(running, "BBBBBBBBBB");
+      const pinned = new Date(Date.now() - 120_000);
+      utimesSync(running, pinned, pinned);
+
+      const first = await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      );
+      expect(first?.staged).toBe("staged");
+      expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBB");
+      const staged = statSync(running);
+
+      // An atomic install: different bytes, same length, the same mtime
+      // restored onto the new file, published over the old one by `rename`.
+      const incoming = `${running}.incoming`;
+      writeFileSync(incoming, "CCCCCCCCCC");
+      utimesSync(incoming, pinned, pinned);
+      renameSync(incoming, running);
+
+      // The premise of the test: everything the record compared BEFORE this
+      // change still matches, so a size/mtime test cannot tell the
+      // replacement happened. If any of these drift the assertion below would
+      // pass for the wrong reason. Compared against the staged file's own
+      // observed `mtimeMs` rather than `pinned.getTime()`: the filesystem
+      // keeps nanoseconds and reconstructs a float a hair below the integer
+      // millisecond, so the round-tripped value is what both the record and
+      // the freshness check actually see.
+      const replaced = statSync(running);
+      expect(replaced.size).toBe(staged.size);
+      expect(replaced.mtimeMs).toBe(staged.mtimeMs);
+      expect(replaced.ino).not.toBe(staged.ino);
+
+      const result = await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      );
+
+      expect(result?.staged).toBe("staged");
+      expect(readFileSync(wellKnownPath, "utf8")).toBe("CCCCCCCCCC");
+    },
+  );
+
+  // A record written by a CLI predating `sourceIno`/`sourceDev` must be
+  // REJECTED rather than honoured on the fields it does carry - honouring it
+  // would silently keep every already-installed machine on the weaker test
+  // this change exists to replace, which is the population most likely to
+  // meet a same-size upgrade.
+  //
+  // Rejection is observable only where the fallback disagrees with the
+  // record, so `utimes` is stubbed out: the slot's mtime never mirrors the
+  // source, `mirrors` therefore cannot prove freshness, and re-staging is
+  // proof the stale record was discarded. Honouring it would return null.
+  it("packaged: a staging record without inode identity is discarded, not trusted", async () => {
+    seaState.current = true;
+    utimesControl.noop = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "AAAAAAAAAA");
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "BBBBBBBBBB");
+    // Distinct mtimes, so the first refresh definitely stages. Two files
+    // written microseconds apart otherwise share a millisecond, `mirrors`
+    // reports the slot already faithful, and nothing is staged at all - which
+    // would leave no record to downgrade and pass the null check below for
+    // entirely the wrong reason.
+    const base = Date.now();
+    utimesSync(wellKnownPath, new Date(base), new Date(base));
+    utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
+
+    const staged = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+    expect(staged?.staged).toBe("staged");
+    // Precondition: with the CURRENT record in place this slot is fresh, so
+    // the re-stage asserted below can only come from the record being
+    // discarded - not from the slot having been stale all along.
+    expect(
+      await withExecPath(running, () =>
+        refreshWellKnownSlotIfStale(ENVIRONMENT),
+      ),
+    ).toBeNull();
+
+    // Downgrade the record in place to the older format.
+    const recordPath = `${wellKnownPath}.source.json`;
+    const current: unknown = JSON.parse(readFileSync(recordPath, "utf8"));
+    if (current === null || typeof current !== "object") {
+      throw new Error("staging record is not an object");
+    }
+    const { sourceIno, sourceDev, ...legacy } = current as Record<
+      string,
+      unknown
+    >;
+    expect(sourceIno).toBeTypeOf("number");
+    expect(sourceDev).toBeTypeOf("number");
+    writeFileSync(recordPath, `${JSON.stringify(legacy)}\n`);
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
   });
 
   it("packaged, the running binary IS the slot: returns null", async () => {
@@ -1099,6 +1259,56 @@ describe("refreshWellKnownSlotIfStale", () => {
     // value, even though the bytes it actually copied were the source's
     // ORIGINAL ones and the source has since moved on to the replacement).
     expect(slotStat.mtime.getTime()).not.toBe(past.getTime());
+  });
+
+  // The same race, followed through to the staging RECORD - which is now the
+  // authority `refreshWellKnownSlotIfStale` consults first, so leaving the
+  // mtime un-mirrored is no longer sufficient on its own.
+  //
+  // A record written here would describe the REPLACEMENT (the only thing left
+  // to stat once the race has fired) while the slot holds the ORIGINAL bytes.
+  // Every later refresh would then stat the replacement, match the record it
+  // wrote, and conclude the slot is current - permanently, because the
+  // replacement's identity never changes again. Writing no record is what
+  // keeps the mistake recoverable: the next run finds none, falls back to
+  // `mirrors`, and re-stages.
+  it("writes NO staging record when the source is atomically replaced mid-copy, and the next refresh re-stages", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    const source = join(workHome, "running-binary-race");
+    const originalBytes = "original binary bytes before the race";
+    writeFileSync(source, originalBytes);
+    const past = new Date(Date.now() - 300_000);
+    utimesSync(source, past, past);
+    copyFileControl.raceSourcePath = source;
+
+    const first = await withExecPath(source, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(first?.staged).toBe("staged");
+    // The copy captured the ORIGINAL bytes; the source has since been
+    // replaced. Sanity-check that the race actually fired before asserting
+    // anything about what was recorded.
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(originalBytes);
+    expect(statSync(source).mtime.getTime()).toBe(
+      RACE_REPLACEMENT_MTIME.getTime(),
+    );
+    // Pins the on-disk record name alongside `SLOT_SOURCE_RECORD_SUFFIX`.
+    expect(existsSync(`${wellKnownPath}.source.json`)).toBe(false);
+
+    const second = await withExecPath(source, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    // Re-staged, and now from a source nobody is racing: the slot ends up
+    // holding the replacement's bytes rather than the stale originals.
+    expect(second?.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(
+      "bytes from a racing installer that replaced the source mid-copy",
+    );
   });
 
   // Fix 1: an unreadable manifest (corrupt bytes, or a real I/O fault such

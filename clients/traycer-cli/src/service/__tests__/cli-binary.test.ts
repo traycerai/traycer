@@ -203,6 +203,34 @@ describe("resolveServiceCliInvocation", () => {
     }
   });
 
+  // A path that EXISTS is not a path that can be run. `access()` succeeds on
+  // a directory, so an existence test would hand a directory straight through
+  // to the service definition, producing a unit systemd and launchd both
+  // accept and neither can ever start. Every path this resolver returns has
+  // to be a regular file, and an override is the one a user types.
+  it("throws SERVICE_CLI_PATH_UNRESOLVED when the override is a DIRECTORY", async () => {
+    const overridePath = join(workHome, "a-directory-not-a-binary");
+    mkdirSync(overridePath, { recursive: true });
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+    const { CLI_ERROR_CODES, CliError } = await import("../../runner/errors");
+
+    let caught: unknown = null;
+    try {
+      await resolveServiceCliInvocation({
+        environment: ENVIRONMENT,
+        override: overridePath,
+        allowSelfInvocation: false,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(CliError);
+    if (caught instanceof CliError) {
+      expect(caught.code).toBe(CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED);
+    }
+  });
+
   // Manifest branch, source !== "npm": the registered command must be the
   // well-known slot (`<cliInstallHomeDir>/bin/traycer`), staged as a COPY of
   // the manifest binary's bytes - not the manifest's binaryPath directly.
@@ -554,7 +582,12 @@ describe("resolveServiceCliInvocation", () => {
     const emptyPathDir = mkdtempSync(join(tmpdir(), "traycer-cli-empty-path-"));
     try {
       const { resolveServiceCliInvocation } = await import("../cli-binary");
+      const { CLI_ERROR_CODES } = await import("../../runner/errors");
 
+      // The CODE, not only the message. Callers branch on
+      // SERVICE_CLI_PATH_UNRESOLVED; a message-only assertion passes for any
+      // rejection that happens to contain the phrase - including one thrown
+      // from somewhere else entirely - so it cannot show the contract held.
       await expect(
         withPath(emptyPathDir, () =>
           resolveServiceCliInvocation({
@@ -563,7 +596,10 @@ describe("resolveServiceCliInvocation", () => {
             allowSelfInvocation: false,
           }),
         ),
-      ).rejects.toThrow(/no 'node' was found on PATH/);
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+        message: expect.stringContaining("no 'node' was found on PATH"),
+      });
     } finally {
       rmSync(emptyPathDir, { recursive: true, force: true });
     }
@@ -632,6 +668,7 @@ describe("resolveServiceCliInvocation", () => {
     writeNodeLookingDirectory(dirOnlyPathDir);
     try {
       const { resolveServiceCliInvocation } = await import("../cli-binary");
+      const { CLI_ERROR_CODES } = await import("../../runner/errors");
 
       await expect(
         withPath(dirOnlyPathDir, () =>
@@ -641,7 +678,10 @@ describe("resolveServiceCliInvocation", () => {
             allowSelfInvocation: false,
           }),
         ),
-      ).rejects.toThrow(/no 'node' was found on PATH/);
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
+        message: expect.stringContaining("no 'node' was found on PATH"),
+      });
     } finally {
       rmSync(dirOnlyPathDir, { recursive: true, force: true });
     }
@@ -875,4 +915,44 @@ describe("resolveServiceCliInvocation", () => {
       renameControl.failOnCallNumber = null;
     }
   });
+
+  // The failed-staging fallback prefers an EXISTING slot over the real binary
+  // path, because the slot is the one path that survives an upgrade. But
+  // "existing" has to mean a regular file. A slot replaced by a DIRECTORY -
+  // a botched install, or a hand-rolled `mkdir ~/.traycer/bin/traycer` - is
+  // also exactly why staging failed in the first place, since the publish
+  // `rename` cannot land on it. Preferring it would answer a staging failure
+  // by registering something no supervisor can execute, on a path nothing
+  // rewrites afterwards.
+  //
+  // No rename interception here: the directory makes the real publish fail on
+  // its own, which is the point - this is the failure as it actually occurs.
+  it.skipIf(process.platform === "win32")(
+    "does not register the slot when staging fails because the slot path is a DIRECTORY",
+    async () => {
+      seaState.current = true;
+      const { wellKnownCliBinaryPath } =
+        await import("../../store/well-known-cli");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      mkdirSync(wellKnownPath, { recursive: true });
+      writeFileSync(join(wellKnownPath, "not-a-binary"), "occupied");
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+      const result = await resolveServiceCliInvocation({
+        environment: ENVIRONMENT,
+        override: null,
+        allowSelfInvocation: false,
+      });
+
+      expect(result).toEqual({ command: process.execPath, args: [] });
+      expect(result.command).not.toBe(wellKnownPath);
+      // Registering a version-scoped path is the recorded worst case, so it
+      // must be logged rather than left to surface later as a service that
+      // mysteriously stopped launching.
+      expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
+        "service CLI registered against an unstaged binary path",
+        expect.objectContaining({ wellKnownPath }),
+      );
+    },
+  );
 });

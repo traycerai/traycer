@@ -81,10 +81,22 @@ export interface ResolveCliInvocationOptions {
   readonly allowSelfInvocation: boolean;
 }
 
-async function pathExists(path: string): Promise<boolean> {
+// Every caller below is asking one question: is there something at this path
+// that can be REGISTERED as a service command (or copied into the slot to
+// become one)? `access()` cannot answer it - it succeeds for a directory, and
+// a directory is exactly what the slot degrades to when a botched install or
+// a hand-rolled `mkdir ~/.traycer/bin/traycer` gets there first. Registering
+// one produces a unit systemd and launchd accept and can never start, on a
+// path nothing rewrites afterwards.
+//
+// `stat`, not `lstat`: a symlink pointing at a real binary is a legitimate
+// registration target (a distro's `/usr/local/bin/traycer` into a versioned
+// keg, the dev orchestrator's wrapper), and reports `isFile()` through the
+// link. What this rejects is a path that is not a regular file under any
+// interpretation - a directory, a socket, a dangling link.
+async function isRegularFile(path: string): Promise<boolean> {
   try {
-    await access(path);
-    return true;
+    return (await stat(path)).isFile();
   } catch {
     return false;
   }
@@ -94,10 +106,10 @@ export async function resolveServiceCliInvocation(
   opts: ResolveCliInvocationOptions,
 ): Promise<CliInvocation> {
   if (opts.override !== null) {
-    if (!(await pathExists(opts.override))) {
+    if (!(await isRegularFile(opts.override))) {
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
-        message: `service install: override path does not exist: ${opts.override}`,
+        message: `service install: override path is not a file: ${opts.override}`,
         details: { override: opts.override },
         exitCode: 1,
       });
@@ -107,10 +119,10 @@ export async function resolveServiceCliInvocation(
 
   const manifest = await readCliManifest(opts.environment);
   if (manifest !== null) {
-    if (!(await pathExists(manifest.binaryPath))) {
+    if (!(await isRegularFile(manifest.binaryPath))) {
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
-        message: `service install: CLI manifest binaryPath does not exist: ${manifest.binaryPath}`,
+        message: `service install: CLI manifest binaryPath is not a file: ${manifest.binaryPath}`,
         details: {
           binaryPath: manifest.binaryPath,
           environment: opts.environment,
@@ -177,7 +189,7 @@ export async function resolveServiceCliInvocation(
   // Interpreter run with a slot already staged - the dev orchestrator's
   // wrapper-script handoff. Left as a direct reference: a dev wrapper is not
   // ours to copy over itself.
-  if (await pathExists(conventionalBinary)) {
+  if (await isRegularFile(conventionalBinary)) {
     return { command: conventionalBinary, args: [] };
   }
 
@@ -231,7 +243,11 @@ async function stagedSlotInvocation(
   if (staged.staged !== "failed") {
     return { command: staged.wellKnownPath, args: [] };
   }
-  if (await pathExists(staged.wellKnownPath)) {
+  // A regular file, not merely a path that exists. Staging fails when the
+  // slot has been replaced by a DIRECTORY (the rename cannot land on it), and
+  // that is precisely the case where an existence test would send the service
+  // definition to something no supervisor can execute.
+  if (await isRegularFile(staged.wellKnownPath)) {
     return { command: staged.wellKnownPath, args: [] };
   }
   createCliLogger(environment).warn(

@@ -4,7 +4,6 @@ import {
   chmod,
   copyFile,
   lstat,
-  mkdir,
   readFile,
   readdir,
   rename,
@@ -21,7 +20,11 @@ import {
 } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { withCliLock } from "./cli-lock";
-import { cliInstallHomeDir, ensureCliInstallHomeDir } from "./paths";
+import {
+  cliInstallHomeDir,
+  ensureCliInstallHomeDir,
+  ensurePrivateDir,
+} from "./paths";
 
 // The well-known per-environment CLI binary location,
 // `<cliInstallHomeDir>/bin/traycer[.exe]`.
@@ -219,10 +222,7 @@ async function pendingRefreshSource(
   if (record !== null && recordDescribes(record, slotStat, source)) {
     const sourceStat = await statOrNull(source);
     if (sourceStat === null) return null;
-    const unchanged =
-      sourceStat.size === record.sourceSize &&
-      sourceStat.mtimeMs === record.sourceMtimeMs;
-    return unchanged ? null : source;
+    return sourceIsUnchanged(record, sourceStat) ? null : source;
   }
   // No usable record - a slot staged by a CLI older than this format, or one
   // a sibling writer published. Fall back to comparing timestamps; when that
@@ -328,12 +328,28 @@ async function mirrors(slotStat: Stats, source: string): Promise<boolean> {
 // answer is wrong somewhere: one re-copies ~100 MB on every command forever,
 // the other misses a same-size upgrade forever.
 //
-// Writing the identity down removes the question. The source's size and
-// mtime are recorded as they were AT STAGING TIME, so a later run compares a
-// fresh stat of the source against a number this module chose - no round
-// trip through the filesystem's timestamp support, and a replacement is
-// detected even when it is byte-identical in length and carries an OLDER
-// mtime.
+// Writing the identity down removes the question. The source's identity is
+// recorded as it was AT STAGING TIME, so a later run compares a fresh stat of
+// the source against numbers this module chose - no round trip through the
+// filesystem's timestamp support, and a replacement is detected even when it
+// is byte-identical in length and carries an OLDER mtime.
+//
+// Identity, not just metadata, and the inode/device pair is the load-bearing
+// half. Size and mtime are a PROXY for "the same bytes" and every proxy has
+// collisions: two releases of a Go/Node SEA routinely pad to the same length,
+// and rpm and dpkg both restore the archive's recorded mtime onto the file
+// they install - so a same-size upgrade can reproduce BOTH numbers and read
+// as unchanged forever, stranding the service on the previous CLI. What no
+// package manager reproduces is the inode, because none of them rewrite a
+// live binary in place: apt, dnf, brew, npm, Scoop and winget all write a new
+// file and `rename` it over the old one, which by definition allocates a new
+// inode. Recording `ino`/`dev` therefore catches the replacement shape that
+// actually occurs, rather than the shape a metadata comparison can see.
+//
+// The limit, stated so the next reader does not have to rediscover it: this
+// still cannot see an in-place rewrite that preserves size, mtime AND inode.
+// Only hashing the bytes could, and hashing a ~100 MB SEA on every command to
+// close a shape no installer produces is not a trade this path can make.
 //
 // The slot's own size and mtime are recorded too, and checked first. That is
 // what keeps the record honest when something else writes the slot: Desktop
@@ -344,8 +360,28 @@ interface SlotSourceRecord {
   readonly sourcePath: string;
   readonly sourceSize: number;
   readonly sourceMtimeMs: number;
+  readonly sourceIno: number;
+  readonly sourceDev: number;
   readonly slotSize: number;
   readonly slotMtimeMs: number;
+}
+
+// Whether `sourceStat` is still the file the slot was staged from.
+//
+// `ino`/`dev` are compared alongside size and mtime rather than instead of
+// them: Windows reports `ino` as 0 on filesystems that expose no file index,
+// where this correctly degrades to the size/mtime test rather than declaring
+// every source replaced (0 === 0) or unchanged.
+function sourceIsUnchanged(
+  record: SlotSourceRecord,
+  sourceStat: Stats,
+): boolean {
+  return (
+    sourceStat.size === record.sourceSize &&
+    sourceStat.mtimeMs === record.sourceMtimeMs &&
+    sourceStat.ino === record.sourceIno &&
+    sourceStat.dev === record.sourceDev
+  );
 }
 
 function slotSourceRecordPath(wellKnownPath: string): string {
@@ -386,10 +422,17 @@ async function readSlotSourceRecord(
     return null;
   }
   const value = parsed as Record<string, unknown>;
+  // Every field is required, which is also the upgrade path: a record written
+  // by a CLI that predates `sourceIno`/`sourceDev` is rejected here, sending
+  // that slot down the `mirrors` fallback exactly once. The restage that
+  // follows writes a current record, so the older format costs one redundant
+  // copy per slot rather than a permanent downgrade to the weaker test.
   if (
     typeof value.sourcePath !== "string" ||
     typeof value.sourceSize !== "number" ||
     typeof value.sourceMtimeMs !== "number" ||
+    typeof value.sourceIno !== "number" ||
+    typeof value.sourceDev !== "number" ||
     typeof value.slotSize !== "number" ||
     typeof value.slotMtimeMs !== "number"
   ) {
@@ -399,6 +442,8 @@ async function readSlotSourceRecord(
     sourcePath: value.sourcePath,
     sourceSize: value.sourceSize,
     sourceMtimeMs: value.sourceMtimeMs,
+    sourceIno: value.sourceIno,
+    sourceDev: value.sourceDev,
     slotSize: value.slotSize,
     slotMtimeMs: value.slotMtimeMs,
   };
@@ -408,17 +453,28 @@ async function readSlotSourceRecord(
 // lands just sends the next run down the timestamp fallback, whereas a
 // record written before a publish that then failed would vouch for bytes
 // that never arrived.
+//
+// `copiedSource` is passed in rather than re-stat-ed here, and that is the
+// whole correctness argument for this function. Re-stat-ing would sample the
+// source a THIRD time, after the copy: if a package manager replaced A with B
+// mid-copy, the slot holds A's bytes while a fresh stat describes B, and the
+// record would then vouch for the stale slot against B's identity - which B
+// keeps matching, so the slot would never be refreshed again. The caller
+// passes the stat it already PROVED describes the bytes that were copied, and
+// declines to call this at all when it could prove no such thing.
 async function writeSlotSourceRecord(
   wellKnownPath: string,
   source: string,
+  copiedSource: Stats,
 ): Promise<void> {
-  const sourceStat = await statOrNull(source);
   const slotStat = await statOrNull(wellKnownPath);
-  if (sourceStat === null || slotStat === null) return;
+  if (slotStat === null) return;
   const record: SlotSourceRecord = {
     sourcePath: source,
-    sourceSize: sourceStat.size,
-    sourceMtimeMs: sourceStat.mtimeMs,
+    sourceSize: copiedSource.size,
+    sourceMtimeMs: copiedSource.mtimeMs,
+    sourceIno: copiedSource.ino,
+    sourceDev: copiedSource.dev,
     slotSize: slotStat.size,
     slotMtimeMs: slotStat.mtimeMs,
   };
@@ -530,26 +586,31 @@ export async function stageWellKnownCliBinary(opts: {
   // see the restore in the catch.
   let asidePath: string | null = null;
   try {
-    // Create the install home through its own 0700 helper rather than
-    // letting the recursive mkdir below do it. On a fresh packaged install
-    // with no manifest - winget and hand-placed binaries, and since the
-    // startup refresh, on EVERY packaged command - this is the first writer
-    // under the CLI home, and a bare recursive mkdir would create the whole
-    // chain at the process umask (0755 typically). Neither this call nor a
-    // later `ensureCliInstallHomeDir` repairs the mode of a directory that
-    // already exists, so that first run would leave the CLI home
-    // world-traversable for the life of the install - the same directory the
-    // credentials file sits in, whose 0700 exists precisely to prevent that.
+    // Create the install home through its own helper first, rather than
+    // letting the bin-dir call below create the whole chain. A recursive
+    // create only applies its mode to the directories it makes, so the
+    // intermediate CLI home would land at the process umask (0755 typically)
+    // and stay there. On a fresh packaged install with no manifest - winget
+    // and hand-placed binaries, and since the startup refresh, on EVERY
+    // packaged command - this is the first writer under that directory, which
+    // is where the credentials file sits.
+    //
+    // Both calls REPAIR an existing directory's mode as well as setting it on
+    // create (see `ensurePrivateDir`): `mkdir` alone would harden only
+    // machines with no Traycer install yet, leaving every already-installed
+    // user - the ones with credentials already on disk - at whatever mode the
+    // first writer happened to pick.
     await ensureCliInstallHomeDir(opts.environment);
-    await mkdir(dirname(wellKnownPath), { recursive: true, mode: 0o700 });
-    // Stat the source on BOTH sides of the copy. The mtime mirrored below
-    // is the whole basis for deciding the slot is fresh, so it has to
-    // describe the bytes that actually landed in `staging`. A package
-    // manager that atomically replaces `source` mid-copy would otherwise
-    // stamp the NEW file's mtime onto a copy of the OLD one - and two
-    // same-sized releases would then look mirrored to
-    // `refreshWellKnownSlotIfStale` forever, which is the one failure this
-    // module cannot detect its way out of.
+    await ensurePrivateDir(dirname(wellKnownPath));
+    // Stat the source on BOTH sides of the copy. Everything this function
+    // writes down about freshness - the mirrored mtime below and the staging
+    // record after the publish - is a claim about which file's bytes landed
+    // in `staging`, so it has to be made against a stat that demonstrably
+    // describes them. A package manager that atomically replaces `source`
+    // mid-copy would otherwise attribute the NEW file's identity to a copy of
+    // the OLD one, and `refreshWellKnownSlotIfStale` would keep matching that
+    // identity and keep declaring the stale slot current - the one failure
+    // this module cannot detect its way out of afterwards.
     const sourceBefore = await statOrNull(source);
     await copyFile(source, staging);
     await sweepSlotLeftovers(wellKnownPath, staging);
@@ -573,17 +634,28 @@ export async function stageWellKnownCliBinary(opts: {
     // timestamp. Best-effort otherwise: an unsupported filesystem costs
     // freshness precision, not the staging.
     const sourceAfter = await statOrNull(source);
-    if (
+    // The one stat PROVEN to describe the bytes now sitting in `staging`, or
+    // null when the source moved under the copy and no such stat exists.
+    const copiedSource =
       sourceBefore !== null &&
       sourceAfter !== null &&
       isSameFile(sourceBefore, sourceAfter)
-    ) {
-      await utimes(staging, sourceAfter.atime, sourceAfter.mtime).catch(
+        ? sourceAfter
+        : null;
+    if (copiedSource !== null) {
+      await utimes(staging, copiedSource.atime, copiedSource.mtime).catch(
         () => undefined,
       );
     }
     await rename(staging, wellKnownPath);
-    await writeSlotSourceRecord(wellKnownPath, source);
+    // Deliberately no record when the copy raced a replacement. The next run
+    // then finds none, falls back to `mirrors` - which the un-mirrored mtime
+    // above makes fail - and restages. That costs one redundant copy; writing
+    // a record anyway would cost a slot that is permanently stale and
+    // permanently sure it is not.
+    if (copiedSource !== null) {
+      await writeSlotSourceRecord(wellKnownPath, source, copiedSource);
+    }
     return { staged: "staged", wellKnownPath };
   } catch (error) {
     await rm(staging, { force: true }).catch(() => undefined);

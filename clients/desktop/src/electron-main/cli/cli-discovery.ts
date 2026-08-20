@@ -708,7 +708,7 @@ export async function installBundledCli(opts: {
   // before it can be opened - `open(path, "wx")` on a missing parent is
   // ENOENT, not contention. The CLI's own `withCliLock` wrapper ensures the
   // same directory for the same reason; the shared lock module does not.
-  await mkdir(resolveCliSlotHome(), { recursive: true, mode: 0o700 });
+  await ensurePrivateDir(resolveCliSlotHome());
   const outcome = await withDesktopCliLock(
     {
       lockPath: resolveCliLockPath(),
@@ -727,17 +727,41 @@ export async function installBundledCli(opts: {
   return publishBundledCli(opts);
 }
 
+// Create a directory at 0700, and REPAIR one that already exists.
+//
+// The mirror of the CLI's `ensurePrivateDir` (clients/traycer-cli,
+// src/store/paths.ts), duplicated for the same reason `withDesktopCliLock`
+// duplicates `withCliLock`: these two packages share no module, but they do
+// share this directory, and a rule only one of them enforces is not enforced.
+//
+// `mkdir`'s `mode` applies only to directories it creates, so an existing one
+// keeps whatever mode its first writer chose - which on any pre-existing
+// install is the process umask, 0755. Setting the mode without repairing it
+// would harden only machines that have never run Traycer, while every
+// installed user keeps a world-traversable slot home - the same directory the
+// credentials file lives in.
+//
+// POSIX only, best-effort, and narrowed to directories that are actually too
+// open: installing the bundled CLI happens during app launch and must not
+// fail over a directory this process may not even own.
+async function ensurePrivateDir(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  if (platform() === "win32") return;
+  try {
+    const current = await stat(path);
+    if ((current.mode & 0o077) !== 0) await chmod(path, 0o700);
+  } catch {
+    return;
+  }
+}
+
 async function publishBundledCli(opts: {
   readonly bundledCliPath: string;
   readonly version: string;
   readonly source: CliInstallManifest["source"];
 }): Promise<string> {
-  // 0700, matching the CLI's `ensureCliInstallHomeDir`. A recursive mkdir
-  // does not repair an existing directory's mode, so whichever writer gets
-  // here first on a fresh machine decides it permanently - and this one is
-  // often first. At 0755 it would leave the slot home, which is also where
-  // the credentials file lives, traversable by other local users.
-  await mkdir(resolveCliBinDir(), { recursive: true, mode: 0o700 });
+  // 0700, matching the CLI's `ensureCliInstallHomeDir`.
+  await ensurePrivateDir(resolveCliBinDir());
   const stablePath = stableCliBinaryPath();
   if (platform() === "win32") {
     // The slot binary is essentially ALWAYS running on Windows - the host's

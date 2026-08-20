@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -183,6 +184,43 @@ describe("installBundledCli stages a copy that outlives the bundle", () => {
       expect(stable).toBe(legacySlot);
       expect(lstatSync(stable).isSymbolicLink()).toBe(false);
       expect(readFileSync(stable, "utf8")).toBe("cli-bytes-v2");
+    },
+  );
+});
+
+// Desktop and the CLI are the two writers of this directory, so a mode rule
+// only one of them enforces is not enforced: whichever runs first on a given
+// machine decides, and on a machine that already has an install neither
+// `mkdir` touches it at all, because `mode` applies only to directories the
+// call actually creates. The CLI side pins the mirror of this in
+// `store/__tests__/well-known-cli.test.ts`.
+describe("installBundledCli hardens the slot home it shares with the CLI", () => {
+  it.skipIf(process.platform === "win32")(
+    "repairs an EXISTING 0755 slot home and bin directory to 0700",
+    async () => {
+      const slotHome = join(homeDir, ".traycer", "cli");
+      const binDir = join(slotHome, "bin");
+      // A pre-existing install, world-traversable - the state an older
+      // Desktop or a bare umask-mode mkdir leaves behind, and the one a
+      // create-only fix can never reach.
+      mkdirSync(binDir, { recursive: true });
+      chmodSync(slotHome, 0o755);
+      chmodSync(binDir, 0o755);
+      const bundled = stageBundled("cli-bytes-v1");
+      const { installBundledCli } = await import("../cli-discovery");
+
+      const stable = await installBundledCli({
+        bundledCliPath: bundled,
+        version: "1.0.0",
+        source: "desktop",
+      });
+
+      // Derived from the published path rather than assumed, so this cannot
+      // pass by hardening directories the publish does not actually use.
+      expect(dirname(stable)).toBe(binDir);
+      expect(dirname(dirname(stable))).toBe(slotHome);
+      expect(statSync(slotHome).mode & 0o777).toBe(0o700);
+      expect(statSync(binDir).mode & 0o777).toBe(0o700);
     },
   );
 });
