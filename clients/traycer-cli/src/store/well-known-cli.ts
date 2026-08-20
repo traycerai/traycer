@@ -10,6 +10,7 @@ import {
   rm,
   stat,
   utimes,
+  writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -209,7 +210,7 @@ async function pendingRefreshSource(
   // file.
   const slotStat = await lstatOrNull(wellKnownPath);
   if (slotStat === null || slotStat.isSymbolicLink()) return source;
-  return (await mirrors(slotStat, source)) ? null : source;
+  return (await mirrors(wellKnownPath, slotStat, source)) ? null : source;
 }
 
 // Which binary the slot SHOULD hold. The manifest wins when it names an
@@ -238,7 +239,41 @@ async function authoritativeSlotSource(
   if (manifest === null) return running;
   if (isInterpreterDistribution(manifest.source)) return null;
   const manifestBinary = resolve(manifest.binaryPath);
-  return (await statOrNull(manifestBinary)) === null ? running : manifestBinary;
+  // Only a CONFIRMED absence may demote the manifest's binary. `statOrNull`
+  // would report an EACCES or EIO on B as indistinguishable from "B is not
+  // there", and the fallback would then hand the slot to whichever binary
+  // happened to be running - so a transient fault reading the manifested
+  // install is all it would take to repoint the slot, and the registered
+  // service with it, onto a possibly older co-installed CLI. Same rule as
+  // the manifest read above: unreadable is not absent.
+  switch (await probePresence(manifestBinary)) {
+    case "present":
+      return manifestBinary;
+    case "absent":
+      return running;
+    default:
+      return null;
+  }
+}
+
+type PathPresence = "present" | "absent" | "unknown";
+
+async function probePresence(path: string): Promise<PathPresence> {
+  try {
+    await stat(path);
+    return "present";
+  } catch (error) {
+    return isEnoentError(error) ? "absent" : "unknown";
+  }
+}
+
+function isEnoentError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 // Whether the slot is a faithful copy of `source`, by the identity staging
@@ -251,13 +286,55 @@ async function authoritativeSlotSource(
 // slot this module had just written. That would re-copy the whole binary on
 // every single command. `getTime()` truncates both sides the same way
 // staging did, so a freshly staged slot compares equal.
-async function mirrors(slotStat: Stats, source: string): Promise<boolean> {
+//
+// Equal sizes with UNEQUAL mtimes are genuinely ambiguous, and the ambiguity
+// has to be resolved rather than guessed. Either the source really was
+// replaced, or this filesystem could not store the mtime staging asked it to
+// mirror - `utimes` can be unsupported outright, and a slot volume with
+// coarser timestamp granularity than the source's silently rounds what it is
+// given. The two are indistinguishable from the two stats alone, and each
+// way of guessing is bad in a different direction: assume "replaced" and a
+// machine that cannot mirror re-copies ~100 MB on EVERY command forever,
+// with a Windows rename-aside each time; assume "mirrored" and a real
+// same-size upgrade is missed.
+//
+// So ask the filesystem instead of guessing. `canReproduceMtime` writes a
+// throwaway file in the slot's own directory - the same volume, which is
+// what makes the answer meaningful - and checks whether the source's mtime
+// survives a `utimes`/`stat` round trip. Deliberately NOT probed on the slot
+// itself: stamping the slot would make stale BYTES look fresh, which is the
+// one error this whole comparison exists to prevent.
+async function mirrors(
+  slotPath: string,
+  slotStat: Stats,
+  source: string,
+): Promise<boolean> {
   const sourceStat = await statOrNull(source);
   if (sourceStat === null) return false;
-  return (
-    slotStat.size === sourceStat.size &&
-    slotStat.mtime.getTime() === sourceStat.mtime.getTime()
-  );
+  if (slotStat.size !== sourceStat.size) return false;
+  if (slotStat.mtime.getTime() === sourceStat.mtime.getTime()) return true;
+  return !(await canReproduceMtime(dirname(slotPath), sourceStat.mtime));
+}
+
+// Whether a file on this directory's volume can hold exactly `mtime`.
+//
+// Runs only in the ambiguous branch above, so the cost is a few metadata
+// operations on an empty file and only when a same-size difference has
+// already been seen. Any failure answers "no": a directory that cannot take
+// a probe file cannot be staged into either, so reporting the slot as fresh
+// at least avoids copying a binary into it on every command.
+async function canReproduceMtime(dir: string, mtime: Date): Promise<boolean> {
+  const probePath = join(dir, `.mtime-probe-${process.pid}-${randomUUID()}`);
+  try {
+    await writeFile(probePath, "");
+    await utimes(probePath, mtime, mtime);
+    const probed = await stat(probePath);
+    return probed.mtime.getTime() === mtime.getTime();
+  } catch {
+    return false;
+  } finally {
+    await rm(probePath, { force: true }).catch(() => undefined);
+  }
 }
 
 // Whether two stats of the SAME path describe the same unreplaced file.
