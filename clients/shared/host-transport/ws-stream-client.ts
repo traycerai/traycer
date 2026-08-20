@@ -994,6 +994,18 @@ class StreamSession<
   private pingIntervalTimer: IntervalHandle | null = null;
   /** In-flight wake liveness probe; see {@link reconnectIfUnresponsive}. */
   private wakeProbeTimer: TimerHandle | null = null;
+  /**
+   * `lastPongAt` as it stood BEFORE a wake probe rebased it, consumed by the
+   * first pong that follows. The rebase keeps the heartbeat's stale pre-sleep
+   * deadline from condemning an intact socket, but it also erases the very gap
+   * the pong handler's availability-recovery edge measures - and on the
+   * probe-succeeds path the socket is deliberately KEPT, so the reconnect
+   * handshake's recovery emission never runs either. Without this baseline a
+   * wake that bridges a sleep-length gap fired NEITHER recovery signal, and
+   * queries stranded in error state before the sleep stayed stranded.
+   * `Math.min` across overlapping probes keeps the earliest truth.
+   */
+  private preProbePongBaselineAt: number | null = null;
   /** Monotonic count of pongs received; the wake probe's liveness signal. */
   private pongSeq = 0;
   private backoffTimer: TimerHandle | null = null;
@@ -1151,7 +1163,13 @@ class StreamSession<
     // can be answered - the stale deadline pre-empting the detector that was
     // meant to decide. Nothing is weakened by moving it: an unanswered probe
     // still fails, just through the timeout below, which is deliberately set
-    // far under `pongTimeoutMs`.
+    // far under `pongTimeoutMs`. The pre-rebase timestamp is preserved so the
+    // probe's pong still answers the TRUE gap - see
+    // {@link preProbePongBaselineAt}.
+    this.preProbePongBaselineAt =
+      this.preProbePongBaselineAt === null
+        ? this.lastPongAt
+        : Math.min(this.preProbePongBaselineAt, this.lastPongAt);
     this.lastPongAt = Date.now();
     this.clearWakeProbe();
     this.wakeProbeTimer = setTimeout(() => {
@@ -1478,7 +1496,11 @@ class StreamSession<
 
     if (envelope.kind === "pong") {
       const now = Date.now();
-      const pongGapMs = now - this.lastPongAt;
+      // Measure the gap from the pre-probe baseline when a wake probe rebased
+      // `lastPongAt`: against the rebased value the probe's own pong reads as
+      // a round trip, and a sleep-length outage would emit no recovery at all.
+      const pongGapMs = now - (this.preProbePongBaselineAt ?? this.lastPongAt);
+      this.preProbePongBaselineAt = null;
       this.lastPongAt = now;
       // Counted, not timestamped: a wake probe has to know whether a pong
       // ARRIVED, and two pongs inside the same millisecond are
@@ -1646,6 +1668,10 @@ class StreamSession<
     // a sustained-subscription dwell for streams with nothing to say (see
     // `armHealthyDwell`).
     this.lastPongAt = Date.now();
+    // A fresh handshake supersedes any wake-probe baseline: this path emits
+    // its own recovery edge below, and a stale baseline would double-count
+    // the outage on the first post-handshake pong.
+    this.preProbePongBaselineAt = null;
     this.startHeartbeat();
     this.armHealthyDwell();
     this.transitionTo("open", null);

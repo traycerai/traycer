@@ -1855,6 +1855,19 @@ export class RemoteSession<
       this.subscriptions.delete(stream.streamId);
       return;
     }
+    // Subscribing this id IS the decision to accept frames for it again, so
+    // any tombstone a retryable FATAL left must be lifted here - in the ONE
+    // place every re-subscribe path funnels through. The per-stream reopen
+    // timer is not the only caller: a session drop during its backoff clears
+    // the timer and the next `handleOpenAck` replays the subscription instead,
+    // and lifting only inside the timer left that replay earning frames
+    // `handleRelayFrame` then discarded forever - `reconnecting` on the wire,
+    // permanently dead in fact. The backoff quarantine is preserved: while the
+    // timer is still pending nothing subscribes the id, so relay-delayed
+    // chunks from before the fatal keep being discarded until a re-subscribe
+    // actually goes out.
+    this.terminalStreamIds.delete(stream.streamId);
+    connection.reassembler.forget(stream.streamId);
     const prepared = prepareStreamSubscribeRequest(
       this.options.streamRegistry,
       stream.method,
@@ -2082,6 +2095,13 @@ export class RemoteSession<
     this.phase = "reconnecting";
     this.restoredStreamIds.clear();
     this.teardownConnection(cause);
+    // A pending per-stream reopen's job transfers to the next handshake: the
+    // openAck replay re-subscribes every stream in `subscriptions`, so a timer
+    // that survived the drop would only issue a DUPLICATE subscribe for a
+    // stream the replay already recovered. The attempts map deliberately
+    // stays - a resolver that keeps failing its init must keep climbing the
+    // backoff across session drops, not restart it.
+    this.clearAllStreamReopens();
     // In-flight unary calls are post-send from the caller's view → not
     // retryable (the host may have applied them). Reject, never replay.
     this.rejectAllPendingUnary(
@@ -2984,22 +3004,14 @@ export class RemoteSession<
       }
       const connection = this.connection;
       // Not ready: the session is between sockets and will replay every
-      // subscription itself once the next `open` is accepted.
+      // subscription itself once the next `open` is accepted -
+      // `openSubscription` lifts the id's tombstone when that replay runs, so
+      // returning here cannot strand the stream behind a stale tombstone.
       if (connection === null || this.phase !== "ready") {
         return;
       }
-      // Lift the tombstone the FATAL handler set for this id, or
-      // `handleRelayFrame` discards every frame the re-subscribe earns and the
-      // stream sits `reconnecting` forever - a silent failure a test that only
-      // watches for an outgoing SUBSCRIBE cannot see.
-      //
-      // Lifted HERE rather than at schedule time on purpose: for the whole
-      // backoff the id stays tombstoned, so a relay-delayed chunk from before
-      // the fatal is still discarded instead of seeding a fresh accumulator.
-      // That quarantine is the tombstone's actual job, and re-opening this id
-      // means accepting frames for it from this point on regardless.
-      this.terminalStreamIds.delete(streamId);
-      connection.reassembler.forget(streamId);
+      // The tombstone lift (and reassembler forget) lives in
+      // `openSubscription`, shared with the session-level replay.
       this.openSubscription(connection, stream);
     }, delay);
     this.streamReopenTimers.set(streamId, timer);

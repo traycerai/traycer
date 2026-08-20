@@ -4171,4 +4171,47 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     session.close();
   });
+
+  // Keeping the socket must not also swallow the recovery signal. Rebasing
+  // `lastPongAt` at probe time makes the probe's own pong read as a round
+  // trip, and since a successful probe deliberately AVOIDS the reconnect, the
+  // handshake-time recovery emission never runs either - the wake that
+  // bridged a sleep-length gap fired neither signal, and host RPC queries
+  // stranded in error state before the sleep (whose other automatic recovery
+  // routes are disabled) stayed stranded until a manual refresh.
+  it("still emits availability recovery when the wake probe's pong bridges a sleep-length gap", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 1_000,
+      pongTimeoutMs: 2_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+    expect(recovered).not.toHaveBeenCalled();
+
+    // Sleep: the wall clock jumps far past every threshold with no timer run.
+    vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
+    client.reconnectAll("wake-resume", { probeFirst: true });
+
+    // The probe's pong: the socket survived (kept, no reconnect) AND the gap
+    // it answers is the whole sleep - that positive edge is the only recovery
+    // signal this path has.
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(stub.closed).toBeNull();
+
+    // The baseline was consumed: the next healthy-cadence pong is measured
+    // against the rebased timestamp and must NOT double-fire.
+    await vi.advanceTimersByTimeAsync(1_000);
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
+  });
 });

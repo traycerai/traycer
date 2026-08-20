@@ -3365,4 +3365,80 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     },
     TEST_BUDGET_MS,
   );
+
+  // The interleaving the per-stream timer alone cannot cover: the session
+  // drops DURING the reopen backoff. The re-dial clears every pending
+  // per-stream timer and the next openAck replays the subscription itself, so
+  // the tombstone must be lifted by the replay path too - otherwise the replay
+  // earns frames `handleRelayFrame` silently discards and the stream reports
+  // `reconnecting` forever off a subscription that is, on the wire, live.
+  it(
+    "recovers a retryable-fatal stream when the session reconnects during the reopen backoff",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => {
+        statuses.push(status);
+      });
+      let framesDelivered = 0;
+      stream.onServerFrame(() => {
+        framesDelivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        await relay.sendStreamFatal(streamId, {
+          code: "EPIC_INIT_FAILED",
+          reason: "cloud unreachable while opening",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        // The fatal must be PROCESSED (tombstone set, reopen scheduled) before
+        // the drop, or the drop can outrun the frame and the test exercises a
+        // plain reconnect instead of the fatal-then-drop interleaving. The
+        // first `reconnecting` can only come from the fatal handler here - no
+        // drop has happened yet.
+        await vi.waitFor(
+          () => expect(statuses).toContain("reconnecting"),
+          WAIT,
+        );
+        // Kill the socket before the 1s reopen backoff can fire, so recovery
+        // has to ride the session-level handshake replay, not the timer.
+        relay.dropCurrentConnection();
+
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        await relay.sendStreamFrame(
+          relay.subscribeStreamIds[relay.subscribeStreamIds.length - 1],
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(framesDelivered).toBe(1), WAIT);
+        expect(statuses[statuses.length - 1]).toBe("open");
+        expect(statuses).not.toContain("closed");
+        // The drop cleared the pending per-stream reopen, so the handshake
+        // replay is the ONLY re-subscribe - a surviving timer would have sent
+        // a duplicate SUBSCRIBE for a stream that already recovered.
+        expect(relay.subscribeStreamIds).toHaveLength(2);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 });
