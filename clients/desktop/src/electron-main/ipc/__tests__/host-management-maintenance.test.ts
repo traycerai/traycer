@@ -13,6 +13,7 @@ import { sandboxHome } from "../../__tests__/sandbox-home";
 import { TraycerCliError } from "../../cli/traycer-cli";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
 import {
+  admissionBlockRestartMessage,
   classifyCliShellError,
   laneBusyRestartMessage,
 } from "../host-management-ipc";
@@ -957,6 +958,10 @@ describe("restartHostIfIdle IPC", () => {
 
 const HOST_CHANGED_MESSAGE =
   "This computer's host changed while that was open. Reopen Settings and try again.";
+const HOST_UNVERIFIED_MESSAGE =
+  "This computer's host can't confirm its identity right now. Try again in a moment.";
+const LOGIN_ITEM_REFRESH_MESSAGE =
+  "Traycer is refreshing this host's background service registration. Try again once that finishes.";
 const LIVE_HOST_ID = "host-local";
 const OTHER_HOST_ID = "host-other";
 
@@ -964,6 +969,24 @@ function writeEnrollment(hostId: string): void {
   const dir = join(workHome, "identity");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "enrollment.json"), JSON.stringify({ hostId }));
+}
+
+function writeMalformedEnrollment(): void {
+  const dir = join(workHome, "identity");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "enrollment.json"), "{not-json");
+}
+
+function writePid(hostId: string): void {
+  writeFileSync(
+    join(workHome, "pid.json"),
+    JSON.stringify({
+      hostId,
+      websocketUrl: "ws://127.0.0.1:1/rpc",
+      version: "1.1.11",
+      pid: 42,
+    }),
+  );
 }
 
 function occupyLaneOnIdentityFileAccess(bridge: HandlerBridge): void {
@@ -1131,6 +1154,192 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     });
     expect(respawn).toHaveBeenCalledTimes(1);
     expect(installVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses when the enrollment record exists but is unreadable, without calling installVersion", async () => {
+    // Discriminator: the old fence treated unusable enrollment as "no
+    // change" and submitted. A pid file naming another host must not leak
+    // through either — that would refuse with the *changed* message.
+    writeMalformedEnrollment();
+    writePid(OTHER_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const installVersion = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      }),
+    );
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const convergeReady = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.installVersion = installVersion;
+    bridge.options.hostController.respawn = respawn;
+    bridge.options.hostController.convergeReady = convergeReady;
+    const install = await registerHandler(
+      bridge,
+      invoke.traycerMaintenanceInstallVersion,
+    );
+    const restart = bridge.handlers.get(invoke.traycerHostRestartIfIdle);
+    const repair = bridge.handlers.get(invoke.traycerDoctorRepairIfIdle);
+    const updateCheck = bridge.handlers.get(
+      invoke.traycerMaintenanceUpdateCheck,
+    );
+    const doctor = bridge.handlers.get(invoke.traycerMaintenanceDoctor);
+    const installInfo = bridge.handlers.get(
+      invoke.traycerMaintenanceInstallationInfo,
+    );
+    if (
+      restart === undefined ||
+      repair === undefined ||
+      updateCheck === undefined ||
+      doctor === undefined ||
+      installInfo === undefined
+    ) {
+      throw new Error("expected every maintenance handler");
+    }
+
+    const payload = { expectedHostId: LIVE_HOST_ID };
+    await expect(
+      install(null, { version: "1.2.0", force: false, ...payload }),
+    ).rejects.toThrow(HOST_UNVERIFIED_MESSAGE);
+    await expect(restart(null, payload)).resolves.toEqual({
+      kind: "declined",
+      message: HOST_UNVERIFIED_MESSAGE,
+    });
+    await expect(
+      repair(null, { repair: "converge-ready", ...payload }),
+    ).resolves.toEqual({
+      kind: "host-changed",
+      message: HOST_UNVERIFIED_MESSAGE,
+    });
+    await expect(updateCheck(null, payload)).rejects.toThrow(
+      HOST_UNVERIFIED_MESSAGE,
+    );
+    await expect(doctor(null, payload)).rejects.toThrow(
+      HOST_UNVERIFIED_MESSAGE,
+    );
+    await expect(installInfo(null, payload)).rejects.toThrow(
+      HOST_UNVERIFIED_MESSAGE,
+    );
+    expect(installVersion).not.toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+    expect(convergeReady).not.toHaveBeenCalled();
+    expect(bundledCliCalls).toEqual([]);
+  });
+
+  it("refuses when enrollment is absent and pid.json names a different host", async () => {
+    writePid(OTHER_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const installVersion = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      }),
+    );
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.installVersion = installVersion;
+    bridge.options.hostController.respawn = respawn;
+    const install = await registerHandler(
+      bridge,
+      invoke.traycerMaintenanceInstallVersion,
+    );
+    const restart = bridge.handlers.get(invoke.traycerHostRestartIfIdle);
+    if (restart === undefined) {
+      throw new Error("expected restart handler");
+    }
+
+    await expect(
+      install(null, {
+        version: "1.2.0",
+        force: false,
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).rejects.toThrow(HOST_CHANGED_MESSAGE);
+    await expect(
+      restart(null, { expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_CHANGED_MESSAGE,
+    });
+    expect(installVersion).not.toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses watched writes during a login-item-refresh admission block", async () => {
+    expect(admissionBlockRestartMessage({ kind: "login-item-refresh" })).toBe(
+      LOGIN_ITEM_REFRESH_MESSAGE,
+    );
+    const invoke = RunnerHostInvoke;
+    const installVersion = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      }),
+    );
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const convergeReady = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.lifecycleAdmissionBlock = {
+      kind: "login-item-refresh",
+    };
+    bridge.options.hostController.installVersion = installVersion;
+    bridge.options.hostController.respawn = respawn;
+    bridge.options.hostController.convergeReady = convergeReady;
+    const install = await registerHandler(
+      bridge,
+      invoke.traycerMaintenanceInstallVersion,
+    );
+    const restart = bridge.handlers.get(invoke.traycerHostRestartIfIdle);
+    const repair = bridge.handlers.get(invoke.traycerDoctorRepairIfIdle);
+    if (restart === undefined || repair === undefined) {
+      throw new Error("expected restart and repair handlers");
+    }
+
+    await expect(
+      install(null, {
+        version: "1.2.0",
+        force: false,
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({ kind: "lane-busy" });
+    await expect(
+      restart(null, { expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: LOGIN_ITEM_REFRESH_MESSAGE,
+    });
+    await expect(
+      repair(null, {
+        repair: "converge-ready",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({
+      kind: "lane-busy",
+      message: LOGIN_ITEM_REFRESH_MESSAGE,
+    });
+    expect(installVersion).not.toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+    expect(convergeReady).not.toHaveBeenCalled();
   });
 
   it("checks identity before the lane — a mismatch on an occupied lane is host-changed, not lane-busy", async () => {

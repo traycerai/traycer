@@ -57,6 +57,7 @@ import {
   buildOverviewHostFixture,
   buildOverviewManagement,
   makeInstalledRecord,
+  type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
 afterEach(() => {
@@ -84,6 +85,16 @@ const DOCTOR_WITHOUT_LOGS = [
   "host.identity.set",
   "host.getInstallationInfo",
   "host.restart",
+  "host.doctor",
+  "host.update.check",
+  "host.update.install",
+] as const;
+
+const DOCTOR_WITHOUT_RESTART = [
+  "host.status",
+  "host.identity.get",
+  "host.identity.set",
+  "host.getInstallationInfo",
   "host.doctor",
   "host.update.check",
   "host.update.install",
@@ -478,5 +489,104 @@ describe("Overview doctor — Show logs stays on an honest source", () => {
     ).toBeNull();
     expect(management.getHostLogs).not.toHaveBeenCalled();
     expect(rpcLogCalls.count).toBe(0);
+  });
+});
+
+function renderRemoteDoctorRestart(options: {
+  readonly advertiseRestart: boolean;
+}): {
+  readonly fixture: OverviewHostFixture;
+} {
+  const hostId = "host-remote";
+  const fixture = buildOverviewHostFixture({
+    hostId,
+    isLocalMachine: false,
+    overrideHandlers: {
+      "host.doctor": () => ({
+        status: "ok" as const,
+        issues: [CLI_UPGRADE_PENDING],
+        triviallyGreenIssueCodes: [],
+      }),
+    },
+  });
+  recordNegotiatedHostMethods(
+    hostId,
+    options.advertiseRestart ? DOCTOR_WITHOUT_LOGS : DOCTOR_WITHOUT_RESTART,
+  );
+
+  const management = buildOverviewManagement({
+    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
+  });
+
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId,
+      isLocalMachine: false,
+      connectable: true,
+    }),
+    hostId,
+    status: "ready",
+    client: fixture.client,
+  };
+  hostBindingMock.current = { hostClient: fixture.client };
+
+  const runnerHost: IRunnerHost = new MockRunnerHost({
+    signInUrl: "https://example.invalid/signin",
+    authnBaseUrl: "https://example.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+    hostManagement: management,
+  });
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostSettingsPanel />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+  return { fixture };
+}
+
+describe("Overview doctor — remote restart capability", () => {
+  it("offers the copy-command on a remote host that advertises doctor but not host.restart", async () => {
+    // Discriminator: `rpcRestartSupported: !restartViaForceFallback` misread
+    // a remote refusal as "the RPC works" and rendered a live Restart button
+    // that dispatched the refused method. Red against 563d9035^.
+    const { fixture } = renderRemoteDoctorRestart({
+      advertiseRestart: false,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    expect(
+      await screen.findByTestId("host-doctor-copy-command-CLI_UPGRADE_PENDING"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
+    ).toBeNull();
+    expect(fixture.restartCalls()).toBe(0);
+  });
+
+  it("keeps a live RPC restart on a remote host that advertises host.restart", async () => {
+    const { fixture } = renderRemoteDoctorRestart({
+      advertiseRestart: true,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
+    );
+
+    await waitFor(() => {
+      expect(fixture.restartCalls()).toBe(1);
+    });
   });
 });

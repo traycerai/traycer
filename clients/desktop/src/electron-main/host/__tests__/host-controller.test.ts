@@ -128,6 +128,7 @@ import {
 } from "../host-controller";
 import {
   HOST_REMOVED_BY_USER_MESSAGE,
+  type LifecycleAdmissionBlock,
   type MutationLaneStatus,
   type MutationProgress,
 } from "../host-controller-types";
@@ -4915,6 +4916,77 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
     });
+  });
+
+  it("lifecycleAdmissionBlock is login-item-refresh only after prechecks pass, then null once the cycle settles", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    const registerGate = deferred<"enabled">();
+    let registerCalled = false;
+    vi.mocked(registerHostLoginItem).mockImplementation(async () => {
+      registerCalled = true;
+      return registerGate.promise;
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "noop",
+        running: true,
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      },
+    });
+
+    const refreshPromise = controller.applyPendingLoginItemRevisionIfIdle();
+    await vi.waitFor(() => {
+      if (!registerCalled) throw new Error("register not reached yet");
+    });
+    expect(controller.lifecycleAdmissionBlock).toEqual({
+      kind: "login-item-refresh",
+    } satisfies LifecycleAdmissionBlock);
+
+    registerGate.resolve("enabled");
+    await refreshPromise;
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+  });
+
+  it("lifecycleAdmissionBlock stays null while uncoalesced prechecks are pending", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const reachabilityGate = deferred<boolean>();
+    const controller = newControllerWithReachability(
+      "production",
+      async () => reachabilityGate.promise,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+
+    const refresh = controller.applyPendingLoginItemRevisionIfIdle();
+    await flushMicrotasks();
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+
+    reachabilityGate.resolve(false);
+    await refresh;
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+  });
+
+  it("a tick that bails on no marker never raises lifecycleAdmissionBlock", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(controller.lifecycleAdmissionBlock).toBeNull();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
 });
 

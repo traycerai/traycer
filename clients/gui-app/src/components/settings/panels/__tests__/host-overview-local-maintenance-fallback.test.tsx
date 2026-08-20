@@ -727,10 +727,11 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
   });
 
-  it("a host-restart doctor fix on a capability-false local host dispatches the page's force-restart, not host.restart or hostRunDoctor", async () => {
-    // Discriminator: `onLocalFix` would land on `hostRunDoctor` (outside
-    // every lifecycle gate). `rpcRestartSupported` hardcoded true would
-    // increment `fixture.restartCalls()` instead of `management.restartHostIfIdle`.
+  it("a host-restart doctor fix on a capability-false local host opens the page confirm, then dispatches on confirm", async () => {
+    // Discriminator: the P1 was a one-click `forceRestart.mutate()` from
+    // the Doctor sheet — skipping the same RestartHostConfirmDialog the
+    // header uses. Click must open the dialog; confirm then fires the
+    // page's forceRestart once. `onLocalFix` would land on `hostRunDoctor`.
     const { management, fixture, queryClient } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
@@ -760,11 +761,19 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       await screen.findByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
     );
 
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Restarting will stop");
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
+    expect(management.restartHost).not.toHaveBeenCalled();
+    expect(fixture.restartCalls()).toBe(0);
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(management.restartHostIfIdle).toHaveBeenCalledWith({
         expectedHostId: HOST_ID,
       });
     });
+    expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
     expect(management.restartHost).not.toHaveBeenCalled();
     expect(fixture.restartCalls()).toBe(0);
     const doctorMutationsAfter = queryClient
@@ -1188,6 +1197,11 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       await screen.findByTestId("host-doctor-fix-HOST_PROCESS_DOWN"),
     );
 
+    expect(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).toBeTruthy();
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(management.restartHostIfIdle).toHaveBeenCalledWith({
         expectedHostId: HOST_ID,
