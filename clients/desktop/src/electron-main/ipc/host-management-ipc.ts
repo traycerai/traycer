@@ -136,34 +136,41 @@ function nullableString(raw: unknown, key: string): string | null {
 /**
  * Whether an admission block represents UPDATE work.
  *
- * Four lane intents can be moving the host's version while they hold the
- * lane - the same four `laneBusyRestartMessage` already groups under
- * "installing an update", so the two taxonomies answer with one voice:
+ * The answer prices a real lock: the fallback maps `true` to the protocol's
+ * `already-updating`, which arms the Overview's accepted-update latch - and
+ * on a pre-1.2.0 host the only releases are a scope flip or the full 60s
+ * timer, because the `host.status.updateProgress` frame that normally frees
+ * it is a field these hosts never publish. Overclaiming therefore locks the
+ * page's update and lifecycle controls for a minute; underclaiming presents
+ * real update work as a retryable failure that releases the latch and
+ * invites a competing install submission. Each kind is judged against that
+ * price:
  *
- *  - `install` / `apply` move it by definition;
+ *  - `install` / `apply` move the version by definition.
  *  - `activate` is the activation tail of an install (packaged-macOS
- *    post-commit, or clearing pendingActivation debt) - an update mid-swap;
- *  - `ensure` shells `host ensure`, which installs or updates whenever the
- *    record is missing or stale, and from outside the lane that is
- *    indistinguishable from a plain start.
+ *    post-commit, or clearing pendingActivation debt) - an update mid-swap,
+ *    when a competing submission is at its most dangerous.
+ *  - `ensure` only WITH EVIDENCE: `host ensure`'s no-op fast path (already
+ *    installed, registered, running, version satisfied - the common
+ *    contention on a page that requires a running host) returns before its
+ *    first progress callback, so a lane still at `progress: null` is either
+ *    that no-op or has not started provisioning - generic contention either
+ *    way. A non-null `progress` means the CLI passed the fast path and is
+ *    materially provisioning (staging bytes, registering, starting), the
+ *    window a competing install must not race.
  *
- * The asymmetry decides the ambiguous `ensure` case: overclaiming costs a
- * transient "already updating" notice on a self-clearing lane, while
- * underclaiming presents REAL update work as a retryable failure - the
- * fallback releases its accepted-update latch and invites a competing
- * install submission. Every other kind (register, deregister, respawn,
- * recoverIfDown, freePortAndRestart, uninstallHost, removeTraycer) and the
- * login-item refresh take the same exclusive lane without ever touching the
- * version. Listed positively so a NEW `MutationKind` defaults to "not an
- * update".
+ * Every other kind (register, deregister, respawn, recoverIfDown,
+ * freePortAndRestart, uninstallHost, removeTraycer) and the login-item
+ * refresh take the same exclusive lane without ever touching the version.
+ * Listed positively so a NEW `MutationKind` defaults to "not an update".
  */
 function admissionBlockIsUpdateWork(block: LifecycleAdmissionBlock): boolean {
   if (block.kind === "login-item-refresh") return false;
+  if (block.lane.kind === "ensure") return block.lane.progress !== null;
   return (
     block.lane.kind === "install" ||
     block.lane.kind === "apply" ||
-    block.lane.kind === "activate" ||
-    block.lane.kind === "ensure"
+    block.lane.kind === "activate"
   );
 }
 

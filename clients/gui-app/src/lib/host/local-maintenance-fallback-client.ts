@@ -103,23 +103,28 @@ function isFallbackMethod(
  *    brief post-completion tail overlaps the host's own restart, when
  *    lifecycle controls SHOULD be locked; the latch's bounded timer and the
  *    reconnect close it.
- *  - `busy` splits on WHERE the lane stopped, because the two continuations
- *    sit on opposite sides of the commit:
- *      - `retry-with-force` is a PRE-commit refusal (the host's busy claim
- *        held) - nothing was dispatched, so it throws like `deferred` below.
- *      - `activate` is POST-commit (packaged macOS: the selected bytes are
- *        installed; only activation is pending) → `accepted`. The accepted
- *        latch must STAY armed here - an error path would release it and
- *        re-offer Install for a version that is already on disk, and a
- *        second submission is exactly the competing-install harm the
- *        lane-busy refusal above exists to prevent. What comes next
- *        (restart/activate to finish) is the desktop controller's own
- *        status/installation-info story, same as after a completed `ok`.
- *  - `deferred` (and busy/`retry-with-force`) → a typed mutation error
- *    carrying the lane's own message. Both are self-clearing "retry when
- *    idle" conditions; the error channel releases the accepted latch
- *    (nothing was dispatched) and the page's existing failure toast renders
- *    the message.
+ *  - `busy` / `deferred` → a typed mutation error carrying the lane's own
+ *    message. For `retry-with-force` and `deferred` that is uncontroversial:
+ *    both are pre-commit, self-clearing "retry when idle" refusals, and the
+ *    error channel releases the accepted latch (nothing was dispatched).
+ *
+ *    The POST-commit busy (`continuation: "activate"` - packaged macOS: the
+ *    bytes are installed, only activation is pending) throws TOO, and that
+ *    is a priced decision, not an oversight. Both mappings are wrong in
+ *    some direction, because no wire arm says "installed, restart to
+ *    finish"; they differ in what the wrongness costs:
+ *      - `accepted` shows a false "Updating…" success toast, DISCARDS the
+ *        one actionable message ("The update was installed, but the host
+ *        has work in progress; restart it to finish."), and arms the
+ *        accepted latch - which on a pre-1.2.0 host nothing can release
+ *        early (no `host.status.updateProgress` is ever published and no
+ *        restart happens on its own), so every control the user needs for
+ *        that restart is locked for the full 60s timer.
+ *      - the thrown refusal renders that actionable message and leaves the
+ *        page live so the user can take the restart it names (the page's
+ *        own force-offer). The residual risk is a redundant re-submission
+ *        of a version already on disk - bounded, and the toast is telling
+ *        the user to restart, not to reinstall.
  *  - `failed` / `stage-fingerprint-mismatch` / `installed-not-converged` →
  *    `cli-failed`, the host's own taxonomy for "the CLI tried and couldn't".
  *    The wire arm carries no message, so the lane's message goes to the log.
@@ -131,16 +136,6 @@ export function mapInstallVersionOutcome(
     case "ok":
       return { outcome: "accepted" };
     case "busy":
-      if (outcome.continuation === "activate") {
-        return { outcome: "accepted" };
-      }
-      throw new HostRpcError({
-        code: "RPC_ERROR",
-        message: outcome.message,
-        requestId: "local-maintenance-fallback",
-        method: "host.update.install",
-        fatalDetails: null,
-      });
     case "deferred":
       throw new HostRpcError({
         code: "RPC_ERROR",

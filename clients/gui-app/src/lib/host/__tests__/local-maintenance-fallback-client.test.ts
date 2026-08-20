@@ -107,20 +107,23 @@ describe("mapInstallVersionOutcome", () => {
     );
   });
 
-  it("maps the POST-commit busy (continuation: activate) to accepted, not an error", () => {
-    // Packaged macOS commits the selected bytes BEFORE activation, so a busy
-    // outcome carrying `continuation: "activate"` describes an install that
-    // already happened. The error channel would release the accepted-update
-    // latch and re-offer Install for a version that is on disk - a second
-    // submission is the competing-install harm the lane-busy refusal exists
-    // to prevent. `accepted` keeps the latch armed, same as a completed ok.
-    expect(
-      mapInstallVersionOutcome({
-        kind: "busy",
-        continuation: "activate",
-        message: "Installed; restart Traycer to finish activating it.",
-      }),
-    ).toEqual({ outcome: "accepted" });
+  it("throws for the POST-commit busy (continuation: activate) too, carrying the actionable message", () => {
+    // Priced decision (see mapInstallVersionOutcome's doc): `accepted` here
+    // would show a false "Updating…" toast, discard this actionable message,
+    // and arm the accepted latch - which a pre-1.2.0 host can never release
+    // early (no `host.status.updateProgress`, no self-restart), locking the
+    // very controls the message asks the user to reach for. The refusal
+    // renders the message and leaves the page live for that restart.
+    expectHostRpcError(
+      () =>
+        mapInstallVersionOutcome({
+          kind: "busy",
+          continuation: "activate",
+          message:
+            "The update was installed, but the host has work in progress; restart it to finish.",
+        }),
+      "The update was installed, but the host has work in progress; restart it to finish.",
+    );
   });
 
   it("throws HostRpcError for deferred, carrying the lane message", () => {
@@ -309,9 +312,12 @@ describe("buildMaintenanceFallbackServeMap", () => {
     },
   );
 
-  it("resolves a dispatched POST-commit busy (continuation: activate) as accepted", async () => {
-    // The resolution path, not the error path: the accepted-update latch
-    // must stay armed for an install whose bytes are already committed.
+  it("rejects a dispatched POST-commit busy (continuation: activate) with the restart-to-finish message", async () => {
+    // The error path ON PURPOSE: it releases the accepted latch, which is
+    // what leaves the restart controls live for the action this message
+    // names - `accepted` would lock them for the full 60s timer instead,
+    // since a pre-1.2.0 host never publishes the progress frame that
+    // releases the latch early.
     const management = buildOverviewManagement({
       maintenanceInstallVersion: () =>
         Promise.resolve({
@@ -319,14 +325,22 @@ describe("buildMaintenanceFallbackServeMap", () => {
           outcome: {
             kind: "busy" as const,
             continuation: "activate" as const,
-            message: "Installed; restart Traycer to finish activating it.",
+            message:
+              "The update was installed, but the host has work in progress; restart it to finish.",
           },
         }),
     });
     const serve = buildMaintenanceFallbackServeMap(management, LOCAL_HOST_ID);
     await expect(
       serve["host.update.install"]({ version: "1.2.0", force: false }),
-    ).resolves.toEqual({ outcome: "accepted" });
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(HostRpcError);
+      if (!(error instanceof HostRpcError)) return false;
+      expect(error.message).toBe(
+        "The update was installed, but the host has work in progress; restart it to finish.",
+      );
+      return true;
+    });
   });
 
   it("maps a dispatched failed through mapInstallVersionOutcome to cli-failed", async () => {

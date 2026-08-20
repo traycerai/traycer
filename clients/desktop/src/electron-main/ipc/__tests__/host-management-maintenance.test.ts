@@ -821,20 +821,17 @@ describe("maintenanceInstallVersion IPC", () => {
 
   it("classifies every version-moving lane as update work, and only those", async () => {
     // `install`/`apply` move the version by definition; `activate` is the
-    // activation tail of an install; `ensure` shells `host ensure`, which
-    // installs or updates whenever the record is missing or stale. Reporting
-    // any of these as generic contention presents real update work as a
-    // retryable failure - the fallback releases its accepted-update latch
-    // and re-offers Install mid-update. Everything else holds the same
-    // exclusive lane without touching the version and MUST stay `false`: an
-    // `already-updating` answer arms that latch to wait on progress those
-    // operations never publish. Iterates the fenced kind list so a NEW
-    // MutationKind fails here and forces this classification decision.
+    // activation tail of an install. Everything else at `progress: null` -
+    // including `ensure`, whose no-op fast path returns before its first
+    // progress callback - MUST stay `false`: an `already-updating` answer
+    // arms the caller's accepted-update latch, and on a pre-1.2.0 host
+    // nothing releases it before the full 60s timer, because these hosts
+    // never publish `host.status.updateProgress`. Iterates the fenced kind
+    // list so a NEW MutationKind fails here and forces the decision.
     const updateWorkKinds: readonly MutationKind[] = [
       "install",
       "apply",
       "activate",
-      "ensure",
     ];
     const bridge = makeBridge();
     const handler = await registerInstallHandler(bridge);
@@ -851,6 +848,40 @@ describe("maintenanceInstallVersion IPC", () => {
         message: laneBusyRestartMessage(kind),
       });
     }
+  });
+
+  it("counts an ensure lane as update work only once it reports provisioning progress", async () => {
+    // The evidence gate: `host ensure` emits its first progress event only
+    // AFTER the no-op fast path (installed + registered + running + version
+    // satisfied) has been passed - so a lane with progress is materially
+    // provisioning (staging bytes, registering, starting), the window a
+    // competing install must not race, while a lane without it is the common
+    // just-verifying contention that must stay generic so the caller's
+    // accepted-update latch is not armed for a minute over a no-op.
+    const bridge = makeBridge();
+    const handler = await registerInstallHandler(bridge);
+    bridge.options.hostController.lifecycleAdmissionBlock = {
+      kind: "mutation",
+      lane: {
+        kind: "ensure",
+        progress: {
+          stage: "host-provision",
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          message: "installing host (1.2.0)",
+          workUnits: null,
+        },
+        startedAt: "2026-08-12T00:00:00Z",
+      },
+    };
+    await expect(
+      handler(null, { version: "1.2.0", force: false }),
+    ).resolves.toEqual({
+      kind: "lane-busy",
+      updateInFlight: true,
+      message: laneBusyRestartMessage("ensure"),
+    });
   });
 
   it("dispatches installVersion when nothing blocks admission", async () => {
