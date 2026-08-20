@@ -1138,8 +1138,42 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
     pin.latchOnFirstUse();
     selection.setSelectedWorkspacePath(workspacePath);
   };
+  // The picker is OUTSIDE the selection branch, and that is load-bearing
+  // rather than cosmetic: its popover carries `WorktreePickerHostSection`, so
+  // while it lived in the `else` arm the empty state removed the only control
+  // that could change the host - and pinning this panel to a host that cannot
+  // answer resolves NO workspace roots, which lands exactly there. The pin is
+  // persisted, so that was a dead end that survived reloads. The git-diff
+  // panel had the identical shape; `NewTerminalPickerBody` never did, and it
+  // is the model here - host section first, unconditionally, whatever the body
+  // below it turns out to be.
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 px-2 pb-1.5 pt-0.5">
+        <WorkspacePickerWithOpener
+          picker={
+            <FileTreeWorkspacePicker
+              epicId={props.epicId}
+              hostId={selection.hostId}
+              selectedPath={selection.selectedWorkspacePath}
+              onSelectPath={handleSelectPath}
+              surfaceKey={surfaceKey}
+            />
+          }
+          // Nothing to open while no workspace is selected; the opener renders
+          // inert rather than aiming at the host that just failed to answer.
+          openTarget={
+            selection.hostId !== null &&
+            selection.selectedWorkspacePath !== null
+              ? {
+                  workspacePath: selection.selectedWorkspacePath,
+                  hostId: selection.hostId,
+                }
+              : null
+          }
+          hostClient={hostClient}
+        />
+      </div>
       {selection.selectedWorkspacePath === null ? (
         <SidebarPanelEmptyState
           icon={FolderOpen}
@@ -1148,38 +1182,14 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
           testId="epic-file-tree-empty"
         />
       ) : (
-        <>
-          <div className="shrink-0 px-2 pb-1.5 pt-0.5">
-            <WorkspacePickerWithOpener
-              picker={
-                <FileTreeWorkspacePicker
-                  epicId={props.epicId}
-                  hostId={selection.hostId}
-                  selectedPath={selection.selectedWorkspacePath}
-                  onSelectPath={handleSelectPath}
-                  surfaceKey={surfaceKey}
-                />
-              }
-              openTarget={
-                selection.hostId !== null
-                  ? {
-                      workspacePath: selection.selectedWorkspacePath,
-                      hostId: selection.hostId,
-                    }
-                  : null
-              }
-              hostClient={hostClient}
-            />
-          </div>
-          <FileTreePanelBodyForWorkspace
-            key={selection.selectedWorkspacePath}
-            epicId={props.epicId}
-            tabId={props.tabId}
-            workspacePath={selection.selectedWorkspacePath}
-            hostId={pin.resolvedHostId}
-            onLatchHost={pin.latchOnFirstUse}
-          />
-        </>
+        <FileTreePanelBodyForWorkspace
+          key={selection.selectedWorkspacePath}
+          epicId={props.epicId}
+          tabId={props.tabId}
+          workspacePath={selection.selectedWorkspacePath}
+          hostId={pin.resolvedHostId}
+          onLatchHost={pin.latchOnFirstUse}
+        />
       )}
     </div>
   );

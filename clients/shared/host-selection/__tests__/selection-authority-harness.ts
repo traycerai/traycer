@@ -19,6 +19,7 @@ import {
   silentAuthorityLog,
   SelectionAuthorityEngineImpl,
   type AuthorityClock,
+  type AuthorityLog,
   type PreferredHostStore,
 } from "../selection-authority-engine";
 import {
@@ -160,6 +161,8 @@ export function createTestAuthority(input: {
   readonly localHostEnsure?: LocalHostEnsurePort;
   readonly preferredStore?: PreferredHostStore;
   readonly seedPreferred?: string | null;
+  /** Defaults to the silent log; pass a recorder to assert on diagnostics. */
+  readonly log?: AuthorityLog;
 }): TestAuthority {
   const fleet = new InMemoryHostFleetSource({
     revision: 0,
@@ -184,7 +187,7 @@ export function createTestAuthority(input: {
     preferredStore,
     clock: input.clock,
     newIncarnationId: createIncrementingIncarnationIds(),
-    log: silentAuthorityLog,
+    log: input.log ?? silentAuthorityLog,
   });
   const { events, subscriptions } = recordEngineEvents(engine);
   return {
@@ -197,6 +200,37 @@ export function createTestAuthority(input: {
     dispose: () => {
       for (const subscription of subscriptions) subscription.dispose();
       engine.dispose();
+    },
+  };
+}
+
+/** One captured {@link AuthorityLog} call. */
+export interface RecordedAuthorityLog {
+  readonly level: "debug" | "warn";
+  readonly message: string;
+  readonly detail: Record<string, unknown>;
+}
+
+/**
+ * An {@link AuthorityLog} that keeps what it was told.
+ *
+ * The engine's dial-evidence instrumentation is only worth having if it is
+ * exhaustive, and "exhaustive" is a claim about lines that DO get emitted -
+ * which the silent log cannot see. Tests assert against this.
+ */
+export interface RecordingAuthorityLog extends AuthorityLog {
+  readonly records: RecordedAuthorityLog[];
+}
+
+export function createRecordingAuthorityLog(): RecordingAuthorityLog {
+  const records: RecordedAuthorityLog[] = [];
+  return {
+    records,
+    debug: (message, detail) => {
+      records.push({ level: "debug", message, detail });
+    },
+    warn: (message, detail) => {
+      records.push({ level: "warn", message, detail });
     },
   };
 }

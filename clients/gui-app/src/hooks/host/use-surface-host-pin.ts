@@ -41,6 +41,20 @@ export interface SurfaceHostPin {
    * never be silent about which machine it is about to create on.
    */
   readonly resolvedHostId: string | null;
+  /**
+   * Where this surface would resolve with NO pin - its default tier if it has
+   * one, else `effective`. In other words, what clearing the pin would move it
+   * to.
+   *
+   * It is here rather than read at the call site because the app-wide host
+   * reads are fenced out of Epic-session surfaces by lint, and correctly so: a
+   * panel that re-derived `effective` itself would be a second decider on the
+   * question this hook already answers. A surface offering "return to
+   * following" needs to know whether that would MOVE anything - a remedy that
+   * resolves to the same machine is a button that cannot work - and this is
+   * that answer, computed on the same three tiers `resolvedHostId` is.
+   */
+  readonly followingHostId: string | null;
   readonly isPinned: boolean;
   readonly latchOnFirstUse: () => void;
 }
@@ -167,6 +181,7 @@ function useSurfaceHostPinResolved(
     honoredSelection,
     setSelection,
     resolvedHostId,
+    followingHostId: honoredDefaultHostId ?? effectiveHostId,
     isPinned: selection !== null,
     latchOnFirstUse,
     resolvedFrom,
