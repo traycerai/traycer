@@ -69,6 +69,17 @@ function rememberErrorNotice(
   tracker: DeliveredNoticeTracker,
 ): boolean {
   if (notice.clientActionId !== null) {
+    // A last-copy record is never evicted from the ring, so its delivery
+    // state cannot be either: the FIFO tracker below would forget it after
+    // 128 ordinary notices, and the next arrival re-traverses the ring and
+    // fires the draft toast a second time. Same exemption, one layer up.
+    if (noticeCarriesOnlyCopy(notice)) {
+      if (tracker.retainedClientActionIds.has(notice.clientActionId)) {
+        return false;
+      }
+      tracker.retainedClientActionIds.add(notice.clientActionId);
+      return true;
+    }
     if (tracker.clientActionIds.has(notice.clientActionId)) return false;
     addWithFifoEviction(
       tracker.clientActionIds,

@@ -2956,6 +2956,8 @@ describe("useRenderedMessages", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: SETTINGS,
           timestamp: 3000,
+          restoreWorktreeIntent: null,
+          restoreWorktreeStagingRevision: null,
         },
       ],
       activeTurn,
@@ -3655,6 +3657,8 @@ describe("useRenderedMessages setup card integration", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: SETTINGS,
           timestamp: 1010,
+          restoreWorktreeIntent: null,
+          restoreWorktreeStagingRevision: null,
         },
       ],
     });
@@ -3678,6 +3682,8 @@ describe("useRenderedMessages setup card integration", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: SETTINGS,
           timestamp: 3000,
+          restoreWorktreeIntent: null,
+          restoreWorktreeStagingRevision: null,
         },
       ],
     });

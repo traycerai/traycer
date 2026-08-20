@@ -139,6 +139,17 @@ export interface PendingUserMessage {
   readonly sender: UserMessageSender;
   readonly settings: ChatRunSettings;
   readonly timestamp: number;
+  /**
+   * The staged worktree choice this send consumed at dispatch, carried here so
+   * it OUTLIVES the accepted ack. `acceptedActions` deliberately keeps only
+   * what action bookkeeping needs, so once the ack lands the pending action -
+   * and with it the only other copy of this binding - is gone. A send stopped
+   * after acceptance but before `messageAccepted` is restored to the composer
+   * by the settled pass, and restoring the prompt without its worktree is the
+   * silent-local-run {@link restoreStagedWorktreeIntent} exists to prevent.
+   */
+  readonly restoreWorktreeIntent: WorktreeIntent | null;
+  readonly restoreWorktreeStagingRevision: number | null;
 }
 
 export interface PendingChatAction {
@@ -683,6 +694,16 @@ export interface ChatSessionStoreOptions {
 export interface DeliveredNoticeTracker {
   readonly notices: WeakSet<ChatErrorNotice>;
   readonly clientActionIds: Set<string>;
+  /**
+   * Delivery state for notices the ring never evicts (see
+   * `noticeCarriesOnlyCopy`). Deliberately UNBOUNDED, mirroring the exemption
+   * on the records themselves: bounded delivery state under an unbounded
+   * record set forgets that a draft was already shown, and the next notice to
+   * arrive re-traverses the ring and fires the never-expiring toast again.
+   * Bounded in practice by the same argument as the ring - one entry per
+   * settled send, deduped, and a session loses drafts in ones.
+   */
+  readonly retainedClientActionIds: Set<string>;
 }
 
 export interface ChatSessionStoreHandle {
@@ -831,25 +852,44 @@ function appendErrorNotice(
  * run against the prior binding - the exact silent-local-run the restore exists
  * to prevent.
  */
-function restoreStagedWorktreeIntentForPending(
-  pending: PendingChatAction,
+/**
+ * The two fields a revision-guarded re-stage needs. Structural rather than
+ * tied to `PendingChatAction`, because the binding has to survive past the
+ * accepted ack that drops the action - `PendingUserMessage` carries the same
+ * pair for exactly that reason, and both restore through one guard.
+ */
+export interface StagedWorktreeIntentSource {
+  readonly restoreWorktreeIntent: WorktreeIntent | null;
+  readonly restoreWorktreeStagingRevision: number | null;
+}
+
+function restoreRestoredWorktreeIntent(
+  source: StagedWorktreeIntentSource | null,
+  stagingKey: WorktreeStagingKey,
+): void {
+  if (source === null) return;
+  restoreStagedWorktreeIntent(source, stagingKey);
+}
+
+function restoreStagedWorktreeIntent(
+  source: StagedWorktreeIntentSource,
   stagingKey: WorktreeStagingKey,
 ): void {
   if (
-    pending.restoreWorktreeIntent === null ||
-    pending.restoreWorktreeStagingRevision === null
+    source.restoreWorktreeIntent === null ||
+    source.restoreWorktreeStagingRevision === null
   ) {
     return;
   }
   if (
     stagedWorktreeIntentRevision(stagingKey) !==
-    pending.restoreWorktreeStagingRevision
+    source.restoreWorktreeStagingRevision
   ) {
     return;
   }
   useWorktreeIntentStagingStore
     .getState()
-    .setIntent(stagingKey, pending.restoreWorktreeIntent);
+    .setIntent(stagingKey, source.restoreWorktreeIntent);
 }
 
 export function createChatSessionStore(
@@ -1172,12 +1212,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the lookup is always present.
           const sweptPendings = get().pendingActions;
           sweep.sweptActionIds.forEach((sweptId) => {
-            restoreStagedWorktreeIntentForPending(
-              sweptPendings[sweptId],
-              stagingKey,
-            );
+            restoreStagedWorktreeIntent(sweptPendings[sweptId], stagingKey);
           });
         }
+        let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
+          null;
         set((state) => {
           const previousTurnId = snapshotPreviousTurnId(
             state.activeTurn,
@@ -1238,6 +1277,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               state.chat.settings,
               frame.snapshot.chat.settings,
             );
+          restoredWorktreeIntentForSnapshot =
+            settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
           return {
             chat: {
               ...frame.snapshot.chat,
@@ -1343,6 +1384,17 @@ export function createChatSessionStoreWithNotificationDependencies(
             liveTurnUsage: null,
           };
         });
+        // A prompt handed back to the composer takes its staged worktree with
+        // it, or the resubmit silently runs against the chat's previous
+        // binding. Same revision guard as the rejection ack and the reconnect
+        // sweep: a NEWER pick made since dispatch wins.
+        restoreRestoredWorktreeIntent(restoredWorktreeIntentForSnapshot, {
+          surface: "owner",
+          hostId: options.hostId,
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
+        });
         // A deferred session stop that survived the sweep (its turn stop was
         // accepted before the connection dropped) may never see another
         // turn-state frame - the turn could have settled while offline - so
@@ -1399,7 +1451,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             ? pendingActionForId(get().pendingActions, frame.clientActionId)
             : null;
         if (rejectedPending !== null) {
-          restoreStagedWorktreeIntentForPending(rejectedPending, {
+          restoreStagedWorktreeIntent(rejectedPending, {
             surface: "owner",
             hostId: options.hostId,
             epicId: options.epicId,
@@ -1548,6 +1600,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // Captured for the re-stage after the set - a restored prompt must
+        // take its staged worktree back with it (see the snapshot handler).
+        let restoredWorktreeIntentForTurnState: StagedWorktreeIntentSource | null =
+          null;
         // Materializes the live row into `messages`; flush first so the turn's
         // final buffered deltas are captured before it freezes.
         flushBlockDeltas();
@@ -1590,6 +1646,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               failedSendRestoration: state.failedSendRestoration,
             },
           );
+          restoredWorktreeIntentForTurnState =
+            settledPatch.restoredWorktreeIntent;
           return {
             ...settledPatch,
             // MUST follow the spread: `appendedErrorNotices` is a delta, and
@@ -1624,6 +1682,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             }),
             ...(turnIdChanged ? { liveTurnUsage: null } : {}),
           };
+        });
+        restoreRestoredWorktreeIntent(restoredWorktreeIntentForTurnState, {
+          surface: "owner",
+          hostId: options.hostId,
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
         });
         maybeDispatchPendingBackgroundSessionStop(set, get);
       },
@@ -2230,6 +2295,8 @@ export function createChatSessionStoreWithNotificationDependencies(
                 sender,
                 settings,
                 timestamp: Date.now(),
+                restoreWorktreeIntent: worktreeIntent,
+                restoreWorktreeStagingRevision,
               }
             : null,
         });
@@ -2329,6 +2396,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             timestamp: Date.now(),
+            // The landing handoff's worktree rides `epic.create`, not this
+            // send, so there is no staged slot for it to give back.
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
           },
         });
         if (sentClientActionId === null) return null;
@@ -3043,6 +3114,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     store,
     deliveredNotices: {
       notices: new WeakSet<ChatErrorNotice>(),
+      retainedClientActionIds: new Set<string>(),
       clientActionIds: new Set<string>(),
     },
     deliveredRestoreCompletionKeys: new Set<string>(),

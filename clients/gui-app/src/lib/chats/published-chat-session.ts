@@ -400,6 +400,7 @@ export function createPublishedChatSessionHandle(
     store: boundStore,
     deliveredNotices: {
       notices: new WeakSet(),
+      retainedClientActionIds: new Set<string>(),
       clientActionIds: new Set(),
     },
     deliveredRestoreCompletionKeys: new Set(),

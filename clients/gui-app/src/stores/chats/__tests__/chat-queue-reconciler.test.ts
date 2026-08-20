@@ -91,6 +91,8 @@ function createPendingUserMessage(
     sender: SENDER,
     settings: SETTINGS,
     timestamp: 1000,
+    restoreWorktreeIntent: null,
+    restoreWorktreeStagingRevision: null,
   };
 }
 
@@ -200,6 +202,8 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         timestamp: 1000,
+        restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
       };
       const input: ReconcileQueueInput = {
         pendingActions: { "action-1": action1, "action-2": action2 },
@@ -266,6 +270,8 @@ describe("chat-queue-reconciler", () => {
             sender: SENDER,
             settings: SETTINGS,
             timestamp: 1000,
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
           },
         ],
         queue: {
@@ -517,6 +523,8 @@ describe("chat-queue-reconciler", () => {
             sender: SENDER,
             settings: SETTINGS,
             timestamp: 1000,
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
           },
         ],
         messages: [confirmedMessage],
@@ -942,6 +950,8 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         timestamp: 1000,
+        restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
       };
       const result = reconcileTurnSettled(
         true,

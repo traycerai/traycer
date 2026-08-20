@@ -5,16 +5,14 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import {
-  collectImageAttachmentsFromJSONContent,
-  collectMentionAttachmentsFromJSONContent,
-  extractPlainTextFromComposerJSONContent,
-} from "@/lib/composer/tiptap-json-content";
+import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import { classifyContentRecovery } from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
   FailedSendRestorationState,
   PendingChatAction,
   PendingUserMessage,
+  StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
 
 /**
@@ -105,6 +103,14 @@ export type ReconcileSnapshotPatch = {
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
+  /**
+   * The staged worktree choice belonging to the send whose prompt just claimed
+   * the restoration slot, for the caller to re-stage under the revision guard.
+   * A prompt handed back WITHOUT its binding is the silent-local-run hazard:
+   * the resubmit looks identical and runs somewhere else. `null` when this
+   * pass restored nothing, or when the restored send carried no staged choice.
+   */
+  readonly restoredWorktreeIntent: StagedWorktreeIntentSource | null;
 };
 
 /**
@@ -126,15 +132,17 @@ export type ReconcileSnapshotPatch = {
  * every later snapshot and pushes stale text back into the composer after the
  * user has already resent it.
  *
- * What survives the trip is TEXT, and the two content classes it fails differ
- * in kind, so the statement names them differently. `imageAttachment` /
- * `attachmentGroup` project to `""`: a whole loss. A `mention` chip projects
- * to `@path`, so its text survives but the binding behind it - workspace,
- * host, entity id, context type - does not, and pasting that string back does
- * NOT rebuild the chip: a partial loss, which is the more dangerous of the two
- * precisely because the quote reads as complete. Detection for both is
- * STRUCTURAL. Emptiness was standing in for "had attachments" and the proxy
- * failed on mixed content; text-presence would fail on mentions the same way.
+ * What survives the trip is TEXT, and {@link classifyContentRecovery} decides
+ * what that costs. The criterion there is whether a loss is INVISIBLE in the
+ * projected text and so unretypeable - attachment bytes, a mention's binding,
+ * a quote's provenance - not whether the projection is byte-identical.
+ * Markdown structure is visible in its absence and would only add noise.
+ *
+ * The classification is total and fails CLOSED, so a node kind nobody has
+ * classified earns a generic qualification rather than passing as complete.
+ * This defect shipped three times running - attachments, then mentions, then
+ * sourced quotes - because each was fixed as itself; driving the clauses off
+ * one classification is what makes a fourth a test failure instead.
  */
 function unrecoverableSendNotice(
   clientActionId: string,
@@ -142,15 +150,31 @@ function unrecoverableSendNotice(
   circumstance: string,
 ): ChatErrorNotice {
   const text = extractPlainTextFromComposerJSONContent(content).trim();
-  const images = collectImageAttachmentsFromJSONContent(content);
-  const mentions = collectMentionAttachmentsFromJSONContent(content);
+  const losses = classifyContentRecovery(content);
+  const attachments = losses.get("attachment") ?? 0;
   const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
     message: [
-      recoverableBody(preamble, text, images.length),
-      imageClause(images.length, text.length > 0),
-      mentionClause(mentions.length),
+      recoverableBody(preamble, text, attachments),
+      attachmentClause(attachments, text.length > 0),
+      countedClause({
+        count: losses.get("mention") ?? 0,
+        singular: "mention",
+        plural: "mentions",
+        verbPhrase: "will paste as plain text - re-pick",
+        tail: "so the agent sees what they point at again",
+      }),
+      countedClause({
+        count: losses.get("quote") ?? 0,
+        singular: "quoted source",
+        plural: "quoted sources",
+        verbPhrase: "lose the link to what they quote - re-quote",
+        tail: "so that link comes back",
+      }),
+      (losses.get("unknown") ?? 0) > 0
+        ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
+        : "",
     ].join(""),
     severity: "warning",
     clientActionId,
@@ -160,33 +184,44 @@ function unrecoverableSendNotice(
 function recoverableBody(
   preamble: string,
   text: string,
-  imageCount: number,
+  attachmentCount: number,
 ): string {
   if (text.length > 0)
     return `${preamble} Copy it from here to resend: ${text}`;
-  if (imageCount > 0) return preamble;
+  if (attachmentCount > 0) return preamble;
   return `${preamble} It had no recoverable content.`;
 }
 
 /** A whole loss: the bytes are not in the notice and cannot be. */
-function imageClause(imageCount: number, hasText: boolean): string {
-  if (imageCount === 0) return "";
-  const noun = imageCount === 1 ? "image attachment" : "image attachments";
+function attachmentClause(attachmentCount: number, hasText: boolean): string {
+  if (attachmentCount === 0) return "";
+  const noun = attachmentCount === 1 ? "image attachment" : "image attachments";
   if (!hasText) {
-    return ` It carried no text - only ${imageCount} ${noun}, which cannot be recovered here.`;
+    return ` It carried no text - only ${attachmentCount} ${noun}, which cannot be recovered here.`;
   }
-  return ` It also carried ${imageCount} ${noun} that cannot be carried here - re-add ${imageCount === 1 ? "it" : "them"} before resending.`;
+  return ` It also carried ${attachmentCount} ${noun} that cannot be carried here - re-add ${attachmentCount === 1 ? "it" : "them"} before resending.`;
 }
 
 /**
- * A PARTIAL loss, and worth its own sentence: the `@path` above is real text
- * the user can paste, but it pastes as prose. Only re-picking the mention
- * restores the attachment the agent actually reads.
+ * A PARTIAL loss, and worth its own sentence: the projected text above is real
+ * and pasteable, but it pastes as prose. Only re-picking restores the binding
+ * the agent actually reads.
  */
-function mentionClause(mentionCount: number): string {
-  if (mentionCount === 0) return "";
-  const noun = mentionCount === 1 ? "mention" : "mentions";
-  return ` Its ${mentionCount} ${noun} will paste as plain text - re-pick ${mentionCount === 1 ? "it" : "them"} so ${mentionCount === 1 ? "it attaches" : "they attach"} again.`;
+interface CountedLossClause {
+  readonly count: number;
+  readonly singular: string;
+  readonly plural: string;
+  /** What happens to it, phrased to precede the pronoun. */
+  readonly verbPhrase: string;
+  /** Why re-doing it matters, phrased to follow the pronoun. */
+  readonly tail: string;
+}
+
+function countedClause(clause: CountedLossClause): string {
+  if (clause.count === 0) return "";
+  const noun = clause.count === 1 ? clause.singular : clause.plural;
+  const pronoun = clause.count === 1 ? "it" : "them";
+  return ` Its ${clause.count} ${noun} ${clause.verbPhrase} ${pronoun} ${clause.tail}.`;
 }
 
 /**
@@ -262,6 +297,7 @@ export function reconcileSnapshotChange(
     pendingUserMessages: input.pendingUserMessages,
     failedSendRestoration: input.failedSendRestoration,
     appendedErrorNotices: [],
+    restoredWorktreeIntent: null,
   };
   return Object.values(input.pendingActions).reduce(
     (next, pending): ReconcileSnapshotPatch => {
@@ -351,6 +387,9 @@ export function reconcileSnapshotChange(
           content: pending.restoreContent,
           reason: "Message was not confirmed after reconnect.",
         },
+        // The prompt goes back to the composer, so its worktree goes back to
+        // the staging slot with it.
+        restoredWorktreeIntent: pending,
       };
     },
     initial,
@@ -374,6 +413,8 @@ export type ReconcileTurnSettledPatch = {
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /** Delta, appended by the caller - see {@link ReconcileSnapshotPatch}. */
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
+  /** See {@link ReconcileSnapshotPatch.restoredWorktreeIntent}. */
+  readonly restoredWorktreeIntent: StagedWorktreeIntentSource | null;
 };
 
 /**
@@ -438,6 +479,7 @@ export function reconcileTurnSettled(
       pendingUserMessages: input.pendingUserMessages,
       failedSendRestoration: input.failedSendRestoration,
       appendedErrorNotices: [],
+      restoredWorktreeIntent: null,
     };
   }
   const confirmedMessageIds = confirmedMessageIdsForMessages(input.messages);
@@ -451,6 +493,7 @@ export function reconcileTurnSettled(
       pendingUserMessages: input.pendingUserMessages,
       failedSendRestoration: input.failedSendRestoration,
       appendedErrorNotices: [],
+      restoredWorktreeIntent: null,
     };
   }
   const restorable = stranded.find(
@@ -479,6 +522,12 @@ export function reconcileTurnSettled(
             content: restorable.content,
             reason: "The message was not recorded before the turn stopped.",
           },
+    // Only when THIS pass handed the prompt back - an already-occupied slot
+    // restored nothing here, so there is no binding to re-stage with it.
+    restoredWorktreeIntent:
+      input.failedSendRestoration !== null || restorable === undefined
+        ? null
+        : restorable,
     appendedErrorNotices: stranded
       .filter(
         (message) =>
@@ -613,6 +662,8 @@ function pendingUserMessageFromPendingAction(
     sender: action.sender,
     settings: action.settings,
     timestamp: action.createdAt,
+    restoreWorktreeIntent: action.restoreWorktreeIntent,
+    restoreWorktreeStagingRevision: action.restoreWorktreeStagingRevision,
   };
 }
 

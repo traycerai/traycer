@@ -944,6 +944,55 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
 
+  // R4-3: a retained record's DELIVERY state has to be as durable as the
+  // record. `clientActionIds` is FIFO-bounded at 128 while the ring exemption
+  // made the records themselves unbounded, so ordinary chat traffic evicts a
+  // delivered last-copy id - and the very next notice re-traverses the ring,
+  // finds it "undelivered" and fires the never-expiring draft toast again.
+  it("delivers a last-copy notice once, even as tracker churn evicts its id", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message: "A message was not recorded. Copy it from here: my draft",
+          severity: "warning",
+          clientActionId: "send-1",
+        },
+      });
+    });
+
+    // Ordinary traffic, more than the tracker's 128-id bound.
+    act(() => {
+      for (let index = 0; index < 200; index += 1) {
+        harness.callbacks().onErrorNotice({
+          kind: "errorNotice",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          notice: {
+            code: "APPROVAL_NOT_PENDING",
+            message: `no longer pending (${index})`,
+            severity: "warning",
+            clientActionId: `approval-${index}`,
+          },
+        });
+      }
+    });
+
+    const draftToasts = sonnerToastWarning.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].includes("my draft"),
+    );
+    expect(draftToasts).toHaveLength(1);
+  });
+
   // The reconnect-while-away case is exactly when a send-recovery notice
   // arrives: the pane is unfocused, so `useActivePaneEffect` has torn the
   // subscription down and the notice lands unseen. The mount-time replay used

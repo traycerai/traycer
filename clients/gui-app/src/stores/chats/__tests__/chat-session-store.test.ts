@@ -8,6 +8,7 @@ import type {
 import type {
   BackgroundItem,
   ChatActiveTurn,
+  ChatErrorNotice,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueueState,
@@ -108,6 +109,35 @@ const MENTION_CONTENT: JsonContent = {
         { type: "text", text: " needs a second look" },
       ],
     },
+  ],
+};
+
+const SOURCED_QUOTE_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "sourcedQuote",
+      attrs: {
+        sourceType: "ticket",
+        sourceId: "ticket-7",
+        sourceEpicId: "epic-9",
+      },
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "the acceptance criteria" }],
+        },
+      ],
+    },
+    { type: "paragraph", content: [{ type: "text", text: "does this hold?" }] },
+  ],
+};
+
+const UNKNOWN_NODE_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "look at this" }] },
+    { type: "someFutureEmbed", attrs: { widgetId: "w-1" } },
   ],
 };
 
@@ -374,6 +404,27 @@ function acceptLastAction(harness: Harness): string {
     backgroundStopTaskIds: [],
   });
   return frame.clientActionId;
+}
+
+function sendTwo(
+  harness: Harness,
+  first: JsonContent,
+  second: JsonContent,
+): void {
+  harness.handle.store
+    .getState()
+    .sendMessage(first, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+  harness.handle.store
+    .getState()
+    .sendMessage(second, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+}
+
+function noticeFor(harness: Harness, clientActionId: string): ChatErrorNotice {
+  const notice = harness.handle.store
+    .getState()
+    .errorNotices.find((entry) => entry.clientActionId === clientActionId);
+  if (notice === undefined) throw new Error("Expected a statement");
+  return notice;
 }
 
 function rejectLastAction(harness: Harness, reason: string): string {
@@ -1700,6 +1751,217 @@ describe("createChatSessionStore", () => {
         .getState()
         .errorNotices.filter((entry) => entry.clientActionId === "send-1"),
     ).toHaveLength(1);
+  });
+
+  // R4-2: a terminal/artifact quote projects through the blockquote branch to
+  // plain quoted text, dropping sourceType/sourceId/sourceEpicId - the
+  // provenance `serializeSourcedQuote` sends to the agent. Second member of
+  // the mention class: projection-loses-invisible-structure.
+  it("qualifies a statement whose quoted source loses its provenance", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, SOURCED_QUOTE_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("the acceptance criteria");
+    expect(notice.message).toContain("quote");
+  });
+
+  // The classification must be TOTAL. A node kind nobody has classified is
+  // exactly the third member of this class, and it has to fail CLOSED - a
+  // generic qualification - rather than pass silently as text-complete.
+  it("fails closed on an unrecognized node kind", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, UNKNOWN_NODE_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("look at this");
+    expect(notice.message).toContain("will not survive");
+  });
+
+  // Ordinary prose must NOT be qualified, or the warning becomes noise that
+  // hides the cases that matter.
+  it("does not qualify a plain-text statement", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("World");
+    expect(notice.message).not.toContain("will not survive");
+    expect(notice.message).not.toContain("re-add");
+    expect(notice.message).not.toContain("re-pick");
+  });
+
+  // R4-1: a staged worktree/branch choice rides the send, and dispatch clears
+  // the slot. The ACCEPTED ack drops the pending action - `acceptedActions`
+  // does not retain `restoreWorktreeIntent` - so a stop before
+  // `messageAccepted` leaves this pass restoring the prompt with no binding.
+  // Resubmitting would then run against the chat's PREVIOUS worktree: the
+  // silent-local-run `restoreStagedWorktreeIntentForPending` exists to stop,
+  // reached by a third caller that skipped it.
+  it("re-stages the worktree intent when a stranded send is restored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, intent);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    expect(frame.worktreeIntent).toEqual(intent);
+    // Dispatch consumed the slot.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    // Accepted - so the pending action is gone and only the optimistic row
+    // remains - then the turn is stopped before the message is appended.
+    acceptLastAction(harness);
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    // The prompt came back to the composer...
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    // ...and so did the worktree it was going to run in.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("does not clobber a newer staged selection when restoring a stranded send", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const original: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    const newer: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: { type: "existing", name: "release/v1.2.0" },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, original);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    acceptLastAction(harness);
+    // The user picks a DIFFERENT worktree while the send is in flight. The
+    // revision guard's existing contract is that the newer pick wins.
+    useWorktreeIntentStagingStore.getState().setIntent(key, newer);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(newer);
   });
 
   // R3-1: absence from a snapshot is only evidence for a send dispatched on an
