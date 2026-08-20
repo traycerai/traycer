@@ -1,4 +1,5 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   HostRpcError,
@@ -194,8 +195,15 @@ export function buildMaintenanceFallbackServeMap(
    * decides whether to serve can hold a FROZEN id — an explicitly-scoped
    * requester keeps answering with the row it was created for, so a local
    * identity change leaves a window where the fence still passes. Main
-   * compares this against the live local identity and refuses a mismatch,
-   * which is the only place the comparison is not racing the change.
+   * re-reads the live local identity as the LAST await before each dispatch
+   * and refuses a mismatch. That comparison still races the change — identity
+   * lives in files another process rewrites, so no read can be transactional
+   * with the dispatch — but the residue is a flip landing inside a
+   * microtask-wide window, indistinguishable from the same request sent a
+   * moment earlier. What the fence actually exists to catch is the STALE
+   * SCOPE: a Settings page pinned to a host that was replaced seconds or
+   * minutes ago, where the renderer's frozen id would otherwise submit
+   * against the replacement indefinitely.
    */
   expectedHostId: string,
 ): MaintenanceFallbackServeMap {
@@ -362,8 +370,52 @@ export function createLocalMaintenanceFallbackClient(input: {
       // query layer just abandoned.
       if (signal?.aborted === true) throw error;
       if (!shouldServe(method)) throw error;
+      return serveRespectingSignal<Method>(method, params, signal);
+    }
+  };
+
+  /**
+   * Serve over the IPC lane while honoring the caller's cancellation.
+   *
+   * The CLI subprocess itself cannot be killed from here, but that is a
+   * statement about the WORK, not the WAITER: an already-aborted request must
+   * not start the CLI at all, and an abort during the wait must release the
+   * caller now rather than deliver an answer the query layer already walked
+   * away from. Rejects with the transport's own cancellation shape
+   * (`HostRequestControlFlowError("waiter-cancelled")`), so the query error
+   * boundary treats a served cancellation exactly like a delegated one.
+   */
+  const serveRespectingSignal = <Method extends keyof HostRpcRegistry & string>(
+    method: LocalMaintenanceFallbackMethod,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    signal: AbortSignal | undefined,
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> => {
+    if (signal === undefined) {
       return serveFallbackRequest<Method>(serve, method, params);
     }
+    if (signal.aborted) {
+      return Promise.reject(
+        new HostRequestControlFlowError("waiter-cancelled"),
+      );
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => {
+        reject(new HostRequestControlFlowError("waiter-cancelled"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      serveFallbackRequest<Method>(serve, method, params).then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          // The serve map rejects with the IPC taxonomy's `Error`s; the
+          // instanceof guard is for the rejection contract, not a real arm.
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
   };
 
   return new Proxy(client, {
@@ -380,15 +432,13 @@ export function createLocalMaintenanceFallbackClient(input: {
               );
       }
       if (property === "requestWithSignal") {
-        // The IPC leg has no cancellation to thread, so a served call ignores
-        // the signal — it is short-lived and its answer is cache-safe.
         return <Method extends keyof HostRpcRegistry & string>(
           method: Method,
           params: RequestOfMethod<HostRpcRegistry, Method>,
           signal: AbortSignal | undefined,
         ) =>
           shouldServe(method)
-            ? serveFallbackRequest<Method>(serve, method, params)
+            ? serveRespectingSignal<Method>(method, params, signal)
             : delegateThenServeIfAbsent(method, params, signal, () =>
                 target.requestWithSignal(method, params, signal),
               );

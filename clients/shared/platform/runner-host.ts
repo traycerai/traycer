@@ -1665,13 +1665,16 @@ export interface IHostManagement {
    * Respawn the local host, REFUSED (not queued) when the desktop's exclusive
    * mutation lane already owns an intent.
    *
-   * `restartHost` queues behind whatever is running, which is right for the
-   * tray and menu — those are "do it when you can" requests. It is wrong for a
-   * Settings restart the person is watching: by the time an install or service
-   * cycle finishes, the kill they authorised is aimed at a host in a different
-   * state, and the update they were waiting for has already restarted it once.
-   * Force overrides the HOST's veto (busy work, a live claim); it was never
-   * meant to override the desktop's own serialization.
+   * `restartHost` queues behind whatever is running, and stays that way for
+   * the tray and menu deliberately — those are RECOVERY surfaces, the ones
+   * still reachable when Settings cannot render, so they must never learn to
+   * say no (they confirm first, exactly like Settings does). Queueing IS
+   * wrong for a Settings restart the person is watching: by the time an
+   * install or service cycle finishes, the kill they authorised is aimed at a
+   * host in a different state, and the update they were waiting for has
+   * already restarted it once. Force overrides the HOST's veto (busy work, a
+   * live claim); it was never meant to override the desktop's own
+   * serialization.
    *
    * A lane refusal arrives as `declined` with a message, the same arm a host's
    * own refusal uses — informational, self-clearing, retryable.

@@ -4017,7 +4017,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
     removePidMetadata("production");
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(hasUnappliedPendingLoginItemRevision).not.toHaveBeenCalled();
   });
 
@@ -4026,7 +4028,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     const controller = newController("production");
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
 
@@ -4040,7 +4044,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
 
@@ -4051,7 +4057,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
@@ -4059,7 +4066,9 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // Quarantined for the rest of the session - a second tick skips even
     // the pre-flight re-read.
     vi.mocked(readHostLoginItemStatus).mockClear();
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(readHostLoginItemStatus).not.toHaveBeenCalled();
   });
 
@@ -4080,7 +4089,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "failed",
@@ -4118,7 +4128,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "ok",
@@ -4137,7 +4148,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // already killed the running host once. A later attempt (e.g. the
     // monitor's next 30s tick) must not run the disruptive cycle again for
     // the same terminal outcome.
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second).toBeNull();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
@@ -4156,7 +4168,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       new Error("takeover exploded"),
     );
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "failed",
@@ -4193,7 +4206,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "pid metadata never appeared",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toEqual({
       kind: "failed",
@@ -4208,7 +4222,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second?.kind).toBe("ok");
     expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
   });
@@ -4254,13 +4269,15 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       throw new Error("failed to seed a held lock for this test");
     }
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toBeNull();
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
     expect(registerHostLoginItem).not.toHaveBeenCalled();
 
     await held.handle.release();
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second?.kind).toBe("ok");
   });
 
@@ -4282,12 +4299,14 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toBeNull();
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
 
     vi.mocked(registerHostLoginItem).mockResolvedValueOnce("enabled");
-    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    const second =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(second).toEqual({
       kind: "ok",
       value: { running: true, version: "1.7.0" },
@@ -4312,7 +4331,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       reason: "ready",
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toEqual({
       kind: "ok",
       value: { running: true, version: "1.7.0" },
@@ -4331,7 +4351,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome).toEqual({
       kind: "ok",
       value: { running: false, version: null },
@@ -4392,7 +4413,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       return {};
     });
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(outcome?.kind).toBe("ok");
 
     expect(stampCalls).toHaveLength(1);
@@ -4445,7 +4467,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -4480,7 +4503,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       },
     });
 
-    const refreshPromise = controller.applyPendingLoginItemRevisionIfIdle();
+    const refreshPromise =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     // Real fs reads precede the disruptive step (readRunningRuntimeVersion,
     // probeHostBusyVerdict, the lock acquisition, readRunningHostIdentity,
     // readDesktopHostInstallRecord) - poll rather than a fixed microtask
@@ -4512,7 +4536,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
-    const refresh = controller.applyPendingLoginItemRevisionIfIdle();
+    const refresh =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await flushMicrotasks();
 
     expect(await controller.awaitMutationLaneIdle(20)).toBe(false);
@@ -4548,8 +4573,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
 
     const [first, second] = await Promise.all([
-      controller.applyPendingLoginItemRevisionIfIdle(),
-      controller.applyPendingLoginItemRevisionIfIdle(),
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
     ]);
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
@@ -4563,7 +4588,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // The slot clears once settled - a later, independent call can still
     // run its own cycle rather than being stuck joined forever.
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
-    const third = await controller.applyPendingLoginItemRevisionIfIdle();
+    const third =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     expect(third).toEqual(expected);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
   });
@@ -4599,7 +4625,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // starts the cycle, then convergeReadyPackagedMac reaches its reentrant
     // public caller while that cycle is still in flight.
     const refresh = vi.spyOn(controller, "applyPendingLoginItemRevisionIfIdle");
-    const monitorTick = controller.applyPendingLoginItemRevisionIfIdle();
+    const monitorTick =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("revision cycle did not start");
     });
@@ -4654,7 +4681,8 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       },
     );
 
-    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    const outcome =
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
 
     expect(outcome).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -4911,7 +4939,7 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     });
 
     await expect(
-      controller.applyPendingLoginItemRevisionIfIdle(),
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
     ).resolves.toMatchObject({
       kind: "failed",
       message: expect.stringContaining("became unavailable"),
@@ -4942,7 +4970,8 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       },
     });
 
-    const refreshPromise = controller.applyPendingLoginItemRevisionIfIdle();
+    const refreshPromise =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("register not reached yet");
     });
@@ -4969,7 +4998,8 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
 
-    const refresh = controller.applyPendingLoginItemRevisionIfIdle();
+    const refresh =
+      controller.applyPendingLoginItemRevisionIfIdle("outside-lane");
     await flushMicrotasks();
     expect(controller.lifecycleAdmissionBlock).toBeNull();
 
@@ -4984,7 +5014,9 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
     expect(controller.lifecycleAdmissionBlock).toBeNull();
-    expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
+    expect(
+      await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+    ).toBeNull();
     expect(controller.lifecycleAdmissionBlock).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });

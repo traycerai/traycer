@@ -69,6 +69,7 @@ import {
   type MutationLaneStatus,
   type MutationOutcome,
   type MutationProgress,
+  type PendingRevisionCaller,
   type RemoveTraycerOk,
   type ServiceRegistrationOk,
   type UninstallOk,
@@ -1698,11 +1699,13 @@ export class HostController {
   // slot for the ENTIRE call - including its own pre-checks - the other
   // joins its result outright, exactly mirroring how `runEnsureHost` gated
   // before any of its own logic ran.
-  async applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
+  async applyPendingLoginItemRevisionIfIdle(
+    caller: PendingRevisionCaller,
+  ): Promise<MutationOutcome<ConvergeReadyOk> | null> {
     if (this.pendingRevisionCycleInFlight !== null) {
       return this.pendingRevisionCycleInFlight;
     }
-    const run = this.applyPendingLoginItemRevisionIfIdleUncoalesced();
+    const run = this.applyPendingLoginItemRevisionIfIdleUncoalesced(caller);
     // The D1 cache becomes visible synchronously, before any of the
     // reachability/quarantine/approval prechecks await. Quit drain must see
     // the entire in-flight intent, not only the later lock-owning cycle.
@@ -1724,7 +1727,9 @@ export class HostController {
     return run;
   }
 
-  private async applyPendingLoginItemRevisionIfIdleUncoalesced(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
+  private async applyPendingLoginItemRevisionIfIdleUncoalesced(
+    caller: PendingRevisionCaller,
+  ): Promise<MutationOutcome<ConvergeReadyOk> | null> {
     const currentVersion = await readRunningRuntimeVersion(
       this.layout,
       this.reachabilityProbe,
@@ -1749,6 +1754,24 @@ export class HostController {
       this.pendingRevisionRefreshQuarantined = true;
       log.warn(
         "[host-controller] pending LaunchAgent revision quarantined for this session - login item requires approval in System Settings",
+      );
+      return null;
+    }
+    // Reverse admission, owner-aware: the *IfIdle handlers refuse while this
+    // cycle is committed, and this is the same rule pointed the other way -
+    // an OUTSIDE caller (the monitor's poll) must not commit a disruptive
+    // cycle while the mutation lane owns an intent, or an already-accepted
+    // watched write gets a second unannounced lifecycle change serialized
+    // behind it on the desktop lock. A WITHIN-LANE caller is that intent -
+    // `convergeReady` reaches here from inside its own lane job, where the
+    // lane being occupied is not a competitor but the caller itself.
+    //
+    // Checked in the same synchronous stretch that raises the flag (no await
+    // between), mirroring the handlers' own test-and-submit rule: the lane
+    // check, the commitment, and the flag are one decision.
+    if (caller === "outside-lane" && this.mutationStatus !== null) {
+      log.debug(
+        "[host-controller] pending LaunchAgent revision deferred - mutation lane active",
       );
       return null;
     }
@@ -2089,7 +2112,8 @@ export class HostController {
         this.reachabilityProbe,
       );
       if (runningRuntimeVersion !== null) {
-        const refreshed = await this.applyPendingLoginItemRevisionIfIdle();
+        const refreshed =
+          await this.applyPendingLoginItemRevisionIfIdle("within-lane-job");
         if (refreshed !== null) return refreshed;
         return {
           kind: "ok",

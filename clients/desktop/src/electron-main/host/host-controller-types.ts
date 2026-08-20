@@ -55,6 +55,14 @@ export type LifecycleAdmissionBlock =
   | { readonly kind: "mutation"; readonly lane: MutationLaneStatus }
   | { readonly kind: "login-item-refresh" };
 
+/**
+ * Who is asking the pending-login-item revision cycle to run. The cycle's
+ * reverse admission (defer while the mutation lane owns an intent) applies to
+ * an OUTSIDE caller only: `convergeReady` reaches the cycle from inside its
+ * own lane job, where the occupied lane IS the caller, not a competitor.
+ */
+export type PendingRevisionCaller = "outside-lane" | "within-lane-job";
+
 export interface DownloadProgress {
   readonly percent: number | null;
   readonly bytes: number | null;

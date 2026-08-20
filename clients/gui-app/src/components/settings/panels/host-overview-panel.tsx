@@ -330,12 +330,14 @@ export function HostOverviewPanel(props: {
       }
       // The REFUSING respawn, for both of this page's callers — the busy-force
       // offer and the fallback confirm. `restartHost()` queues behind whatever
-      // owns the desktop's exclusive mutation lane, which is right for the
-      // tray and menu ("do it when you can") and wrong for a restart someone
-      // is watching: an install or service cycle running underneath would
-      // swallow the click and fire the kill afterwards, against a host in a
-      // state they never saw. Force overrides the HOST's veto — a live claim,
-      // busy work — never the desktop's own serialization. The refusal comes
+      // owns the desktop's exclusive mutation lane, which the tray and menu
+      // keep deliberately — they are RECOVERY surfaces, reachable when this
+      // page cannot render, so they must never learn to refuse — and which is
+      // wrong for a restart someone is watching: an install or service cycle
+      // running underneath would swallow the click and fire the kill
+      // afterwards, against a host in a state they never saw. Force overrides
+      // the HOST's veto — a live claim, busy work — never the desktop's own
+      // serialization. The refusal comes
       // back as `declined`, which this mutation already renders as
       // information rather than an error.
       // The host this page is scoped to, not whatever is local by the time
