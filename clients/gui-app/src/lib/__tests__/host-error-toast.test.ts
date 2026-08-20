@@ -459,6 +459,58 @@ describe("transport-class causes never reach a reportable toast", () => {
     expect(new Set(ids).size).toBe(2);
   });
 
+  function terminalTransportFailure(method: string): HostTransportFailureError {
+    // Exactly the shape `RemoteSession.notReadyRejection` mints for a request
+    // parked against a session that has gone terminal: the CLASS is transport,
+    // the `code` is the generic `RPC_ERROR`, and the real verdict rides in
+    // `fatalDetails`.
+    return new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "Remote session is closed",
+      requestId: `req-${method}`,
+      method,
+      fatalDetails: {
+        code: "PLAN_RESTRICTED",
+        reason: "Remote host connectivity requires a paid plan",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+  }
+
+  it("keeps FATAL handling for a transport-class failure carrying a terminal verdict", () => {
+    // The mirror image of the mistake this whole branch exists to fix. A
+    // session closed by plan restriction, protocol incompatibility or revoked
+    // access settles its parked requests as `HostTransportFailureError` - so
+    // classifying on the class alone renders a FATAL as transport, promising a
+    // reconnect that is not scheduled and burying the one thing the user could
+    // act on. `fatalDetails` is the discriminator: a verdict means the host was
+    // reached and answered, which is never a connection statement.
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+
+    toastFromHostError(
+      terminalTransportFailure("epic.list"),
+      "Couldn't load epics.",
+    );
+
+    expect(toast).not.toHaveBeenCalled();
+    // The copy states the CONDITION, not the operation. The caller's fallback
+    // ("Couldn't load epics.") names something that was never attempted, and
+    // the wire `code` is the generic `RPC_ERROR`, so routing on it alone would
+    // land there.
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe(
+      "Remote host connectivity requires a paid plan",
+    );
+    // And it deposits the durable row, whose detail carries the remediation -
+    // the condition outlives the toast because, unlike a blip, it will not
+    // heal on its own.
+    const state = useAppLocalNotificationsStore.getState();
+    expect(state.orderedIds).toHaveLength(1);
+    expect(state.byId[state.orderedIds[0]]).toMatchObject({
+      detail: "Remote host connectivity requires a paid plan",
+    });
+  });
+
   it("stays completely silent for an aborted request", () => {
     // `HostRequestAbortedError extends HostTransportFailureError`, but it is
     // not a network condition at all - a caller-owned authority was replaced

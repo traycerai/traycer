@@ -58,9 +58,22 @@ const TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID = "host-transport-notice-unknown";
  * early return had already taken the case. An untestable branch that looks
  * like a safety net is worse than no branch, so there is exactly one
  * mechanism and the probe can reach it.
+ *
+ * The `fatalDetails` clause is load-bearing and the class check alone is NOT
+ * enough. `RemoteSession.notReadyRejection` settles every request parked
+ * against a session that has gone TERMINAL - plan restriction, protocol
+ * incompatibility, revoked access - as a plain `HostTransportFailureError`
+ * whose `code` is the generic `RPC_ERROR` and whose real verdict rides in
+ * `fatalDetails`. Classifying those as transport is this epic's central
+ * distinction violated in the opposite direction: it promises a reconnect that
+ * is not scheduled (the session is closed; nothing is redialling) and buries
+ * the one thing the user could act on. A verdict means the host was reached
+ * and answered, which is never a statement about the connection.
  */
 function isTransportClassFailure(error: HostRpcError): boolean {
-  return error instanceof HostTransportFailureError;
+  return (
+    error instanceof HostTransportFailureError && error.fatalDetails === null
+  );
 }
 
 /**
@@ -212,11 +225,53 @@ function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
   return useAuthStore.getState().status !== "signed-out";
 }
 
-function hostErrorToastMessage(error: HostRpcError, fallback: string) {
+/**
+ * Copy for the two cases whose real cause is NOT the `code` on the error:
+ * an unreachable host, and a terminal verdict riding on a transport-class
+ * failure. Returns `null` when neither applies and the ordinary code mapping
+ * should run.
+ *
+ * Split out from {@link hostErrorToastMessage} to keep that function under the
+ * complexity ceiling, and because these two share a premise the code-keyed
+ * branches do not: they read the CLASS and `fatalDetails`, never `code`.
+ */
+function hostConnectionOrVerdictMessage(error: HostRpcError): string | null {
   // Connection-level failures name the underlying cause, not whichever
   // operation happened to be in flight when the host went away.
-  if (error instanceof HostTransportFailureError) {
+  //
+  // Same `fatalDetails === null` clause as `isTransportClassFailure`, and for
+  // the same reason: a terminal-verdict failure reaches this function too (it
+  // is deliberately no longer taken by the transport branch above), and
+  // "It may be restarting — try again in a moment" would re-apply the exact
+  // misclassification one layer down, for a session that is closed for good.
+  if (
+    error instanceof HostTransportFailureError &&
+    error.fatalDetails === null
+  ) {
     return "Can't reach the Traycer host. It may be restarting — try again in a moment.";
+  }
+  // A terminal verdict carried on a transport-class failure. Its wire `code`
+  // is the generic `RPC_ERROR` - the real one lives in `fatalDetails` - so
+  // every code-keyed branch would miss and the user would get the caller's
+  // fallback, which names an operation that was never attempted ("Couldn't
+  // load epics.") for a session that is closed for good.
+  //
+  // The verdict's own `reason` is used rather than new invented copy: it is
+  // host-authored, states the CONDITION ("Remote host connectivity requires a
+  // paid plan", "Host access was revoked"), and is already what
+  // `emitHostErrorNotification` puts in the durable row's detail. Bounded,
+  // because host detail is unbounded by construction.
+  const verdict = error.fatalDetails;
+  if (verdict !== null && error.code === "RPC_ERROR" && verdict.reason !== "") {
+    return truncateWithEllipsis(verdict.reason, HOST_ERROR_DETAIL_MAX_CHARS);
+  }
+  return null;
+}
+
+function hostErrorToastMessage(error: HostRpcError, fallback: string) {
+  const connectionOrVerdict = hostConnectionOrVerdictMessage(error);
+  if (connectionOrVerdict !== null) {
+    return connectionOrVerdict;
   }
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
