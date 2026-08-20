@@ -359,6 +359,47 @@ describe("createLocalMaintenanceFallbackClient", () => {
     return { client, rpcCalls, fixture };
   }
 
+  function decorateThrowing(
+    hostId: string,
+    management: IHostManagement,
+    localHostId: string,
+    beforeThrow: (method: string) => void,
+  ) {
+    const rpcCalls: string[] = [];
+    const fixture = buildOverviewHostFixture({
+      hostId,
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.update.check": () => {
+          rpcCalls.push("host.update.check");
+          beforeThrow("host.update.check");
+          throw new Error("refused host.update.check");
+        },
+        "host.update.install": () => {
+          rpcCalls.push("host.update.install");
+          beforeThrow("host.update.install");
+          throw new Error("refused host.update.install");
+        },
+        "host.doctor": () => {
+          rpcCalls.push("host.doctor");
+          beforeThrow("host.doctor");
+          throw new Error("refused host.doctor");
+        },
+        "host.getInstallationInfo": () => {
+          rpcCalls.push("host.getInstallationInfo");
+          beforeThrow("host.getInstallationInfo");
+          throw new Error("refused host.getInstallationInfo");
+        },
+      },
+    });
+    const client = createLocalMaintenanceFallbackClient({
+      client: fixture.client,
+      localHostId,
+      management,
+    });
+    return { client, rpcCalls, fixture };
+  }
+
   function servingManagement(): {
     readonly management: IHostManagement;
     readonly checkCalls: Array<{ readonly includePreReleases: boolean }>;
@@ -560,5 +601,155 @@ describe("createLocalMaintenanceFallbackClient", () => {
       fixture.client.getRequestContextUserId(),
     );
     expect(client.getRegistry()).toBe(fixture.client.getRegistry());
+  });
+
+  it("re-serves over the bridge when a delegated request's own handshake reveals the method absent", async () => {
+    // Discriminator: if the catch arm is removed, the RPC refusal escapes
+    // and the bridge is never called. Recording the absent family INSIDE
+    // the rejecting fake is the cold-renderer race — `shouldServe` read
+    // `null` at dispatch, then this call's handshake flipped it to false.
+    const served = servingManagement();
+    const { client, rpcCalls } = decorateThrowing(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+      () => {
+        handshakeAbsent(LOCAL_HOST_ID);
+      },
+    );
+
+    const answer = await client.request("host.update.check", {
+      includePreReleases: false,
+    });
+
+    expect(answer).toEqual({
+      outcome: "ok",
+      manifest: updateCheckManifest("1.2.0"),
+    });
+    expect(rpcCalls).toEqual(["host.update.check"]);
+    expect(served.checkCalls).toEqual([{ includePreReleases: false }]);
+  });
+
+  it("re-serves a live-signal requestWithSignal after the same null→false flip", async () => {
+    const served = servingManagement();
+    const { client, rpcCalls } = decorateThrowing(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+      () => {
+        handshakeAbsent(LOCAL_HOST_ID);
+      },
+    );
+    const signal = new AbortController().signal;
+
+    const answer = await client.requestWithSignal("host.doctor", {}, signal);
+
+    expect(answer).toEqual({
+      status: "ok",
+      issues: [doctorIssue("SERVICE_STOPPED")],
+      triviallyGreenIssueCodes: [
+        ...LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
+      ],
+    });
+    expect(rpcCalls).toEqual(["host.doctor"]);
+    expect(served.doctorCalls).toBe(1);
+  });
+
+  it("re-serves requestWithResponseTimeout when the delegated call rejects and the handshake flips mid-flight", async () => {
+    // This fixture's HostClient rejects `requestWithResponseTimeout` at the
+    // scheduling-policy gate (no join timeout), which is still a delegated
+    // rejection. Flip the registry between dispatch and settlement so the
+    // catch arm can see handshake-false.
+    const served = servingManagement();
+    const { client, rpcCalls } = decorateThrowing(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+      () => {
+        throw new Error("handler must not run; timeout policy rejects first");
+      },
+    );
+
+    const pending = client.requestWithResponseTimeout(
+      "host.getInstallationInfo",
+      {},
+      1_000,
+    );
+    handshakeAbsent(LOCAL_HOST_ID);
+    const answer = await pending;
+
+    expect(answer).toEqual({ status: "unmanaged" });
+    expect(rpcCalls).toEqual([]);
+    expect(served.installInfoCalls).toBe(1);
+  });
+
+  it("propagates a genuine transport failure when the host already advertises the method", async () => {
+    handshakeAdvertisesMaintenance(LOCAL_HOST_ID);
+    const served = servingManagement();
+    const { client, rpcCalls } = decorateThrowing(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+      () => undefined,
+    );
+
+    await expect(
+      client.request("host.update.check", { includePreReleases: false }),
+    ).rejects.toThrow("refused host.update.check");
+    expect(rpcCalls).toEqual(["host.update.check"]);
+    expect(served.checkCalls).toEqual([]);
+  });
+
+  it("does not re-serve an already-aborted requestWithSignal even if the handshake flips to absent", async () => {
+    // Discriminator: without the abort guard, the catch would see
+    // handshake-false and call the bridge, resurrecting work the caller
+    // cancelled. The coordinator rejects an already-aborted waiter before
+    // the mock handler runs, so the flip is recorded after dispatch.
+    const served = servingManagement();
+    const { client, rpcCalls } = decorateThrowing(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+      () => {
+        throw new Error("handler must not run for an already-aborted waiter");
+      },
+    );
+    const signal = AbortSignal.abort();
+
+    const pending = client.requestWithSignal(
+      "host.update.check",
+      { includePreReleases: false },
+      signal,
+    );
+    handshakeAbsent(LOCAL_HOST_ID);
+
+    await expect(pending).rejects.toThrow("Host request waiter cancelled");
+    expect(rpcCalls).toEqual([]);
+    expect(served.checkCalls).toEqual([]);
+  });
+
+  it("does not call the wrapped client at all when shouldServe is already true", async () => {
+    // Discriminator: routing through delegateThenServeIfAbsent first would
+    // invoke the throwing RPC fake (rpcCalls non-empty) even if the catch
+    // then served the bridge.
+    handshakeAbsent(LOCAL_HOST_ID);
+    const served = servingManagement();
+    const { client, rpcCalls } = decorateThrowing(
+      LOCAL_HOST_ID,
+      served.management,
+      LOCAL_HOST_ID,
+      () => undefined,
+    );
+
+    const answer = await client.request("host.update.check", {
+      includePreReleases: true,
+    });
+
+    expect(answer).toEqual({
+      outcome: "ok",
+      manifest: updateCheckManifest("1.2.0"),
+    });
+    expect(rpcCalls).toEqual([]);
+    expect(served.checkCalls).toEqual([{ includePreReleases: true }]);
   });
 });
