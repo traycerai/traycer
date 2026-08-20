@@ -820,13 +820,16 @@ describe("maintenanceInstallVersion IPC", () => {
   });
 
   it("classifies every version-moving lane as update work, and only those", async () => {
-    // `install`/`apply` move the version by definition; `activate` is the
-    // activation tail of an install. Everything else at `progress: null` -
-    // including `ensure`, whose no-op fast path returns before its first
-    // progress callback - MUST stay `false`: an `already-updating` answer
-    // arms the caller's accepted-update latch, and on a pre-1.2.0 host
-    // nothing releases it before the full 60s timer, because these hosts
-    // never publish `host.status.updateProgress`.
+    // This bit never admits anything - the install is already refused - it
+    // only chooses between `already-updating` (which ARMS the caller's
+    // accepted-update latch) and a retryable refusal. On a pre-1.2.0 host
+    // nothing releases that latch before the full 60s timer (these hosts
+    // never publish `host.status.updateProgress`), so `true` is reserved
+    // for lanes whose work can OUTLAST the latch: the minutes-long
+    // version movers. `activate` is deliberately `false` - the lane kind
+    // cannot separate the genuine update tail from the legacy
+    // `activationUnknown` stamp-repair, and both are seconds-long either
+    // way.
     //
     // Compile-time exhaustive: `satisfies Record<MutationKind, boolean>`
     // makes a NEW MutationKind a type error here until it gets an explicit
@@ -836,7 +839,7 @@ describe("maintenanceInstallVersion IPC", () => {
     const updateWorkByKind = {
       install: true,
       apply: true,
-      activate: true,
+      activate: false,
       // At `progress: null`. The numeric-evidence gate that can flip an
       // ensure to `true` has its own tests below.
       ensure: false,

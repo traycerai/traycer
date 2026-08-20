@@ -136,34 +136,39 @@ function nullableString(raw: unknown, key: string): string | null {
 /**
  * Whether an admission block represents UPDATE work.
  *
- * The answer prices a real lock: the fallback maps `true` to the protocol's
- * `already-updating`, which arms the Overview's accepted-update latch - and
- * on a pre-1.2.0 host the only releases are a scope flip or the full 60s
- * timer, because the `host.status.updateProgress` frame that normally frees
- * it is a field these hosts never publish. Overclaiming therefore locks the
- * page's update and lifecycle controls for a minute; underclaiming presents
- * real update work as a retryable failure that releases the latch and
- * invites a competing install submission. Each kind is judged against that
- * price:
+ * Scope first: the lane is exclusive and the caller has ALREADY refused the
+ * competing install by the time it asks - this bit never admits anything.
+ * It picks between two presentations of that refusal: `true` becomes the
+ * protocol's `already-updating` (an informational toast that ARMS the
+ * Overview's accepted-update latch), `false` a retryable refusal carrying
+ * the lane's message. On a pre-1.2.0 host the latch releases only on a
+ * scope flip or its full 60s timer - the `host.status.updateProgress`
+ * frame that normally frees it is a field these hosts never publish - so a
+ * wrong `true` is a minute-long lock of the page's update and lifecycle
+ * controls, while a wrong `false` is an error-styled toast whose text
+ * (`laneBusyRestartMessage`) still names the update. That asymmetry sets
+ * the rule: answer `true` only when the lane work can OUTLAST the latch it
+ * arms, so the lock is protecting a swap that is genuinely still running.
  *
- *  - `install` / `apply` move the version by definition.
- *  - `activate` is the activation tail of an install (packaged-macOS
- *    post-commit, or clearing pendingActivation debt) - an update mid-swap,
- *    when a competing submission is at its most dangerous.
- *  - `ensure` only with NUMERIC evidence. Mere non-null progress is not it:
- *    `host ensure`'s service branches - `runServiceRegister`, `runStart`,
- *    the repair retry - narrate through the same null-metric
- *    `host-provision` events without ever touching the version, so a
- *    service repair on an already-current host would read as an update.
- *    What only the version-moving path emits is a NUMBER: the staging
- *    download reports `bytes`/`totalBytes`/`percent` and the extract
- *    reports `workUnits`, and those are the long windows a competing
- *    install must not race. The no-op fast path (already installed,
- *    registered, running, version satisfied - the common contention on a
- *    page that requires a running host) returns before any progress at
- *    all. The brief null-metric moments inside a real install (source
- *    resolution, the locked promote) fall to generic contention - the
- *    cheap direction, a retryable refusal rather than a minute-long lock.
+ *  - `install` / `apply` qualify by definition: version-moving, and
+ *    minutes-long against the 60s window.
+ *  - `ensure` qualifies only with NUMERIC progress evidence. Its service
+ *    branches (`runServiceRegister`, `runStart`, the repair retry) narrate
+ *    through the same null-metric `host-provision` events without touching
+ *    the version, and its no-op fast path returns before any progress at
+ *    all; only the version-moving path reports numbers - the staging
+ *    download's `bytes`/`totalBytes`/`percent`, the extract's `workUnits` -
+ *    and those are its long windows. Null-metric moments inside a real
+ *    install (source resolution, the locked promote) fall to the retryable
+ *    side, the cheap direction.
+ *  - `activate` does NOT qualify, deliberately. The lane cannot say which
+ *    arm triggered it: the genuine update tail (pendingActivation) and the
+ *    legacy stamp-repair (`activationUnknown` - a record with
+ *    `runtimeVersion: null`, which launch converge activates with NO update
+ *    staged, on exactly this pre-1.2.0 population) are one kind at
+ *    admission. Both are a seconds-long service cycle either way - work the
+ *    60s latch would outlive many times over, guarding a swap that already
+ *    finished while the page sits locked.
  *
  * Every other kind (register, deregister, respawn, recoverIfDown,
  * freePortAndRestart, uninstallHost, removeTraycer) and the login-item
@@ -182,11 +187,7 @@ function admissionBlockIsUpdateWork(block: LifecycleAdmissionBlock): boolean {
         progress.workUnits !== null)
     );
   }
-  return (
-    block.lane.kind === "install" ||
-    block.lane.kind === "apply" ||
-    block.lane.kind === "activate"
-  );
+  return block.lane.kind === "install" || block.lane.kind === "apply";
 }
 
 /**
