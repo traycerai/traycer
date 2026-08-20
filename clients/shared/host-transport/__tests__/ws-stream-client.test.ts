@@ -366,7 +366,7 @@ describe("WsStreamClient", () => {
     expect(subscribeFrame).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-1" },
     });
 
@@ -404,7 +404,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-1" },
     });
 
@@ -476,7 +476,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-1" },
     });
 
@@ -1400,7 +1400,7 @@ describe("WsStreamClient", () => {
     expect(firstSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-42" },
     });
 
@@ -1420,7 +1420,7 @@ describe("WsStreamClient", () => {
     expect(secondSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-42" },
     });
 
@@ -1604,7 +1604,7 @@ describe("WsStreamClient", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-42" },
     });
     expect(statuses.at(-1)).toBe("open");
