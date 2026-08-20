@@ -109,7 +109,7 @@ describe("headerTabMatchesProject", () => {
     ).toBe(false);
   });
 
-  it("hides a claimed epic whose primary folder belongs to another project", () => {
+  it("keeps a claimed epic even when the folder belongs to another project", () => {
     expect(
       headerTabMatchesProject(
         { kind: "epic", epicId: "claimed-titanos" },
@@ -120,6 +120,22 @@ describe("headerTabMatchesProject", () => {
             { hostId: "host-a", workspacePath: "/Users/g/work/CRM" },
           ],
         },
+      ),
+    ).toBe(true);
+  });
+
+  it("hides an epic claimed on another project even when the folder matches", () => {
+    expect(
+      headerTabMatchesProject(
+        { kind: "epic", epicId: "claimed-titanos" },
+        CRM,
+        {
+          worktreePaths: [],
+          linkedWorkspaces: [
+            { hostId: "host-a", workspacePath: "/Users/g/work/CRM" },
+          ],
+        },
+        [TITANOS, CRM],
       ),
     ).toBe(false);
   });

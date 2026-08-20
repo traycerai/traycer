@@ -1,7 +1,10 @@
 import {
   ArrowLeftRight,
+  Check,
   CopyPlus,
   ExternalLink,
+  FolderKanban,
+  FolderPlus,
   Maximize2,
   PanelLeftClose,
   PanelRightClose,
@@ -16,6 +19,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import {
   DropdownMenuContent,
@@ -29,6 +35,89 @@ import {
   type TabSplitCommandAvailability,
   type TabSplitCommandId,
 } from "@/stores/tabs/tab-split-commands";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { workspaceHintForOpenEpic } from "@/hooks/workspace/use-project-scoped-header-strip";
+import {
+  assignEpicToProjectProfile,
+  createProjectFromWorkspaceHint,
+  folderAlreadyOwnsAProject,
+} from "@/lib/workspace/assign-epic-to-project";
+import { claimedProfileIdForEpic } from "@/lib/workspace/history-item-matches-project";
+import { resolveOwningProjectProfile } from "@/lib/workspace/header-tab-matches-project";
+import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { PROJECT_PROFILE_COLOR_DOT } from "@/components/layout/header/project-profile-colors";
+import {
+  selectProjectProfilesBucket,
+  useProjectProfilesStore,
+} from "@/stores/workspace/project-profiles-store";
+
+function TabProjectMenuItems(props: { readonly tab: HeaderTab }): React.ReactNode {
+  const { tab } = props;
+  const hostId = useAddressableHostId();
+  const bucket = useProjectProfilesStore((state) =>
+    selectProjectProfilesBucket(state, hostId),
+  );
+  if (tab.kind !== "epic") return null;
+  const hint = workspaceHintForOpenEpic(tab.epicId);
+  const claimedId = claimedProfileIdForEpic(bucket.profiles, tab.epicId);
+  const owner =
+    claimedId === null
+      ? resolveOwningProjectProfile(bucket.profiles, tab.epicId, hint)
+      : (bucket.profiles.find((profile) => profile.id === claimedId) ?? null);
+  const folderPath = hint?.primaryPath ?? hint?.linkedWorkspaces[0]?.workspacePath ?? null;
+  const canCreateFromFolder =
+    folderPath !== null &&
+    !folderAlreadyOwnsAProject(bucket.profiles, folderPath);
+  const folderLabel =
+    folderPath === null ? null : workspaceFolderName(folderPath);
+  if (bucket.profiles.length === 0 && !canCreateFromFolder) return null;
+  return (
+    <>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger data-testid={`tab-move-project-${tab.id}`}>
+          <FolderKanban />
+          Move to project
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          {bucket.profiles.map((profile) => {
+            const current = owner?.id === profile.id;
+            return (
+              <ContextMenuItem
+                key={profile.id}
+                data-testid={`tab-move-project-${tab.id}-${profile.id}`}
+                onSelect={() => {
+                  assignEpicToProjectProfile(hostId, tab.epicId, profile.id);
+                }}
+              >
+                <span
+                  aria-hidden
+                  className={`size-2 shrink-0 rounded-full ${PROJECT_PROFILE_COLOR_DOT[profile.color]}`}
+                />
+                <span className="min-w-0 flex-1 truncate">{profile.name}</span>
+                {current ? <Check className="ml-auto size-3.5" /> : null}
+              </ContextMenuItem>
+            );
+          })}
+          {canCreateFromFolder && folderLabel !== null ? (
+            <>
+              {bucket.profiles.length > 0 ? <ContextMenuSeparator /> : null}
+              <ContextMenuItem
+                data-testid={`tab-new-project-${tab.id}`}
+                onSelect={() => {
+                  createProjectFromWorkspaceHint(hostId, tab.epicId, hint);
+                }}
+              >
+                <FolderPlus />
+                New project from {folderLabel}
+              </ContextMenuItem>
+            </>
+          ) : null}
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSeparator />
+    </>
+  );
+}
 
 interface TabContextMenuContentProps {
   readonly tab: HeaderTab;
@@ -100,7 +189,7 @@ export function TabContextMenuContent(
               />
             ) : null}
           </ContextMenuItem>
-          <ContextMenuSeparator />
+          <TabProjectMenuItems tab={tab} />
         </>
       ) : null}
       {showDuplicate ? (

@@ -82,13 +82,13 @@ describe("historyItemMatchesProject", () => {
     ).toBe(false);
   });
 
-  it("does not match a claimed chat that also has another project's folder", () => {
+  it("matches a claimed chat even when the folder belongs to another project", () => {
     expect(
       historyItemMatchesProject(
         item("claimed", [], ["/Users/g/work/CRM"]),
         PROFILE,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("matches a local-mode chat by its originating workspace path", () => {

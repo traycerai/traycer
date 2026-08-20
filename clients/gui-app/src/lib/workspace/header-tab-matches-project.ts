@@ -1,7 +1,10 @@
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { SplitSide, StripItem } from "@/stores/tabs/layout";
 import type { ProjectProfile } from "@/stores/workspace/project-profiles-store";
-import { historyItemMatchesProject } from "@/lib/workspace/history-item-matches-project";
+import {
+  claimedProfileIdForEpic,
+  historyItemMatchesProject,
+} from "@/lib/workspace/history-item-matches-project";
 
 export type ProjectScopedHeaderTab =
   | { readonly kind: "epic"; readonly epicId: string }
@@ -127,9 +130,12 @@ function epicOwnedByProfile(
   epicId: string,
   hint: EpicWorkspaceHint | null,
   profile: ProjectProfile,
+  profiles: ReadonlyArray<ProjectProfile>,
 ): boolean {
+  const claimedId = claimedProfileIdForEpic(profiles, epicId);
+  if (claimedId !== null) return claimedId === profile.id;
   const paths = hintWorkspacePaths(hint);
-  if (paths.length === 0) return profile.epicIds.includes(epicId);
+  if (paths.length === 0) return false;
   return paths.every((path) => pathOwnedByProfile(path, profile));
 }
 
@@ -137,10 +143,12 @@ export function headerTabMatchesProject(
   tab: ProjectScopedHeaderTab,
   profile: ProjectProfile | null,
   hint: EpicWorkspaceHint | null,
+  profiles: ReadonlyArray<ProjectProfile> = profile === null ? [] : [profile],
 ): boolean {
   if (profile === null) return true;
   if (tab.kind !== "epic") return true;
-  return epicOwnedByProfile(tab.epicId, hint, profile);
+  const list = profiles.length > 0 ? profiles : [profile];
+  return epicOwnedByProfile(tab.epicId, hint, profile, list);
 }
 
 export function resolveOwningProjectProfile(
@@ -148,8 +156,12 @@ export function resolveOwningProjectProfile(
   epicId: string,
   hint: EpicWorkspaceHint | null,
 ): ProjectProfile | null {
+  const claimedId = claimedProfileIdForEpic(profiles, epicId);
+  if (claimedId !== null) {
+    return profiles.find((profile) => profile.id === claimedId) ?? null;
+  }
   const owners = profiles.filter((profile) =>
-    epicOwnedByProfile(epicId, hint, profile),
+    epicOwnedByProfile(epicId, hint, profile, profiles),
   );
   return owners.length === 1 ? owners[0] : null;
 }
@@ -182,11 +194,13 @@ export function filterHeaderStripItemIdsForProject(input: {
   readonly itemIds: ReadonlyArray<string>;
   readonly items: ReadonlyArray<StripItem>;
   readonly profile: ProjectProfile | null;
+  readonly profiles?: ReadonlyArray<ProjectProfile>;
   readonly epicIdForTabId: (tabId: string) => string | null;
   readonly workspaceHintForEpic: (epicId: string) => EpicWorkspaceHint | null;
 }): ReadonlyArray<string> {
   const profile = input.profile;
   if (profile === null) return input.itemIds;
+  const profiles = input.profiles ?? [profile];
   const byId = new Map(input.items.map((item) => [item.id, item]));
   return input.itemIds.filter((itemId) => {
     const item = byId.get(itemId);
@@ -194,6 +208,7 @@ export function filterHeaderStripItemIdsForProject(input: {
     return stripItemMatchesProject(
       item,
       profile,
+      profiles,
       input.epicIdForTabId,
       input.workspaceHintForEpic,
     );
@@ -203,6 +218,7 @@ export function filterHeaderStripItemIdsForProject(input: {
 function stripItemMatchesProject(
   item: StripItem,
   profile: ProjectProfile,
+  profiles: ReadonlyArray<ProjectProfile>,
   epicIdForTabId: (tabId: string) => string | null,
   workspaceHintForEpic: (epicId: string) => EpicWorkspaceHint | null,
 ): boolean {
@@ -211,6 +227,7 @@ function stripItemMatchesProject(
       item.ref.kind,
       item.ref.id,
       profile,
+      profiles,
       epicIdForTabId,
       workspaceHintForEpic,
     );
@@ -219,12 +236,14 @@ function stripItemMatchesProject(
     sideMatchesProject(
       item.left,
       profile,
+      profiles,
       epicIdForTabId,
       workspaceHintForEpic,
     ) &&
     sideMatchesProject(
       item.right,
       profile,
+      profiles,
       epicIdForTabId,
       workspaceHintForEpic,
     )
@@ -234,6 +253,7 @@ function stripItemMatchesProject(
 function sideMatchesProject(
   side: SplitSide,
   profile: ProjectProfile,
+  profiles: ReadonlyArray<ProjectProfile>,
   epicIdForTabId: (tabId: string) => string | null,
   workspaceHintForEpic: (epicId: string) => EpicWorkspaceHint | null,
 ): boolean {
@@ -242,6 +262,7 @@ function sideMatchesProject(
     side.ref.kind,
     side.ref.id,
     profile,
+    profiles,
     epicIdForTabId,
     workspaceHintForEpic,
   );
@@ -251,11 +272,17 @@ function tabRefMatchesProject(
   kind: string,
   tabId: string,
   profile: ProjectProfile,
+  profiles: ReadonlyArray<ProjectProfile>,
   epicIdForTabId: (tabId: string) => string | null,
   workspaceHintForEpic: (epicId: string) => EpicWorkspaceHint | null,
 ): boolean {
   if (kind !== "epic") {
-    return headerTabMatchesProject({ kind: scopedKind(kind) }, profile, null);
+    return headerTabMatchesProject(
+      { kind: scopedKind(kind) },
+      profile,
+      null,
+      profiles,
+    );
   }
   const epicId = epicIdForTabId(tabId);
   if (epicId === null) return false;
@@ -263,6 +290,7 @@ function tabRefMatchesProject(
     { kind: "epic", epicId },
     profile,
     workspaceHintForEpic(epicId),
+    profiles,
   );
 }
 
@@ -278,11 +306,22 @@ export function headerTabRecordMatchesProject(
   tab: { readonly kind: string; readonly epicId?: string },
   profile: ProjectProfile | null,
   hint: EpicWorkspaceHint | null,
+  profiles: ReadonlyArray<ProjectProfile> = profile === null ? [] : [profile],
 ): boolean {
   if (tab.kind === "epic") {
     const epicId = tab.epicId;
     if (epicId === undefined) return false;
-    return headerTabMatchesProject({ kind: "epic", epicId }, profile, hint);
+    return headerTabMatchesProject(
+      { kind: "epic", epicId },
+      profile,
+      hint,
+      profiles,
+    );
   }
-  return headerTabMatchesProject({ kind: scopedKind(tab.kind) }, profile, hint);
+  return headerTabMatchesProject(
+    { kind: scopedKind(tab.kind) },
+    profile,
+    hint,
+    profiles,
+  );
 }

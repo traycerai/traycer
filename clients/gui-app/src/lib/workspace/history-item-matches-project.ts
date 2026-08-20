@@ -4,18 +4,35 @@ import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 
 const TRAYCER_WORKTREES_MARKER = "/.traycer/worktrees/";
 
+export function claimedProfileIdForEpic(
+  profiles: ReadonlyArray<ProjectProfile>,
+  epicId: string,
+): string | null {
+  let claimed: string | null = null;
+  for (const profile of profiles) {
+    if (!profile.epicIds.includes(epicId)) continue;
+    if (claimed !== null && claimed !== profile.id) return claimed;
+    claimed = profile.id;
+  }
+  return claimed;
+}
+
 /**
  * An existing chat belongs to a project when every workspace path sits
  * inside that project's folders (or a documented Traycer worktree of
- * them). Claim wins only when there is no path. Fan-out that also
- * touched another repo is not this project's History row.
+ * them). An explicit Move-to-project claim wins over path matching.
+ * Fan-out that also touched another repo is not this project's History
+ * row unless the user claimed it.
  */
 export function historyItemMatchesProject(
   item: Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
   profile: ProjectProfile,
+  profiles: ReadonlyArray<ProjectProfile> = [profile],
 ): boolean {
+  const claimedId = claimedProfileIdForEpic(profiles, item.epicId);
+  if (claimedId !== null) return claimedId === profile.id;
   if (profile.folderPaths.length === 0) {
-    return profile.epicIds.includes(item.epicId);
+    return false;
   }
   const folders = profile.folderPaths.map(normalizePathSeparators);
   if (item.linkedWorkspaces.length > 0) {
@@ -40,7 +57,7 @@ export function historyItemMatchesProject(
       ),
     );
   }
-  return profile.epicIds.includes(item.epicId);
+  return false;
 }
 
 export function filterHistoryItemsForProject<
@@ -48,9 +65,12 @@ export function filterHistoryItemsForProject<
 >(
   items: ReadonlyArray<T>,
   profile: ProjectProfile | null,
+  profiles: ReadonlyArray<ProjectProfile> = profile === null ? [] : [profile],
 ): ReadonlyArray<T> {
   if (profile === null) return items;
-  return items.filter((item) => historyItemMatchesProject(item, profile));
+  return items.filter((item) =>
+    historyItemMatchesProject(item, profile, profiles),
+  );
 }
 
 export type HistoryListEmptyState =

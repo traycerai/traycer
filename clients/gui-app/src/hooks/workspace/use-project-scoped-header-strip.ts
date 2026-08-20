@@ -16,6 +16,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { selectHeaderStripItemIds } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
+import { claimEpicOnMatchingProfile } from "@/lib/workspace/assign-epic-to-project";
 import type { HeaderTab } from "@/stores/tabs/types";
 import {
   selectActiveProjectProfile,
@@ -29,6 +30,9 @@ export function useProjectScopedHeaderStripItemIds(): ReadonlyArray<string> {
   const profile = useProjectProfilesStore((state) =>
     selectActiveProjectProfile(state, hostId),
   );
+  const profiles = useProjectProfilesStore(
+    useShallow((state) => selectProjectProfilesBucket(state, hostId).profiles),
+  );
   const itemIds = useTabsStore(useShallow(selectHeaderStripItemIds));
   const items = useTabsStore(useShallow((state) => state.items));
   const epicTabsById = useEpicCanvasStore(
@@ -40,15 +44,17 @@ export function useProjectScopedHeaderStripItemIds(): ReadonlyArray<string> {
         itemIds,
         items,
         profile,
+        profiles,
         epicIdForTabId: (tabId) => epicTabsById[tabId]?.epicId ?? null,
         workspaceHintForEpic: (epicId) =>
           workspaceHintForEpic(epicId, epicTabsById),
       }),
-    [epicTabsById, itemIds, items, profile],
+    [epicTabsById, itemIds, items, profile, profiles],
   );
 }
 
 export function usePersistOpenEpicWorkspaceStamps(): void {
+  const hostId = useAddressableHostId();
   const stampEpicWorkspaceHint = useEpicCanvasStore(
     (state) => state.stampEpicWorkspaceHint,
   );
@@ -65,18 +71,18 @@ export function usePersistOpenEpicWorkspaceStamps(): void {
       const live = liveWorkspaceHintForEpic(tab.epicId);
       if (live === null) continue;
       if (
-        (tab.projectWorkspace?.primaryPath ?? null) ===
+        (tab.projectWorkspace?.primaryPath ?? null) !==
         (live.primaryPath ?? null)
       ) {
-        continue;
+        stampEpicWorkspaceHint(tab.epicId, {
+          primaryPath: live.primaryPath ?? null,
+          linkedWorkspaces: live.linkedWorkspaces,
+          worktreePaths: live.worktreePaths,
+        });
       }
-      stampEpicWorkspaceHint(tab.epicId, {
-        primaryPath: live.primaryPath ?? null,
-        linkedWorkspaces: live.linkedWorkspaces,
-        worktreePaths: live.worktreePaths,
-      });
+      claimEpicOnMatchingProfile(hostId, tab.epicId, live);
     }
-  }, [openTabs, stampEpicWorkspaceHint]);
+  }, [hostId, openTabs, stampEpicWorkspaceHint]);
 }
 
 export function workspaceHintForOpenEpic(
@@ -92,17 +98,17 @@ export function scopeHeaderTabsToActiveProject(
   tabs: ReadonlyArray<HeaderTab>,
   hostId: string | null,
 ): ReadonlyArray<HeaderTab> {
-  const profile = selectActiveProjectProfile(
-    useProjectProfilesStore.getState(),
-    hostId,
-  );
+  const state = useProjectProfilesStore.getState();
+  const profile = selectActiveProjectProfile(state, hostId);
   if (profile === null) return tabs;
+  const profiles = selectProjectProfilesBucket(state, hostId).profiles;
   const tabsById = useEpicCanvasStore.getState().tabsById;
   return tabs.filter((tab) =>
     headerTabRecordMatchesProject(
       tab,
       profile,
       tab.kind === "epic" ? workspaceHintForEpic(tab.epicId, tabsById) : null,
+      profiles,
     ),
   );
 }
