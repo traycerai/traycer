@@ -5,6 +5,7 @@ import {
   copyFile,
   lstat,
   mkdir,
+  readFile,
   readdir,
   rename,
   rm,
@@ -210,7 +211,24 @@ async function pendingRefreshSource(
   // file.
   const slotStat = await lstatOrNull(wellKnownPath);
   if (slotStat === null || slotStat.isSymbolicLink()) return source;
-  return (await mirrors(wellKnownPath, slotStat, source)) ? null : source;
+  // The staging record is the authority whenever it applies, because it is
+  // the one identity no filesystem can take away: staging writes down what
+  // it copied and what it produced, so freshness stops depending on a volume
+  // being able to reproduce a timestamp. See `SLOT_SOURCE_RECORD_SUFFIX`.
+  const record = await readSlotSourceRecord(wellKnownPath);
+  if (record !== null && recordDescribes(record, slotStat, source)) {
+    const sourceStat = await statOrNull(source);
+    if (sourceStat === null) return null;
+    const unchanged =
+      sourceStat.size === record.sourceSize &&
+      sourceStat.mtimeMs === record.sourceMtimeMs;
+    return unchanged ? null : source;
+  }
+  // No usable record - a slot staged by a CLI older than this format, or one
+  // a sibling writer published. Fall back to comparing timestamps; when that
+  // cannot prove freshness the caller stages, which writes a record, so a
+  // slot takes this path at most until the first time this CLI stages it.
+  return (await mirrors(slotStat, source)) ? null : source;
 }
 
 // Which binary the slot SHOULD hold. The manifest wins when it names an
@@ -287,60 +305,128 @@ function isEnoentError(error: unknown): boolean {
 // every single command. `getTime()` truncates both sides the same way
 // staging did, so a freshly staged slot compares equal.
 //
-// Equal sizes with UNEQUAL mtimes are genuinely ambiguous, and the ambiguity
-// has to be resolved rather than guessed. Either the source really was
-// replaced, or this filesystem could not store the mtime staging asked it to
-// mirror - `utimes` can be unsupported outright, and a slot volume with
-// coarser timestamp granularity than the source's silently rounds what it is
-// given. The two are indistinguishable from the two stats alone, and each
-// way of guessing is bad in a different direction: assume "replaced" and a
-// machine that cannot mirror re-copies ~100 MB on EVERY command forever,
-// with a Windows rename-aside each time; assume "mirrored" and a real
-// same-size upgrade is missed.
-//
-// So ask the filesystem instead of guessing. `canReproduceMtime` writes a
-// throwaway file in the slot's own directory - the same volume, which is
-// what makes the answer meaningful - and checks whether the source's mtime
-// survives a `utimes`/`stat` round trip. Deliberately NOT probed on the slot
-// itself: stamping the slot would make stale BYTES look fresh, which is the
-// one error this whole comparison exists to prevent.
-async function mirrors(
-  slotPath: string,
-  slotStat: Stats,
-  source: string,
-): Promise<boolean> {
+// Fallback freshness for a slot with no staging record: same length, same
+// mtime. Nothing is inferred from inequality beyond "cannot prove fresh" -
+// the caller stages on false, which writes a record, and from then on the
+// record answers this question exactly.
+async function mirrors(slotStat: Stats, source: string): Promise<boolean> {
   const sourceStat = await statOrNull(source);
   if (sourceStat === null) return false;
-  if (slotStat.size !== sourceStat.size) return false;
-  if (slotStat.mtime.getTime() === sourceStat.mtime.getTime()) return true;
-  return !(await canReproduceMtime(dirname(slotPath), sourceStat.mtime));
+  return (
+    slotStat.size === sourceStat.size &&
+    slotStat.mtime.getTime() === sourceStat.mtime.getTime()
+  );
 }
 
-// Whether a file on this directory's volume can hold exactly `mtime`.
+// What staging copied, and what it produced.
 //
-// Runs only in the ambiguous branch above, so the cost is a few metadata
-// operations on an empty file and only when a same-size difference has
-// already been seen. Any failure answers "no": a directory that cannot take
-// a probe file cannot be staged into either, so reporting the slot as fresh
-// at least avoids copying a binary into it on every command.
-async function canReproduceMtime(dir: string, mtime: Date): Promise<boolean> {
-  // Stamped like the aside files, and for the same reason: this file's own
-  // mtime is deliberately set to an arbitrary value below, so `stat` can say
-  // nothing about how old it is. The sweep reads the name instead.
-  const probePath = join(
-    dir,
-    `${MTIME_PROBE_PREFIX}${Date.now()}-${process.pid}-${randomUUID()}`,
+// Mirroring the source's mtime onto the copy made freshness checkable, but
+// only on volumes that can actually store the value they are handed - a
+// filesystem without `utimes`, or with coarser granularity, silently rounds
+// it, and then no comparison of the two stats can distinguish "the source
+// was replaced" from "this volume cannot reproduce the timestamp". Either
+// answer is wrong somewhere: one re-copies ~100 MB on every command forever,
+// the other misses a same-size upgrade forever.
+//
+// Writing the identity down removes the question. The source's size and
+// mtime are recorded as they were AT STAGING TIME, so a later run compares a
+// fresh stat of the source against a number this module chose - no round
+// trip through the filesystem's timestamp support, and a replacement is
+// detected even when it is byte-identical in length and carries an OLDER
+// mtime.
+//
+// The slot's own size and mtime are recorded too, and checked first. That is
+// what keeps the record honest when something else writes the slot: Desktop
+// publishes this same path, and a record describing bytes that are no longer
+// there would otherwise vouch for a stale slot. A mismatch discards the
+// record rather than trusting it.
+interface SlotSourceRecord {
+  readonly sourcePath: string;
+  readonly sourceSize: number;
+  readonly sourceMtimeMs: number;
+  readonly slotSize: number;
+  readonly slotMtimeMs: number;
+}
+
+function slotSourceRecordPath(wellKnownPath: string): string {
+  return `${wellKnownPath}${SLOT_SOURCE_RECORD_SUFFIX}`;
+}
+
+// `mtimeMs` here, deliberately, where `mirrors` must not: both sides are
+// this module's own observations of one real file, with no `utimes` round
+// trip in between to truncate the precision away.
+function recordDescribes(
+  record: SlotSourceRecord,
+  slotStat: Stats,
+  source: string,
+): boolean {
+  return (
+    record.sourcePath === source &&
+    record.slotSize === slotStat.size &&
+    record.slotMtimeMs === slotStat.mtimeMs
   );
+}
+
+async function readSlotSourceRecord(
+  wellKnownPath: string,
+): Promise<SlotSourceRecord | null> {
+  let raw: string;
   try {
-    await writeFile(probePath, "");
-    await utimes(probePath, mtime, mtime);
-    const probed = await stat(probePath);
-    return probed.mtime.getTime() === mtime.getTime();
+    raw = await readFile(slotSourceRecordPath(wellKnownPath), "utf8");
   } catch {
-    return false;
-  } finally {
-    await rm(probePath, { force: true }).catch(() => undefined);
+    return null;
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const value = parsed as Record<string, unknown>;
+  if (
+    typeof value.sourcePath !== "string" ||
+    typeof value.sourceSize !== "number" ||
+    typeof value.sourceMtimeMs !== "number" ||
+    typeof value.slotSize !== "number" ||
+    typeof value.slotMtimeMs !== "number"
+  ) {
+    return null;
+  }
+  return {
+    sourcePath: value.sourcePath,
+    sourceSize: value.sourceSize,
+    sourceMtimeMs: value.sourceMtimeMs,
+    slotSize: value.slotSize,
+    slotMtimeMs: value.slotMtimeMs,
+  };
+}
+
+// Best-effort, and ordered after the publish on purpose: a record that never
+// lands just sends the next run down the timestamp fallback, whereas a
+// record written before a publish that then failed would vouch for bytes
+// that never arrived.
+async function writeSlotSourceRecord(
+  wellKnownPath: string,
+  source: string,
+): Promise<void> {
+  const sourceStat = await statOrNull(source);
+  const slotStat = await statOrNull(wellKnownPath);
+  if (sourceStat === null || slotStat === null) return;
+  const record: SlotSourceRecord = {
+    sourcePath: source,
+    sourceSize: sourceStat.size,
+    sourceMtimeMs: sourceStat.mtimeMs,
+    slotSize: slotStat.size,
+    slotMtimeMs: slotStat.mtimeMs,
+  };
+  await writeFile(
+    slotSourceRecordPath(wellKnownPath),
+    `${JSON.stringify(record)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  ).catch(() => undefined);
 }
 
 // Whether two stats of the SAME path describe the same unreplaced file.
@@ -497,6 +583,7 @@ export async function stageWellKnownCliBinary(opts: {
       );
     }
     await rename(staging, wellKnownPath);
+    await writeSlotSourceRecord(wellKnownPath, source);
     return { staged: "staged", wellKnownPath };
   } catch (error) {
     await rm(staging, { force: true }).catch(() => undefined);
@@ -590,7 +677,9 @@ async function renameSlotBinaryAside(
 // the rename actually happened.
 const STAGING_ORPHAN_MIN_AGE_MS = 60 * 60 * 1000;
 const ASIDE_INFLIGHT_WINDOW_MS = 5 * 60 * 1000;
-const MTIME_PROBE_PREFIX = ".mtime-probe-";
+// Sits beside the slot, named after it. Not swept: the sweep matches the
+// `.old-` / `.staging-` prefixes, and this is neither.
+const SLOT_SOURCE_RECORD_SUFFIX = ".source.json";
 
 // Milliseconds encoded in a `<binary>.old-<ts>-<pid>` or
 // `.mtime-probe-<ts>-<pid>-<uuid>` name, or null when the name does not carry
@@ -631,26 +720,6 @@ async function sweepSlotLeftovers(
       // plausible, recent age defers the sweep.
       const age = stampedAt === null ? null : now - stampedAt;
       if (age !== null && age >= 0 && age < ASIDE_INFLIGHT_WINDOW_MS) continue;
-      await rm(path, { force: true }).catch(() => undefined);
-      continue;
-    }
-    if (entry.startsWith(MTIME_PROBE_PREFIX)) {
-      // An empty file, but one this module creates and nothing else would
-      // remove: `canReproduceMtime` deletes its own in a `finally`, which a
-      // SIGKILL between the write and that block skips. Same in-flight window
-      // as the asides, so a concurrent probe is never deleted out from under
-      // the process still measuring with it - stat-ing a probe file that
-      // vanished mid-measurement would report "cannot mirror" and wrongly
-      // hold a genuinely stale slot fresh.
-      const probedAt = leftoverStampedAt(entry, MTIME_PROBE_PREFIX);
-      const probeAge = probedAt === null ? null : now - probedAt;
-      if (
-        probeAge !== null &&
-        probeAge >= 0 &&
-        probeAge < ASIDE_INFLIGHT_WINDOW_MS
-      ) {
-        continue;
-      }
       await rm(path, { force: true }).catch(() => undefined);
       continue;
     }

@@ -765,16 +765,18 @@ describe("refreshWellKnownSlotIfStale", () => {
     expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBB");
   });
 
-  // The mtime-reproducibility probe's negative direction: a same-size slot
-  // whose mtime differs from the source is ambiguous on its own - either the
-  // source was replaced, or this filesystem could not store the mtime
-  // staging asked it to mirror. Simulate the second case by making `utimes`
-  // a no-op, so `canReproduceMtime`'s round-trip can never see its own probe
-  // stamp survive, and confirm the slot is treated as mirrored (fresh)
-  // rather than re-copied. Without `canReproduceMtime`, this scenario would
-  // read as "replaced" and re-stage the ~100 MB binary on every command
-  // forever on such a machine.
-  it("packaged, same size but a different source mtime, and this filesystem cannot reproduce mtimes: returns null (no re-stage)", async () => {
+  // A filesystem that cannot store the mtime staging mirrors onto the slot -
+  // no `utimes` support, or coarser granularity - simulated by making
+  // `utimes` a no-op. Timestamps alone can never prove freshness there, so
+  // the guarantee has to come from the staging RECORD instead.
+  //
+  // The property that matters is the second call, not the first. Staging
+  // once is correct and unavoidable: with no record and no usable timestamp
+  // the slot cannot be shown to be current. What must not happen is staging
+  // AGAIN, which on such a machine would re-copy the whole binary on every
+  // command forever. The record written by the first stage is what stops it,
+  // and it does so without depending on the filesystem at all.
+  it("packaged, this filesystem cannot reproduce mtimes: stages once, then the staging record keeps it from re-copying", async () => {
     seaState.current = true;
     utimesControl.noop = true;
     const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
@@ -788,12 +790,53 @@ describe("refreshWellKnownSlotIfStale", () => {
     utimesSync(wellKnownPath, new Date(base), new Date(base));
     utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
 
+    const first = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(first?.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBB");
+
+    const second = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(second).toBeNull();
+  });
+
+  // The direction the record must NOT lose: a same-size replacement whose
+  // mtime is OLDER than the copy already in the slot. This is the case the
+  // whole identity scheme exists for - it is invisible to "is the slot
+  // newer?", and on a filesystem that cannot mirror timestamps it is
+  // invisible to any timestamp comparison at all. The record catches it
+  // because it stores the source's mtime as a number this module chose,
+  // rather than one the filesystem has to reproduce.
+  it("packaged, cannot reproduce mtimes, and the source is REPLACED by a same-size older file: re-stages", async () => {
+    seaState.current = true;
+    utimesControl.noop = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "AAAAAAAAAA");
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "BBBBBBBBBB");
+    const base = Date.now();
+    utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
+
+    await withExecPath(running, () => refreshWellKnownSlotIfStale(ENVIRONMENT));
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBB");
+
+    // Same length, older timestamp, different bytes.
+    writeFileSync(running, "CCCCCCCCCC");
+    utimesSync(running, new Date(base - 600_000), new Date(base - 600_000));
+
     const result = await withExecPath(running, () =>
       refreshWellKnownSlotIfStale(ENVIRONMENT),
     );
 
-    expect(result).toBeNull();
-    expect(readFileSync(wellKnownPath, "utf8")).toBe("AAAAAAAAAA");
+    expect(result?.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("CCCCCCCCCC");
   });
 
   it("packaged, the running binary IS the slot: returns null", async () => {
