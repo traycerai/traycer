@@ -105,15 +105,19 @@ export function createStoreBackedRevalidator(args: {
     // recovery without a try/catch and without risking an unhandled rejection.
     try {
       const current = lease.getBearerToken();
-      const result = await withCommitRetry(() =>
-        store.rotate({
-          expectedUserId: lease.identity.userId,
-          expectedToken: current,
-          // `null` → rotate spends the file's own refresh token (the CLI never
-          // overrides it; that override is migration-only, §6).
-          refreshTokenOverride: null,
-          signal,
-        }),
+      const result = await withCommitRetry(
+        () =>
+          store.rotate({
+            expectedUserId: lease.identity.userId,
+            expectedToken: current,
+            // `null` → rotate spends the file's own refresh token (the CLI never
+            // overrides it; that override is migration-only, §6).
+            refreshTokenOverride: null,
+            signal,
+          }),
+        // The deadline-bounded caller's signal, so an abandoned commit
+        // retry cannot outlive the probe that started it.
+        signal,
       );
       switch (result.outcome) {
         case "applied":
@@ -206,6 +210,19 @@ export async function runWithCliStore<T>(
  */
 export async function withCommitRetry(
   op: () => Promise<MutationResult>,
+  // Cancels the WAIT between attempts, and stops the loop re-driving `op`
+  // once aborted. Threading it into the op alone is not enough: this
+  // wrapper's own inter-attempt timer is an ordinary `setTimeout`, and the
+  // CLI exits by draining the event loop (`runner/exit.ts` sets
+  // `process.exitCode`), so an abandoned retry keeps the process sitting at
+  // the prompt for up to `COMMIT_RETRY_ATTEMPTS * CONTINUATION_RETRY_MS`
+  // after the command already printed its result - the exact bound-escape
+  // `createStoreBackedRevalidator`'s `signal` exists to prevent.
+  //
+  // `null` is the right value for a caller whose lifetime IS the process
+  // (`login`, `logout`, `validate`): landing the commit before exit is the
+  // whole point there, so the retry must not be cut short.
+  signal: AbortSignal | null,
 ): Promise<MutationResult> {
   let result = await op();
   for (
@@ -213,14 +230,36 @@ export async function withCommitRetry(
     attempt < COMMIT_RETRY_ATTEMPTS && result.outcome === "commit-failed";
     attempt += 1
   ) {
-    await delay(CONTINUATION_RETRY_MS);
+    await delay(CONTINUATION_RETRY_MS, signal);
+    // Re-checked after the wait as well as inside it: an abort that lands
+    // while we sleep must not spend another attempt, and `op` itself would
+    // only fail again on a signal it already honors.
+    if (signal !== null && signal.aborted) {
+      break;
+    }
     result = await op();
   }
   return result;
 }
 
-function delay(ms: number): Promise<void> {
+function delay(ms: number, signal: AbortSignal | null): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    if (signal !== null && signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      if (signal !== null) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve();
+    }, ms);
+    if (signal !== null) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
 }

@@ -182,7 +182,7 @@ describe("withCommitRetry", () => {
       outcome: "applied",
       credentials: pair("x"),
     }));
-    const result = await withCommitRetry(op);
+    const result = await withCommitRetry(op, null);
     expect(result.outcome).toBe("applied");
     expect(op).toHaveBeenCalledTimes(1);
   });
@@ -196,7 +196,7 @@ describe("withCommitRetry", () => {
         credentials: pair("m"),
       })
       .mockResolvedValueOnce({ outcome: "superseded", credentials: pair("m") });
-    const pending = withCommitRetry(op);
+    const pending = withCommitRetry(op, null);
     await vi.runAllTimersAsync();
     expect((await pending).outcome).toBe("superseded");
     expect(op).toHaveBeenCalledTimes(2);
@@ -208,10 +208,56 @@ describe("withCommitRetry", () => {
       outcome: "commit-failed",
       credentials: pair("m"),
     }));
-    const pending = withCommitRetry(op);
+    const pending = withCommitRetry(op, null);
     await vi.runAllTimersAsync();
     expect((await pending).outcome).toBe("commit-failed");
     // Initial attempt + COMMIT_RETRY_ATTEMPTS (3) re-drives.
     expect(op).toHaveBeenCalledTimes(4);
+  });
+
+  it("an already-aborted signal spends no retry and leaves no pending timer", async () => {
+    // The inter-attempt wait is an ordinary `setTimeout`, and the CLI exits by
+    // draining the event loop (`runner/exit.ts` sets `process.exitCode`), so a
+    // retry that ignores the signal keeps the process at the prompt for up to
+    // the whole retry budget after the command printed its result. Threading
+    // the signal into the OP alone does not fix that - this wrapper's own
+    // timer has to honor it too.
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    controller.abort();
+    const op = vi.fn(async (): Promise<MutationResult> => ({
+      outcome: "commit-failed",
+      credentials: pair("m"),
+    }));
+
+    const result = await withCommitRetry(op, controller.signal);
+
+    expect(result.outcome).toBe("commit-failed");
+    // The first attempt always runs; the abort stops it re-driving.
+    expect(op).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborting mid-wait resolves the pending retry instead of leaving its timer armed", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const op = vi.fn(async (): Promise<MutationResult> => ({
+      outcome: "commit-failed",
+      credentials: pair("m"),
+    }));
+
+    const pending = withCommitRetry(op, controller.signal);
+    // Let the first attempt settle and the wait arm.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((await pending).outcome).toBe("commit-failed");
+    // The wait was cut short and its timer cleared - nothing is left to hold
+    // the event loop open.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(op).toHaveBeenCalledTimes(1);
   });
 });
