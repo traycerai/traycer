@@ -771,7 +771,17 @@ export function HostOverviewPanel(props: {
               // otherwise Save calls a method the handshake already declined.
               degrade={renameDegrade}
               loaded={identity !== null}
-              failed={identity === null && identityQuery.isError}
+              // NOT `isError`, which goes false the instant the retry starts.
+              // TanStack's `fetchState` clears `error` and returns `status` to
+              // `pending` whenever a fetch begins with no data behind it, so an
+              // `isError` gate unmounts the arm on the click that starts the
+              // read — taking the spinner inside it with it, and flickering the
+              // disabled pencil in for the duration of the very retry the
+              // person just pressed. `errorUpdateCount` is the settle counter
+              // the reducer never resets, so `no identity && it has settled in
+              // error at least once` says exactly what this prop means: the
+              // last settled read failed and there is still no name to edit.
+              failed={identity === null && identityQuery.errorUpdateCount > 0}
               retrying={identityQuery.isFetching}
               onRetry={() => {
                 void identityQuery.refetch();
