@@ -128,9 +128,18 @@ const CLI_UPGRADE_PENDING: HostDoctorIssue = {
   details: null,
 };
 
-function releasedFloorHandshake(): void {
-  recordNegotiatedHostMethods(HOST_ID, RELEASED_FLOOR_METHODS);
-}
+const RECENT_CRASH_MARKERS: HostDoctorIssue = {
+  code: "RECENT_CRASH_MARKERS",
+  severity: "warning",
+  title: "Recent crash markers",
+  message: "The host log contains recent crash markers.",
+  fixAction: "host-logs",
+  terminalCommand: null,
+  details: null,
+};
+
+const LANE_BUSY_INSTALL_MESSAGE =
+  "Traycer is installing an update on this host. Restart it once that finishes.";
 
 function healedHandshake(): void {
   recordNegotiatedHostMethods(HOST_ID, [
@@ -259,14 +268,18 @@ function renderOverview(input: {
 function mountFallbackOverview(options: {
   readonly installOutcome: MutationOutcome<InstallVersionOk>;
   readonly rpcCheckCalls: { count: number };
-  readonly restartHost: (() => Promise<HostRestartRequestResult>) | undefined;
+  readonly restartHostIfIdle:
+    (() => Promise<HostRestartRequestResult>) | undefined;
+  readonly extraHandshakeMethods: readonly string[] | undefined;
   readonly extra: ReactNode | undefined;
 }): {
   readonly management: IHostManagement;
   readonly fixture: OverviewHostFixture;
   readonly queryClient: QueryClient;
+  readonly rpcLogCalls: { count: number };
 } {
   const rpcCheckCalls = options.rpcCheckCalls;
+  const rpcLogCalls = { count: 0 };
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -286,6 +299,16 @@ function mountFallbackOverview(options: {
       },
       "host.getInstallationInfo": () =>
         managedInstallationInfo(RPC_INSTALL_VERSION),
+      "diagnostics.logs.tail": () => {
+        rpcLogCalls.count += 1;
+        return {
+          status: "available" as const,
+          target: "host" as const,
+          path: "/tmp/host.log",
+          lines: ["rpc-log-line"],
+          truncated: false,
+        };
+      },
     },
   });
   const management = buildOverviewManagement({
@@ -311,11 +334,14 @@ function mountFallbackOverview(options: {
     maintenanceInstallationInfo: vi.fn(() =>
       Promise.resolve(managedInstallationInfo(BRIDGE_INSTALL_VERSION)),
     ),
-    ...(options.restartHost === undefined
+    ...(options.restartHostIfIdle === undefined
       ? {}
-      : { restartHost: vi.fn(options.restartHost) }),
+      : { restartHostIfIdle: vi.fn(options.restartHostIfIdle) }),
   });
-  releasedFloorHandshake();
+  recordNegotiatedHostMethods(HOST_ID, [
+    ...RELEASED_FLOOR_METHODS,
+    ...(options.extraHandshakeMethods ?? []),
+  ]);
   localHostIdMock.current = HOST_ID;
   hostBindingMock.current = bindingWith(fixture.client);
   scopeOverrides.current = fallbackScope(fixture, management);
@@ -324,7 +350,7 @@ function mountFallbackOverview(options: {
     queryClient,
     extra: options.extra,
   });
-  return { management, fixture, queryClient };
+  return { management, fixture, queryClient, rpcLogCalls };
 }
 
 function expectButtonEnabled(button: HTMLElement): void {
@@ -342,7 +368,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: undefined,
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
       extra: undefined,
     });
 
@@ -387,7 +414,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: undefined,
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
       extra: undefined,
     });
 
@@ -417,7 +445,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         message: "Host is busy installing another version.",
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: undefined,
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
       extra: undefined,
     });
 
@@ -448,7 +477,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: undefined,
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
       extra: undefined,
     });
 
@@ -479,13 +509,14 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: async () => {
+      restartHostIfIdle: async () => {
         await gate;
         return {
           kind: "declined" as const,
           message: "Another process holds the host lock.",
         };
       },
+      extraHandshakeMethods: undefined,
       extra: undefined,
     });
 
@@ -498,8 +529,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(dialog).toBeTruthy();
     await waitFor(() => {
-      expect(management.restartHost).toHaveBeenCalledTimes(1);
+      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
     });
+    expect(management.restartHost).not.toHaveBeenCalled();
     const confirm = screen.getByTestId("confirm-action");
     if (!(confirm instanceof HTMLButtonElement)) {
       throw new Error("expected confirm button");
@@ -533,7 +565,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: undefined,
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
       extra: (
         <ExternalHostRestartTrigger
           onReady={(mutate) => {
@@ -583,7 +616,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls,
-      restartHost: undefined,
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
       extra: undefined,
     });
 
@@ -612,14 +646,15 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   it("a host-restart doctor fix on a capability-false local host dispatches the page's force-restart, not host.restart or hostRunDoctor", async () => {
     // Discriminator: `onLocalFix` would land on `hostRunDoctor` (outside
     // every lifecycle gate). `rpcRestartSupported` hardcoded true would
-    // increment `fixture.restartCalls()` instead of `management.restartHost`.
+    // increment `fixture.restartCalls()` instead of `management.restartHostIfIdle`.
     const { management, fixture, queryClient } = mountFallbackOverview({
       installOutcome: {
         kind: "ok",
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: () => Promise.resolve({ kind: "restarted" as const }),
+      restartHostIfIdle: () => Promise.resolve({ kind: "restarted" as const }),
+      extraHandshakeMethods: undefined,
       extra: undefined,
     });
     vi.mocked(management.maintenanceDoctor).mockResolvedValue({
@@ -642,8 +677,9 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     );
 
     await waitFor(() => {
-      expect(management.restartHost).toHaveBeenCalledTimes(1);
+      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
     });
+    expect(management.restartHost).not.toHaveBeenCalled();
     expect(fixture.restartCalls()).toBe(0);
     const doctorMutationsAfter = queryClient
       .getMutationCache()
@@ -681,7 +717,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         value: { installedVersion: "1.2.0", runningActivated: true },
       },
       rpcCheckCalls: { count: 0 },
-      restartHost: () => Promise.resolve({ kind: "restarted" as const }),
+      restartHostIfIdle: () => Promise.resolve({ kind: "restarted" as const }),
+      extraHandshakeMethods: undefined,
       extra: (
         <ExternalHostRestartTrigger
           onReady={(mutate) => {
@@ -726,6 +763,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     }
     expect(gatedFix.disabled).toBe(true);
     fireEvent.click(gatedFix);
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
     expect(management.restartHost).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -737,5 +775,136 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         screen.getByTestId("host-doctor-fix-CLI_UPGRADE_PENDING"),
       );
     });
+  });
+
+  it("a watched Restart confirm refused by a busy lane closes with an informational toast, not an error", async () => {
+    const { management, fixture } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: () =>
+        Promise.resolve({
+          kind: "declined" as const,
+          message: LANE_BUSY_INSTALL_MESSAGE,
+        }),
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+
+    await waitFor(() => {
+      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
+    });
+    expect(management.restartHost).not.toHaveBeenCalled();
+    expect(fixture.restartCalls()).toBe(0);
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+      description: LANE_BUSY_INSTALL_MESSAGE,
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a watched Restart confirm on an idle lane still respawns", async () => {
+    const { management } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: () => Promise.resolve({ kind: "restarted" as const }),
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-restart"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart host" }),
+    );
+
+    await waitFor(() => {
+      expect(management.restartHostIfIdle).toHaveBeenCalledTimes(1);
+    });
+    expect(management.restartHost).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("Show logs on a capability-false local host reads the bridge log, not diagnostics.logs.tail", async () => {
+    const { management, rpcLogCalls } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: undefined,
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [RECENT_CRASH_MARKERS],
+    });
+    vi.mocked(management.getHostLogs).mockResolvedValue({
+      path: "/tmp/host.log",
+      tail: "bridge-line-1\nbridge-line-2",
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-RECENT_CRASH_MARKERS"),
+    );
+
+    await waitFor(() => {
+      expect(management.getHostLogs).toHaveBeenCalledWith({ tailLines: 200 });
+    });
+    expect(rpcLogCalls.count).toBe(0);
+    const tail = await screen.findByTestId("host-doctor-log-tail");
+    expect(tail.textContent).toContain("bridge-line-1");
+    expect(tail.textContent).toContain("bridge-line-2");
+    expect(tail.textContent).not.toContain("rpc-log-line");
+  });
+
+  it("Show logs uses diagnostics.logs.tail when the host advertises it, and does not call getHostLogs", async () => {
+    const { management, rpcLogCalls } = mountFallbackOverview({
+      installOutcome: {
+        kind: "ok",
+        value: { installedVersion: "1.2.0", runningActivated: true },
+      },
+      rpcCheckCalls: { count: 0 },
+      restartHostIfIdle: undefined,
+      extraHandshakeMethods: ["diagnostics.logs.tail"],
+      extra: undefined,
+    });
+    vi.mocked(management.maintenanceDoctor).mockResolvedValue({
+      status: "ok",
+      issues: [RECENT_CRASH_MARKERS],
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-RECENT_CRASH_MARKERS"),
+    );
+
+    await waitFor(() => {
+      expect(rpcLogCalls.count).toBe(1);
+    });
+    expect(management.getHostLogs).not.toHaveBeenCalled();
+    const tail = await screen.findByTestId("host-doctor-log-tail");
+    expect(tail.textContent).toContain("rpc-log-line");
+    expect(tail.textContent).not.toContain("bridge-line-1");
   });
 });

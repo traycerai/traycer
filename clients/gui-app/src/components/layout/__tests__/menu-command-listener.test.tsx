@@ -740,8 +740,23 @@ describe("<MenuCommandListener />", () => {
     const requestHostRespawn = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
     );
+    const management = makeHostManagementFixture({
+      download: null,
+      mutation: null,
+      installedVersion: "1.5.0",
+      latestVersion: "1.5.0",
+      stagedVersion: null,
+      installedRuntimeVersion: "1.5.0",
+      runningRuntimeVersion: "1.5.0",
+      updateReady: false,
+      activation: "activated",
+      reachable: true,
+      removedByUser: false,
+      checkedAt: "2026-08-12T00:00:00Z",
+    });
     const runnerHost = Object.assign(createRunnerHost(menu), {
       requestHostRespawn,
+      hostManagement: management,
     });
 
     render(
@@ -765,6 +780,7 @@ describe("<MenuCommandListener />", () => {
     await waitFor(() => {
       expect(requestHostRespawn).toHaveBeenCalledTimes(1);
     });
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
   });
 
   it("closes the landing draft from the native menu command", () => {

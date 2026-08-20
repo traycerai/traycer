@@ -4,12 +4,16 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   InstallVersionOk,
+  MutationKind,
   MutationLaneStatus,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { TraycerCliError } from "../../cli/traycer-cli";
-import { classifyCliShellError } from "../host-management-ipc";
+import {
+  classifyCliShellError,
+  laneBusyRestartMessage,
+} from "../host-management-ipc";
 
 vi.mock("electron", () => ({
   app: {
@@ -93,6 +97,52 @@ describe("classifyCliShellError", () => {
   });
 });
 
+// Enumerated independently of the switch so a new MutationKind fails here
+// instead of silently inheriting a default (there is none — the switch is
+// exhaustive, and this list is the second fence).
+const ALL_MUTATION_KINDS: readonly MutationKind[] = [
+  "ensure",
+  "apply",
+  "activate",
+  "install",
+  "register",
+  "deregister",
+  "respawn",
+  "recoverIfDown",
+  "freePortAndRestart",
+  "uninstallHost",
+  "removeTraycer",
+];
+
+describe("laneBusyRestartMessage", () => {
+  it("returns a non-empty message for every MutationKind", () => {
+    for (const kind of ALL_MUTATION_KINDS) {
+      expect(laneBusyRestartMessage(kind).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("groups kinds by the operation the watcher should wait for", () => {
+    const installing =
+      "Traycer is installing an update on this host. Restart it once that finishes.";
+    const service =
+      "Traycer is changing this host's background service. Restart it once that finishes.";
+    const removing =
+      "Traycer is removing this host. There is nothing to restart until that finishes.";
+    const restarting = "This host is already restarting.";
+    expect(laneBusyRestartMessage("install")).toBe(installing);
+    expect(laneBusyRestartMessage("apply")).toBe(installing);
+    expect(laneBusyRestartMessage("activate")).toBe(installing);
+    expect(laneBusyRestartMessage("ensure")).toBe(installing);
+    expect(laneBusyRestartMessage("register")).toBe(service);
+    expect(laneBusyRestartMessage("deregister")).toBe(service);
+    expect(laneBusyRestartMessage("uninstallHost")).toBe(removing);
+    expect(laneBusyRestartMessage("removeTraycer")).toBe(removing);
+    expect(laneBusyRestartMessage("respawn")).toBe(restarting);
+    expect(laneBusyRestartMessage("recoverIfDown")).toBe(restarting);
+    expect(laneBusyRestartMessage("freePortAndRestart")).toBe(restarting);
+  });
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
@@ -173,6 +223,7 @@ interface HandlerBridge {
         version: string,
         force: boolean,
       ) => Promise<MutationOutcome<InstallVersionOk>>;
+      respawn: () => Promise<MutationOutcome<{ readonly activated: boolean }>>;
     };
   };
 }
@@ -196,6 +247,11 @@ function makeBridge(): HandlerBridge {
           Promise.resolve({
             kind: "ok" as const,
             value: { installedVersion: "1.2.0", runningActivated: true },
+          }),
+        respawn: () =>
+          Promise.resolve({
+            kind: "ok" as const,
+            value: { activated: true },
           }),
       },
     },
@@ -778,5 +834,99 @@ describe("maintenanceInstallVersion IPC", () => {
       throw new Error("expected installVersion to occupy the mutation lane");
     }
     expect(occupied.current.kind).toBe("install");
+  });
+});
+
+describe("restartHostIfIdle IPC", () => {
+  beforeEach(beginSandbox);
+  afterEach(endSandbox);
+
+  async function registerRestartIfIdleHandler(
+    bridge: HandlerBridge,
+  ): Promise<(event: unknown, raw: unknown) => Promise<unknown>> {
+    installFakeCli(resolveWith({}));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostRestartIfIdle,
+    );
+    if (handler === undefined) {
+      throw new Error("expected restartHostIfIdle handler");
+    }
+    return handler;
+  }
+
+  it("returns declined when mutationLane is occupied, without calling respawn", async () => {
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.mutationLane = {
+      kind: "install",
+      progress: null,
+      startedAt: "2026-08-12T00:00:00Z",
+    };
+    bridge.options.hostController.respawn = respawn;
+    const handler = await registerRestartIfIdleHandler(bridge);
+
+    await expect(handler(null, null)).resolves.toEqual({
+      kind: "declined",
+      message: laneBusyRestartMessage("install"),
+    });
+    expect(respawn).not.toHaveBeenCalled();
+  });
+
+  it("calls respawn when mutationLane is null and maps an ok outcome to restarted", async () => {
+    const respawn = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      }),
+    );
+    const bridge = makeBridge();
+    bridge.options.hostController.mutationLane = null;
+    bridge.options.hostController.respawn = respawn;
+    const handler = await registerRestartIfIdleHandler(bridge);
+
+    await expect(handler(null, null)).resolves.toEqual({
+      kind: "restarted",
+    });
+    expect(respawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads mutationLane before submitting — occupying the lane inside respawn still dispatches", async () => {
+    const bridge = makeBridge();
+    const occupied: { current: MutationLaneStatus | null } = {
+      current: null,
+    };
+    const respawn = vi.fn(() => {
+      occupied.current = {
+        kind: "respawn",
+        progress: null,
+        startedAt: "2026-08-12T00:00:00Z",
+      };
+      bridge.options.hostController.mutationLane = occupied.current;
+      return Promise.resolve({
+        kind: "ok" as const,
+        value: { activated: true },
+      });
+    });
+    bridge.options.hostController.respawn = respawn;
+    const handler = await registerRestartIfIdleHandler(bridge);
+
+    await expect(handler(null, null)).resolves.toEqual({
+      kind: "restarted",
+    });
+    expect(respawn).toHaveBeenCalledTimes(1);
+    if (occupied.current === null) {
+      throw new Error("expected respawn to occupy the mutation lane");
+    }
+    expect(occupied.current.kind).toBe("respawn");
   });
 });

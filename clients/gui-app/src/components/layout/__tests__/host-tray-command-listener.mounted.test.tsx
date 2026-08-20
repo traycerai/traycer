@@ -295,6 +295,9 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     // The consolidation is deliberate: the OLD `management.restartHost()`
     // bridge call must never fire from this surface any more.
     expect(management.restartHost).not.toHaveBeenCalled();
+    // Queueing twin, not the refusing one: a tray restart is "do it when
+    // you can". `restartHostIfIdle` belongs to Settings surfaces that watch.
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
   });
 
   it("previews the version, submits applyStaged after confirm when a stage is updateReady", async () => {
