@@ -5006,6 +5006,76 @@ describe("selection authority dial-evidence instrumentation", () => {
     authority.dispose();
   });
 
+  it("warns ONCE per stall episode, not once per dial past the threshold", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // The test above stops exactly AT the threshold, so it cannot tell "fire
+    // at the crossing" from "fire at or above it". This one runs well past it:
+    // a prolonged outage is when this warn fires and also when dials are most
+    // frequent, so warning on every subsequent report would bury the
+    // transition under its own repetitions, in the logs of the very incident
+    // it exists to mark.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    const dials = CONFIRMED_DEATH_REFUSAL_STREAK * 4;
+    for (let i = 0; i < dials; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(1);
+    // Every report is still individually recorded - the `debug` channel keeps
+    // the full history, so quieting the warn costs no evidence.
+    expect(dialLogs(log.records)).toHaveLength(dials);
+
+    authority.dispose();
+  });
+
+  it("warns again after a host recovers and stalls a SECOND time", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Latching on the host forever would be the wrong cure for the flood: a
+    // machine that recovers and then strands a surface again is a new
+    // incident, and the second one is exactly as worth reporting as the first.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    let seq = 0;
+    for (let episode = 0; episode < 2; episode += 1) {
+      for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+        seq += 1;
+        engine.ingestEvidence(
+          "A",
+          incarnationId,
+          dialRefusal("H", `attempt-${seq}`, null, seq),
+        );
+      }
+      seq += 1;
+      // Proof of life clears the stall.
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `attempt-${seq}`, "success", seq),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(2);
+
+    authority.dispose();
+  });
+
   it("stays silent on a healthy host - the stall resets on any real evidence", () => {
     const log = createRecordingAuthorityLog();
     const { authority, incarnationId } = attachedAuthority(log);

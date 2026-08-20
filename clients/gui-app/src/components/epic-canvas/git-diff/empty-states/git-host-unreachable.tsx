@@ -1,10 +1,10 @@
 import { useCallback, type ReactNode } from "react";
-import { RotateCcw, Unplug } from "lucide-react";
+import { Unplug } from "lucide-react";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { cn } from "@/lib/utils";
 
 const GIT_HOST_RETRY_TIMEOUT_MS = 10_000;
 
@@ -33,7 +33,14 @@ const GIT_HOST_RETRY_TIMEOUT_MS = 10_000;
 export function GitHostUnreachable(props: {
   /** Display name of the host that did not answer. `null` while unresolved. */
   readonly hostName: string | null;
-  readonly onRetry: () => void;
+  /**
+   * Must resolve when the re-dial SETTLES. The pending state is driven off
+   * this promise, so a caller that fires and forgets re-enables the button
+   * while its own request is still in flight - which both invites a second
+   * dial on top of the first and defeats the timeout below, since there is
+   * nothing left to time out.
+   */
+  readonly onRetry: () => Promise<void>;
   /**
    * Clears this surface's pin so the panel resolves to the effective host.
    * `null` when the panel is not pinned (or is pinned to the effective host),
@@ -42,10 +49,7 @@ export function GitHostUnreachable(props: {
   readonly onUseActiveHost: (() => void) | null;
 }): ReactNode {
   const onRetry = props.onRetry;
-  const handleRefresh = useCallback((): Promise<void> => {
-    onRetry();
-    return Promise.resolve();
-  }, [onRetry]);
+  const handleRefresh = useCallback((): Promise<void> => onRetry(), [onRetry]);
   const refresh = useRefreshSpinner({
     onRefresh: handleRefresh,
     externalRefreshing: false,
@@ -81,13 +85,13 @@ export function GitHostUnreachable(props: {
           disabled={refresh.refreshing}
           data-testid="git-host-unreachable-retry"
         >
-          <RotateCcw
-            className={cn(
-              "mr-1.5 size-3.5",
-              refresh.refreshing && "animate-spin",
-            )}
-            aria-hidden
-          />
+          {refresh.refreshing ? (
+            <AgentSpinningDots
+              className="mr-1.5"
+              testId="git-host-unreachable-retry-spinner"
+              variant={undefined}
+            />
+          ) : null}
           Retry
         </Button>
         {props.onUseActiveHost === null ? null : (

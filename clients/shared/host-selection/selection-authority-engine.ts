@@ -1473,6 +1473,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    * healthy fleet by construction - a success or a counted refusal both reset
    * it - and it fires exactly when a host is failing while its lease cannot
    * move, which is the state that strands a pinned surface.
+   *
+   * It fires ONCE per stall episode, at the crossing. The alternative - warn
+   * while the counter sits at or above the threshold - turns the longest
+   * outages into the loudest ones and buries the transition under its own
+   * repetitions; the counter still climbs, and the `debug` line still carries
+   * every individual report. A later success or counted refusal clears the
+   * stall, so a host that recovers and stalls again warns again.
    */
   private recordDialDisposition(
     report: Extract<SelectionEvidenceReport, { kind: "dial" }>,
@@ -1500,7 +1507,12 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     const stalled = (this.dialStalls.get(hostId) ?? 0) + 1;
     this.dialStalls.set(hostId, stalled);
-    if (stalled < CONFIRMED_DEATH_REFUSAL_STREAK) return;
+    // Exactly at the crossing, not `>=`. A prolonged outage is precisely when
+    // this fires, and it is also when dials are most frequent, so a `>=` here
+    // would warn on EVERY subsequent report and bury the transition it exists
+    // to mark. The counter keeps climbing either way; the `debug` line above
+    // carries each individual report for anyone reading the whole history.
+    if (stalled !== CONFIRMED_DEATH_REFUSAL_STREAK) return;
     this.options.log.warn(
       "[selection-authority] dial failures are not advancing the death streak",
       {

@@ -18,6 +18,10 @@ import type {
 } from "@traycer/protocol/host";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useGitDiffPanelSurfaceKey,
@@ -55,6 +59,7 @@ import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picke
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { CapabilityGate } from "./capability-gate";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
+import { GitBindingsUnreadable } from "./empty-states/git-bindings-unreadable";
 import { GitHostUnreachable } from "./empty-states/git-host-unreachable";
 import { GitRootsUnavailable } from "./empty-states/git-roots-unavailable";
 import { NoGitWorktrees } from "./empty-states/no-git-worktrees";
@@ -331,22 +336,31 @@ export function GitDiffPanelBodyLive(
   // focus/reconnect refetch - see `lib/host/availability-recovery.ts`), so an
   // errored bindings read stays errored until something asks again. This is
   // the only thing in the panel that can ask.
+  // Returns the query's own promise rather than firing and forgetting: the
+  // retry affordance keeps its pending state for exactly as long as the read
+  // is in flight, which is only true if the caller can await it.
   const { refetch: refetchBindings } = bindingsQuery;
-  const retryBindings = useCallback(() => {
-    void refetchBindings();
+  const retryBindings = useCallback(async (): Promise<void> => {
+    await refetchBindings();
   }, [refetchBindings]);
 
   // Returning the surface to following by clearing the pin - the recovery the
   // panel can perform on its own, rather than waiting on the authority to
   // reach a death verdict it may never reach. Offered only when it would
-  // actually MOVE the panel: unpinned, or pinned to the host it would follow
-  // to anyway, it resolves to the same machine and the button would be a
-  // no-op that reads like a fix.
+  // actually MOVE the panel.
+  //
+  // The comparison is against `resolvedHostId`, NOT the raw `selection`. A pin
+  // whose host the authority HAS declared dead is already deposed, so the
+  // panel is on `followingHostId` and reads through to it - and if that host's
+  // own bindings read then fails, comparing the raw preference would offer
+  // "Use active host" while the active host is precisely what already failed.
+  // Clicking would drop the sticky pin, move nothing and change no error,
+  // which is the no-op-that-reads-like-a-fix this guard exists to prevent.
   const { setSelection } = pin;
   const canUseActiveHost =
     pin.selection !== null &&
     pin.followingHostId !== null &&
-    pin.followingHostId !== pin.selection;
+    pin.resolvedHostId !== pin.followingHostId;
   const useActiveHost = useCallback(() => {
     setSelection(null);
   }, [setSelection]);
@@ -366,7 +380,7 @@ export function GitDiffPanelBodyLive(
         client,
         latchOnFirstUse: pin.latchOnFirstUse,
         bindingsPending: bindingsQuery.isPending,
-        bindingsError: bindingsQuery.error !== null,
+        bindingsFailure: classifyBindingsFailure(bindingsQuery.error),
         gitRows,
         rows,
         selectedRepo,
@@ -383,12 +397,41 @@ export function GitDiffPanelBodyLive(
   );
 }
 
+/**
+ * Why the bindings read failed, to the only resolution the panel can act on.
+ *
+ * `unreachable` is the machine not answering. Everything else is the host
+ * answering with a refusal - unauthorized, unsupported method, an internal
+ * failure on the far side - and those are NOT interchangeable: one is fixed by
+ * re-dialing or moving off the pin, the other by reading what the host said.
+ * Collapsing them would put this panel back where it started, asserting a
+ * remedy on the wrong machine.
+ */
+type BindingsFailure =
+  | { readonly kind: "unreachable" }
+  | { readonly kind: "answered"; readonly message: string };
+
+function classifyBindingsFailure(
+  error: HostRpcError | null,
+): BindingsFailure | null {
+  if (error === null) return null;
+  // `HostTransportFailureError` extends `HostRpcError`, so this order matters:
+  // it is the ONLY error that means the host did not answer.
+  if (error instanceof HostTransportFailureError)
+    return { kind: "unreachable" };
+  const message = error.message.trim();
+  return {
+    kind: "answered",
+    message: message.length > 0 ? message : "The host refused the request.",
+  };
+}
+
 function renderGitDiffPanelBody(input: {
   readonly surfaceKey: string;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly latchOnFirstUse: () => void;
   readonly bindingsPending: boolean;
-  readonly bindingsError: boolean;
+  readonly bindingsFailure: BindingsFailure | null;
   readonly gitRows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
   readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
   readonly selectedRepo: GitPanelSelectedRepo | null;
@@ -397,7 +440,7 @@ function renderGitDiffPanelBody(input: {
   readonly tabId: string;
   readonly retryUnavailableRoots: () => void;
   readonly unavailableGitRootKeys: ReadonlySet<string>;
-  readonly retryBindings: () => void;
+  readonly retryBindings: () => Promise<void>;
   readonly useActiveHost: (() => void) | null;
   readonly resolvedHostName: string | null;
 }): ReactNode {
@@ -406,7 +449,7 @@ function renderGitDiffPanelBody(input: {
     input.selectedRootRow !== null &&
     input.gitRows.length > 0 &&
     !input.bindingsPending &&
-    !input.bindingsError
+    input.bindingsFailure === null
   ) {
     return (
       <GitDiffPanelLoaded
@@ -453,20 +496,30 @@ function renderGitDiffPanelBody(input: {
 
 function degradedGitDiffBody(input: {
   readonly bindingsPending: boolean;
-  readonly bindingsError: boolean;
+  readonly bindingsFailure: BindingsFailure | null;
   readonly gitRows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
   readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
   readonly retryUnavailableRoots: () => void;
   readonly unavailableGitRootKeys: ReadonlySet<string>;
-  readonly retryBindings: () => void;
+  readonly retryBindings: () => Promise<void>;
   readonly useActiveHost: (() => void) | null;
   readonly resolvedHostName: string | null;
 }): ReactNode {
   if (input.bindingsPending) return <DiffLoadingSkeleton variant="panel" />;
-  // The host did not answer. Distinct from `NoGitWorktrees`, which tells the
-  // user to add workspaces - the wrong remedy, on the wrong machine, and
-  // indistinguishable from a host that answered with nothing.
-  if (input.bindingsError) {
+  // Both arms are distinct from `NoGitWorktrees`, which tells the user to add
+  // workspaces - the wrong remedy, on the wrong machine, and indistinguishable
+  // from a host that answered with nothing. They are also distinct from EACH
+  // OTHER, which is the finer point: "did not answer" and "answered with a
+  // refusal" have different fixes, and only the first is about reachability.
+  if (input.bindingsFailure !== null) {
+    if (input.bindingsFailure.kind === "answered") {
+      return (
+        <GitBindingsUnreadable
+          message={input.bindingsFailure.message}
+          onRetry={input.retryBindings}
+        />
+      );
+    }
     return (
       <GitHostUnreachable
         hostName={input.resolvedHostName}
