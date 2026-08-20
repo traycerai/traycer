@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import {
   customNameFromIdentityDraft,
+  resolveOverviewMethodDegrade,
   splitDoctorIssuesByVantage,
+  type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 
 function issue(code: string): HostDoctorIssue {
@@ -33,6 +35,28 @@ describe("splitDoctorIssuesByVantage", () => {
     const split = splitDoctorIssuesByVantage([issue("SERVICE_STOPPED")], []);
     expect(split.actionable.map((i) => i.code)).toEqual(["SERVICE_STOPPED"]);
     expect(split.disprovenByTransport).toEqual([]);
+  });
+});
+
+describe("resolveOverviewMethodDegrade", () => {
+  it("is unsupported only for handshake-false without a fallback lane", () => {
+    const rows: ReadonlyArray<{
+      readonly supported: boolean | null;
+      readonly fallbackServes: boolean;
+      readonly expected: OverviewDegradeReason | null;
+    }> = [
+      { supported: null, fallbackServes: false, expected: null },
+      { supported: null, fallbackServes: true, expected: null },
+      { supported: true, fallbackServes: false, expected: null },
+      { supported: true, fallbackServes: true, expected: null },
+      { supported: false, fallbackServes: true, expected: null },
+      { supported: false, fallbackServes: false, expected: "unsupported" },
+    ];
+    for (const row of rows) {
+      expect(
+        resolveOverviewMethodDegrade(row.supported, row.fallbackServes),
+      ).toBe(row.expected);
+    }
   });
 });
 
