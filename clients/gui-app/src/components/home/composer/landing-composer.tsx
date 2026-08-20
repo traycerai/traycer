@@ -65,7 +65,11 @@ import {
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  readStagedWorktreeIntent,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
+import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
 import {
   draftRuntimeRegistry,
   EMPTY_DRAFT_RUNTIME_CONTENT,
@@ -589,9 +593,9 @@ export function LandingComposer(props: LandingComposerProps) {
     workspaceCanStart &&
     hasSubmittableContent;
 
-  // Submit-time refusal copy (selection model §54) and the G4 re-point notice
-  // share one slot: both say "this composer's device is not what you think",
-  // and showing two stacked banners about the same host would be noise.
+  // Submit-time refusal copy (selection model §54). The G4 re-point used to
+  // share this slot; it narrates as a toast now, and only when it actually
+  // reset staged intent — see the effect below.
   const [hostNotice, setHostNotice] = useState<ComposerHostNoticeState | null>(
     null,
   );
@@ -616,15 +620,26 @@ export function LandingComposer(props: LandingComposerProps) {
   // blip. The folders re-resolve against the new host through the picker's
   // existing absent-row + Locate affordance, which names the dangle instead of
   // hiding it - and submit re-validation stands behind both.
+  //
+  // Narrated as a toast, and ONLY when the move reset something: the switch
+  // itself is `toastSelectionSwitched`'s to tell, and a persistent banner
+  // here outlived the condition it described — a startup failover round trip
+  // left it announcing the user's own host as news over an empty composer.
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
       if (!composerFollowsEffective) return;
-      useWorktreeIntentStagingStore
-        .getState()
-        .clear({ surface: "landing", hostId: activeHostId, draftId });
-      setHostNotice({ kind: "repointed", hostId: nextEffectiveHostId });
+      const stagingKey = {
+        surface: "landing",
+        hostId: activeHostId,
+        draftId,
+      } as const;
+      const hadStagedIntent = readStagedWorktreeIntent(stagingKey) !== null;
+      useWorktreeIntentStagingStore.getState().clear(stagingKey);
+      if (hadStagedIntent) {
+        toastRepointedStagingReset(hostLabelFromDirectory(nextEffectiveHostId));
+      }
     });
-  }, [activeHostId, composerFollowsEffective, draftId]);
+  }, [activeHostId, composerFollowsEffective, draftId, hostLabelFromDirectory]);
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -784,7 +799,6 @@ export function LandingComposer(props: LandingComposerProps) {
         <>
           <ComposerHostNotice
             notice={hostNotice}
-            hostLabelFor={hostLabelFromDirectory}
             onDismiss={dismissHostNotice}
           />
           {rateLimitPrompt.kind === "visible" ? (

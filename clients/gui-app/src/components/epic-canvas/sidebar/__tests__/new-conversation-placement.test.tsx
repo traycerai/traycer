@@ -60,6 +60,18 @@ function stagedIntent(): WorktreeIntent | undefined {
   return useWorktreeIntentStagingStore.getState().intentByKey[STAGING_KEY_ID];
 }
 
+// The G4 toast, mocked so these tests assert the modal's decision to fire it
+// (and with what label) rather than sonner's internals. The staging store
+// itself stays REAL below (unlike the landing composer's wiring suite) - the
+// modal's `readStagedWorktreeIntent`/`clearForAllHosts` calls are exercised
+// against it directly.
+const toastMocks = vi.hoisted(() => ({
+  toastRepointedStagingReset: vi.fn<(hostLabel: string) => void>(),
+}));
+vi.mock("@/lib/composer/repointed-staging-toast", () => ({
+  toastRepointedStagingReset: toastMocks.toastRepointedStagingReset,
+}));
+
 interface PlacementTargetShape {
   readonly resolvedHostId: string | null;
   readonly client: { readonly getActiveHostId: () => string | null } | null;
@@ -427,6 +439,7 @@ afterEach(() => {
   testState.bodySubmit = null;
   testState.bodyStartTerminal = null;
   useNewConversationModalStore.getState().resetForTests();
+  toastMocks.toastRepointedStagingReset.mockReset();
 });
 
 describe("new-conversation modal shares the composer's placement semantics", () => {
@@ -535,7 +548,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(testState.onSubmitted).not.toHaveBeenCalled();
   });
 
-  it("G4: a FOLLOWING modal clears its staged intent and says so when effective moves", () => {
+  it("G4: a FOLLOWING modal clears its staged intent and toasts when something was staged", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(STAGING_KEY, STAGED_INTENT);
@@ -546,10 +559,34 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
 
     expect(stagedIntent()).toBeUndefined();
-    expect(noticeText()).toContain("now run on");
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledTimes(1);
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledWith(
+      testState.placement.current.hostLabel,
+    );
+    // The inline notice slot is `refused`-only now; a re-point is a toast.
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
 
-  it("G4: a PINNED modal keeps its staged intent (D6)", () => {
+  it("G4: a FOLLOWING modal clears anyway but does not toast when nothing was staged", () => {
+    const clearForAllHostsSpy = vi.spyOn(
+      useWorktreeIntentStagingStore.getState(),
+      "clearForAllHosts",
+    );
+    renderModal();
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    expect(clearForAllHostsSpy).toHaveBeenCalledWith(STAGING_KEY);
+    expect(stagedIntent()).toBeUndefined();
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+
+    clearForAllHostsSpy.mockRestore();
+  });
+
+  it("G4: a PINNED modal keeps its staged intent and does not toast (D6)", () => {
     testState.pinIsPinned.current = true;
     testState.followsEffective.current = false;
     testState.placement.current = {
@@ -566,6 +603,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
 
     expect(stagedIntent()).toBeDefined();
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
   });
 
   it("G4: a modal resting on the EPIC's host (default tier, unpinned) keeps its staged intent", () => {
@@ -592,6 +630,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
 
     expect(stagedIntent()).toBeDefined();
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
     // And no move narrated: there is no notice at all.
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });

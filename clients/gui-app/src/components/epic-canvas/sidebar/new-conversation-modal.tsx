@@ -70,6 +70,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicConversationPlacement } from "@/hooks/host/use-composer-placement";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
+import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import {
   ComposerHostNotice,
@@ -507,6 +508,7 @@ export function NewConversationModalBody(props: {
   const hostClient = composerPlacement.target.client;
   const submitTarget = composerPlacement.submitTarget;
   const composerFollowsEffective = composerPlacement.followsEffective;
+  const hostLabelFor = composerPlacement.hostLabelFor;
   // "Last created chat's host": every create in this modal writes the Epic's
   // placement memory with the host it resolved, at SUBMIT (beside the settings
   // memory) rather than on the create's success - the model picker's memory
@@ -769,8 +771,9 @@ export function NewConversationModalBody(props: {
     />
   );
   const header = <NewConversationModalHeader switcher={switcher} />;
-  // §54 refusal copy and the G4 re-point notice share one slot, as on the
-  // landing composer.
+  // §54 refusal copy, as on the landing composer. The G4 re-point used to
+  // share this slot; it narrates as a toast now, and only when it actually
+  // reset staged intent.
   const [hostNotice, setHostNotice] = useState<ComposerHostNoticeState | null>(
     null,
   );
@@ -784,13 +787,18 @@ export function NewConversationModalBody(props: {
   // and must not travel; the §51 folder set stays, per the orchestrator's
   // ruling on the landing row. A modal resting on its pin or on the Epic's
   // host is not moved by the derivation and must not narrate a move (D6).
+  // A move that reset nothing stays silent: the switch itself is
+  // `toastSelectionSwitched`'s to tell.
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
       if (!composerFollowsEffective) return;
+      const hadStagedIntent = readStagedWorktreeIntent(stagingKey) !== null;
       clearStagedIntent(stagingKey);
-      setHostNotice({ kind: "repointed", hostId: nextEffectiveHostId });
+      if (hadStagedIntent) {
+        toastRepointedStagingReset(hostLabelFor(nextEffectiveHostId));
+      }
     });
-  }, [clearStagedIntent, composerFollowsEffective, stagingKey]);
+  }, [clearStagedIntent, composerFollowsEffective, hostLabelFor, stagingKey]);
   const cleanupAfterSubmit = useCallback((): void => {
     clearDraft(epicId);
     clearStagedIntent(stagingKey);
@@ -1072,11 +1080,7 @@ export function NewConversationModalBody(props: {
       workspaceDisabledHint={composerDisabledHint}
       header={header}
       topBanner={
-        <ComposerHostNotice
-          notice={hostNotice}
-          hostLabelFor={composerPlacement.hostLabelFor}
-          onDismiss={dismissHostNotice}
-        />
+        <ComposerHostNotice notice={hostNotice} onDismiss={dismissHostNotice} />
       }
       stashControl={
         <PromptStashControl

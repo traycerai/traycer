@@ -6,6 +6,8 @@ import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import { notifyEffectiveHostChanged } from "@/stores/host/surface-host-selection-store";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 
 /**
@@ -41,6 +43,18 @@ const SUBMIT_TARGET: LandingPlacementTarget = {
   namedHostDead: false,
 };
 
+/** A per-machine choice: exactly the state G4 must not carry across hosts. */
+const STAGED_INTENT: WorktreeIntent = {
+  entries: [
+    {
+      kind: "local",
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+    },
+  ],
+};
+
 const testState = vi.hoisted(() => ({
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
@@ -69,9 +83,16 @@ const testState = vi.hoisted(() => ({
 // `.clear`/`.migrateKeyForAllHosts` are the only members the G4 effect and
 // the create path touch (`.getState()` only, never the reactive hook), so a
 // bare `getState()` stub is a complete fixture for this module.
+// `readStagedWorktreeIntent` is a plain named export (not read off
+// `.getState()`), so it is mocked as its own top-level export here - the
+// component imports it directly to decide whether the G4 move actually reset
+// anything before it toasts.
 const stagingStoreMocks = vi.hoisted(() => ({
   clear: vi.fn(),
   migrateKeyForAllHosts: vi.fn(),
+  readStagedWorktreeIntent: vi.fn<
+    (key: WorktreeStagingKey) => WorktreeIntent | null
+  >(() => null),
 }));
 vi.mock("@/stores/worktree/worktree-intent-staging-store", () => ({
   useWorktreeIntentStagingStore: {
@@ -80,6 +101,16 @@ vi.mock("@/stores/worktree/worktree-intent-staging-store", () => ({
       migrateKeyForAllHosts: stagingStoreMocks.migrateKeyForAllHosts,
     }),
   },
+  readStagedWorktreeIntent: stagingStoreMocks.readStagedWorktreeIntent,
+}));
+
+// The G4 toast, mocked so these tests assert the composer's decision to fire
+// it (and with what label) rather than sonner's internals.
+const toastMocks = vi.hoisted(() => ({
+  toastRepointedStagingReset: vi.fn<(hostLabel: string) => void>(),
+}));
+vi.mock("@/lib/composer/repointed-staging-toast", () => ({
+  toastRepointedStagingReset: toastMocks.toastRepointedStagingReset,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -307,6 +338,9 @@ afterEach(() => {
   testState.composerIsPinned = true;
   stagingStoreMocks.clear.mockReset();
   stagingStoreMocks.migrateKeyForAllHosts.mockReset();
+  stagingStoreMocks.readStagedWorktreeIntent.mockReset();
+  stagingStoreMocks.readStagedWorktreeIntent.mockReturnValue(null);
+  toastMocks.toastRepointedStagingReset.mockReset();
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
@@ -350,14 +384,15 @@ describe("landing composer placement wiring", () => {
   });
 });
 
-describe("landing composer G4 re-point notice", () => {
-  it("fires the re-pointed notice and resets staged intent for a DEPOSED pin (isPinned true, honoredSelection null)", () => {
+describe("landing composer G4 re-point", () => {
+  it("clears staged intent and toasts for a DEPOSED pin (isPinned true, honoredSelection null) when intent was staged", () => {
     // A deposed pin still reads `pin.isPinned: true` (the pin itself is never
     // cleared by death - only `honoredSelection` goes null), but the
     // composer's resolved host has fallen back to `effective`, so it IS
     // following and a derivation move DOES re-point it. Gating G4 on
     // `isPinned` instead of `followsEffective` would wrongly suppress this.
     testState.composerFollowsEffective = true;
+    stagingStoreMocks.readStagedWorktreeIntent.mockReturnValue(STAGED_INTENT);
     render(
       <LandingComposer
         draftId={null}
@@ -371,16 +406,45 @@ describe("landing composer G4 re-point notice", () => {
       notifyEffectiveHostChanged("host-a", "host-b");
     });
 
-    const notice = screen.getByTestId("composer-host-notice");
-    expect(notice.dataset.noticeKind).toBe("repointed");
     expect(stagingStoreMocks.clear).toHaveBeenCalledWith({
       surface: "landing",
       hostId: "host-a",
       draftId: null,
     });
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledTimes(1);
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledWith(
+      "Studio Mac",
+    );
+    // The inline notice slot is `refused`-only now; a re-point is a toast.
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
 
-  it("does not fire the notice or reset staged intent for a composer resting on its own pin", () => {
+  it("clears staged intent but does not toast for a DEPOSED pin when nothing was staged", () => {
+    testState.composerFollowsEffective = true;
+    stagingStoreMocks.readStagedWorktreeIntent.mockReturnValue(null);
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    expect(stagingStoreMocks.clear).toHaveBeenCalledWith({
+      surface: "landing",
+      hostId: "host-a",
+      draftId: null,
+    });
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+
+  it("does not clear staged intent or toast for a composer resting on its own pin", () => {
     testState.composerFollowsEffective = false;
     render(
       <LandingComposer
@@ -397,5 +461,6 @@ describe("landing composer G4 re-point notice", () => {
 
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
     expect(stagingStoreMocks.clear).not.toHaveBeenCalled();
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
   });
 });
