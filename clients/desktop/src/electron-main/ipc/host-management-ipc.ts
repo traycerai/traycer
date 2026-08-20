@@ -21,6 +21,8 @@ import type {
   HostUpdateCheckResponse,
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
+  HostRestartRequestResult,
+  MutationKind,
   FreePortAndRestartInput,
 } from "../../ipc-contracts/host-management-types";
 import {
@@ -497,6 +499,33 @@ function isVerifyDisabledForBuild(err: unknown): boolean {
  *  - every other `TraycerCliError` (error envelope, crash, timeout) is the CLI
  *    running and not completing — `cli-failed`.
  */
+/**
+ * Why a watched restart was refused, in the words of whatever holds the lane.
+ *
+ * The message is the whole value of the refusal — `declined` renders as plain
+ * information, so a generic "busy" would leave someone re-clicking a button
+ * that keeps saying no. Naming the operation says how long to wait instead.
+ */
+export function laneBusyRestartMessage(kind: MutationKind): string {
+  switch (kind) {
+    case "install":
+    case "apply":
+    case "activate":
+    case "ensure":
+      return "Traycer is installing an update on this host. Restart it once that finishes.";
+    case "register":
+    case "deregister":
+      return "Traycer is changing this host's background service. Restart it once that finishes.";
+    case "uninstallHost":
+    case "removeTraycer":
+      return "Traycer is removing this host. There is nothing to restart until that finishes.";
+    case "respawn":
+    case "recoverIfDown":
+    case "freePortAndRestart":
+      return "This host is already restarting.";
+  }
+}
+
 export function classifyCliShellError(
   err: unknown,
 ): "cli-unavailable" | "cli-failed" | "invalid-output" {
@@ -814,6 +843,31 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       await bridge.options.hostController.respawn(),
     );
   });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostRestartIfIdle,
+    async (): Promise<HostRestartRequestResult> => {
+      // The refusing twin of the handler above, for a restart someone is
+      // WATCHING. `respawn()` goes through the same exclusive lane as every
+      // other intent and queues behind it rather than being refused, so a
+      // Settings restart submitted while an install, apply or service cycle
+      // is running would fire its kill after that finished — against a host in
+      // a state the person never saw, and typically one the update just
+      // restarted anyway.
+      //
+      // Same atomicity rule as `maintenance:installVersion`: test the lane and
+      // submit with NO await in between, because a lane read that crosses an
+      // await is already history. `respawn()` registers on the tail
+      // synchronously.
+      const lane = bridge.options.hostController.mutationLane;
+      if (lane !== null) {
+        return { kind: "declined", message: laneBusyRestartMessage(lane.kind) };
+      }
+      return restartRequestResultFromOutcome(
+        await bridge.options.hostController.respawn(),
+      );
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostLogs,

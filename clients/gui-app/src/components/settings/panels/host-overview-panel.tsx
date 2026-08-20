@@ -85,6 +85,10 @@ import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/inde
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
 
+// Matches the RPC Doctor card's own tail size, so a report read over the
+// bridge shows the same amount of log as one read over `diagnostics.logs.tail`.
+const DOCTOR_BRIDGE_LOG_TAIL_LINES = 200;
+
 /** How long an accepted install may hold the page before progress appears. */
 const UPDATE_INSTALL_ACCEPTED_LATCH_MS = 60_000;
 
@@ -238,6 +242,7 @@ export function HostOverviewPanel(props: {
     identitySet: identitySetDegrade,
     restart: restartDegrade,
     restartViaForceFallback,
+    logsSupported,
     doctor: doctorDegrade,
     installInfo: installInfoDegrade,
     updateCheck: updateCheckDegrade,
@@ -322,7 +327,17 @@ export function HostOverviewPanel(props: {
       if (management === null) {
         return Promise.reject(new Error("No local host bridge is available."));
       }
-      return management.restartHost();
+      // The REFUSING respawn, for both of this page's callers — the busy-force
+      // offer and the fallback confirm. `restartHost()` queues behind whatever
+      // owns the desktop's exclusive mutation lane, which is right for the
+      // tray and menu ("do it when you can") and wrong for a restart someone
+      // is watching: an install or service cycle running underneath would
+      // swallow the click and fire the kill afterwards, against a host in a
+      // state they never saw. Force overrides the HOST's veto — a live claim,
+      // busy work — never the desktop's own serialization. The refusal comes
+      // back as `declined`, which this mutation already renders as
+      // information rather than an error.
+      return management.restartHostIfIdle();
     },
     onSuccess: (result) => {
       // The offer is answered either way — a `declined` respawn performed
@@ -346,6 +361,25 @@ export function HostOverviewPanel(props: {
       toastFromRunnerError(error, "Couldn't restart host");
     },
   });
+  // The Doctor sheet's log read for a host with no `diagnostics.*` family —
+  // every released host below the maintenance floor, which is exactly the
+  // population this fallback serves. Same file, read from this machine
+  // instead of asked for over an RPC the host does not have, so the report's
+  // Show logs button keeps working rather than becoming a refusal. Keyed on
+  // the shared runner key so it dedupes with any other read of this log.
+  const bridgeDoctorLogs = useMutation<readonly string[]>({
+    mutationKey: runnerMutationKeys.hostDoctorBridgeLogs(),
+    mutationFn: async () => {
+      if (management === null) {
+        throw new Error("No local host bridge is available.");
+      }
+      const result = await management.getHostLogs({
+        tailLines: DOCTOR_BRIDGE_LOG_TAIL_LINES,
+      });
+      return result.tail.length === 0 ? [] : result.tail.split("\n");
+    },
+  });
+
   // CACHE-derived, not observer-derived, for the page-wide gate. The panel's
   // inner tree is keyed per scope, so switching hosts unmounts this
   // component and a remounted `useMutation` observer starts idle even while
@@ -983,6 +1017,14 @@ export function HostOverviewPanel(props: {
                   forceRestart.mutate();
                 },
                 bridgeRestartPending: forceRestartInFlight || anyPending,
+                // `diagnostics.logs.tail` is absent from every released host
+                // below the maintenance floor (verified against the
+                // `host-v1.1.11` protocol-surface asset: no `diagnostics.*`
+                // at all), and this fallback is what puts a Doctor report —
+                // and its Show logs button — in front of those hosts.
+                rpcLogsSupported: logsSupported,
+                onBridgeLogs: () => bridgeDoctorLogs.mutateAsync(),
+                bridgeLogsPending: bridgeDoctorLogs.isPending,
                 onLocalFix: props.onLocalDoctorFix,
                 localFixPendingCode: props.localDoctorFixPendingCode,
               }
@@ -1167,6 +1209,12 @@ interface OverviewCapabilities {
    * `restart` above, so the button and its routing cannot tear.
    */
   readonly restartViaForceFallback: boolean;
+  /**
+   * Whether `diagnostics.logs.tail` is servable. `false` only for a host below
+   * the maintenance floor, whose Doctor sheet this fallback enables — its log
+   * read has to go over the bridge or the Show logs button cannot work.
+   */
+  readonly logsSupported: boolean;
   readonly doctor: OverviewDegradeReason | null;
   readonly installInfo: OverviewDegradeReason | null;
   readonly updateCheck: OverviewDegradeReason | null;
@@ -1206,6 +1254,7 @@ function useOverviewCapabilities(
   fallback: OverviewFallbackRoutes,
 ): OverviewCapabilities {
   const restartSupport = useHostMethodSupport(hostId, "host.restart");
+  const logsSupport = useHostMethodSupport(hostId, "diagnostics.logs.tail");
   return {
     identity: overviewMethodDegrade(
       useHostMethodSupport(hostId, "host.identity.get"),
@@ -1230,6 +1279,7 @@ function useOverviewCapabilities(
     ),
     restartViaForceFallback:
       restartSupport === false && fallback.restartForceRoute,
+    logsSupported: logsSupport !== false,
     doctor: resolveOverviewMethodDegrade(
       useHostMethodSupport(hostId, "host.doctor"),
       fallback.maintenanceFallback,

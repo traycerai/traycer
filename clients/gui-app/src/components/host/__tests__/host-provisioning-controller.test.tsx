@@ -87,6 +87,7 @@ function makeHostManagement(
     maintenanceDoctor: notImplemented("maintenanceDoctor"),
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
+    restartHostIfIdle: notImplemented("restartHostIfIdle"),
     getHostName: () =>
       Promise.resolve({
         systemName: validSnapshot.systemHostName,

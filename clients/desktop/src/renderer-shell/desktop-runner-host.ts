@@ -316,6 +316,7 @@ export interface DesktopHostManagementBridge {
     readonly version: string;
     readonly force: boolean;
   }): Promise<MaintenanceInstallDispatch>;
+  restartHostIfIdle(): Promise<HostRestartRequestResult>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -795,6 +796,7 @@ export class DesktopRunnerHost implements IRunnerHost {
         managementBridge.maintenanceInstallationInfo(),
       maintenanceInstallVersion: (input) =>
         managementBridge.maintenanceInstallVersion(input),
+      restartHostIfIdle: () => managementBridge.restartHostIfIdle(),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };

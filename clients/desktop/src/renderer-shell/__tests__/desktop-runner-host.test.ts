@@ -564,6 +564,9 @@ function buildFakeBridge(
       maintenanceInstallVersion: async () => {
         throw new Error("maintenanceInstallVersion not used in test");
       },
+      restartHostIfIdle: async () => {
+        throw new Error("restartHostIfIdle not used in test");
+      },
       getHostName: async () => ({
         systemName: "desktop-1",
         customName: null,

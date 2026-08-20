@@ -190,6 +190,9 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     maintenanceInstallVersion: vi.fn(() =>
       Promise.reject(new Error("maintenanceInstallVersion not implemented")),
     ),
+    restartHostIfIdle: vi.fn(() =>
+      Promise.reject(new Error("restartHostIfIdle not implemented")),
+    ),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "test-host",

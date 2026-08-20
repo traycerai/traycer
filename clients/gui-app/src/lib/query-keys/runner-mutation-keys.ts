@@ -47,6 +47,10 @@ export const runnerMutationKeys = {
   hostConvergeReady: () => ["runner.host.convergeReady"] as const,
   hostApplyStaged: () => ["runner.host.applyStaged"] as const,
   hostActivateInstalled: () => ["runner.host.activateInstalled"] as const,
+  // On-demand bridge read of this machine's host log, for a Doctor report on a
+  // host with no `diagnostics.*` family to ask. Mutation-shaped like the RPC
+  // card's own logs read: it is a button, not a subscription.
+  hostDoctorBridgeLogs: () => ["runner.host.doctorBridgeLogs"] as const,
   hostRestart: () => ["runner.host.restart"] as const,
   hostRegisterService: () => ["runner.host.registerService"] as const,
   hostDeregisterService: () => ["runner.host.deregisterService"] as const,

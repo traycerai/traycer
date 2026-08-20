@@ -45,6 +45,12 @@ export type DoctorSheetSource =
       readonly onBridgeRestart: () => void;
       /** True while that restart write is in flight. */
       readonly bridgeRestartPending: boolean;
+      /** Whether `diagnostics.logs.tail` is servable for this host. */
+      readonly rpcLogsSupported: boolean;
+      /** Reads this machine's host log over the CLI bridge. */
+      readonly onBridgeLogs: () => Promise<readonly string[]>;
+      /** True while that bridge read is in flight. */
+      readonly bridgeLogsPending: boolean;
       /** Runs a local-only repair on this computer via the CLI bridge. */
       readonly onLocalFix: (issue: HostDoctorIssue) => void;
       readonly localFixPendingCode: string | null;
@@ -113,6 +119,9 @@ function DoctorSheetBody(props: {
       rpcRestartSupported={source.rpcRestartSupported}
       onBridgeRestart={source.onBridgeRestart}
       bridgeRestartPending={source.bridgeRestartPending}
+      rpcLogsSupported={source.rpcLogsSupported}
+      onBridgeLogs={source.onBridgeLogs}
+      bridgeLogsPending={source.bridgeLogsPending}
       onLocalFix={source.onLocalFix}
       localFixPendingCode={source.localFixPendingCode}
     />

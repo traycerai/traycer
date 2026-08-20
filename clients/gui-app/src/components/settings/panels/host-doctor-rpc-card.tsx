@@ -36,6 +36,7 @@ import { useHostDoctorRun } from "@/components/settings/panels/host-overview-rpc
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { toastHostRestartRequested } from "@/lib/host-restart-toast";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { cn } from "@/lib/utils";
@@ -83,6 +84,18 @@ export function HostDoctorRpcCard(props: {
   readonly onBridgeRestart: () => void;
   /** True while the page's restart write is in flight; disables the fix. */
   readonly bridgeRestartPending: boolean;
+  /**
+   * Whether `diagnostics.logs.tail` is servable for this host. `false` reads
+   * the log over the local bridge instead — the same file, on this machine.
+   * Released hosts below the maintenance floor have no `diagnostics.*` family
+   * at all, and this fallback is what ENABLES their Doctor sheet, so the
+   * report would otherwise carry a Show logs button nothing can answer.
+   */
+  readonly rpcLogsSupported: boolean;
+  /** Reads the local host's log tail over the CLI bridge, newest last. */
+  readonly onBridgeLogs: () => Promise<readonly string[]>;
+  /** True while that bridge read is in flight. */
+  readonly bridgeLogsPending: boolean;
   /** Runs the local-only repair actions on this computer. */
   readonly onLocalFix: (issue: HostDoctorIssue) => void;
   readonly localFixPendingCode: string | null;
@@ -231,7 +244,11 @@ export function HostDoctorRpcCard(props: {
           })}
           restartPending={restartMutation.isPending}
           bridgeRestartPending={props.bridgeRestartPending}
-          logsPending={logsMutation.isPending}
+          logsPending={
+            props.rpcLogsSupported
+              ? logsMutation.isPending
+              : props.bridgeLogsPending
+          }
           localFixPending={props.localFixPendingCode === issue.code}
           logTail={logTail}
           onRestart={() => {
@@ -266,6 +283,17 @@ export function HostDoctorRpcCard(props: {
             );
           }}
           onShowLogs={() => {
+            if (!props.rpcLogsSupported) {
+              // No `diagnostics.*` on this host. The bridge reads the same
+              // file from this machine, so the button keeps its meaning
+              // rather than becoming a refusal.
+              void props.onBridgeLogs().then(
+                (lines) => setLogTail(lines),
+                (error: unknown) =>
+                  toastFromRunnerError(error, "Couldn't read this host's log."),
+              );
+              return;
+            }
             logsMutation.mutate(undefined, {
               onSuccess: (response) => {
                 setLogTail(

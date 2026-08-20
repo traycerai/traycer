@@ -90,6 +90,7 @@ export interface HostManagementBridgeSurface {
     readonly version: string;
     readonly force: boolean;
   }): Promise<MaintenanceInstallDispatch>;
+  restartHostIfIdle(): Promise<HostRestartRequestResult>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -194,6 +195,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         version,
         force,
       }) as Promise<MaintenanceInstallDispatch>,
+    restartHostIfIdle: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostRestartIfIdle,
+      ) as Promise<HostRestartRequestResult>,
     getHostName: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostNameGet,

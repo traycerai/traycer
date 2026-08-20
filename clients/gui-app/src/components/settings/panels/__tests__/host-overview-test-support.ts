@@ -323,6 +323,7 @@ export function buildOverviewManagement(
     maintenanceInstallVersion: vi.fn(
       notImplemented("maintenanceInstallVersion"),
     ),
+    restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "recovery-host",

@@ -571,6 +571,7 @@ describe("<MenuCommandListener />", () => {
       maintenanceInstallVersion: vi.fn(() =>
         Promise.reject(new Error("not used")),
       ),
+      restartHostIfIdle: vi.fn(() => Promise.reject(new Error("not used"))),
       getHostName: vi.fn(() =>
         Promise.resolve({
           systemName: "test-host",
