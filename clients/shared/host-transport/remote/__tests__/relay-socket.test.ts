@@ -4,7 +4,10 @@ import type {
   StreamWebSocketLike,
   StreamWebSocketMessageEvent,
 } from "../../ws-stream-factory";
-import type { WebSocketCloseEvent, WebSocketErrorEvent } from "../../ws-factory";
+import type {
+  WebSocketCloseEvent,
+  WebSocketErrorEvent,
+} from "../../ws-factory";
 import {
   RELAY_AWAITING_PING_INTERVAL_MS,
   RELAY_AWAITING_PONG_TIMEOUT_MS,
@@ -60,7 +63,7 @@ class FakeStreamSocket implements StreamWebSocketLike {
 }
 
 function makeHandlers(
-  overrides: Partial<RelaySocketHandlers> = {},
+  overrides: Partial<RelaySocketHandlers>,
 ): RelaySocketHandlers {
   return {
     onAttachAck: vi.fn(),
@@ -119,7 +122,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("idle socket: pings on the 25s cadence and does not fail before 60s of silence", () => {
-    const handlers = makeHandlers();
+    const handlers = makeHandlers({});
     const { stream } = openSocket(handlers);
 
     // Just under the idle deadline: still silent, no ping cadence violated,
@@ -138,7 +141,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("after application traffic with no inbound reply: pings at 5s and fails at ~12s", () => {
-    const handlers = makeHandlers();
+    const handlers = makeHandlers({});
     const { socket } = openSocket(handlers);
 
     vi.advanceTimersByTime(1);
@@ -160,7 +163,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("pings at the fast 5s cadence once awaiting a reply to application traffic", () => {
-    const handlers = makeHandlers();
+    const handlers = makeHandlers({});
     const { socket, stream } = openSocket(handlers);
 
     vi.advanceTimersByTime(1);
@@ -179,7 +182,7 @@ describe("RelaySocket adaptive half-open detection", () => {
     // A stale-but-healthy `lastInboundAt` would otherwise make a brand-new
     // send look like it has already been silent for the fast deadline's
     // full duration.
-    const handlers = makeHandlers();
+    const handlers = makeHandlers({});
     const { socket, stream } = openSocket(handlers);
 
     // Let the idle pong arrive, then let ~25s pass with nothing else
@@ -201,7 +204,9 @@ describe("RelaySocket adaptive half-open detection", () => {
     // It only fails once the fast deadline has genuinely elapsed from the
     // moment the send opened the unanswered run - comfortably before that,
     // it must still be healthy.
-    vi.advanceTimersByTime(RELAY_AWAITING_PONG_TIMEOUT_MS - 2 * RELAY_PING_TICK_MS);
+    vi.advanceTimersByTime(
+      RELAY_AWAITING_PONG_TIMEOUT_MS - 2 * RELAY_PING_TICK_MS,
+    );
     expect(handlers.onClose).not.toHaveBeenCalled();
     // And it fails within one tick of the deadline genuinely elapsing.
     vi.advanceTimersByTime(2 * RELAY_PING_TICK_MS);
@@ -212,7 +217,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("any inbound frame counts as liveness, not just a pong", () => {
-    const handlers = makeHandlers();
+    const handlers = makeHandlers({});
     const { socket, stream } = openSocket(handlers);
 
     socket.sendData(new Uint8Array([1]));
@@ -227,7 +232,7 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("a keepalive ping alone does not put the socket into the fast mode", () => {
-    const handlers = makeHandlers();
+    const handlers = makeHandlers({});
     const { stream } = openSocket(handlers);
 
     // Drive the idle keepalive: a ping goes out around 25s with nothing
@@ -240,7 +245,9 @@ describe("RelaySocket adaptive half-open detection", () => {
     // deadline (12s), with margin for tick granularity, with no reply is
     // expected and must not fail the socket, since only the idle 60s
     // deadline governs here.
-    vi.advanceTimersByTime(RELAY_AWAITING_PONG_TIMEOUT_MS + 2 * RELAY_PING_TICK_MS);
+    vi.advanceTimersByTime(
+      RELAY_AWAITING_PONG_TIMEOUT_MS + 2 * RELAY_PING_TICK_MS,
+    );
     expect(handlers.onClose).not.toHaveBeenCalled();
   });
 });

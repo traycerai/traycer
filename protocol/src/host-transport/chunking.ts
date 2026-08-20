@@ -1,3 +1,12 @@
+// SYNCHRONOUS BY REQUIREMENT, not by preference - do not swap in an async
+// codec (`CompressionStream`, `node:zlib`'s callback/stream forms, a worker).
+// `ChunkReassembler.accept` inflates inline, and an `await` on that path would
+// release the turn mid-ingest, letting frames for other streams interleave
+// between a chunk and its successor. The per-stream `seq`-adjacency guard
+// would then fire on our own scheduling rather than on relay reordering,
+// turning a healthy channel into `ChunkSequenceMismatchError`s. fflate is here
+// specifically because it is sync and isomorphic; native zlib is faster but
+// Node-only, and this module runs in the browser too.
 import { deflateSync, inflateSync } from "fflate";
 import {
   MAX_MUX_MESSAGE_BYTES,

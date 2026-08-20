@@ -2243,43 +2243,43 @@ describe("RemoteSession body compression is gated on the host's openAck advert (
   it(
     "no outbound frame is compressed when the host's openAck omits SESSION_CAPABILITY_BODY_COMPRESSION",
     async () => {
-    const relay = new FakeRelayHost();
-    relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
-    // Explicit and empty: this host advertises nothing.
-    relay.openAckCapabilities = [];
-    const lease = new MutableBearerLease("valid-token", "user-1");
-    const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
-      streamRegistry: cursorStreamRegistry,
-    });
-    const stream = session.subscribe("cursor.subscribe", { cursor: null });
-    try {
-      await vi.waitFor(
-        () => expect(relay.subscribeStreamIds).toHaveLength(1),
-        WAIT,
-      );
-      const streamId = relay.subscribeStreamIds[0];
-      relay.clientFrames.length = 0;
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      // Explicit and empty: this host advertises nothing.
+      relay.openAckCapabilities = [];
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        relay.clientFrames.length = 0;
 
-      // Large AND highly compressible - if compression were happening at
-      // all, this body would trigger it.
-      const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3).fill(0x41);
-      session.sendStreamFrame(
-        streamId,
-        { kind: "snapshot", hasBinaryPayload: true },
-        binary,
-      );
+        // Large AND highly compressible - if compression were happening at
+        // all, this body would trigger it.
+        const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3).fill(0x41);
+        session.sendStreamFrame(
+          streamId,
+          { kind: "snapshot", hasBinaryPayload: true },
+          binary,
+        );
 
-      await vi.waitFor(
-        () => expect(relay.clientFrames.length).toBeGreaterThan(1),
-        WAIT,
-      );
-      expect(relay.clientFrames.some((f) => f.compressed)).toBe(false);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      stream.close();
-      session.close();
-    }
+        await vi.waitFor(
+          () => expect(relay.clientFrames.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        expect(relay.clientFrames.some((f) => f.compressed)).toBe(false);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
     },
     TEST_BUDGET_MS,
   );
@@ -2287,40 +2287,40 @@ describe("RemoteSession body compression is gated on the host's openAck advert (
   it(
     "a large compressible body IS compressed once the host's openAck advertises SESSION_CAPABILITY_BODY_COMPRESSION",
     async () => {
-    const relay = new FakeRelayHost();
-    relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
-    relay.openAckCapabilities = [SESSION_CAPABILITY_BODY_COMPRESSION];
-    const lease = new MutableBearerLease("valid-token", "user-1");
-    const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
-      streamRegistry: cursorStreamRegistry,
-    });
-    const stream = session.subscribe("cursor.subscribe", { cursor: null });
-    try {
-      await vi.waitFor(
-        () => expect(relay.subscribeStreamIds).toHaveLength(1),
-        WAIT,
-      );
-      const streamId = relay.subscribeStreamIds[0];
-      relay.clientFrames.length = 0;
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.openAckCapabilities = [SESSION_CAPABILITY_BODY_COMPRESSION];
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        relay.clientFrames.length = 0;
 
-      const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3).fill(0x41);
-      session.sendStreamFrame(
-        streamId,
-        { kind: "snapshot", hasBinaryPayload: true },
-        binary,
-      );
+        const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3).fill(0x41);
+        session.sendStreamFrame(
+          streamId,
+          { kind: "snapshot", hasBinaryPayload: true },
+          binary,
+        );
 
-      await vi.waitFor(
-        () => expect(relay.clientFrames.length).toBeGreaterThan(1),
-        WAIT,
-      );
-      expect(relay.clientFrames.some((f) => f.compressed)).toBe(true);
-      expect(relay.errors).toEqual([]);
-    } finally {
-      stream.close();
-      session.close();
-    }
+        await vi.waitFor(
+          () => expect(relay.clientFrames.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        expect(relay.clientFrames.some((f) => f.compressed)).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
     },
     TEST_BUDGET_MS,
   );
@@ -2328,21 +2328,21 @@ describe("RemoteSession body compression is gated on the host's openAck advert (
   it(
     "the `open` frame itself is never compressed, whichever way the host advertises - it is the one frame that must stay readable by a host of any vintage",
     async () => {
-    const relay = new FakeRelayHost();
-    relay.openAckCapabilities = [SESSION_CAPABILITY_BODY_COMPRESSION];
-    // A large, highly compressible bearer token: the `open` frame's body must
-    // exceed COMPRESSION_MIN_PAYLOAD_BYTES so this test actually exercises the
-    // gate rather than passing merely because a small `open` body was never
-    // going to be compressed either way, capability advert or not.
-    const lease = new MutableBearerLease("a".repeat(8192), "user-1");
-    const session = buildSession(relay, lease, null);
-    try {
-      session.start();
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-      expect(relay.clientFrames.some((f) => f.compressed)).toBe(false);
-    } finally {
-      session.close();
-    }
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_BODY_COMPRESSION];
+      // A large, highly compressible bearer token: the `open` frame's body must
+      // exceed COMPRESSION_MIN_PAYLOAD_BYTES so this test actually exercises the
+      // gate rather than passing merely because a small `open` body was never
+      // going to be compressed either way, capability advert or not.
+      const lease = new MutableBearerLease("a".repeat(8192), "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+        expect(relay.clientFrames.some((f) => f.compressed)).toBe(false);
+      } finally {
+        session.close();
+      }
     },
     TEST_BUDGET_MS,
   );
@@ -3404,39 +3404,123 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     };
   }
 
-  it(
-    "after a session has reached ready, the next drop redials at 0ms and only THEN climbs to RECONNECT_INITIAL_BACKOFF_MS",
-    async () => {
-      // REAL timers, deliberately: `beginConnect` runs a genuine WebCrypto
-      // key generation (`NoiseChannel.begin`) before it ever reaches the
-      // socket factory, and that operation does not resolve under
-      // `vi.useFakeTimers()` (confirmed empirically - the very first dial
-      // attempt never landed even after advancing 130s of fake time). The
-      // doubling-and-cap ARITHMETIC is already proven in isolation by
-      // `backoff.test.ts`; this test's job is only to prove RemoteSession
-      // wires `reconnectAttempt` through that formula, including the rung-0
-      // special case - so it observes the first two real rungs, not the
-      // full climb to the 30s cap.
-      //
-      // The session MUST reach ready before the measured drop, and that is
-      // the whole point rather than setup noise: the immediate rung is a
-      // RECOVERY affordance, gated on `hasReachedReadyOnce`. A session that
-      // has never connected deliberately keeps the original ladder, because
-      // its retries are evidence about host liveness and doubling their rate
-      // would hammer a host that is legitimately down. An earlier version of
-      // this test measured a never-ready session and asserted 0ms, which
-      // pinned exactly the behaviour that gating removed.
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("valid-token", "user-1");
-      let firstDialTaken = false;
-      const redialTimestamps: number[] = [];
-      const succeedOnceThenFail: IStreamWebSocketFactory = {
-        create: (url: string): StreamWebSocketLike => {
-          if (!firstDialTaken) {
-            firstDialTaken = true;
-            return relay.factory.create(url);
-          }
-          redialTimestamps.push(Date.now());
+  it("after a session has reached ready, the next drop redials at 0ms and only THEN climbs to RECONNECT_INITIAL_BACKOFF_MS", async () => {
+    // REAL timers, deliberately: `beginConnect` runs a genuine WebCrypto
+    // key generation (`NoiseChannel.begin`) before it ever reaches the
+    // socket factory, and that operation does not resolve under
+    // `vi.useFakeTimers()` (confirmed empirically - the very first dial
+    // attempt never landed even after advancing 130s of fake time). The
+    // doubling-and-cap ARITHMETIC is already proven in isolation by
+    // `backoff.test.ts`; this test's job is only to prove RemoteSession
+    // wires `reconnectAttempt` through that formula, including the rung-0
+    // special case - so it observes the first two real rungs, not the
+    // full climb to the 30s cap.
+    //
+    // The session MUST reach ready before the measured drop, and that is
+    // the whole point rather than setup noise: the immediate rung is a
+    // RECOVERY affordance, gated on `hasReachedReadyOnce`. A session that
+    // has never connected deliberately keeps the original ladder, because
+    // its retries are evidence about host liveness and doubling their rate
+    // would hammer a host that is legitimately down. An earlier version of
+    // this test measured a never-ready session and asserted 0ms, which
+    // pinned exactly the behaviour that gating removed.
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    let firstDialTaken = false;
+    const redialTimestamps: number[] = [];
+    const succeedOnceThenFail: IStreamWebSocketFactory = {
+      create: (url: string): StreamWebSocketLike => {
+        if (!firstDialTaken) {
+          firstDialTaken = true;
+          return relay.factory.create(url);
+        }
+        redialTimestamps.push(Date.now());
+        const socket = new FakeSocket(
+          () => undefined,
+          () => undefined,
+        );
+        Promise.resolve().then(() => {
+          socket.onclose?.({ code: 1006, reason: "", wasClean: false });
+        });
+        return socket;
+      },
+    };
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      webSocketFactory: succeedOnceThenFail,
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 10_000,
+        interval: 20,
+      });
+
+      const droppedAt = Date.now();
+      relay.dropCurrentConnection();
+      await vi.waitFor(
+        () => expect(redialTimestamps.length).toBeGreaterThanOrEqual(2),
+        { timeout: 8_000, interval: 20 },
+      );
+
+      // Rung 0: the redial after losing a HEALTHY session is immediate -
+      // allow scheduling jitter, not a full second.
+      expect(redialTimestamps[0] - droppedAt).toBeLessThan(200);
+      // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
+      // case does not leak into later rungs.
+      const secondGap = redialTimestamps[1] - redialTimestamps[0];
+      expect(secondGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+      expect(secondGap).toBeLessThan(RECONNECT_INITIAL_BACKOFF_MS + 300);
+    } finally {
+      session.close();
+    }
+  }, 12_000);
+
+  it("a session that has NEVER reached ready keeps the original ladder - its first failure waits RECONNECT_INITIAL_BACKOFF_MS, not 0ms", async () => {
+    // The other half of the gate, and the one with real consequences: a
+    // never-connected session's retries feed the host-liveness evidence
+    // machinery, so granting them the immediate rung would both hammer a
+    // host that is legitimately down and accelerate the death-streak logic
+    // that reads those attempts. Two evidence-classification tests in this
+    // file fail if this regresses, which is the coupling that makes this
+    // behaviour load-bearing rather than cosmetic.
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const createTimestamps: number[] = [];
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      webSocketFactory: alwaysFailFactory(() => {
+        createTimestamps.push(Date.now());
+      }),
+    });
+    try {
+      session.start();
+      await vi.waitFor(
+        () => expect(createTimestamps.length).toBeGreaterThanOrEqual(2),
+        { timeout: 8_000, interval: 20 },
+      );
+      const firstGap = createTimestamps[1] - createTimestamps[0];
+      expect(firstGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {
+    // The flapping case, stated explicitly and set up honestly: rung 0 is
+    // legitimately available to a session's very FIRST-ever failure (that
+    // is the whole point of the feature), so proving the ladder does NOT
+    // reset on a quick re-drop requires this session to have already
+    // consumed rung 0 once, via one real failure, BEFORE it ever reaches
+    // ready. Only then does a second drop shortly after ready expose
+    // whether the reset is real or premature.
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    let failuresLeft = 1;
+    const flakyFactory: IStreamWebSocketFactory = {
+      create: (url: string): StreamWebSocketLike => {
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
           const socket = new FakeSocket(
             () => undefined,
             () => undefined,
@@ -3445,188 +3529,85 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
             socket.onclose?.({ code: 1006, reason: "", wasClean: false });
           });
           return socket;
-        },
-      };
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, null),
-        webSocketFactory: succeedOnceThenFail,
+        }
+        return relay.factory.create(url);
+      },
+    };
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      webSocketFactory: flakyFactory,
+    });
+    try {
+      session.start();
+      // The one prior failure resolves and redials (rung 0, immediate),
+      // which this time succeeds via the real relay factory.
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 10_000,
+        interval: 20,
       });
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-          timeout: 10_000,
-          interval: 20,
-        });
+      expect(failuresLeft).toBe(0);
 
-        const droppedAt = Date.now();
-        relay.dropCurrentConnection();
-        await vi.waitFor(
-          () => expect(redialTimestamps.length).toBeGreaterThanOrEqual(2),
-          { timeout: 8_000, interval: 20 },
-        );
+      // Comfortably short of RECONNECT_STABLE_RESET_MS: the ladder reset
+      // timer has not fired yet when the connection drops again.
+      expect(RECONNECT_STABLE_RESET_MS).toBeGreaterThan(300);
 
-        // Rung 0: the redial after losing a HEALTHY session is immediate -
-        // allow scheduling jitter, not a full second.
-        expect(redialTimestamps[0] - droppedAt).toBeLessThan(200);
-        // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
-        // case does not leak into later rungs.
-        const secondGap = redialTimestamps[1] - redialTimestamps[0];
-        expect(secondGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
-        expect(secondGap).toBeLessThan(RECONNECT_INITIAL_BACKOFF_MS + 300);
-      } finally {
-        session.close();
-      }
-    },
-    12_000,
-  );
-
-  it(
-    "a session that has NEVER reached ready keeps the original ladder - its first failure waits RECONNECT_INITIAL_BACKOFF_MS, not 0ms",
-    async () => {
-      // The other half of the gate, and the one with real consequences: a
-      // never-connected session's retries feed the host-liveness evidence
-      // machinery, so granting them the immediate rung would both hammer a
-      // host that is legitimately down and accelerate the death-streak logic
-      // that reads those attempts. Two evidence-classification tests in this
-      // file fail if this regresses, which is the coupling that makes this
-      // behaviour load-bearing rather than cosmetic.
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("valid-token", "user-1");
-      const createTimestamps: number[] = [];
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, null),
-        webSocketFactory: alwaysFailFactory(() => {
-          createTimestamps.push(Date.now());
-        }),
-      });
-      try {
-        session.start();
-        await vi.waitFor(
-          () => expect(createTimestamps.length).toBeGreaterThanOrEqual(2),
-          { timeout: 8_000, interval: 20 },
-        );
-        const firstGap = createTimestamps[1] - createTimestamps[0];
-        expect(firstGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
-      } finally {
-        session.close();
-      }
-    },
-    10_000,
-  );
-
-  it(
-    "the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time",
-    async () => {
-      // The flapping case, stated explicitly and set up honestly: rung 0 is
-      // legitimately available to a session's very FIRST-ever failure (that
-      // is the whole point of the feature), so proving the ladder does NOT
-      // reset on a quick re-drop requires this session to have already
-      // consumed rung 0 once, via one real failure, BEFORE it ever reaches
-      // ready. Only then does a second drop shortly after ready expose
-      // whether the reset is real or premature.
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("valid-token", "user-1");
-      let failuresLeft = 1;
-      const flakyFactory: IStreamWebSocketFactory = {
-        create: (url: string): StreamWebSocketLike => {
-          if (failuresLeft > 0) {
-            failuresLeft -= 1;
-            const socket = new FakeSocket(
-              () => undefined,
-              () => undefined,
-            );
-            Promise.resolve().then(() => {
-              socket.onclose?.({ code: 1006, reason: "", wasClean: false });
-            });
-            return socket;
-          }
-          return relay.factory.create(url);
-        },
-      };
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, null),
-        webSocketFactory: flakyFactory,
-      });
-      try {
-        session.start();
-        // The one prior failure resolves and redials (rung 0, immediate),
-        // which this time succeeds via the real relay factory.
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-          timeout: 10_000,
-          interval: 20,
-        });
-        expect(failuresLeft).toBe(0);
-
-        // Comfortably short of RECONNECT_STABLE_RESET_MS: the ladder reset
-        // timer has not fired yet when the connection drops again.
-        expect(RECONNECT_STABLE_RESET_MS).toBeGreaterThan(300);
-
-        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-        relay.dropCurrentConnection();
-        await vi.waitFor(
-          () => expect(setTimeoutSpy).toHaveBeenCalled(),
-          { timeout: 2_000, interval: 20 },
-        );
-
-        // This session already spent rung 0 on its first-ever failure, so
-        // this second, post-ready drop must continue the ladder rather than
-        // restart it - or a host that accepts and immediately drops
-        // sessions gets hammered at the fastest rung forever.
-        expect(setTimeoutSpy).toHaveBeenCalledWith(
-          expect.any(Function),
-          RECONNECT_INITIAL_BACKOFF_MS,
-        );
-        expect(setTimeoutSpy).not.toHaveBeenCalledWith(
-          expect.any(Function),
-          0,
-        );
-        setTimeoutSpy.mockRestore();
-      } finally {
-        session.close();
-      }
-    },
-    12_000,
-  );
-
-  it(
-    "connection loss cancels the pending stable-reset timer",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("valid-token", "user-1");
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const session = new RemoteSession(buildSessionOptions(relay, lease, null));
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-          timeout: 10_000,
-          interval: 20,
-        });
+      relay.dropCurrentConnection();
+      await vi.waitFor(() => expect(setTimeoutSpy).toHaveBeenCalled(), {
+        timeout: 2_000,
+        interval: 20,
+      });
 
-        // Identify the EXACT timer handle `armStableResetTimer` scheduled at
-        // the ready boundary (its delay is the unique fingerprint), so this
-        // test proves the SPECIFIC timer was cancelled - not merely that
-        // *some* `clearTimeout` call happened to fire around the same time.
-        const stableResetCallIndex = setTimeoutSpy.mock.calls.findIndex(
-          (call) => call[1] === RECONNECT_STABLE_RESET_MS,
-        );
-        expect(stableResetCallIndex).toBeGreaterThanOrEqual(0);
-        const stableResetHandle =
-          setTimeoutSpy.mock.results[stableResetCallIndex].value;
+      // This session already spent rung 0 on its first-ever failure, so
+      // this second, post-ready drop must continue the ladder rather than
+      // restart it - or a host that accepts and immediately drops
+      // sessions gets hammered at the fastest rung forever.
+      expect(setTimeoutSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        RECONNECT_INITIAL_BACKOFF_MS,
+      );
+      expect(setTimeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 0);
+      setTimeoutSpy.mockRestore();
+    } finally {
+      session.close();
+    }
+  }, 12_000);
 
-        const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-        relay.dropCurrentConnection();
-        await vi.waitFor(
-          () => expect(clearTimeoutSpy).toHaveBeenCalled(),
-          { timeout: 2_000, interval: 20 },
-        );
+  it("connection loss cancels the pending stable-reset timer", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const session = new RemoteSession(buildSessionOptions(relay, lease, null));
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 10_000,
+        interval: 20,
+      });
 
-        expect(clearTimeoutSpy).toHaveBeenCalledWith(stableResetHandle);
-        clearTimeoutSpy.mockRestore();
-      } finally {
-        session.close();
-        setTimeoutSpy.mockRestore();
-      }
-    },
-    10_000,
-  );
+      // Identify the EXACT timer handle `armStableResetTimer` scheduled at
+      // the ready boundary (its delay is the unique fingerprint), so this
+      // test proves the SPECIFIC timer was cancelled - not merely that
+      // *some* `clearTimeout` call happened to fire around the same time.
+      const stableResetCallIndex = setTimeoutSpy.mock.calls.findIndex(
+        (call) => call[1] === RECONNECT_STABLE_RESET_MS,
+      );
+      expect(stableResetCallIndex).toBeGreaterThanOrEqual(0);
+      const stableResetHandle =
+        setTimeoutSpy.mock.results[stableResetCallIndex].value;
+
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      relay.dropCurrentConnection();
+      await vi.waitFor(() => expect(clearTimeoutSpy).toHaveBeenCalled(), {
+        timeout: 2_000,
+        interval: 20,
+      });
+
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(stableResetHandle);
+      clearTimeoutSpy.mockRestore();
+    } finally {
+      session.close();
+      setTimeoutSpy.mockRestore();
+    }
+  }, 10_000);
 });

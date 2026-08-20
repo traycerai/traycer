@@ -399,8 +399,9 @@ describe("transport-class causes never reach a reportable toast", () => {
     toastFromHostError(transportFailure("chat.rename"), "b");
     toastFromHostErrorWithDetail(transportFailure("agent.configure"), "c");
 
-    const ids = (toast as unknown as { mock: { calls: unknown[][] } }).mock.calls
-      .map((call) => (call[1] as { id?: string } | undefined)?.id)
+    const ids = vi
+      .mocked(toast)
+      .mock.calls.map((call) => call[1]?.id)
       .filter((id): id is string => id !== undefined);
     expect(ids).toHaveLength(3);
     expect(new Set(ids).size).toBe(1);
