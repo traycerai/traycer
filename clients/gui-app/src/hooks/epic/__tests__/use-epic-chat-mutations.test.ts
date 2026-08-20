@@ -38,6 +38,8 @@ const {
   forceReleaseChatSession,
   beginPendingChatCreation,
   clearPendingChatCreation,
+  closeConfirmedDeletedChatTiles,
+  unmarkArtifactSelfDeleted,
 } = vi.hoisted(() => ({
   archiveChatMutateAsync: vi.fn(),
   epicSessionHostClient: {
@@ -49,6 +51,8 @@ const {
   forceReleaseChatSession: vi.fn(),
   beginPendingChatCreation: vi.fn(),
   clearPendingChatCreation: vi.fn(),
+  closeConfirmedDeletedChatTiles: vi.fn(),
+  unmarkArtifactSelfDeleted: vi.fn(),
 }));
 // The pending-creation registry is the open-epic store's seam
 // (`stores/epics/open-epic/pending-chat-creations.ts`), covered on its own
@@ -69,6 +73,14 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
     forceRelease: forceReleaseChatSession,
   }),
+}));
+vi.mock("@/stores/epics/canvas/store", () => ({
+  useEpicCanvasStore: {
+    getState: () => ({
+      closeConfirmedDeletedChatTiles,
+      unmarkArtifactSelfDeleted,
+    }),
+  },
 }));
 
 import type {
@@ -269,6 +281,11 @@ describe("useEpicDeleteChat", () => {
       "chat-1",
       "host-test",
     );
+    expect(closeConfirmedDeletedChatTiles).toHaveBeenCalledWith(
+      "epic-1",
+      "chat-1",
+      "host-test",
+    );
   });
 
   it("does not force-release anything when no host was active at mutate time", () => {
@@ -290,14 +307,22 @@ describe("useEpicDeleteChat", () => {
     // whichever machine happened to be active - the exact cross-host teardown
     // this scoping exists to prevent.
     expect(forceReleaseChatSession).not.toHaveBeenCalled();
+    expect(closeConfirmedDeletedChatTiles).not.toHaveBeenCalled();
   });
 
   it("shows fallback on error", () => {
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat").options as {
-      onError: (e: HostRpcError) => void;
+      onError: (
+        e: HostRpcError,
+        variables: { readonly epicId: string; readonly chatId: string },
+      ) => void;
     };
-    opts.onError(makeError("RPC_ERROR"));
+    opts.onError(makeError("RPC_ERROR"), {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    expect(unmarkArtifactSelfDeleted).toHaveBeenCalledWith("chat-1");
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
   });
 
