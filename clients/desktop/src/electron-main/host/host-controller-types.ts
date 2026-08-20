@@ -44,6 +44,17 @@ export interface MutationLaneStatus {
   readonly startedAt: string;
 }
 
+/**
+ * Why an admission-checked lifecycle write would not run alone right now.
+ * `mutation` is the FIFO lane's running intent; `login-item-refresh` is the
+ * pending-login-item revision cycle, which runs on its own tail (it cannot
+ * take FIFO exclusivity — see `pendingRevisionTail` in `host-controller.ts`)
+ * but restarts the host exactly like a lane job would.
+ */
+export type LifecycleAdmissionBlock =
+  | { readonly kind: "mutation"; readonly lane: MutationLaneStatus }
+  | { readonly kind: "login-item-refresh" };
+
 export interface DownloadProgress {
   readonly percent: number | null;
   readonly bytes: number | null;

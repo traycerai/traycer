@@ -165,7 +165,7 @@ function fakeHostController(
   let stageLatestCalls = 0;
   let getStatusCalls = 0;
   return {
-    mutationLane: null,
+    lifecycleAdmissionBlock: null,
     get callOrder() {
       return callOrder;
     },

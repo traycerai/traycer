@@ -242,6 +242,7 @@ export function HostOverviewPanel(props: {
     identitySet: identitySetDegrade,
     restart: restartDegrade,
     restartViaForceFallback,
+    restartSupported,
     logsSupported,
     doctor: doctorDegrade,
     installInfo: installInfoDegrade,
@@ -1006,22 +1007,30 @@ export function HostOverviewPanel(props: {
                 isLocalMachine: host.isLocalMachine,
                 hasLocalBridge: props.hasLocalBridge,
                 degrade: doctorDegrade,
-                // The same fact the header item's Restart routes on. This
-                // fallback ENABLES the Doctor sheet on hosts that refuse
-                // `host.restart`, so a `host-restart` fix offered inside it
-                // has to reach the same bridge respawn the header does —
-                // otherwise the sheet the fallback opened is the one surface
-                // still dispatching the refused RPC.
-                rpcRestartSupported: !restartViaForceFallback,
-                // Dispatch through THIS page's restart write, so a Doctor fix
-                // shares the lifecycle gate and the cross-surface mutation key
-                // with the header's Restart. Routing it through `onLocalFix`
-                // would put it on the `hostRunDoctor` key instead — outside
-                // every gate on this page — and a forced respawn would queue
-                // behind whatever lifecycle intent is already running.
+                // The capability itself, NOT `!restartViaForceFallback`: a
+                // remote host can refuse `host.restart` too, where no force
+                // route exists and the inverse would misread as "the RPC
+                // works" — putting a live Restart button on the one host it
+                // cannot restart.
+                rpcRestartSupported: restartSupported,
+                // The same derived fact the confirm dialog's dispatch leg
+                // branches on, threaded rather than re-derived from
+                // `isLocalMachine && hasLocalBridge` inside the card: the two
+                // readings could tear (the force route also needs a runner
+                // bridge), and a torn pair routes a Doctor restart to a
+                // confirm whose dispatch leg then sends the refused RPC.
+                bridgeRestartRoute: restartViaForceFallback,
+                // OPENS THE SAME CONFIRM the header's Restart uses rather
+                // than dispatching — the bridge respawn always forces, ending
+                // sessions and cancelling in-flight requests, and the header
+                // puts that consent behind `RestartHostConfirmDialog`. On the
+                // fallback route the dialog's confirm IS the force consent:
+                // same click-time identity guard, same page-wide lifecycle
+                // gate, same cross-surface mutation key. A one-click Doctor
+                // dispatch here was the one surface skipping all three.
                 onBridgeRestart: () => {
                   if (anyPending) return;
-                  forceRestart.mutate();
+                  setRestartConfirmOpen(true);
                 },
                 bridgeRestartPending: forceRestartInFlight || anyPending,
                 // `diagnostics.logs.tail` is absent from every released host
@@ -1217,6 +1226,14 @@ interface OverviewCapabilities {
    */
   readonly restartViaForceFallback: boolean;
   /**
+   * Whether `host.restart` itself is servable — the capability alone, apart
+   * from any fallback route. The Doctor sheet needs this fact and not its
+   * routing consequence: a REMOTE host can refuse `host.restart` too, where
+   * no force route exists and `!restartViaForceFallback` would misread as
+   * "the RPC works". Same tri-state treatment as `logsSupported` below.
+   */
+  readonly restartSupported: boolean;
+  /**
    * Whether `diagnostics.logs.tail` is servable. `false` only for a host below
    * the maintenance floor, whose Doctor sheet this fallback enables — its log
    * read has to go over the bridge or the Show logs button cannot work.
@@ -1286,6 +1303,7 @@ function useOverviewCapabilities(
     ),
     restartViaForceFallback:
       restartSupport === false && fallback.restartForceRoute,
+    restartSupported: restartSupport !== false,
     logsSupported: logsSupport !== false,
     doctor: resolveOverviewMethodDegrade(
       useHostMethodSupport(hostId, "host.doctor"),

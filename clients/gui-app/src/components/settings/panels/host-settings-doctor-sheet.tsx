@@ -37,11 +37,21 @@ export type DoctorSheetSource =
       readonly hasLocalBridge: boolean;
       readonly degrade: OverviewDegradeReason | null;
       /**
-       * Whether `host.restart` is servable for this host. `false` routes the
-       * restart fix actions through the bridge respawn — see `doctorFixRoute`.
+       * Whether `host.restart` is servable for this host — the capability
+       * itself, so `false` for ANY host whose handshake refused it, remote
+       * ones included. Routing on refusal is `bridgeRestartRoute`'s job.
        */
       readonly rpcRestartSupported: boolean;
-      /** Dispatches the page's own bridge respawn for a restart fix. */
+      /**
+       * Whether a refused `host.restart` has the page's bridge respawn to
+       * stand in — the SAME derived fact the restart confirm's dispatch leg
+       * branches on, threaded so the card cannot route to a confirm whose
+       * dispatch would disagree. `false` with `rpcRestartSupported` false
+       * means no route at all: the fix degrades to its terminal command.
+       */
+      readonly bridgeRestartRoute: boolean;
+      /** Opens the page's restart confirm, whose confirm dispatches the
+       * bridge respawn — never a direct dispatch, the respawn always forces. */
       readonly onBridgeRestart: () => void;
       /** True while that restart write is in flight. */
       readonly bridgeRestartPending: boolean;
@@ -117,6 +127,7 @@ function DoctorSheetBody(props: {
       hasLocalBridge={source.hasLocalBridge}
       degrade={source.degrade}
       rpcRestartSupported={source.rpcRestartSupported}
+      bridgeRestartRoute={source.bridgeRestartRoute}
       onBridgeRestart={source.onBridgeRestart}
       bridgeRestartPending={source.bridgeRestartPending}
       rpcLogsSupported={source.rpcLogsSupported}

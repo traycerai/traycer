@@ -97,7 +97,7 @@ import type {
   ApplyStagedTrigger,
   ConvergeReadyOk,
   HostControllerStatus,
-  MutationLaneStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
@@ -362,12 +362,14 @@ export interface IpcHostLifecycle {
  */
 export interface IpcHostController {
   /**
-   * The mutation lane sampled synchronously, for a handler that must test it
-   * and submit in one stretch. `getStatus()` carries the same field but only
-   * after awaiting disk reads, which is already too late to decide whether
-   * submitting would QUEUE behind a running intent.
+   * The lifecycle admission verdict sampled synchronously, for a handler that
+   * must test it and submit in one stretch. `getStatus()` carries the lane
+   * half but only after awaiting disk reads, which is already too late to
+   * decide whether submitting would QUEUE behind a running intent — and it
+   * cannot see the pending-login-item revision cycle at all, which this
+   * includes. Deliberately the ONLY admission surface exposed here.
    */
-  readonly mutationLane: MutationLaneStatus | null;
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
   getStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;

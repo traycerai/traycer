@@ -25,7 +25,7 @@ import type {
   ApplyStagedTrigger,
   ConvergeReadyOk,
   HostControllerStatus,
-  MutationLaneStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
@@ -248,7 +248,7 @@ const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
 class FakeHostController implements IpcHostController {
   respawnCalls = 0;
 
-  readonly mutationLane: MutationLaneStatus | null = null;
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   async getStatus(): Promise<HostControllerStatus> {
     return FAKE_HOST_CONTROLLER_STATUS;
   }

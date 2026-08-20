@@ -135,22 +135,28 @@ export function doctorFixRoute(input: {
   readonly isLocalMachine: boolean;
   readonly hasLocalBridge: boolean;
   /**
-   * Whether `host.restart` is actually servable for this host. `false` only
-   * for a local host too old to advertise it, whose Doctor is being served
-   * over the CLI fallback: the report is real, so the fix must be too, and
-   * `runFixAction` already carries out both restart actions through the
-   * bridge respawn. Without this the Doctor sheet the fallback ENABLES would
-   * offer a Restart host button that dispatches an RPC the host refuses.
+   * Whether `host.restart` is actually servable for this host — the
+   * capability alone, `false` for ANY host whose handshake refused it. A
+   * remote host can refuse it too, so this must never be derived from
+   * whether a fallback route was selected: the inverse of "the bridge stands
+   * in" reads as "the RPC works" exactly where neither is true.
    */
   readonly rpcRestartSupported: boolean;
+  /**
+   * Whether a refused `host.restart` has the page's bridge respawn to stand
+   * in — the page's own derived fact (`restartViaForceFallback`), NOT
+   * re-derived here from `isLocalMachine && hasLocalBridge`: the force route
+   * also requires a runner bridge, and a torn pair would route a restart fix
+   * to a confirm whose dispatch leg then sends the RPC the handshake
+   * refused.
+   */
+  readonly bridgeRestartRoute: boolean;
 }): DoctorFixRoute {
   if (input.fixAction === "host-restart" || input.fixAction === "host-start") {
     if (input.rpcRestartSupported) return "rpc";
-    // Same precedence as below: the bridge when it can reach this machine,
+    // Same precedence as below: the bridge when it can genuinely stand in,
     // otherwise the command to run on the box itself.
-    return input.isLocalMachine && input.hasLocalBridge
-      ? "local-bridge"
-      : "copy-command";
+    return input.bridgeRestartRoute ? "local-bridge" : "copy-command";
   }
   if (input.fixAction === "host-logs") return "rpc";
   return input.isLocalMachine && input.hasLocalBridge

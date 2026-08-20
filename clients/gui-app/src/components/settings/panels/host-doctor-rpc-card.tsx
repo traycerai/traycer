@@ -71,15 +71,23 @@ export function HostDoctorRpcCard(props: {
   /** `host.doctor` capability; `null` (no handshake yet) is NOT a degrade. */
   readonly degrade: OverviewDegradeReason | null;
   /**
-   * Whether `host.restart` can actually be served for this host. `false`
-   * routes both restart fix actions to the bridge respawn instead of an RPC
-   * this host would refuse — see `doctorFixRoute`.
+   * Whether `host.restart` can actually be served for this host — the
+   * capability alone. `false` for ANY host whose handshake refused it,
+   * remote ones included; see `doctorFixRoute`.
    */
   readonly rpcRestartSupported: boolean;
   /**
-   * Dispatches the page's OWN bridge respawn for a restart fix that routed to
-   * the local bridge. Shares the page's restart mutation (and therefore its
-   * lifecycle gate and cross-surface dedup), unlike `onLocalFix`.
+   * Whether a refused `host.restart` has the page's bridge respawn to stand
+   * in. Threaded from the page (the same fact its restart confirm's dispatch
+   * leg branches on) rather than re-derived here from
+   * `isLocalMachine && hasLocalBridge` — the readings could tear.
+   */
+  readonly bridgeRestartRoute: boolean;
+  /**
+   * Opens the page's restart confirm for a restart fix that routed to the
+   * local bridge; the confirm's dispatch shares the page's restart mutation
+   * (and therefore its lifecycle gate, its click-time identity guard and the
+   * cross-surface dedup), unlike `onLocalFix`.
    */
   readonly onBridgeRestart: () => void;
   /** True while the page's restart write is in flight; disables the fix. */
@@ -252,6 +260,7 @@ export function HostDoctorRpcCard(props: {
             isLocalMachine: props.isLocalMachine,
             hasLocalBridge: props.hasLocalBridge,
             rpcRestartSupported: props.rpcRestartSupported,
+            bridgeRestartRoute: props.bridgeRestartRoute,
           })}
           restartPending={restartMutation.isPending}
           bridgeRestartPending={props.bridgeRestartPending}

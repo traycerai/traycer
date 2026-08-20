@@ -8,6 +8,7 @@ import type {
   MutationLaneStatus,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { LifecycleAdmissionBlock } from "../../host/host-controller-types";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { TraycerCliError } from "../../cli/traycer-cli";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
@@ -220,7 +221,7 @@ interface HandlerBridge {
       readonly pidMetadataFile: string;
     };
     readonly hostController: {
-      mutationLane: MutationLaneStatus | null;
+      lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
       readonly getStatus: () => Promise<{ readonly updateReady: boolean }>;
       installVersion: (
         version: string,
@@ -248,7 +249,7 @@ function makeBridge(): HandlerBridge {
         pidMetadataFile: join(workHome, "pid.json"),
       },
       hostController: {
-        mutationLane: null,
+        lifecycleAdmissionBlock: null,
         getStatus: () => Promise.resolve({ updateReady: false }),
         installVersion: () =>
           Promise.resolve({
@@ -761,7 +762,7 @@ describe("maintenanceInstallVersion IPC", () => {
     return handler;
   }
 
-  it("returns lane-busy when mutationLane is occupied, without calling installVersion", async () => {
+  it("returns lane-busy when the mutation lane is occupied, without calling installVersion", async () => {
     const installVersion = vi.fn(() =>
       Promise.resolve({
         kind: "ok" as const,
@@ -769,10 +770,13 @@ describe("maintenanceInstallVersion IPC", () => {
       }),
     );
     const bridge = makeBridge();
-    bridge.options.hostController.mutationLane = {
-      kind: "apply",
-      progress: null,
-      startedAt: "2026-08-12T00:00:00Z",
+    bridge.options.hostController.lifecycleAdmissionBlock = {
+      kind: "mutation",
+      lane: {
+        kind: "apply",
+        progress: null,
+        startedAt: "2026-08-12T00:00:00Z",
+      },
     };
     bridge.options.hostController.installVersion = installVersion;
     const handler = await registerInstallHandler(bridge);
@@ -783,7 +787,7 @@ describe("maintenanceInstallVersion IPC", () => {
     expect(installVersion).not.toHaveBeenCalled();
   });
 
-  it("dispatches installVersion when mutationLane is null", async () => {
+  it("dispatches installVersion when nothing blocks admission", async () => {
     const installVersion = vi.fn((version: string, force: boolean) =>
       Promise.resolve({
         kind: "ok" as const,
@@ -791,7 +795,7 @@ describe("maintenanceInstallVersion IPC", () => {
       }),
     );
     const bridge = makeBridge();
-    bridge.options.hostController.mutationLane = null;
+    bridge.options.hostController.lifecycleAdmissionBlock = null;
     bridge.options.hostController.installVersion = installVersion;
     const handler = await registerInstallHandler(bridge);
 
@@ -807,7 +811,7 @@ describe("maintenanceInstallVersion IPC", () => {
     expect(installVersion).toHaveBeenCalledWith("1.3.0", true);
   });
 
-  it("reads mutationLane before submitting — occupying the lane inside installVersion still dispatches", async () => {
+  it("reads admission before submitting — occupying the lane inside installVersion still dispatches", async () => {
     // Discriminator: if the handler checked the lane AFTER awaiting
     // installVersion, occupying it inside the submit would flip the
     // answer to lane-busy. Reading first, with no await in between,
@@ -822,7 +826,10 @@ describe("maintenanceInstallVersion IPC", () => {
         progress: null,
         startedAt: "2026-08-12T00:00:00Z",
       };
-      bridge.options.hostController.mutationLane = occupied.current;
+      bridge.options.hostController.lifecycleAdmissionBlock =
+        occupied.current === null
+          ? null
+          : { kind: "mutation", lane: occupied.current };
       return Promise.resolve({
         kind: "ok" as const,
         value: { installedVersion: version, runningActivated: true },
@@ -870,7 +877,7 @@ describe("restartHostIfIdle IPC", () => {
     return handler;
   }
 
-  it("returns declined when mutationLane is occupied, without calling respawn", async () => {
+  it("returns declined when the mutation lane is occupied, without calling respawn", async () => {
     const respawn = vi.fn(() =>
       Promise.resolve({
         kind: "ok" as const,
@@ -878,10 +885,13 @@ describe("restartHostIfIdle IPC", () => {
       }),
     );
     const bridge = makeBridge();
-    bridge.options.hostController.mutationLane = {
-      kind: "install",
-      progress: null,
-      startedAt: "2026-08-12T00:00:00Z",
+    bridge.options.hostController.lifecycleAdmissionBlock = {
+      kind: "mutation",
+      lane: {
+        kind: "install",
+        progress: null,
+        startedAt: "2026-08-12T00:00:00Z",
+      },
     };
     bridge.options.hostController.respawn = respawn;
     const handler = await registerRestartIfIdleHandler(bridge);
@@ -893,7 +903,7 @@ describe("restartHostIfIdle IPC", () => {
     expect(respawn).not.toHaveBeenCalled();
   });
 
-  it("calls respawn when mutationLane is null and maps an ok outcome to restarted", async () => {
+  it("calls respawn when nothing blocks admission and maps an ok outcome to restarted", async () => {
     const respawn = vi.fn(() =>
       Promise.resolve({
         kind: "ok" as const,
@@ -901,7 +911,7 @@ describe("restartHostIfIdle IPC", () => {
       }),
     );
     const bridge = makeBridge();
-    bridge.options.hostController.mutationLane = null;
+    bridge.options.hostController.lifecycleAdmissionBlock = null;
     bridge.options.hostController.respawn = respawn;
     const handler = await registerRestartIfIdleHandler(bridge);
 
@@ -911,7 +921,7 @@ describe("restartHostIfIdle IPC", () => {
     expect(respawn).toHaveBeenCalledTimes(1);
   });
 
-  it("reads mutationLane before submitting — occupying the lane inside respawn still dispatches", async () => {
+  it("reads admission before submitting — occupying the lane inside respawn still dispatches", async () => {
     const bridge = makeBridge();
     const occupied: { current: MutationLaneStatus | null } = {
       current: null,
@@ -922,7 +932,10 @@ describe("restartHostIfIdle IPC", () => {
         progress: null,
         startedAt: "2026-08-12T00:00:00Z",
       };
-      bridge.options.hostController.mutationLane = occupied.current;
+      bridge.options.hostController.lifecycleAdmissionBlock =
+        occupied.current === null
+          ? null
+          : { kind: "mutation", lane: occupied.current };
       return Promise.resolve({
         kind: "ok" as const,
         value: { activated: true },
@@ -959,10 +972,13 @@ function occupyLaneOnIdentityFileAccess(bridge: HandlerBridge): void {
     configurable: true,
     enumerable: true,
     get() {
-      bridge.options.hostController.mutationLane = {
-        kind: "install",
-        progress: null,
-        startedAt: "2026-08-12T00:00:00Z",
+      bridge.options.hostController.lifecycleAdmissionBlock = {
+        kind: "mutation",
+        lane: {
+          kind: "install",
+          progress: null,
+          startedAt: "2026-08-12T00:00:00Z",
+        },
       };
       return path;
     },
@@ -1130,10 +1146,13 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       Promise.resolve({ kind: "ok" as const, value: null }),
     );
     const bridge = makeBridge();
-    bridge.options.hostController.mutationLane = {
-      kind: "apply",
-      progress: null,
-      startedAt: "2026-08-12T00:00:00Z",
+    bridge.options.hostController.lifecycleAdmissionBlock = {
+      kind: "mutation",
+      lane: {
+        kind: "apply",
+        progress: null,
+        startedAt: "2026-08-12T00:00:00Z",
+      },
     };
     bridge.options.hostController.installVersion = installVersion;
     bridge.options.hostController.convergeReady = convergeReady;
@@ -1246,10 +1265,13 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       Promise.resolve({ kind: "ok" as const, value: null }),
     );
     const bridge = makeBridge();
-    bridge.options.hostController.mutationLane = {
-      kind: "install",
-      progress: null,
-      startedAt: "2026-08-12T00:00:00Z",
+    bridge.options.hostController.lifecycleAdmissionBlock = {
+      kind: "mutation",
+      lane: {
+        kind: "install",
+        progress: null,
+        startedAt: "2026-08-12T00:00:00Z",
+      },
     };
     bridge.options.hostController.convergeReady = convergeReady;
     bridge.options.hostController.registerService = registerService;
@@ -1378,7 +1400,10 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
         progress: null,
         startedAt: "2026-08-12T00:00:00Z",
       };
-      bridge.options.hostController.mutationLane = occupied.current;
+      bridge.options.hostController.lifecycleAdmissionBlock =
+        occupied.current === null
+          ? null
+          : { kind: "mutation", lane: occupied.current };
       return Promise.resolve({ kind: "ok" as const, value: null });
     });
     bridge.options.hostController.convergeReady = convergeReady;

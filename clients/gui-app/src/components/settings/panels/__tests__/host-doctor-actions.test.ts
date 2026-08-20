@@ -6,6 +6,7 @@ describe("doctorFixRoute", () => {
     {
       fixAction: "host-restart",
       rpcRestartSupported: true,
+      bridgeRestartRoute: false,
       isLocalMachine: true,
       hasLocalBridge: true,
       expected: "rpc",
@@ -13,6 +14,7 @@ describe("doctorFixRoute", () => {
     {
       fixAction: "host-start",
       rpcRestartSupported: true,
+      bridgeRestartRoute: false,
       isLocalMachine: false,
       hasLocalBridge: false,
       expected: "rpc",
@@ -20,6 +22,7 @@ describe("doctorFixRoute", () => {
     {
       fixAction: "host-restart",
       rpcRestartSupported: false,
+      bridgeRestartRoute: true,
       isLocalMachine: true,
       hasLocalBridge: true,
       expected: "local-bridge",
@@ -27,6 +30,7 @@ describe("doctorFixRoute", () => {
     {
       fixAction: "host-start",
       rpcRestartSupported: false,
+      bridgeRestartRoute: true,
       isLocalMachine: true,
       hasLocalBridge: true,
       expected: "local-bridge",
@@ -34,6 +38,7 @@ describe("doctorFixRoute", () => {
     {
       fixAction: "host-restart",
       rpcRestartSupported: false,
+      bridgeRestartRoute: false,
       isLocalMachine: false,
       hasLocalBridge: true,
       expected: "copy-command",
@@ -41,12 +46,21 @@ describe("doctorFixRoute", () => {
     {
       fixAction: "host-start",
       rpcRestartSupported: false,
+      bridgeRestartRoute: false,
       isLocalMachine: false,
       hasLocalBridge: false,
       expected: "copy-command",
     },
+    {
+      fixAction: "host-restart",
+      rpcRestartSupported: false,
+      bridgeRestartRoute: false,
+      isLocalMachine: true,
+      hasLocalBridge: true,
+      expected: "copy-command",
+    },
   ] as const)(
-    "$fixAction supported=$rpcRestartSupported local=$isLocalMachine bridge=$hasLocalBridge → $expected",
+    "$fixAction supported=$rpcRestartSupported route=$bridgeRestartRoute local=$isLocalMachine bridge=$hasLocalBridge → $expected",
     (row) => {
       expect(
         doctorFixRoute({
@@ -54,6 +68,7 @@ describe("doctorFixRoute", () => {
           isLocalMachine: row.isLocalMachine,
           hasLocalBridge: row.hasLocalBridge,
           rpcRestartSupported: row.rpcRestartSupported,
+          bridgeRestartRoute: row.bridgeRestartRoute,
         }),
       ).toBe(row.expected);
     },
@@ -66,6 +81,7 @@ describe("doctorFixRoute", () => {
         isLocalMachine: true,
         hasLocalBridge: true,
         rpcRestartSupported: false,
+        bridgeRestartRoute: true,
       }),
     ).toBe("rpc");
     expect(
@@ -74,6 +90,7 @@ describe("doctorFixRoute", () => {
         isLocalMachine: false,
         hasLocalBridge: false,
         rpcRestartSupported: true,
+        bridgeRestartRoute: false,
       }),
     ).toBe("rpc");
   });

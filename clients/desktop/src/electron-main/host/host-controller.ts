@@ -64,6 +64,7 @@ import {
   type HostControllerIntent,
   type HostControllerStatus,
   type InstallVersionOk,
+  type LifecycleAdmissionBlock,
   type MutationKind,
   type MutationLaneStatus,
   type MutationOutcome,
@@ -682,6 +683,14 @@ export class HostController {
   private pendingRevisionCycleInFlight: Promise<MutationOutcome<ConvergeReadyOk> | null> | null =
     null;
 
+  // True only while a pending-login-item revision cycle is COMMITTED - past
+  // every precheck and either waiting on the desktop lock or running its
+  // bootout/re-register. Deliberately narrower than the D1 in-flight slot
+  // above, which is occupied during the prechecks of every monitor tick;
+  // admission must not refuse a user's install because a poll happened to be
+  // reading files at that moment.
+  private pendingRevisionCycleDisruptive = false;
+
   private downloadTail: Promise<void> = Promise.resolve();
   private downloadStatus: DownloadLaneStatus | null = null;
   private downloadAbortController: AbortController | null = null;
@@ -711,27 +720,44 @@ export class HostController {
   // ---- Canonical status --------------------------------------------------
 
   /**
-   * The mutation lane RIGHT NOW, with no await in between.
+   * What would stop an accepted lifecycle write from running ALONE right now,
+   * sampled synchronously — or `null` when nothing would.
    *
-   * `getStatus()` reads the same field, but only after three filesystem reads,
+   * `getStatus()` reads the lane too, but only after three filesystem reads,
    * so its answer is already history by the time a caller sees it. A caller
-   * that must not ENQUEUE beside a running intent needs the test and the
+   * that must not ENQUEUE beside running lifecycle work needs the test and the
    * submission in one synchronous stretch — the lane is exclusive but it does
    * not refuse a distinct intent, it queues it, so a stale "idle" verdict
    * becomes a write that lands after whatever was running. Pair this with the
    * submission and put no `await` between them.
    *
-   * This reports the RUNNING intent, and `mutationStatus` is set when a job
-   * begins rather than when it is enqueued — which is nevertheless sufficient
-   * for every caller here, because the gap is not observable from one. A job
-   * queued behind another is queued behind a job that has already set the
-   * field; the only window where something is enqueued and this reads `null`
-   * is between one job's `finally` and the next job's first line, and those
-   * are adjacent microtasks in a single drain. No macrotask — no IPC handler,
-   * no timer — can be scheduled inside it.
+   * TWO sources, because the FIFO lane is not the only lifecycle work: the
+   * pending-login-item revision cycle runs on its own tail (see
+   * `pendingRevisionTail` above) and its bootout/re-register restarts the host
+   * exactly like a lane job would. An admission check that read only the lane
+   * would accept an install or restart during that cycle, serialize it behind
+   * the refresh on the desktop lock, and deliver a second lifecycle change
+   * after a refusal was promised. This getter is the ONLY admission surface —
+   * the lane is deliberately not exposed on its own, so a future `*IfIdle`
+   * handler cannot reach for the narrower fact.
+   *
+   * The lane arm reports the RUNNING intent, and `mutationStatus` is set when
+   * a job begins rather than when it is enqueued — which is nevertheless
+   * sufficient for every caller here, because the gap is not observable from
+   * one. A job queued behind another is queued behind a job that has already
+   * set the field; the only window where something is enqueued and this reads
+   * `null` is between one job's `finally` and the next job's first line, and
+   * those are adjacent microtasks in a single drain. No macrotask — no IPC
+   * handler, no timer — can be scheduled inside it.
    */
-  get mutationLane(): MutationLaneStatus | null {
-    return this.mutationStatus;
+  get lifecycleAdmissionBlock(): LifecycleAdmissionBlock | null {
+    if (this.mutationStatus !== null) {
+      return { kind: "mutation", lane: this.mutationStatus };
+    }
+    if (this.pendingRevisionCycleDisruptive) {
+      return { kind: "login-item-refresh" };
+    }
+    return null;
   }
 
   async getStatus(): Promise<HostControllerStatus> {
@@ -1726,7 +1752,17 @@ export class HostController {
       );
       return null;
     }
-    return this.runPendingLoginItemRevisionCycle(currentVersion);
+    // Committed from here: every precheck passed, and the next thing this
+    // call does is take the desktop lock and run the disruptive bootout /
+    // re-register. Raised BEFORE the lock wait, not inside it - a caller
+    // refused admission during the wait would otherwise be accepted, queue on
+    // the same lock, and land right after the cycle it was told nothing about.
+    this.pendingRevisionCycleDisruptive = true;
+    try {
+      return await this.runPendingLoginItemRevisionCycle(currentVersion);
+    } finally {
+      this.pendingRevisionCycleDisruptive = false;
+    }
   }
 
   private async runPendingLoginItemRevisionCycle(

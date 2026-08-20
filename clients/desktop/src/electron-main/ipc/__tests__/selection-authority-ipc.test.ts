@@ -19,7 +19,7 @@ import type {
   ApplyStagedTrigger,
   ConvergeReadyOk,
   HostControllerStatus,
-  MutationLaneStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
@@ -238,7 +238,7 @@ function buildControllerStatus(): HostControllerStatus {
 }
 
 class FakeHostController implements IpcHostController {
-  readonly mutationLane: MutationLaneStatus | null = null;
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   async getStatus(): Promise<HostControllerStatus> {
     return buildControllerStatus();
   }

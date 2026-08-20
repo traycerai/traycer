@@ -35,7 +35,10 @@ import {
   readHostStagedRecordAt,
   readStoredCliInstallManifestAtPath,
 } from "@traycer/protocol/config/installation";
-import type { MutationOutcome } from "../host/host-controller-types";
+import type {
+  LifecycleAdmissionBlock,
+  MutationOutcome,
+} from "../host/host-controller-types";
 import {
   clearHostRemovedByUser,
   isHostRemovedByUser,
@@ -53,7 +56,7 @@ import {
 } from "../host/host-display-name";
 import type { IpcHostController, RunnerIpcBridge } from "./runner-ipc-bridge";
 import { restartRequestResultFromOutcome } from "./host-ipc";
-import { readLastKnownLocalHostId } from "../host/local-host-identity";
+import { classifyLocalHostIdentity } from "../host/local-host-identity";
 
 export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -509,37 +512,61 @@ function isVerifyDisabledForBuild(err: unknown): boolean {
  * that keeps saying no. Naming the operation says how long to wait instead.
  */
 /**
- * Whether this machine's host is still the one the caller meant.
+ * Whether this machine's host is still the one the caller meant, with the
+ * refusal words when it is not.
  *
  * Every handler below acts on "the local host" implicitly — the channel
  * carries no host id — so a request aimed at A lands on its replacement B
  * without this. The scope that built the request can hold a FROZEN id (an
  * explicitly-scoped requester keeps answering with the row it was created
- * for), so the renderer cannot be the one to notice; main compares against the
- * same durable identity `lastKnownLocalHostId` answers from, in the same
- * order.
+ * for), so the renderer cannot be the one to notice; main classifies the same
+ * durable identity `lastKnownLocalHostId` projects, in the same order.
+ *
+ * The two anonymous classifications go OPPOSITE ways, and the split is the
+ * fence's whole strength:
+ *
+ *  - `unverifiable` REFUSES. The enrollment record exists but cannot answer —
+ *    which is what a re-enrollment or replacement mid-write looks like, the
+ *    exact window where "assume no change" would submit A's install against
+ *    B. Refusing here still terminates: the tray/menu respawn and the copied
+ *    terminal commands stay reachable, and the condition clears when the
+ *    record settles.
+ *  - `unenrolled` ALLOWS. Nothing on this machine has ever named a host (a
+ *    legacy install predating the record, with no pid file left) — there is
+ *    no identity machinery a replacement could have gone through, and this is
+ *    exactly the down-legacy-host state the repair handlers exist for.
  *
  * Awaited BEFORE any lane test, never between one and its submission: this
  * reads files, and an await there would reopen the window the lane test
  * exists to close.
  */
-async function localHostIsStill(
+async function checkLocalHostIsStill(
   bridge: RunnerIpcBridge,
   expectedHostId: string,
-): Promise<boolean> {
-  const live = await readLastKnownLocalHostId({
+): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly message: string }
+> {
+  const live = await classifyLocalHostIdentity({
     identityEnrollmentFile: bridge.options.host.identityEnrollmentFile,
     pidMetadataFile: bridge.options.host.pidMetadataFile,
   });
-  // A host that cannot name itself right now is not proof of a CHANGE, and
-  // refusing on it would break the repair paths that run while the host is
-  // down — exactly when its files are least readable.
-  if (live === null) return true;
-  return live === expectedHostId;
+  switch (live.kind) {
+    case "named":
+      return live.hostId === expectedHostId
+        ? { ok: true }
+        : { ok: false, message: HOST_CHANGED_MESSAGE };
+    case "unverifiable":
+      return { ok: false, message: HOST_UNVERIFIED_MESSAGE };
+    case "unenrolled":
+      return { ok: true };
+  }
 }
 
 const HOST_CHANGED_MESSAGE =
   "This computer's host changed while that was open. Reopen Settings and try again.";
+
+const HOST_UNVERIFIED_MESSAGE =
+  "This computer's host can't confirm its identity right now. Try again in a moment.";
 
 export function laneBusyRestartMessage(kind: MutationKind): string {
   switch (kind) {
@@ -558,6 +585,22 @@ export function laneBusyRestartMessage(kind: MutationKind): string {
     case "recoverIfDown":
     case "freePortAndRestart":
       return "This host is already restarting.";
+  }
+}
+
+/**
+ * `laneBusyRestartMessage` widened to every admission block: the words for
+ * whatever lifecycle work caused a watched request to be refused, whichever
+ * tail it runs on.
+ */
+export function admissionBlockRestartMessage(
+  block: LifecycleAdmissionBlock,
+): string {
+  switch (block.kind) {
+    case "mutation":
+      return laneBusyRestartMessage(block.lane.kind);
+    case "login-item-refresh":
+      return "Traycer is refreshing this host's background service registration. Try again once that finishes.";
   }
 }
 
@@ -883,8 +926,9 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostRestartIfIdle,
     async (_event, raw: unknown): Promise<HostRestartRequestResult> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      if (!(await localHostIsStill(bridge, expectedHostId))) {
-        return { kind: "declined", message: HOST_CHANGED_MESSAGE };
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "declined", message: identity.message };
       }
       // The refusing twin of the handler above, for a restart someone is
       // WATCHING. `respawn()` goes through the same exclusive lane as every
@@ -894,13 +938,16 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // a state the person never saw, and typically one the update just
       // restarted anyway.
       //
-      // Same atomicity rule as `maintenance:installVersion`: test the lane and
-      // submit with NO await in between, because a lane read that crosses an
+      // Same atomicity rule as `maintenance:installVersion`: test admission
+      // and submit with NO await in between, because a read that crosses an
       // await is already history. `respawn()` registers on the tail
       // synchronously.
-      const lane = bridge.options.hostController.mutationLane;
-      if (lane !== null) {
-        return { kind: "declined", message: laneBusyRestartMessage(lane.kind) };
+      const block = bridge.options.hostController.lifecycleAdmissionBlock;
+      if (block !== null) {
+        return {
+          kind: "declined",
+          message: admissionBlockRestartMessage(block),
+        };
       }
       return restartRequestResultFromOutcome(
         await bridge.options.hostController.respawn(),
@@ -980,8 +1027,9 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerMaintenanceUpdateCheck,
     async (_event, raw: unknown): Promise<HostUpdateCheckResponse> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      if (!(await localHostIsStill(bridge, expectedHostId))) {
-        throw new Error(HOST_CHANGED_MESSAGE);
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
       }
       const includePreReleases = optionalBoolean(raw, "includePreReleases");
       const args = [
@@ -1023,8 +1071,9 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerMaintenanceDoctor,
     async (_event, raw: unknown): Promise<MaintenanceDoctorProjection> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      if (!(await localHostIsStill(bridge, expectedHostId))) {
-        throw new Error(HOST_CHANGED_MESSAGE);
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
       }
       let payload: unknown;
       try {
@@ -1058,8 +1107,9 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerMaintenanceInstallationInfo,
     async (_event, raw: unknown): Promise<HostGetInstallationInfoResponse> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
-      if (!(await localHostIsStill(bridge, expectedHostId))) {
-        throw new Error(HOST_CHANGED_MESSAGE);
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
       }
       // Byte-for-byte the host resolver's `readInstallationInfo`, pointed at
       // the desktop's own path authority for the same files: a missing
@@ -1090,8 +1140,9 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const force = optionalBoolean(raw, "force");
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
       // BEFORE the lane test, never between it and the submission.
-      if (!(await localHostIsStill(bridge, expectedHostId))) {
-        throw new Error(HOST_CHANGED_MESSAGE);
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        throw new Error(identity.message);
       }
       // ATOMIC test-and-submit, and the reason this is a separate channel from
       // `traycerHostInstallVersion`. The lane is exclusive but it does not
@@ -1106,7 +1157,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // clearHostRemovalIfSet()` here (as the sibling handler does) would
       // reopen exactly the window this exists to close — `installVersion`
       // clears the removed-by-user sentinel inside the mutation body anyway.
-      if (bridge.options.hostController.mutationLane !== null) {
+      if (bridge.options.hostController.lifecycleAdmissionBlock !== null) {
         return { kind: "lane-busy" };
       }
       const outcome = await bridge.options.hostController.installVersion(
@@ -1125,8 +1176,9 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       if (repair !== "converge-ready" && repair !== "register-service") {
         throw new Error(`Unknown doctor repair: ${String(repair)}`);
       }
-      if (!(await localHostIsStill(bridge, expectedHostId))) {
-        return { kind: "host-changed", message: HOST_CHANGED_MESSAGE };
+      const identity = await checkLocalHostIsStill(bridge, expectedHostId);
+      if (!identity.ok) {
+        return { kind: "host-changed", message: identity.message };
       }
       // The Doctor sheet's two LIFECYCLE repairs, refused rather than queued
       // for the same reason a watched restart is: `convergeReady` converges to
@@ -1136,11 +1188,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // state cannot see a lane the background reconciler armed.
       //
       // Atomic: the lane test and the submission have no await between them.
-      const lane = bridge.options.hostController.mutationLane;
-      if (lane !== null) {
+      const block = bridge.options.hostController.lifecycleAdmissionBlock;
+      if (block !== null) {
         return {
           kind: "lane-busy",
-          message: laneBusyRestartMessage(lane.kind),
+          message: admissionBlockRestartMessage(block),
         };
       }
       const outcome =
