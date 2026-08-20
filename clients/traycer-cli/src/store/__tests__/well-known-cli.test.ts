@@ -413,8 +413,12 @@ describe("stageWellKnownCliBinary", () => {
 
   // Sweep tests exercise `sweepSlotLeftovers` indirectly through
   // `stageWellKnownCliBinary`, which is its only caller - see the sweep's
-  // own doc comment in well-known-cli.ts for why `.staging-` orphans get
-  // age-gated treatment while `.old-` ones are swept on sight.
+  // own doc comment in well-known-cli.ts for the full reasoning. Both the
+  // `.staging-` and `.old-` prefixes are age-gated, on different clocks: a
+  // `.staging-` orphan's age comes from `stat`, but an `.old-` aside's age
+  // comes from the timestamp encoded in its NAME - a rename doesn't change
+  // mtime, and staging mirrors the source binary's mtime onto the slot, so
+  // an aside file's mtime is its binary's timestamp, not the rename's.
   it("removes a .staging- orphan older than the 1 hour cutoff during the next staging", async () => {
     const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
       await import("../well-known-cli");
@@ -483,6 +487,74 @@ describe("stageWellKnownCliBinary", () => {
     expect(readFileSync(wellKnownPath, "utf8")).toBe(sourceBytes);
     expect(existsSync(staleOrphan)).toBe(false);
     expect(existsSync(freshOrphan)).toBe(true);
+  });
+
+  // Aside-sweep tests exercise the SAME sweep, but the age comes from the
+  // timestamp encoded in the `.old-` name rather than from `stat` - see
+  // `asideStampedAt`'s doc comment for why a rename can't be aged via mtime.
+  it("does not remove a FRESH .old- aside, which may still be the slot's only rollback copy", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const asidePath = `${wellKnownPath}.old-${Date.now()}-4242`;
+    writeFileSync(asidePath, "rollback copy from an in-flight rename-aside");
+    // Deliberately give this FRESH aside an OLD mtime. Age is read from the
+    // NAME's embedded Date.now(), never from `stat` - a rename doesn't
+    // change mtime, and staging mirrors the source binary's own mtime onto
+    // the slot, so an aside's real mtime is its binary's timestamp and
+    // would misread as ancient if the sweep ever consulted it. This file
+    // surviving the sweep is proof the code reads the name, not the mtime.
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(asidePath, old, old);
+    const source = join(workHome, "real-binary");
+    writeFileSync(source, "binary bytes");
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result.staged).toBe("staged");
+    expect(existsSync(asidePath)).toBe(true);
+  });
+
+  it("removes a STALE .old- aside past the 5 minute inflight window", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const asidePath = `${wellKnownPath}.old-${Date.now() - 10 * 60 * 1000}-4242`;
+    writeFileSync(asidePath, "aside left behind by a publish that finished");
+    const source = join(workHome, "real-binary");
+    writeFileSync(source, "binary bytes");
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result.staged).toBe("staged");
+    expect(existsSync(asidePath)).toBe(false);
+  });
+
+  it("removes an unstamped legacy .old- aside whose name predates the stamp convention", async () => {
+    const { stageWellKnownCliBinary, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const asidePath = `${wellKnownPath}.old-legacy-name`;
+    writeFileSync(asidePath, "aside with no parseable timestamp in its name");
+    const source = join(workHome, "real-binary");
+    writeFileSync(source, "binary bytes");
+
+    const result = await stageWellKnownCliBinary({
+      environment: ENVIRONMENT,
+      binaryPath: source,
+    });
+
+    expect(result.staged).toBe("staged");
+    expect(existsSync(asidePath)).toBe(false);
   });
 
   // Regression test: on a FROM-SCRATCH install nothing under the CLI
