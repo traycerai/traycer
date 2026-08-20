@@ -466,38 +466,45 @@ async function slotRefreshPlan(
     // service, which is the very downgrade the guard exists to prevent.
     //
     // The question is asked of the link's TARGET rather than of the slot
-    // because the target is what the bytes ARE - not as a recursion
-    // defence, which it never was. Probing either spelling re-enters this
-    // planner in the child, since the lexical `resolve(wellKnownPath) ===
-    // source` check above cannot see that a symlinked slot and its target
-    // name one file. What ends the recursion is `slotOutranksRunning`
-    // declining to spawn this process's own image: the child launched as
-    // the target asks nothing, stages the slot from itself, de-symlinks it,
-    // and answers. Stated once, there.
+    // because the target is what the bytes ARE. Probing either spelling
+    // re-enters this planner in the child, since the lexical
+    // `resolve(wellKnownPath) === source` check above cannot see that a
+    // symlinked slot and its target name one file. What ends the recursion
+    // is `slotOutranksRunning` declining to spawn this process's own image.
+    // Stated once, there.
     //
-    // Preserving the target only on a version answer, rather than on
-    // `realpath` succeeding, is the other half. Bytes that resolve are not
-    // therefore a CLI: a link may point at a shim, another tool, or
-    // anything else that survived the years since some installer wrote it,
-    // and copying that into the slot hands the registered service and the
-    // host a program that will never repair itself - the repair path here
-    // runs only when a real CLI is invoked, and after this the thing being
-    // invoked is not one. So a target that cannot say what it is loses to
-    // the running packaged CLI, which demonstrably can. (What "usable"
-    // means is exactly what it means one branch below, and both halves are
-    // decided in `slotOutranksRunning`: it answered `--version` with
-    // something parseable, AND it is a binary the slot may hold at all -
-    // an npm install answers that question perfectly well and still must
-    // never be copied here.)
+    // A target that outranks is left ALONE - never copied. This planner
+    // stages only bytes an authority vouches for: the manifest's binary, or
+    // the image this process is running. Bytes merely FOUND at the end of a
+    // link are neither, and every trust once extended to them needed its own
+    // guard (a spelling that named this process's own image, an npm script
+    // that answers `--version` fine, a FIFO that blocks the read). Those
+    // guards all remain, because the probe still spawns the target - but no
+    // verdict they produce can put foreign bytes in the slot any more.
     //
-    // Not strictly newer - older, equal, unreadable, dangling - all fall
-    // through to the ordinary stage from `source`, which de-symlinks and
-    // refreshes in one step. That is also what made copy-not-symlink the
-    // rule: a link nobody can vouch for must not survive as one.
+    // Declining to copy is not declining to repair; it is delegating the
+    // repair to its rightful author. "Strictly newer than this process"
+    // implies the target carries this same refresh - it runs before
+    // commander parses the `--version` the probe just asked for - so the
+    // child, launched as the target, declines to probe its own image and
+    // stages the slot from itself, de-symlinking it with exactly the bytes
+    // this arm used to copy. By the time the probe's answer arrives here the
+    // link is normally already a regular file. When the child could not act
+    // (it lost the CLI lock to a sibling writer), the link survives one more
+    // round: bounded staleness the next probe or the target's next own run
+    // repairs, never a wedge. And a link that later DANGLES stops answering,
+    // loses seniority, and is staged over - self-healing Desktop's old
+    // symlink slot never had.
+    //
+    // Not strictly newer - older, equal, unreadable, ineligible, dangling -
+    // all fall through to the ordinary stage from `source`, which
+    // de-symlinks and refreshes in one step. That is also what made
+    // copy-not-symlink the rule: a link nobody can vouch for must not
+    // survive as one.
     if (!anchored) {
       const target = await realpath(wellKnownPath).catch(() => null);
       if (target !== null && (await slotOutranksRunning(target))) {
-        return { kind: "stage", source: target };
+        return { kind: "current" };
       }
     }
     return { kind: "stage", source };
@@ -590,11 +597,19 @@ async function slotOutranksRunning(candidatePath: string): Promise<boolean> {
   //
   // A version answer is exactly what an npm CLI gives (the shebang runs it),
   // so without this an old Desktop symlink pointing at a newer npm install
-  // puts a Node script behind `bin/traycer`, and nothing repairs it: the next
-  // packaged run probes that slot, the script answers newer again, and the
-  // guard leaves it there forever while the service cannot start. Refusing
-  // here is also what makes that state RECOVERABLE if it is ever reached by
-  // hand - `false` stages the running SEA over it.
+  // would hold seniority forever: the script answers newer on every probe,
+  // the guard leaves the link standing, and the registered service keeps
+  // spawning a shebang whose `node` never resolves. Refusing makes the link
+  // lose the contest and get staged over with the running SEA - and the same
+  // for a script somehow sitting AT the slot by hand.
+  //
+  // Eligibility is also what makes the symlink arm's delegation sound. That
+  // arm leaves an outranking target alone on the grounds that the target,
+  // spawned by this very probe, repairs the slot itself - which only a
+  // PACKAGED CLI does (`isPackagedRun` gates the refresh). Checked here,
+  // before the spawn, every target that can win the contest is a real
+  // executable image, so the thing deferred to is a thing that carries the
+  // healer.
   if (!(await isSlotEligibleBinary(candidatePath))) return false;
   let reported: string;
   try {
