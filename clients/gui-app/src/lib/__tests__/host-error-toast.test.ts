@@ -459,6 +459,103 @@ describe("transport-class causes never reach a reportable toast", () => {
     expect(new Set(ids).size).toBe(2);
   });
 
+  function hostAttestedNoDispatchTimeout(
+    method: string,
+  ): HostTransportFailureError {
+    // Exactly what `ws-rpc-client.ts`'s `hostFatalError` mints for the host's
+    // typed `RPC_REQUEST_TIMEOUT` fatal: the RETRYABLE subclass, and yet
+    // carrying the host's fatal frame in `fatalDetails`. Both halves are
+    // deliberate upstream - the host ANSWERED, so there is a frame, and what it
+    // answered is "I never dispatched your request", which is precisely the
+    // no-dispatch guarantee that makes retrying a non-idempotent method safe.
+    return new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Host timed out awaiting the request frame",
+      requestId: `req-${method}`,
+      method,
+      fatalDetails: {
+        code: "RPC_REQUEST_TIMEOUT",
+        reason: "Host timed out awaiting the request frame",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+  }
+
+  it("reads a retryable attestation as transport even though it carries fatal details", () => {
+    // The discriminator cannot be `fatalDetails === null` alone. On this error
+    // `fatalDetails` is an ATTESTATION ("safe to retry, never dispatched"), not
+    // a VERDICT ("the host was reached and refused") - opposite meanings behind
+    // one field. Classifying it as a verdict is what turned a recoverable
+    // transport condition into a durable failure row with a Report Issue
+    // button, which is the exact shape this whole branch exists to remove.
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+
+    toastFromHostError(
+      hostAttestedNoDispatchTimeout("terminal.create"),
+      "Couldn't create terminal.",
+    );
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+  });
+
+  it("keeps the no-dispatch guarantee in the copy for a retryable attestation", () => {
+    // Fixing the classifier alone would move the bug one layer down: the
+    // verdict branch keys on `code === "RPC_ERROR"` plus a non-empty reason,
+    // which this error ALSO matches, so it would have rendered the host's raw
+    // timeout reason as a terminal verdict.
+    toastFromHostError(
+      hostAttestedNoDispatchTimeout("chat.delete"),
+      "Couldn't delete chat.",
+    );
+
+    const message = vi.mocked(toast).mock.calls[0][0];
+    expect(message).toContain("didn't go through");
+    expect(message).not.toContain("Host timed out awaiting the request frame");
+  });
+
+  function requestOnlyUnaryTimeout(method: string): HostTransportFailureError {
+    // What `RemoteSession.unaryTimeoutError` mints when ONE unary outlives its
+    // response deadline. `rejectUnary` tombstones that single stream and closes
+    // it; the session stays `ready` and no reconnect is scheduled.
+    return new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: `Remote unary '${method}' timed out awaiting a response`,
+      requestId: `req-${method}`,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  it("never promises a reconnection that is not happening", () => {
+    // Neither of these errors proves session recovery is active, and one of
+    // them proves the opposite: a request-only unary timeout leaves the session
+    // ready with nothing redialling. Promising recovery there tells the user to
+    // wait for something that will never arrive.
+    //
+    // The ambiguous arm cannot be split, and that is stated rather than worked
+    // around: a post-send socket drop (session genuinely lost, redial running)
+    // and a unary timeout (session healthy) are both a plain
+    // `HostTransportFailureError` with null `fatalDetails`. With no fact to
+    // separate them, the honest copy is the one that claims neither. Narrating
+    // recovery is the session-level affordance's job, not this toast's.
+    toastFromHostError(requestOnlyUnaryTimeout("chat.rename"), "a");
+    toastFromHostError(hostAttestedNoDispatchTimeout("terminal.create"), "b");
+    toastFromHostError(retryableTransportFailure("epic.create"), "c");
+
+    const messages = vi
+      .mocked(toast)
+      .mock.calls.map((call) => call[0])
+      .filter((message): message is string => typeof message === "string");
+    expect(messages).toHaveLength(3);
+    for (const message of messages) {
+      expect(message).not.toMatch(/reconnect/i);
+    }
+  });
+
   function terminalTransportFailure(method: string): HostTransportFailureError {
     // Exactly the shape `RemoteSession.notReadyRejection` mints for a request
     // parked against a session that has gone terminal: the CLASS is transport,

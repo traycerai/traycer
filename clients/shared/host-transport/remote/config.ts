@@ -82,7 +82,19 @@ export const RECONNECT_MAX_BACKOFF_MS = 30_000;
  * immediate rung, while a genuinely sick host backs off exactly as intended.
  *
  * The reset timer is armed at the ready boundary and cancelled on any
- * connection loss, so partial credit is never awarded.
+ * connection loss (in `dropConnection`, so every drop path clears it), so
+ * partial credit is never awarded.
+ *
+ * COLLISION WARNING, for whoever changes this number. It is currently equal to
+ * {@link RECONNECT_MAX_BACKOFF_MS}, and the two are independent concepts - a
+ * probation window and a backoff ceiling - that nothing requires to match.
+ * `remote-session.test.ts` identifies timers by their DELAY, so while these are
+ * equal the probation timer and a capped redial are indistinguishable to a spy
+ * assertion. That has already cost: an assertion of the form
+ * `toHaveBeenCalledWith(fn, 30_000)` was satisfied by the probation timer and
+ * passed for months against a backoff armed at 16s. Three call sites in that
+ * file now clear or fingerprint spies specifically to work around it. Moving
+ * either constant is safe; assuming they are the same one is not.
  */
 export const RECONNECT_STABLE_RESET_MS = 30_000;
 

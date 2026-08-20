@@ -278,6 +278,16 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
  * malformed, and it is rejected the same fail-closed way every other
  * structural violation on this path is.
  *
+ * "Fail closed" here means the STREAM, not the session. The
+ * `MuxFrameDecodeError` this throws is routed per-stream by
+ * `RemoteSession.failStreamOnInboundError`, alongside `ChunkReassemblyError`:
+ * by the time it can be thrown the frame header has already decoded and the
+ * fault is attributable to one stream, and this function holds no state
+ * between frames for a bad payload to poison. Dropping the session instead
+ * would turn any deterministic mis-encode of one frame in a large transfer
+ * into a reconnect loop — reconnect, re-request the same body, fail again —
+ * which is the outcome the per-stream routing exists to prevent.
+ *
  * The output buffer is deliberately allocated ONE BYTE LARGER than the
  * declared length, and that byte is what makes the length check a check at all.
  * `inflateSync` reports the bytes it wrote by returning `out.subarray(0, n)` —

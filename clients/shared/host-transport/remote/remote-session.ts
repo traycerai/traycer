@@ -70,6 +70,7 @@ import { resolveUnavailableMethodDegrade } from "../unavailable-method-degrade";
 import {
   CURRENT_MUX_VERSION,
   FINE_INITIAL_BULK_SEND_CREDITS,
+  MuxFrameDecodeError,
   MuxFrameType,
   MuxMessageSizeError,
   QosClass,
@@ -1524,14 +1525,29 @@ export class RemoteSession<
 
   /**
    * Per-stream routing for deterministic inbound reassembly failures
-   * (Decision 6 of the whole-body-chunking plan): a chunk-sequence fault or
-   * an over-cap message on stream N proves nothing about the session — the
-   * Noise decrypt already succeeded — so it fails that ONE stream (a live
-   * subscription gets its fatal, a pending unary rejects) instead of the
-   * blanket connection drop, which at 100 MB snapshot scale would loop:
-   * reconnect → identical snapshot → identical failure. Returns false for
-   * anything that IS session-level (control-stream faults, unknown errors),
-   * which the caller re-throws into the connection-lost path.
+   * (Decision 6 of the whole-body-chunking plan): a chunk-sequence fault, an
+   * over-cap message, or an undecodable body on stream N proves nothing about
+   * the session — the Noise decrypt already succeeded — so it fails that ONE
+   * stream (a live subscription gets its fatal, a pending unary rejects)
+   * instead of the blanket connection drop, which at 100 MB snapshot scale
+   * would loop: reconnect → identical snapshot → identical failure. Returns
+   * false for anything that IS session-level (control-stream faults, unknown
+   * errors), which the caller re-throws into the connection-lost path.
+   *
+   * `MuxFrameDecodeError` belongs in that set even though the class is also
+   * thrown for FRAME-level faults, and the placement of the caller's `try` is
+   * what makes the distinction sound: `decodeMuxFrame` runs OUTSIDE it, so a
+   * malformed header — which names no stream and therefore has nothing to
+   * blame — still reaches `handleConnectionLost` unchanged. What reaches HERE
+   * is only what `ChunkReassembler.accept` throws for an already-attributed
+   * frame: a body whose framing or json will not decode, or a compressed
+   * payload `inflateFramePayload` rejects. Both are per-stream by
+   * construction. `inflateFramePayload` in particular is a pure function over
+   * one frame — raw deflate into a fresh buffer, no context carried between
+   * frames or streams — so a corrupt payload cannot have poisoned anything a
+   * sibling stream depends on, and failing the session closed would buy no
+   * safety while guaranteeing the reconnect loop above for any peer that
+   * mis-encodes deterministically.
    */
   private failStreamOnInboundError(
     generation: number,
@@ -1540,7 +1556,8 @@ export class RemoteSession<
   ): boolean {
     if (
       !(error instanceof ChunkReassemblyError) &&
-      !(error instanceof MuxMessageSizeError)
+      !(error instanceof MuxMessageSizeError) &&
+      !(error instanceof MuxFrameDecodeError)
     ) {
       return false;
     }
@@ -1551,10 +1568,11 @@ export class RemoteSession<
       return true;
     }
     const details: FatalErrorDetails = {
-      code:
-        error instanceof MuxMessageSizeError
-          ? "STREAM_MESSAGE_TOO_LARGE"
-          : "STREAM_CHUNK_REASSEMBLY_FAILED",
+      // Its own code rather than folding into the reassembly one: a corrupt
+      // compressed payload and a chunk-sequence fault send a reader to
+      // different places, and a fatal that misnames its own cause is the
+      // misdirection this epic keeps removing.
+      code: streamInboundFailureCode(error),
       reason: error.message,
       incompatibleMethods: null,
       upgradeGuidance: null,
@@ -2203,11 +2221,6 @@ export class RemoteSession<
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
-    // Before anything else: a connection that is being lost never earned its
-    // ladder reset, however close it came. THE host-plane funnel is the right
-    // place for this precisely because every loss arrives here.
-    this.clearStableResetTimer();
-    this.noteConnectionLost();
     this.dropConnection(cause);
     this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnect();
@@ -2247,8 +2260,26 @@ export class RemoteSession<
    * what happens next - `handleConnectionLost` schedules the backoff redial
    * immediately; the `UNAUTHORIZED` session-fatal path first revalidates the
    * credential and only then reconnects (or goes terminal).
+   *
+   * "Shared" is now literal. The two lines below used to sit in
+   * `handleConnectionLost`, which reads as the funnel but is only ONE of three
+   * callers - and the other two are exactly the ones that keep the session
+   * disconnected for an unbounded time. `handleUnauthorizedSessionFatal` awaits
+   * an auth-plane round trip before it redials, and the connect-path-threw
+   * lander is a pre-dial failure; neither cleared the ladder-reset probation
+   * timer, so an ABSENT host went on being counted as sustained health and a
+   * timer that expired mid-outage handed the eventual redial the immediate
+   * rung. Both facts are properties of the DROP - the ladder reset was not
+   * earned, and this is when the outage clock starts - so they belong with the
+   * drop rather than with one caller's choice of what to do next.
    */
   private dropConnection(cause: string): void {
+    // Before anything else: a connection that is being lost never earned its
+    // ladder reset, however close it came.
+    this.clearStableResetTimer();
+    // Guarded internally to once per outage, so a failed redial arriving here
+    // again does not restart the clock.
+    this.noteConnectionLost();
     this.phase = "reconnecting";
     this.restoredStreamIds.clear();
     this.teardownConnection(cause);
@@ -3434,6 +3465,19 @@ function abortedRequestError(
     requestId,
     method,
   });
+}
+
+/** The stream-fatal code for one of the three per-stream inbound failures {@link RemoteSession.failStreamOnInboundError} routes. */
+function streamInboundFailureCode(
+  error: ChunkReassemblyError | MuxMessageSizeError | MuxFrameDecodeError,
+): string {
+  if (error instanceof MuxMessageSizeError) {
+    return "STREAM_MESSAGE_TOO_LARGE";
+  }
+  if (error instanceof MuxFrameDecodeError) {
+    return "STREAM_BODY_DECODE_FAILED";
+  }
+  return "STREAM_CHUNK_REASSEMBLY_FAILED";
 }
 
 function unaryTimeoutError(

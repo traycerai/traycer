@@ -1437,6 +1437,69 @@ describe("RemoteSession reconnect ladder accounting", () => {
   );
 
   it(
+    "cancels the ladder-reset probation timer when an UNAUTHORIZED session fatal drops a ready session",
+    async () => {
+      // The third loss edge that bypassed the funnel, and the one the
+      // `host_detached` fix above does NOT cover:
+      // `handleUnauthorizedSessionFatal` calls `dropConnection()` directly and
+      // then awaits credential revalidation. Revalidation is a network round
+      // trip against the auth plane, so the disconnected window is open-ended
+      // - and for as long as the probation timer runs through it, an ABSENT
+      // host is being counted as sustained health. If it expires there,
+      // `reconnectAttempt` returns to 0 and the redial that revalidation
+      // finally triggers is handed the immediate rung, hammering a host that
+      // has just refused this client's credential.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      // Held open deliberately. Letting revalidation resolve would redial, and
+      // the next ready boundary calls `clearStableResetTimer` on its way to
+      // arming a fresh probation timer - which would satisfy the assertion
+      // below through the RECOVERY path rather than the drop, and the test
+      // would pass against the unfixed code. The bug lives entirely in the
+      // window this pause holds open.
+      let releaseRevalidation: () => void = () => undefined;
+      const auth: StreamAuthRevalidator = {
+        revalidateForReconnect: () =>
+          new Promise((resolve) => {
+            releaseRevalidation = () => resolve("rotated");
+          }),
+      };
+      const session = buildSession(relay, lease, auth);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // Premise, same as the sibling above: exactly one 30s timer exists, so
+        // this fingerprints the probation timer and not `RECONNECT_MAX_BACKOFF_MS`.
+        const armed = setTimeoutSpy.mock.results
+          .filter(
+            (_result, index) =>
+              setTimeoutSpy.mock.calls[index][1] === RECONNECT_STABLE_RESET_MS,
+          )
+          .map((result) => result.value);
+        expect(armed).toHaveLength(1);
+
+        clearTimeoutSpy.mockClear();
+        await relay.sendStreamFatal(
+          SESSION_CONTROL_STREAM_ID,
+          unauthorizedDetails(),
+        );
+        await vi.waitFor(() => expect(session.isReady()).toBe(false), WAIT);
+
+        expect(clearTimeoutSpy).toHaveBeenCalledWith(armed[0]);
+      } finally {
+        releaseRevalidation();
+        session.close();
+        setTimeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "a congestion kill after the session reached ready redials at the full cap, not one rung under it",
     async () => {
       // `raiseReconnectBackoffToMax` solves for the ATTEMPT whose backoff is
@@ -1460,9 +1523,17 @@ describe("RemoteSession reconnect ladder accounting", () => {
 
         const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
         expect(delays).toContain(RECONNECT_MAX_BACKOFF_MS);
-        // The one-rung-short value, named rather than written as 16_000 so it
-        // tracks the constants if they ever move.
-        expect(delays).not.toContain(RECONNECT_MAX_BACKOFF_MS / 2);
+        // The value the regression actually produces: rung 4 of the doubling
+        // ladder rather than rung 5. Derived from the constants so it tracks
+        // them if they move.
+        //
+        // It was written as `RECONNECT_MAX_BACKOFF_MS / 2` (15_000), which is
+        // not a rung of a ladder that doubles from 1_000 and therefore could
+        // never fail - the positive assertion above was carrying this test on
+        // its own. Same family as the 30_000 collision this file works around
+        // in three places: an assertion naming a plausible number rather than
+        // a reachable one.
+        expect(delays).not.toContain(RECONNECT_INITIAL_BACKOFF_MS * 2 ** 4);
       } finally {
         session.close();
         setTimeoutSpy.mockRestore();
@@ -2778,6 +2849,108 @@ describe("RemoteSession per-stream inbound error routing", () => {
     TEST_BUDGET_MS,
   );
 
+  it(
+    "fails only the corrupted stream on an undecodable COMPRESSED frame - a deterministic mis-encode must not become a reconnect loop",
+    async () => {
+      // The asymmetry this closes. `inflateFramePayload` throws
+      // `MuxFrameDecodeError`, which the per-stream router did not recognise,
+      // so one malformed compressed frame tore down the whole session - and a
+      // peer that mis-encodes DETERMINISTICALLY then loops: drop, reconnect,
+      // re-request the same body, fail again. That loop is what per-stream
+      // routing exists to prevent, and it is the exact failure shape this
+      // epic's ruling rules out.
+      //
+      // Safe to route per-stream because the fault is provably confined to one
+      // stream by the time it is thrown: `decodeMuxFrame` already parsed the
+      // header OUTSIDE this try (a header fault has no stream to blame and
+      // stays session-fatal), the Noise decrypt already succeeded, and
+      // `inflateFramePayload` is a pure per-frame function - raw deflate with
+      // a fresh output buffer, holding no state across frames or streams that
+      // a bad payload could poison.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let streamAClosedReason: StreamCloseReason | null = null;
+      streamA.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamAClosedReason = reason;
+        }
+      });
+      let streamBDelivered: StreamFrameEnvelope | null = null;
+      streamB.onServerFrame((envelope) => {
+        streamBDelivered = envelope;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [streamIdA, streamIdB] = relay.subscribeStreamIds;
+
+        // A frame FLAGGED compressed whose payload is not a valid deflate
+        // stream: a well-formed 4-byte plaintext-length header (so it clears
+        // the length and bound checks) followed by bytes `inflateSync` cannot
+        // decode. This is the mis-encoding shape, not a truncation.
+        const corrupt = new Uint8Array(4 + 8);
+        new DataView(corrupt.buffer).setUint32(0, 64);
+        corrupt.set([9, 9, 9, 9, 9, 9, 9, 9], 4);
+        const corruptFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: streamIdA,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: corrupt,
+        };
+        relay.deliverToClient(await relay.encryptFrame(corruptFrame));
+
+        await vi.waitFor(
+          () => expect(streamAClosedReason).not.toBeNull(),
+          WAIT,
+        );
+        expect(streamAClosedReason).toEqual({
+          kind: "fatalError",
+          details: expect.objectContaining({
+            code: "STREAM_BODY_DECODE_FAILED",
+          }),
+        });
+
+        // The loop this prevents, asserted as the absence of a redial: the
+        // session was never dropped, so the host never saw a second `open`.
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers).toHaveLength(1);
+
+        // And the sibling stream, which shares the connection and the
+        // reassembler, is untouched.
+        const normalEnvelope = { kind: "snapshot", hasBinaryPayload: false };
+        await relay.sendStreamFrame(
+          streamIdB,
+          normalEnvelope,
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(streamBDelivered).not.toBeNull(), WAIT);
+        expect(streamBDelivered).toEqual(normalEnvelope);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   // An "over-cap sequence via a shrunk-cap reassembler" sub-case
   // (`MuxMessageSizeError` routing) is intentionally NOT covered here.
   // `RemoteSession` constructs the client-side `ActiveConnection.reassembler`
@@ -3807,12 +3980,20 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
       // the ready boundary (its delay is the unique fingerprint), so this
       // test proves the SPECIFIC timer was cancelled - not merely that
       // *some* `clearTimeout` call happened to fire around the same time.
-      const stableResetCallIndex = setTimeoutSpy.mock.calls.findIndex(
-        (call) => call[1] === RECONNECT_STABLE_RESET_MS,
-      );
-      expect(stableResetCallIndex).toBeGreaterThanOrEqual(0);
+      const stableResetCallIndexes = setTimeoutSpy.mock.calls
+        .map((call, index) =>
+          call[1] === RECONNECT_STABLE_RESET_MS ? index : -1,
+        )
+        .filter((index) => index >= 0);
+      // `RECONNECT_MAX_BACKOFF_MS` is also 30_000, so a second match would
+      // mean this test is about to fingerprint the backoff handle instead.
+      // Safe today only because the session reaches ready on the first dial
+      // and no capped backoff timer exists; an edit that adds a prior failure
+      // to the setup would silently select the wrong one, and the assertion
+      // would then pass or fail for a reason unrelated to its name.
+      expect(stableResetCallIndexes).toHaveLength(1);
       const stableResetHandle =
-        setTimeoutSpy.mock.results[stableResetCallIndex].value;
+        setTimeoutSpy.mock.results[stableResetCallIndexes[0]].value;
 
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
       relay.dropCurrentConnection();

@@ -69,8 +69,23 @@ const TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID = "host-transport-notice-unknown";
  * is not scheduled (the session is closed; nothing is redialling) and buries
  * the one thing the user could act on. A verdict means the host was reached
  * and answered, which is never a statement about the connection.
+ *
+ * `RetryableTransportError` is exempt from that clause, and the exemption is
+ * the whole reason this is a function rather than one expression. On the
+ * retryable subclass `fatalDetails` carries the OPPOSITE meaning: it is the
+ * host's own attestation that it sat in `awaitingRequest` and never dispatched
+ * the call (`ws-rpc-client.ts`'s `RPC_REQUEST_TIMEOUT` arm), which is exactly
+ * the no-dispatch guarantee that licenses retrying a non-idempotent method.
+ * Reading that attestation as a verdict routes a recoverable transport
+ * condition to `reportableErrorToast` once retries are exhausted - a durable
+ * failure row plus a Report Issue button for ordinary network weather. So the
+ * discriminator is "was the host reached AND did it refuse", and only the
+ * non-retryable subclass can answer yes.
  */
 function isTransportClassFailure(error: HostRpcError): boolean {
+  if (error instanceof RetryableTransportError) {
+    return true;
+  }
   return (
     error instanceof HostTransportFailureError && error.fatalDetails === null
   );
@@ -121,14 +136,27 @@ function transportNoticeToast(error: HostRpcError): void {
   // and had only its RESPONSE lost. Telling that user it did not go through
   // invites them to do it again - and at ~158 gesture call sites the set of
   // things being repeated includes deletes, revokes and archives.
+  //
+  // Neither arm narrates RECOVERY, and that is a correction rather than an
+  // omission. "Reconnecting" was false for two of the errors that reach here:
+  // a request-only unary timeout (`RemoteSession.unaryTimeoutError`) tombstones
+  // one stream and leaves the session `ready` with nothing redialling, and the
+  // host-attested no-dispatch timeout was ANSWERED by a healthy host. Worse,
+  // the two are not separable at this boundary - a genuine post-send socket
+  // drop, where a redial really is running, arrives as the same class with the
+  // same null `fatalDetails` as the unary timeout. With no fact available to
+  // tell them apart, the only honest copy is the one that claims neither, and
+  // telling a user to wait for a recovery that is not coming is the worse
+  // error of the two. Narrating the connection is the session-level
+  // affordance's job; this toast's job is the gesture's outcome.
   if (error instanceof RetryableTransportError) {
-    toast("Reconnecting to the Traycer host — that didn't go through.", {
+    toast("That didn't go through — the Traycer host never received it.", {
       id: TRANSPORT_NOTICE_TOAST_ID,
     });
     return;
   }
   toast(
-    "Reconnecting to the Traycer host — no reply came back, so this may or may not have gone through.",
+    "No reply came back from the Traycer host, so this may or may not have gone through.",
     { id: TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID },
   );
 }
@@ -226,30 +254,29 @@ function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
 }
 
 /**
- * Copy for the two cases whose real cause is NOT the `code` on the error:
- * an unreachable host, and a terminal verdict riding on a transport-class
- * failure. Returns `null` when neither applies and the ordinary code mapping
- * should run.
+ * Copy for a terminal verdict riding on a transport-class failure - the one
+ * case whose real cause is NOT the `code` on the error. Returns `null` when it
+ * does not apply and the ordinary code mapping should run.
+ *
+ * PRECONDITION: the error is not transport-class. Both exported callers return
+ * on `isTransportClassFailure` before reaching the code mapping, which is what
+ * makes the single check below sufficient - a retryable attestation matches
+ * this branch's shape exactly (`RPC_ERROR` + a non-empty `reason`), so without
+ * that guard the host's raw timeout text would render as a verdict and the
+ * classifier fix would simply move the bug one layer down.
+ *
+ * That guard is not restated here. Re-testing the caller's precondition would
+ * add a branch no test can reach, and an unreachable branch that looks like a
+ * safety net is worse than none - the same call already made for
+ * `HostRequestAbortedError` above, and for the same reason. The composition is
+ * covered where it is observable instead: at the exported helpers, driven with
+ * the real retryable-attestation shape.
  *
  * Split out from {@link hostErrorToastMessage} to keep that function under the
- * complexity ceiling, and because these two share a premise the code-keyed
- * branches do not: they read the CLASS and `fatalDetails`, never `code`.
+ * complexity ceiling, and because it reads the CLASS and `fatalDetails`, never
+ * `code`.
  */
-function hostConnectionOrVerdictMessage(error: HostRpcError): string | null {
-  // Connection-level failures name the underlying cause, not whichever
-  // operation happened to be in flight when the host went away.
-  //
-  // Same `fatalDetails === null` clause as `isTransportClassFailure`, and for
-  // the same reason: a terminal-verdict failure reaches this function too (it
-  // is deliberately no longer taken by the transport branch above), and
-  // "It may be restarting — try again in a moment" would re-apply the exact
-  // misclassification one layer down, for a session that is closed for good.
-  if (
-    error instanceof HostTransportFailureError &&
-    error.fatalDetails === null
-  ) {
-    return "Can't reach the Traycer host. It may be restarting — try again in a moment.";
-  }
+function hostTerminalVerdictMessage(error: HostRpcError): string | null {
   // A terminal verdict carried on a transport-class failure. Its wire `code`
   // is the generic `RPC_ERROR` - the real one lives in `fatalDetails` - so
   // every code-keyed branch would miss and the user would get the caller's
@@ -269,9 +296,9 @@ function hostConnectionOrVerdictMessage(error: HostRpcError): string | null {
 }
 
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {
-  const connectionOrVerdict = hostConnectionOrVerdictMessage(error);
-  if (connectionOrVerdict !== null) {
-    return connectionOrVerdict;
+  const verdict = hostTerminalVerdictMessage(error);
+  if (verdict !== null) {
+    return verdict;
   }
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
