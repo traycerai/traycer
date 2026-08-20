@@ -156,6 +156,13 @@ const LIST_CONTENT: JsonContent = {
   ],
 };
 
+const DIAGRAM_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "mermaidBlock", attrs: { code: "graph TD;\n  Start-->Done;" } },
+  ],
+};
+
 const UNKNOWN_NODE_CONTENT: JsonContent = {
   type: "doc",
   content: [
@@ -1776,6 +1783,27 @@ describe("createChatSessionStore", () => {
         .getState()
         .errorNotices.filter((entry) => entry.clientActionId === "send-1"),
     ).toHaveLength(1);
+  });
+
+  // R6 `-cbH`: a diagram-only send used to be told it had "no recoverable
+  // content" while its source was deleted. The block is an ATOM - the source
+  // is in `attrs.code`, not in children - so the projection saw nothing, and
+  // classifying it text-complete on top of that was the defect.
+  it("hands back the source of a diagram-only send", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, DIAGRAM_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("graph TD;");
+    expect(notice.message).toContain("Start-->Done;");
+    expect(notice.message).not.toContain("no recoverable content");
   });
 
   // R5 `-LSI`: the slot LOSER's worktree. Round 4 gave the winner its binding

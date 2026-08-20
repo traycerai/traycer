@@ -28,6 +28,14 @@ export type ContentRecoveryLoss =
  * Node kinds whose meaning survives as text, so copying the projection back
  * into the composer reproduces the request.
  *
+ * `mermaidBlock` / `uiPreviewBlock` belong here only because
+ * {@link recoveryTextFromContent} carries their source. They are ATOMS
+ * (`atom: true`) whose text lives in `attrs.code` / `attrs.htmlContent`, so
+ * the shared projection - which walks children - emits nothing for them.
+ * "Text-complete" means complete IN THE RECOVERY TEXT, so an entry here is a
+ * claim about what that seam produces, not about the shared projection; the
+ * two must agree, and `content-recovery-classification.test.ts` asserts it.
+ *
  * `slashCommand` belongs here: it projects to the canonical `/name`, which is
  * exactly the string the composer's raw-text converter turns back into a chip
  * (`parseLeadingSlashCommand` / `buildSubmittedChatJSONContent`). That leans
@@ -177,10 +185,64 @@ export const CLASSIFIED_LABELS_FOR_TESTS: ReadonlySet<string> = new Set([
  * are visible in their absence and retypeable; the corruption is the bug.
  */
 export function recoveryTextFromContent(content: JsonContent): string {
-  return extractPlainTextFromComposerJSONContent({
+  const projected = extractPlainTextFromComposerJSONContent({
     ...content,
-    content: [...hoistListItems(content.content ?? [])],
-  }).trim();
+    content: [...prepareForProjection(content.content ?? [])],
+  });
+  return stripEmptyEdgeLines(projected);
+}
+
+/**
+ * Drop blank lines the EDITOR contributed at the edges - a trailing empty
+ * paragraph, a leading one - without touching a line's own whitespace.
+ *
+ * A bare `.trim()` cannot tell the two apart: it also eats the leading
+ * indentation of a code block's first line, so the user is told to copy a
+ * snippet that is subtly not theirs (a Python block comes back invalid). The
+ * text is quoted back verbatim, so it has to BE verbatim.
+ */
+function stripEmptyEdgeLines(text: string): string {
+  const lines = text.split("\n");
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start].length === 0) start += 1;
+  while (end > start && lines[end - 1].length === 0) end -= 1;
+  return lines.slice(start, end).join("\n");
+}
+
+/**
+ * Reshape the tree so the shared projection can see everything the recovery
+ * text owes the user: list items hoisted (above), and atom sources lifted into
+ * text nodes.
+ */
+function prepareForProjection(
+  nodes: ReadonlyArray<JsonContent>,
+): ReadonlyArray<JsonContent> {
+  return hoistListItems(nodes).map((node) => {
+    const source = atomSource(node);
+    return source === null
+      ? node
+      : { type: "paragraph", content: [{ type: "text", text: source }] };
+  });
+}
+
+/**
+ * The text an ATOM node carries in its attrs. These blocks have no children,
+ * so the shared projection emits nothing for them - but their source IS text,
+ * and the notice can hand it back rather than telling someone their diagram is
+ * gone when it did not have to be.
+ */
+const ATOM_SOURCE_ATTRS: ReadonlyMap<string, string> = new Map([
+  ["mermaidBlock", "code"],
+  ["uiPreviewBlock", "htmlContent"],
+]);
+
+function atomSource(node: JsonContent): string | null {
+  const attrName =
+    node.type === undefined ? undefined : ATOM_SOURCE_ATTRS.get(node.type);
+  if (attrName === undefined) return null;
+  const attr = node.attrs?.[attrName];
+  return typeof attr === "string" && attr.length > 0 ? attr : null;
 }
 
 function hoistListItems(

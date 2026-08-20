@@ -153,15 +153,20 @@ function unrecoverableSendNotice(
   circumstance: string,
   worktreeIntent: WorktreeIntent | null,
 ): ChatErrorNotice {
+  // The quote is VERBATIM; only the branch decision is trimmed. A message of
+  // pure whitespace has nothing to hand back, but a code block whose first
+  // line is indented very much does - and trimming the quote itself is what
+  // used to corrupt it.
   const text = recoveryTextFromContent(content);
+  const hasText = text.trim().length > 0;
   const losses = classifyContentRecovery(content);
   const attachments = losses.get("attachment") ?? 0;
   const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
     message: [
-      recoverableBody(preamble, text, attachments),
-      attachmentClause(attachments, text.length > 0),
+      recoverableBody(preamble, text, hasText, attachments),
+      attachmentClause(attachments, hasText),
       countedClause({
         count: losses.get("mention") ?? 0,
         singular: "mention",
@@ -196,10 +201,10 @@ function unrecoverableSendNotice(
 function recoverableBody(
   preamble: string,
   text: string,
+  hasText: boolean,
   attachmentCount: number,
 ): string {
-  if (text.length > 0)
-    return `${preamble} Copy it from here to resend: ${text}`;
+  if (hasText) return `${preamble} Copy it from here to resend: ${text}`;
   if (attachmentCount > 0) return preamble;
   return `${preamble} It had no recoverable content.`;
 }

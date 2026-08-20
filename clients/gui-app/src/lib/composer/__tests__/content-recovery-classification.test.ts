@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   CLASSIFIED_LABELS_FOR_TESTS,
   classifyContentRecovery,
+  recoveryTextFromContent,
 } from "@/lib/composer/content-recovery";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -220,5 +221,67 @@ describe("content recovery classification", () => {
     });
 
     expect(report.size).toBe(0);
+  });
+
+  // `mermaidBlock` and `uiPreviewBlock` are ATOMS (`atom: true`) whose source
+  // lives in `attrs.code` / `attrs.htmlContent`. The shared projection walks
+  // children, so it emits nothing for them - classifying them text-complete
+  // while the projection skips them is the defect: a diagram-only send was
+  // told it had "no recoverable content" while its source was deleted.
+  it("carries a mermaid block's source into the recovery text", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        { type: "mermaidBlock", attrs: { code: "graph TD;\n  A-->B;" } },
+      ],
+    });
+
+    expect(text).toContain("graph TD;");
+    expect(text).toContain("A-->B;");
+  });
+
+  it("carries a UI preview block's source into the recovery text", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "uiPreviewBlock",
+          attrs: { htmlContent: "<section>hello</section>" },
+        },
+      ],
+    });
+
+    expect(text).toContain("<section>hello</section>");
+  });
+
+  // The recovery text is quoted back verbatim for the user to copy. Trimming
+  // it strips meaningful leading indentation - a Python block comes back
+  // invalid, and they are told to resend something subtly not theirs.
+  it("preserves a code block's leading indentation", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          content: [{ type: "text", text: "    if True:\n        pass" }],
+        },
+      ],
+    });
+
+    expect(text).toBe("    if True:\n        pass");
+  });
+
+  it("still drops editor-generated blank lines at the edges", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        { type: "paragraph" },
+        { type: "paragraph", content: [{ type: "text", text: "  real" }] },
+        { type: "paragraph" },
+      ],
+    });
+
+    // The empty wrapper paragraphs go; the content line keeps its own spaces.
+    expect(text).toBe("  real");
   });
 });
