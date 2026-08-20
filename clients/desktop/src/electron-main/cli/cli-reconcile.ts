@@ -321,10 +321,18 @@ export async function reconcileCli(
       // inside fifteen seconds is not serving the host either. Patience is
       // where this is fought; refusal is not.
       //
-      // Stage it into the Desktop-owned slot (a symlink on
-      // POSIX) so the bundle-blind host has a deterministic, space-free
-      // `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for the monitor /
-      // title hooks / terminal agents. Nothing else self-heals this slot.
+      // Stage it into the Desktop-owned slot - a COPY on every platform, see
+      // `installBundledCli` - so the bundle-blind host has a deterministic,
+      // space-free `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for
+      // the monitor / title hooks / terminal agents. Nothing else self-heals
+      // this slot.
+      //
+      // Said "a symlink on POSIX" until now, which is what it was before the
+      // pre-copy era ended and is no longer true of any platform. Left
+      // uncorrected it reads as a live design note rather than history, and
+      // it has already been cited that way in review - the link is exactly
+      // what was removed, because a bundle remove/replace left it DANGLING
+      // with no healer but the next successful app launch.
       const installed = await deps.installBundledCli({
         bundledCliPath: bundledPath,
         version: bundledVersion,

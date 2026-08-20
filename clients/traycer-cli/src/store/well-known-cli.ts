@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { constants } from "node:fs";
 import type { Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import {
@@ -637,9 +638,32 @@ async function isSlotEligibleBinary(binaryPath: string): Promise<boolean> {
   ) {
     return false;
   }
+  // REGULAR FILE first, and this ordering is the load-bearing part. Opening a
+  // FIFO for reading BLOCKS until a writer appears - forever, with no
+  // deadline of its own, and upstream of the `execFile` timeout that bounds
+  // everything else here. Every packaged command awaits this refresh before
+  // commander parses argv, so a FIFO at the slot (or a legacy link resolving
+  // to one) would hang every CLI invocation on the machine, including the
+  // ones that exist to repair it. A wedge with no recovery path is the one
+  // outcome this module is under orders never to create.
+  //
+  // It is also the honest question: the slot must hold an executable image,
+  // and a directory, socket, device or FIFO is not one whatever its first
+  // bytes would say.
+  const candidateStat = await statOrNull(binaryPath);
+  if (candidateStat === null || !candidateStat.isFile()) return false;
   let handle: FileHandle;
   try {
-    handle = await open(binaryPath, "r");
+    // O_NONBLOCK closes the window between the stat above and this open, in
+    // which the candidate could become a FIFO. A no-op for the regular file
+    // this is reached with; absent on Windows, which has no FIFO to open
+    // this way.
+    handle = await open(
+      binaryPath,
+      process.platform === "win32"
+        ? constants.O_RDONLY
+        : constants.O_RDONLY | constants.O_NONBLOCK,
+    );
   } catch {
     return false;
   }

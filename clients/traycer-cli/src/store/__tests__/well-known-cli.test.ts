@@ -2109,6 +2109,48 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+// Reading a candidate's first bytes must never be able to BLOCK. Opening a
+// FIFO for reading waits for a writer that may never come, with no deadline
+// of its own and upstream of the `execFile` timeout that bounds every other
+// wait here - and since each packaged command awaits this refresh before
+// commander parses argv, a FIFO at the slot would hang every CLI invocation
+// on the machine, including the ones run to repair it.
+//
+// So the assertion is simply that the refresh RETURNS, and the mutation
+// signature is a timeout rather than a wrong value. A real FIFO, because
+// that is the whole point - `mkfifo` through the unmocked `execFileSync`
+// (this suite replaces `execFile` only).
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, a FIFO at the slot cannot hang the refresh",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { execFileSync } = await import("node:child_process");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    execFileSync("mkfifo", [wellKnownPath]);
+    const running = join(workHome, "running-binary");
+    const runningBytes = "binary A - the running packaged CLI";
+    writeFileSync(running, runningBytes);
+    // Mapped so that a probe, if one were reached, would report the slot
+    // strictly newer - the test must fail on the BLOCK, not on a verdict.
+    slotProbeControl.versionForPath.set(wellKnownPath, "9.9.9\n");
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    // Returned at all is the property. Repairing the slot is the bonus: a
+    // FIFO cannot serve the host or the registered service, so staging over
+    // it is the recovery path.
+    expect(result?.staged).toBe("staged");
+    expect(statSync(wellKnownPath).isFIFO()).toBe(false);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
+  },
+  10_000,
+);
+
 // An ANCHORED nomination - the manifest names a different existing binary
 // - is trusted outright: the guard only ever applies to the two
 // self-nominated (unanchored) cases, so a manifest-driven stage must
