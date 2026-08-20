@@ -62,17 +62,21 @@ import {
   UNARY_RESPONSE_TIMEOUT_MS,
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
+  RECONNECT_STABLE_RESET_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
 import { resolveUnavailableMethodDegrade } from "../unavailable-method-degrade";
 import {
   CURRENT_MUX_VERSION,
+  FINE_INITIAL_BULK_SEND_CREDITS,
   MuxFrameType,
   MuxMessageSizeError,
   QosClass,
   SESSION_CONTROL_STREAM_ID,
+  SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+  SESSION_CAPABILITY_FINE_CREDITS,
   creditPayloadSchema,
   decodeMuxFrame,
   encodeMuxFrame,
@@ -188,6 +192,28 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * deaths. A new credential-plane code gets added here explicitly, with the
  * same reasoning written down.
  */
+/**
+ * Where the wall-clock of one connect attempt went, stamped at each phase
+ * transition. Every field after `startedAt` is `null` until its phase is
+ * reached, so a breakdown emitted for a partial attempt is honest about which
+ * legs never happened rather than reporting them as zero-cost.
+ */
+interface ReattachMarks {
+  startedAt: number;
+  attachAckAt: number | null;
+  handshakeAt: number | null;
+  openAckAt: number | null;
+}
+
+function emptyReattachMarks(): ReattachMarks {
+  return {
+    startedAt: 0,
+    attachAckAt: null,
+    handshakeAt: null,
+    openAckAt: null,
+  };
+}
+
 function sessionFatalProvenance(
   details: FatalErrorDetails,
 ): ConnectionLossProvenance {
@@ -392,6 +418,14 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  /**
+   * Whether the HOST advertised that it can inflate compressed frames, i.e.
+   * whether frames this client sends may set `MuxFlags.COMPRESSED`. Starts
+   * `false` and is only ever raised at `openAck`, so the `open` frame itself —
+   * the one frame that must be readable by a host of any vintage — can never
+   * go out compressed.
+   */
+  bodyCompressionSupported: boolean;
   hostAttached: boolean;
 }
 
@@ -415,6 +449,34 @@ export class RemoteSession<
   private phase: SessionPhase = "idle";
   private connectGeneration = 0;
   private reconnectAttempt = 0;
+  /**
+   * Armed at the ready boundary, fires after RECONNECT_STABLE_RESET_MS of
+   * uninterrupted health and only then clears the ladder. Cancelled on every
+   * connection loss so a flapping host never collects partial credit.
+   */
+  private stableResetTimer: TimerHandle | null = null;
+  /**
+   * Whether this session has EVER reached its ready boundary.
+   *
+   * Separates "recovering" from "still trying for the first time", which two
+   * behaviours below must not conflate. A session that has never connected has
+   * no established health to recover TO: its failures are the ordinary
+   * can't-reach-the-host case, its retries feed the host-liveness evidence
+   * machinery, and its ladder must stay exactly what it has always been.
+   */
+  private hasReachedReadyOnce = false;
+  /**
+   * Phase-transition stamps for the CURRENT connect attempt, emitted as one
+   * breakdown line at the ready boundary.
+   *
+   * A single "reconnected in 3.2s" number is unactionable - it cannot say
+   * whether the time went to backoff we imposed on ourselves, a grant mint, a
+   * Noise round trip, or resubscribing N streams, and those have completely
+   * different fixes. The rc.1 diagnosis cost two logs and a code read for
+   * exactly this class of missing breakdown. Reset per attempt, so a retry
+   * never reports its predecessor's timings.
+   */
+  private reattachMarks: ReattachMarks = emptyReattachMarks();
   private connection: ActiveConnection | null = null;
 
   /**
@@ -1186,6 +1248,7 @@ export class RemoteSession<
     const generation = ++this.connectGeneration;
     this.phase = "connecting";
     this.clearPhaseTimer();
+    this.reattachMarks = { ...emptyReattachMarks(), startedAt: Date.now() };
 
     const provision = await this.options.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
@@ -1294,6 +1357,7 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      bodyCompressionSupported: false,
       hostAttached: true,
     };
     this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
@@ -1308,6 +1372,7 @@ export class RemoteSession<
       return;
     }
     this.phase = "handshaking";
+    this.reattachMarks.attachAckAt = Date.now();
     this.armPhaseTimer(
       generation,
       NOISE_HANDSHAKE_TIMEOUT_MS,
@@ -1523,6 +1588,7 @@ export class RemoteSession<
       return;
     }
     this.phase = "opening";
+    this.reattachMarks.handshakeAt = Date.now();
     this.openFrameBearer = bearer;
     this.armPhaseTimer(
       generation,
@@ -1535,6 +1601,16 @@ export class RemoteSession<
       manifest: this.clientManifests,
       authz: null,
       resume: null,
+      // Advertised UNCONDITIONALLY: both entries describe what this client can
+      // COPE with, never what it demands, so a host that has never heard of
+      // either simply strips the key (zod objects are non-strict) and keeps
+      // behaving exactly as it does today. There is deliberately no version
+      // branch here — a capability the peer ignores must be indistinguishable
+      // from one it never received.
+      capabilities: [
+        SESSION_CAPABILITY_BODY_COMPRESSION,
+        SESSION_CAPABILITY_FINE_CREDITS,
+      ],
     };
     this.enqueueMessage(connection, {
       type: MuxFrameType.OPEN,
@@ -1772,8 +1848,25 @@ export class RemoteSession<
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
+    connection.bodyCompressionSupported = parsed.data.capabilities.includes(
+      SESSION_CAPABILITY_BODY_COMPRESSION,
+    );
+    if (
+      parsed.data.capabilities.includes(SESSION_CAPABILITY_FINE_CREDITS) &&
+      FINE_INITIAL_BULK_SEND_CREDITS < INITIAL_BULK_SEND_CREDITS
+    ) {
+      // Shrinking the un-granted send window is the ONE half of the credit
+      // change that can deadlock, so it happens here and only here: after a
+      // host has said, in this session, that it grants finely. A host that
+      // said nothing keeps the legacy 32 MiB window, which is wasteful but
+      // never wedged.
+      connection.scheduler.adoptNegotiatedCreditWindow(
+        FINE_INITIAL_BULK_SEND_CREDITS,
+      );
+    }
     this.clearPhaseTimer();
     this.phase = "ready";
+    this.reattachMarks.openAckAt = Date.now();
     // The host accepted the `open{bearer}`: any prior UNAUTHORIZED episode is
     // over, so a later one starts its no-progress bound from a clean slate.
     this.noProgressUnauthorizedReconnects = 0;
@@ -2002,6 +2095,10 @@ export class RemoteSession<
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
+    // Before anything else: a connection that is being lost never earned its
+    // ladder reset, however close it came. THE host-plane funnel is the right
+    // place for this precisely because every loss arrives here.
+    this.clearStableResetTimer();
     this.dropConnection(cause);
     this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnect();
@@ -2312,6 +2409,64 @@ export class RemoteSession<
    * report the SAME value they actually scheduled (never a second jitter/
    * growth roll purely for the log line).
    */
+  /**
+   * Arms the ladder reset. Deliberately a TIMER rather than an assignment at
+   * the ready boundary: reaching ready proves a session was established, not
+   * that it is healthy, and rewarding establishment alone is what let a
+   * flapping host be re-dialled at the fastest rung indefinitely.
+   */
+  private armStableResetTimer(): void {
+    this.clearStableResetTimer();
+    this.stableResetTimer = setTimeout(() => {
+      this.stableResetTimer = null;
+      this.reconnectAttempt = 0;
+    }, RECONNECT_STABLE_RESET_MS);
+  }
+
+  /**
+   * Emits the one line that makes the reattach budget falsifiable: total, and
+   * where the time went. Without the split, a regression in any single leg -
+   * a slower grant mint, an extra Noise round trip, a resubscribe fan-out that
+   * grew with the epic - is invisible inside one aggregate number, and the
+   * budget becomes a claim nobody can check against a field log.
+   *
+   * `info`, not `warn`: a successful reattach is not a problem, and the
+   * scenario harness asserts zero ERROR-level lines per blip.
+   */
+  private logReattachBreakdown(): void {
+    const marks = this.reattachMarks;
+    if (marks.startedAt === 0) {
+      return;
+    }
+    if (!this.hasReachedReadyOnce) {
+      // A first-ever connect is not a reattach, and calling it one would put
+      // "reattached in Nms" in a field log for a session that had never been
+      // attached. The first connect's cost is already covered by the dial
+      // failure/recovery log; this line exists to explain RECOVERIES.
+      this.reattachMarks = emptyReattachMarks();
+      return;
+    }
+    const now = Date.now();
+    const leg = (from: number | null, to: number | null): string =>
+      from === null || to === null ? "n/a" : `${to - from}ms`;
+    console.info(
+      `[remote-session] host=${this.options.hostId} reattached in ${now - marks.startedAt}ms ` +
+        `(grant+dial=${leg(marks.startedAt, marks.attachAckAt)} ` +
+        `noise=${leg(marks.attachAckAt, marks.handshakeAt)} ` +
+        `open=${leg(marks.handshakeAt, marks.openAckAt)} ` +
+        `resubscribe=${leg(marks.openAckAt, now)} ` +
+        `streams=${this.subscriptions.size})`,
+    );
+    this.reattachMarks = emptyReattachMarks();
+  }
+
+  private clearStableResetTimer(): void {
+    if (this.stableResetTimer !== null) {
+      clearTimeout(this.stableResetTimer);
+      this.stableResetTimer = null;
+    }
+  }
+
   private scheduleReconnect(): number {
     if (this.phase === "closed") {
       return 0;
@@ -2319,11 +2474,32 @@ export class RemoteSession<
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);
     }
-    const delay = backoffFor(
-      this.reconnectAttempt,
-      RECONNECT_INITIAL_BACKOFF_MS,
-      RECONNECT_MAX_BACKOFF_MS,
-    );
+    // Rung 0 is IMMEDIATE. On a link that blips for a second, the dominant
+    // cost of recovery used to be a backoff we imposed on ourselves before
+    // even trying - a full second of a ~2 s budget spent waiting to find out
+    // whether anything was wrong. A blip is far more likely than a sick host,
+    // so the first attempt after a stable session pays nothing and the ladder
+    // starts from the SECOND consecutive failure: 0, 1s, 2s, 4s ... 30s. The
+    // counter only returns to rung 0 after RECONNECT_STABLE_RESET_MS of
+    // sustained health, so this cannot become a hot loop against a host that
+    // is genuinely refusing.
+    // The immediate rung is for RECOVERY only - a session that was healthy and
+    // lost its link, where a blip is far likelier than a sick host. A session
+    // that has never connected keeps the original ladder untouched: its
+    // retries are evidence about host liveness, and doubling their rate would
+    // both hammer a host that is legitimately down and accelerate the
+    // death-streak machinery that reads those attempts.
+    const immediate = this.reconnectAttempt === 0 && this.hasReachedReadyOnce;
+    const rung = this.hasReachedReadyOnce
+      ? this.reconnectAttempt - 1
+      : this.reconnectAttempt;
+    const delay = immediate
+      ? 0
+      : backoffFor(
+          Math.max(0, rung),
+          RECONNECT_INITIAL_BACKOFF_MS,
+          RECONNECT_MAX_BACKOFF_MS,
+        );
     this.reconnectAttempt += 1;
     this.backoffTimer = setTimeout(() => {
       this.backoffTimer = null;
@@ -2490,8 +2666,10 @@ export class RemoteSession<
     connection: ActiveConnection,
     message: OutboundMessage,
   ): void {
-    const source = new OutboundChunkSource(message, () =>
-      this.nextSeq(message.streamId),
+    const source = new OutboundChunkSource(
+      message,
+      () => this.nextSeq(message.streamId),
+      connection.bodyCompressionSupported,
     );
     connection.scheduler.enqueue(source);
   }
@@ -2645,7 +2823,11 @@ export class RemoteSession<
       }
     }
     this.readyBoundaryGeneration = this.connectGeneration;
-    this.reconnectAttempt = 0;
+    this.armStableResetTimer();
+    // Order matters: the breakdown reads `hasReachedReadyOnce` to decide
+    // whether this was a REATTACH at all, so the flag is raised after it.
+    this.logReattachBreakdown();
+    this.hasReachedReadyOnce = true;
     this.dialFailures.recordSuccess();
     // The ready boundary is the ONLY site that mints a session id, and it runs
     // once per connect generation (the guard above). Order matters: the dial
@@ -2911,6 +3093,7 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
+    this.clearStableResetTimer();
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);
       this.backoffTimer = null;

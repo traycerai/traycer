@@ -1,11 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("sonner", () => ({
-  toast: {
-    error: vi.fn(),
-    success: vi.fn(),
-  },
-}));
+vi.mock("sonner", () => {
+  // `toast` is CALLABLE as well as a namespace: the transport-class notice
+  // deliberately uses the plain `toast(...)` rather than `toast.error(...)`,
+  // because a transient, self-healing condition must not be framed as a
+  // failure. A namespace-only mock would make that path throw rather than
+  // fail an assertion, which is the confusing kind of red.
+  const base = vi.fn();
+  return {
+    toast: Object.assign(base, {
+      error: vi.fn(),
+      success: vi.fn(),
+    }),
+  };
+});
 
 import { toast } from "sonner";
 import {
@@ -17,6 +25,7 @@ import {
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -205,10 +214,15 @@ describe("toastFromHostError", () => {
       "Couldn't load epics.",
     );
 
-    expect(toast.error).toHaveBeenCalledWith(
-      "Can't reach the Traycer host. It may be restarting — try again in a moment.",
-      { id: "host-error:transport", cancel: null },
-    );
+    // Policy changed deliberately (T5 item 5b): a transport cause no longer
+    // renders through `reportableErrorToast` at all. The old assertion's
+    // `cancel: null` was an artifact of `reportIssueAvailable` defaulting to
+    // false under test - in the desktop app that flag is TRUE, so this path
+    // really did attach a "Report issue" button to ordinary network weather,
+    // across ~158 gesture call sites. The no-feed-entry half of this test
+    // still holds and is kept.
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledTimes(1);
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
   });
 
@@ -334,5 +348,94 @@ describe("toastFromHostError", () => {
       );
       expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
     });
+  });
+});
+
+describe("transport-class causes never reach a reportable toast", () => {
+  beforeEach(() => {
+    // BEFORE, not after: `toast` is one shared mock function across this file
+    // and the suites above leave calls on it, so a count assertion that only
+    // cleared afterwards would inherit them.
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function transportFailure(method: string): HostTransportFailureError {
+    return new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "Host is unreachable",
+      requestId: `req-${method}`,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  it("renders a plain, non-reportable notice instead of an error toast", () => {
+    toastFromHostError(transportFailure("terminal.create"), "Couldn't create.");
+
+    // The harm this replaces: `reportableErrorToast` drives `toast.error` AND
+    // attaches a Report Issue affordance, so every flap invited a support
+    // ticket for ordinary network weather across ~158 gesture call sites.
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not deposit a host-error notification that outlives the blip", () => {
+    toastFromHostError(transportFailure("chat.rename"), "Couldn't rename.");
+
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+  });
+
+  it("collapses many gestures during one flap into a single toast id", () => {
+    // A session-wide condition, not a per-operation failure: five gestures
+    // colliding with one outage must read as one line. The default dedupe key
+    // is per-operation, which is right for genuine failures and wrong here.
+    toastFromHostError(transportFailure("terminal.create"), "a");
+    toastFromHostError(transportFailure("chat.rename"), "b");
+    toastFromHostErrorWithDetail(transportFailure("agent.configure"), "c");
+
+    const ids = (toast as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .map((call) => (call[1] as { id?: string } | undefined)?.id)
+      .filter((id): id is string => id !== undefined);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(1);
+  });
+
+  it("stays completely silent for an aborted request", () => {
+    // `HostRequestAbortedError extends HostTransportFailureError`, but it is
+    // not a network condition at all - a caller-owned authority was replaced
+    // or disposed (tab closed, host rebound). Saying "reconnecting" for what
+    // was effectively a user navigation would be a NEW false statement.
+    toastFromHostError(
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "req-abort",
+        method: "epic.subscribe",
+      }),
+      "Couldn't subscribe.",
+    );
+
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("leaves a retryable UNAUTHORIZED on its own reportable copy", () => {
+    // The reason the branch is `instanceof HostTransportFailureError` and NOT
+    // `isTransientHostRpcFailure`: the broader predicate also matches a
+    // host-side JWKS outage, where the host WAS reached and DID answer. That
+    // is not a connection statement and must keep its distinct copy rather
+    // than being swallowed into the generic reconnecting notice.
+    toastFromHostError(
+      unauthorizedFatal("req-jwks", "epic.subscribe", "jwks unreachable", true),
+      "Couldn't subscribe.",
+    );
+
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 });

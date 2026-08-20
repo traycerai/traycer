@@ -1,8 +1,10 @@
 import {
+  HostRequestAbortedError,
   HostTransportFailureError,
   isTransientHostRpcFailure,
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { toast } from "sonner";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -15,11 +17,89 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
  *
  * Call this in every mutation hook's `onError` callback.
  */
+/**
+ * One stable id for EVERY transport notice, across every call site.
+ *
+ * Being unable to reach the host is a SESSION-WIDE condition, not a property
+ * of whichever mutation happened to be in flight, so a flap that catches five
+ * gestures must read as one line rather than five. `hostErrorDedupeKey` keys
+ * by operation, which is right for genuine per-operation failures and wrong
+ * here.
+ */
+const TRANSPORT_NOTICE_TOAST_ID = "host-transport-notice";
+
+/**
+ * Whether this failure is the transport itself, and therefore says nothing
+ * about the operation the user asked for.
+ *
+ * Deliberately NOT `isTransientHostRpcFailure`, which is a broader predicate
+ * that also matches `fatalDetails.retryable === true` - the host-side JWKS
+ * outage. That case was REACHED and ANSWERED by the host, has its own
+ * deliberate copy, and is not a connection statement; folding it in here would
+ * silently swallow that copy.
+ *
+ * `HostRequestAbortedError` is NOT handled here even though it extends
+ * `HostTransportFailureError` - the callers return early on it, above, which
+ * is what makes it silent. An exclusion here as well would be unreachable, and
+ * a mutation probe proved it: deleting it left every test green, because the
+ * early return had already taken the case. An untestable branch that looks
+ * like a safety net is worse than no branch, so there is exactly one
+ * mechanism and the probe can reach it.
+ */
+function isTransportClassFailure(error: HostRpcError): boolean {
+  return error instanceof HostTransportFailureError;
+}
+
+/**
+ * The transport-class branch shared by both gesture-path helpers.
+ *
+ * Three things it deliberately does NOT do, each of which the reportable path
+ * does and each of which was actively harmful for a transient network state:
+ *
+ *  - No Report Issue context. A flaky link is not a defect, and attaching a
+ *    report affordance to one converts ordinary network weather into support
+ *    tickets. We have already been burned by support issues minted by our own
+ *    toasts; at ~158 call sites this was that shape at scale.
+ *  - No `emitHostErrorNotification`. A blip must not deposit a host-error
+ *    entry that outlives the condition that produced it.
+ *  - Not `toast.error`. The condition is transient and self-healing, so it is
+ *    stated as a condition rather than framed as a failure.
+ *
+ * It is also NOT silent, and that is the deliberate part. Silence is correct
+ * for background work, and correct for a surface that disables its own
+ * affordance (chat's composer gates on `connectionStatus === "open"`, so the
+ * disabled composer IS the feedback). A generic mutation has no such
+ * affordance: the user clicked, nothing happened, and with no notice at all
+ * they either retry blindly or believe it worked.
+ *
+ * RESIDUAL GAP, stated rather than papered over: this covers every caller that
+ * routes through these helpers, which is all ~158 of them, but it cannot
+ * constrain a future caller that reaches for `reportableErrorToast` directly
+ * with a host error. A lexical guard (grep/lint for the pairing) would look
+ * like a fence and would not be one - the property is not lexically decidable.
+ * The helper test is the real coverage; this paragraph is the rest.
+ */
+function transportNoticeToast(): void {
+  toast("Reconnecting to the Traycer host — that didn't go through.", {
+    id: TRANSPORT_NOTICE_TOAST_ID,
+  });
+}
+
 export function toastFromHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
   if (shouldSuppressRecoverableUnauthorized(error)) return;
+  // Silent, and deliberately BEFORE the transport branch: an aborted request
+  // is not a network condition at all - a caller-owned authority was replaced
+  // or disposed (tab closed, host rebound). Saying "reconnecting" for what was
+  // effectively a user navigation would be a NEW false statement, and saying
+  // "couldn't do X" for something they themselves cancelled is no better.
+  if (error instanceof HostRequestAbortedError) return;
+  if (isTransportClassFailure(error)) {
+    transportNoticeToast();
+    return;
+  }
   const message = hostErrorToastMessage(error, fallback);
   emitHostFatalErrorNotification(error, message);
   const dedupeKey = hostErrorDedupeKey(error);
@@ -59,6 +139,11 @@ export function toastFromHostErrorWithDetail(
   fallback: string,
 ): void {
   if (shouldSuppressRecoverableUnauthorized(error)) return;
+  if (error instanceof HostRequestAbortedError) return;
+  if (isTransportClassFailure(error)) {
+    transportNoticeToast();
+    return;
+  }
   const message = hostErrorToastMessageWithDetail(error, fallback);
   emitHostFatalErrorNotification(error, message);
   const dedupeKey = hostErrorDedupeKey(error);

@@ -1,7 +1,9 @@
+import { deflateSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import {
   decodeMuxFrame,
   encodeMuxFrame,
+  type MuxFrame,
   MuxFrameDecodeError,
   MuxFrameType,
   MuxMessageSizeError,
@@ -17,8 +19,10 @@ import {
   ChunkPacer,
   ChunkReassembler,
   ChunkReassemblyError,
+  COMPRESSION_MIN_PAYLOAD_BYTES,
   decodeMuxMessageBody,
   encodeMuxMessageBody,
+  type ReassembledMessage,
   OutboundChunkSource,
 } from "../chunking";
 import { runChunkReassemblerConformanceSpec } from "./chunk-reassembler-conformance";
@@ -101,6 +105,7 @@ describe("OutboundChunkSource BULK QoS override at the exact body-size threshold
         binary: new Uint8Array(binaryLen),
       },
       () => seq++,
+      false,
     );
   }
 
@@ -138,6 +143,7 @@ describe("ChunkReassembler accumulation cap failing mid-sequence", () => {
         binary,
       },
       () => seq++,
+      false,
     );
     expect(source.chunked).toBe(true);
 
@@ -160,6 +166,7 @@ describe("ChunkReassembler accumulation cap failing mid-sequence", () => {
         chunked: true,
         chunkFirst: true,
         chunkLast: false,
+        compressed: false,
         json: null,
         binary: new Uint8Array([1, 2, 3]),
       }),
@@ -232,5 +239,248 @@ describe("ChunkPacer stays within its per-second budget under a fake clock", () 
     // token - the byte dimension alone must then pace the next frame out.
     expect(pacer.tryConsume(CHUNK_PACE_BURST_BYTES - 1)).toBe(true);
     expect(pacer.tryConsume(2)).toBe(false);
+  });
+});
+
+describe("body compression round-trip (T5)", () => {
+  function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function concatBytes(...parts: Uint8Array[]): Uint8Array {
+    const total = parts.reduce((sum, part) => sum + part.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      out.set(part, offset);
+      offset += part.length;
+    }
+    return out;
+  }
+
+  function randomBytes(length: number): Uint8Array {
+    const out = new Uint8Array(length);
+    for (let i = 0; i < out.length; i += 1) {
+      out[i] = Math.floor(Math.random() * 256);
+    }
+    return out;
+  }
+
+  /** Drains a source through the wire (encode/decode) into a fresh reassembler; returns every decoded frame plus the completed message. */
+  function drainThroughWire(source: OutboundChunkSource): {
+    readonly frames: MuxFrame[];
+    readonly message: ReassembledMessage | null;
+  } {
+    const reassembler = new ChunkReassembler(undefined);
+    const frames: MuxFrame[] = [];
+    let message: ReassembledMessage | null = null;
+    while (!source.done) {
+      const decoded = decodeMuxFrame(encodeMuxFrame(source.nextFrame()));
+      frames.push(decoded);
+      const out = reassembler.accept(decoded);
+      if (out !== null) {
+        message = out;
+      }
+    }
+    return { frames, message };
+  }
+
+  it("OutboundChunkSource with compress: false never sets compressed, whatever the body (B2)", () => {
+    const bodies = [
+      new Uint8Array(COMPRESSION_MIN_PAYLOAD_BYTES - 100), // under threshold
+      new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3).fill(0x41), // large, highly compressible
+      randomBytes(BULK_CHUNK_SIZE_BYTES * 2), // large, incompressible
+    ];
+    for (const binary of bodies) {
+      let seq = 0;
+      const source = new OutboundChunkSource(
+        { type: MuxFrameType.STREAM_FRAME, streamId: 1, qos: QosClass.BULK, json: null, binary },
+        () => seq++,
+        false,
+      );
+      const { frames } = drainThroughWire(source);
+      expect(frames.length).toBeGreaterThan(0);
+      expect(frames.every((f) => !f.compressed)).toBe(true);
+    }
+  });
+
+  it("a body over one 64 KiB chunk, compressed, reassembles byte-identical to the uncompressed path", () => {
+    // Highly compressible, multi-chunk binary content.
+    const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3 + 777).fill(0x41);
+    const json = { kind: "snapshot", note: "compression round-trip" };
+    let seqA = 0;
+    let seqB = 0;
+    const compressed = new OutboundChunkSource(
+      { type: MuxFrameType.STREAM_FRAME, streamId: 1, qos: QosClass.BULK, json, binary },
+      () => seqA++,
+      true,
+    );
+    const plain = new OutboundChunkSource(
+      { type: MuxFrameType.STREAM_FRAME, streamId: 1, qos: QosClass.BULK, json, binary },
+      () => seqB++,
+      false,
+    );
+    expect(compressed.chunked).toBe(true);
+
+    const compressedResult = drainThroughWire(compressed);
+    const plainResult = drainThroughWire(plain);
+
+    expect(compressedResult.message).not.toBeNull();
+    expect(plainResult.message).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const c = compressedResult.message!;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const p = plainResult.message!;
+    expect(c.json).toEqual(p.json);
+    expect(c.json).toEqual(json);
+    expect(c.binary).not.toBeNull();
+    expect(p.binary).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    expect(bytesEqual(c.binary!, p.binary!)).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    expect(bytesEqual(c.binary!, binary)).toBe(true);
+  });
+
+  it("emits at least one frame with compressed === true and a payload smaller than the plaintext slice, for compressible content", () => {
+    const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 2).fill(0x42);
+    let seq = 0;
+    const source = new OutboundChunkSource(
+      { type: MuxFrameType.STREAM_FRAME, streamId: 2, qos: QosClass.BULK, json: null, binary },
+      () => seq++,
+      true,
+    );
+    const { frames } = drainThroughWire(source);
+    const compressedFrames = frames.filter((f) => f.compressed);
+    expect(compressedFrames.length).toBeGreaterThan(0);
+    for (const frame of compressedFrames) {
+      expect(frame.binary).not.toBeNull();
+      // A full 64 KiB chunk of a single repeated byte compresses to far less
+      // than the plaintext slice it carries.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      expect(frame.binary!.length).toBeLessThan(BULK_CHUNK_SIZE_BYTES);
+    }
+  });
+
+  it("incompressible (random) content emits compressed === false and still reassembles byte-identical", () => {
+    const binary = randomBytes(BULK_CHUNK_SIZE_BYTES * 2 + 100);
+    let seq = 0;
+    const source = new OutboundChunkSource(
+      { type: MuxFrameType.STREAM_FRAME, streamId: 3, qos: QosClass.BULK, json: null, binary },
+      () => seq++,
+      true,
+    );
+    const { frames, message } = drainThroughWire(source);
+    expect(frames.some((f) => f.compressed)).toBe(false);
+    expect(message).not.toBeNull();
+    expect(message?.binary).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    expect(bytesEqual(message!.binary!, binary)).toBe(true);
+  });
+
+  it("a payload under COMPRESSION_MIN_PAYLOAD_BYTES is never compressed, even with compression negotiated", () => {
+    // -10 (not -1): the body carries a 5-byte header alongside the binary, so
+    // the actual FRAME payload is binary.length + 5 - stay comfortably under
+    // the threshold rather than at its edge.
+    const binary = new Uint8Array(COMPRESSION_MIN_PAYLOAD_BYTES - 10).fill(
+      0x41,
+    );
+    let seq = 0;
+    const source = new OutboundChunkSource(
+      { type: MuxFrameType.STREAM_FRAME, streamId: 4, qos: QosClass.INTERACTIVE, json: null, binary },
+      () => seq++,
+      true,
+    );
+    expect(source.chunked).toBe(false);
+    const { frames } = drainThroughWire(source);
+    expect(frames).toHaveLength(1);
+    expect(frames[0].compressed).toBe(false);
+  });
+
+  it("a sequence that mixes compressed and uncompressed frames reassembles correctly - a real wire state, since the sender decides per frame", () => {
+    const compressiblePart = new Uint8Array(
+      Math.floor(BULK_CHUNK_SIZE_BYTES * 1.5),
+    ).fill(0x43);
+    const incompressiblePart = randomBytes(
+      Math.floor(BULK_CHUNK_SIZE_BYTES * 1.5),
+    );
+    const binary = concatBytes(compressiblePart, incompressiblePart);
+    let seq = 0;
+    const source = new OutboundChunkSource(
+      { type: MuxFrameType.STREAM_FRAME, streamId: 5, qos: QosClass.BULK, json: null, binary },
+      () => seq++,
+      true,
+    );
+    const { frames, message } = drainThroughWire(source);
+    expect(frames.some((f) => f.compressed)).toBe(true);
+    expect(frames.some((f) => !f.compressed)).toBe(true);
+    expect(message).not.toBeNull();
+    expect(message?.binary).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    expect(bytesEqual(message!.binary!, binary)).toBe(true);
+  });
+
+  describe("decompression bomb guard", () => {
+    it("throws MuxFrameDecodeError for a GENUINELY oversized declared plaintext length - a real, validly-deflated payload that would successfully inflate past BULK_CHUNK_SIZE_BYTES if the bound were not checked first", () => {
+      // A real decompression bomb: highly compressible content that deflates
+      // small but declares (and would genuinely inflate to) well over the
+      // per-chunk bound. Using GARBAGE bytes here instead would let this test
+      // pass for the wrong reason (inflate itself throwing on invalid deflate
+      // data), masking a missing length check - it must be real deflate data
+      // that WOULD succeed were the bound not enforced first.
+      const oversizedPlainLength = BULK_CHUNK_SIZE_BYTES * 4;
+      const deflated = deflateSync(new Uint8Array(oversizedPlainLength).fill(0), {
+        level: 6,
+      });
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, oversizedPlainLength);
+      const badPayload = concatBytes(header, deflated);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 6,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: badPayload,
+        }),
+      );
+      const reassembler = new ChunkReassembler(undefined);
+      expect(() => reassembler.accept(frame)).toThrow(MuxFrameDecodeError);
+    });
+
+    it("throws MuxFrameDecodeError on a truncated/garbage deflate payload with a valid declared length", () => {
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, 10); // plausible, under the bound
+      const garbage = new Uint8Array([0xff, 0xff, 0xff, 0xff]); // not valid deflate
+      const badPayload = concatBytes(header, garbage);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 7,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: badPayload,
+        }),
+      );
+      const reassembler = new ChunkReassembler(undefined);
+      expect(() => reassembler.accept(frame)).toThrow(MuxFrameDecodeError);
+    });
   });
 });
