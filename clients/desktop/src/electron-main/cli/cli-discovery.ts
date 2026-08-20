@@ -604,44 +604,69 @@ export async function probeCliVersion(
 // misclassification for the whole session.
 //
 // The two verdicts that ARE cached (`version`, `not-a-cli`) are facts about
-// the binary, so they are shared across deadlines: an impatient caller may
-// answer from a patient probe's result and vice versa. Only the deadline an
-// in-flight probe was STARTED with is deadline-specific, which is what the
-// entry records - see `cachedProbeCliVersion`.
-interface PathProbeEntry {
-  readonly deadlineMs: number;
-  readonly probe: Promise<CliVersionProbe>;
-}
+// the binary, so once settled they answer every caller whatever its
+// patience. A probe still RUNNING is not that: it carries the deadline it
+// was started with, and that deadline is only good enough for a caller
+// willing to wait no longer. The entry therefore says which of the two it
+// is rather than leaving the distinction to a sentinel value.
+type PathProbeEntry =
+  | { readonly kind: "settled"; readonly probe: Promise<CliVersionProbe> }
+  | {
+      readonly kind: "in-flight";
+      readonly deadlineMs: number;
+      readonly probe: Promise<CliVersionProbe>;
+    };
 
 const pathProbeCache = new Map<string, PathProbeEntry>();
 
+// Every (entry state x caller deadline) pair, stated once so none of them
+// is decided by accident:
+//
+//   settled                  -> answer from it, whatever the deadline.
+//   in-flight, D === T       -> join it.
+//   in-flight, D  >  T       -> join, but stop waiting at T. Otherwise a
+//                               status poll landing inside the reconcile's
+//                               15s probe would stall the invocation path
+//                               for all of it.
+//   in-flight, D  <  T       -> do NOT join: that probe gets killed at D
+//                               and hands back a `timeout` describing
+//                               someone else's patience. For the reconcile
+//                               that verdict is not recoverable - it drops
+//                               the PATH candidate and installs a
+//                               Desktop-owned manifest that outranks PATH
+//                               from then on. Start a probe that can
+//                               actually run for T and let it supersede.
 function cachedProbeCliVersion(
   binaryPath: string,
   timeoutMs: number,
 ): Promise<CliVersionProbe> {
   const cached = pathProbeCache.get(binaryPath);
   if (cached !== undefined) {
-    // Joining an in-flight probe must never lengthen the joiner's own wait.
-    // The reconcile's probe runs for up to 15s; a status poll's discovery
-    // landing in that window would otherwise inherit that deadline and
-    // stall the invocation path for the whole of it. It waits its own 2s
-    // and reports its own timeout instead - the patient probe keeps running
-    // and still publishes its verdict for whoever asks next.
-    if (cached.deadlineMs <= timeoutMs) return cached.probe;
-    return raceProbeDeadline(cached.probe, timeoutMs);
+    if (cached.kind === "settled") return cached.probe;
+    if (cached.deadlineMs === timeoutMs) return cached.probe;
+    if (cached.deadlineMs > timeoutMs) {
+      return raceProbeDeadline(cached.probe, timeoutMs);
+    }
   }
   const probe = probeCliVersion(binaryPath, timeoutMs);
-  pathProbeCache.set(binaryPath, { deadlineMs: timeoutMs, probe });
+  const entry: PathProbeEntry = {
+    kind: "in-flight",
+    deadlineMs: timeoutMs,
+    probe,
+  };
+  pathProbeCache.set(binaryPath, entry);
   void probe.then((verdict) => {
+    // Only ever replaces its OWN entry. A more patient probe may have
+    // superseded this one while it ran, and neither of this probe's
+    // outcomes may disturb that: a `timeout` deleting the entry would
+    // discard a probe that is still running, and a verdict overwriting it
+    // would put the shorter deadline's answer back in front of it.
+    if (pathProbeCache.get(binaryPath) !== entry) return;
     if (verdict.kind === "timeout") {
       pathProbeCache.delete(binaryPath);
       return;
     }
-    // Settled on a fact about the BINARY, so the deadline it was reached
-    // under stops mattering: recording it as zero lets every later caller
-    // answer from it directly instead of pointlessly racing a promise that
-    // is already resolved.
-    pathProbeCache.set(binaryPath, { deadlineMs: 0, probe });
+    pathProbeCache.set(binaryPath, { kind: "settled", probe });
   });
   return probe;
 }

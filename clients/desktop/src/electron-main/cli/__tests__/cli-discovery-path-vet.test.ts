@@ -193,6 +193,43 @@ describe.skipIf(process.platform === "win32")("vetPathCliCandidate", () => {
     ).toEqual({ version: "1.2.3" });
   }, 20_000);
 
+  // The same join, the other way round, and the direction that actually
+  // costs something. A status poll's 2s probe can be in flight when the
+  // detached reconcile arrives - on the very machine this matters for
+  // there is no manifest, so both paths walk PATH - and joining it would
+  // hand the reconcile a verdict about someone else's patience. Its
+  // verdicts are not recoverable: a dropped PATH candidate becomes a
+  // Desktop-owned manifest that outranks PATH from then on. It must get a
+  // probe that can actually run for 15s.
+  it("a patient caller does not inherit a shorter in-flight deadline", async () => {
+    const dir = await makeTempDir();
+    const candidate = join(dir, "traycer");
+    const countFile = join(dir, "exec-count");
+    await writeScript(
+      candidate,
+      `echo x >> '${countFile}'\nsleep 3\nprintf '1.2.3\\n'`,
+    );
+
+    const impatient = vetPathCliCandidate(
+      candidate,
+      CLI_INVOCATION_PROBE_TIMEOUT_MS,
+    );
+    const patient = await vetPathCliCandidate(
+      candidate,
+      CLI_RECONCILE_PROBE_TIMEOUT_MS,
+    );
+
+    // Inheriting the 2s probe would make this null - the fixture needs 3s.
+    expect(patient).toEqual({ version: "1.2.3" });
+    // The impatient caller still gets its own (correct, impatient) answer.
+    expect(await impatient).toBeNull();
+    // Two spawns, necessarily: the deadlines cannot share one process.
+    const count = (await readFile(countFile, "utf8"))
+      .split("\n")
+      .filter((line) => line.length > 0).length;
+    expect(count).toBe(2);
+  }, 20_000);
+
   // Patience must not leak onto the impatient path. The cache shares the
   // in-flight PROMISE, so a status poll landing mid-reconcile would inherit
   // the reconcile's 15s deadline and stall the invocation path for the

@@ -432,8 +432,13 @@ async function slotRefreshPlan(
   // exists for must keep converging, and a slot that cannot say what it is
   // has no seniority to assert.
   //
-  // The legacy-symlink arm below owes the same rule and asks the same
-  // question, but answers it with a different remedy - see there.
+  // Only ever reached with a REGULAR-FILE slot, and that is a safety
+  // precondition rather than an accident of ordering: spawning the slot
+  // runs a CLI that itself refreshes before printing a version, and only a
+  // regular-file slot makes that child stop at the
+  // `resolve(wellKnownPath) === source` check above instead of re-entering
+  // the planner. The symlink arm below therefore answers the same question
+  // without asking it - see there.
   const guardedStage = async (): Promise<SlotRefreshPlan> => {
     if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
       return { kind: "current" };
@@ -455,24 +460,37 @@ async function slotRefreshPlan(
     // De-symlinking must not double as a downgrade. This arm decides what
     // `guardedStage` decides for a regular-file slot - which bytes replace
     // the slot - so it owes the same rule: an unanchored nomination may
-    // fill or refresh a slot, never demote one. Left unguarded, an older
-    // stray SEA run once on a machine whose legacy link points at a NEWER
-    // CLI replaced the link with a copy of itself and demoted the
-    // registered service, which is the exact downgrade the guard was added
-    // to prevent, reached through a different door.
+    // fill or refresh a slot, never demote one. Copying the running binary
+    // over a link that points at a NEWER CLI demotes the registered
+    // service, which is the very downgrade the guard exists to prevent.
     //
-    // The resolution keeps both invariants instead of trading one for the
-    // other: when the link outranks this process, stage from the link's own
-    // TARGET. The slot stops being a symlink (nothing left to dangle) and
-    // still holds the newer binary's bytes. Copying the running binary
-    // would satisfy only the first.
+    // It does NOT resolve that by asking the version question, and the
+    // reason is that this arm cannot ask it safely. `slotOutranksRunning`
+    // spawns the slot, and every packaged CLI runs this refresh before it
+    // parses `--version`: through a REGULAR-FILE slot the child
+    // self-nominates the slot it was launched from and stops at the
+    // `resolve(wellKnownPath) === source` check above, but through a
+    // SYMLINK the child's `process.execPath` resolves to the TARGET, that
+    // lexical check misses, and the child arrives right back here and
+    // spawns its own probe. Each level a fresh ~100 MB process, until the
+    // probe deadlines unwind - and the original process then stages its
+    // own older bytes anyway.
     //
-    // A DANGLING link cannot answer the version probe, so it falls straight
-    // through to the ordinary stage below and self-heals - the case that
-    // made copy-not-symlink the rule stays fixed. `realpath` failing after
-    // a successful probe (a target unlinked in between) falls through the
-    // same way.
-    if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
+    // The question does not have to be asked. Staging from the link's own
+    // TARGET preserves whatever the slot already resolved to while making
+    // it a real file, so it cannot downgrade anything by construction:
+    // same bytes, no link left to dangle. Whether those bytes are actually
+    // newer than this process is then settled on the NEXT invocation by
+    // the regular-file arm below, where the probe is safe (that arm's slot
+    // is a real file, so its child short-circuits) and cheap.
+    //
+    // A DANGLING link resolves to nothing and falls through to the
+    // ordinary stage from `source`, self-healing exactly as it did before
+    // this guard existed - the case that made copy-not-symlink the rule.
+    // So does a link pointing at something that cannot answer for itself:
+    // the next invocation's regular-file probe fails and re-stages from
+    // the running binary.
+    if (!anchored) {
       const target = await realpath(wellKnownPath).catch(() => null);
       if (target !== null) return { kind: "stage", source: target };
     }
