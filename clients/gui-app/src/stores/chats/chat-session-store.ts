@@ -1,5 +1,6 @@
 import {
   addAcceptedAction,
+  noticeCarriesOnlyCopy,
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
@@ -784,12 +785,39 @@ function appendErrorNotice(
   notices: ReadonlyArray<ChatErrorNotice>,
   next: ChatErrorNotice,
 ): ReadonlyArray<ChatErrorNotice> {
+  // A last-copy notice is the user's draft, not notice history: the reconcile
+  // that emitted it dropped the send's row, so evicting the record destroys
+  // the text outright. Before that change an eviction cost a pointer and the
+  // row still held the words; now it is the whole loss, so these records are
+  // exempt below.
+  //
+  // Deduping on insert is what keeps that exemption bounded, and it answers
+  // the re-emission hazard in the same stroke: at most one un-evictable
+  // record per settled send, and a send settles once (its action is dropped
+  // when it is stated). So the ring's ceiling is the number of drafts a
+  // session has actually lost - ones, in the half-open double-send window
+  // that produces them - plus the cap for ordinary history.
+  if (noticeCarriesOnlyCopy(next)) {
+    const alreadyStated = notices.some(
+      (notice) =>
+        noticeCarriesOnlyCopy(notice) &&
+        notice.clientActionId === next.clientActionId,
+    );
+    if (alreadyStated) return notices;
+  }
   if (notices.length < MAX_ERROR_NOTICE_RECORDS) {
     return [...notices, next];
   }
-  // FIFO eviction once the cap is reached.
+  // FIFO eviction once the cap is reached - of the oldest EVICTABLE record.
+  // With nothing evictable the ring grows by one rather than dropping a
+  // draft; ordinary history then rotates through that slot as usual.
+  const evictable = notices.findIndex(
+    (notice) => !noticeCarriesOnlyCopy(notice),
+  );
+  if (evictable === -1) return [...notices, next];
   return [
-    ...notices.slice(notices.length - MAX_ERROR_NOTICE_RECORDS + 1),
+    ...notices.slice(0, evictable),
+    ...notices.slice(evictable + 1),
     next,
   ];
 }

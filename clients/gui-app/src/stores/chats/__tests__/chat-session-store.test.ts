@@ -45,6 +45,7 @@ import { resolveSubmitDeliveryPolicy } from "@/lib/chats/resolve-steer-submit";
 import {
   ACCEPTED_CHAT_ACTION_RETENTION_MS,
   MAX_ACCEPTED_CHAT_ACTION_RECORDS,
+  MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
@@ -1573,6 +1574,153 @@ describe("createChatSessionStore", () => {
     emitSnapshot(callbacks, "owner");
 
     expect(noticesFor(second.clientActionId)).toHaveLength(1);
+  });
+
+  // Once the row is dropped the notice IS the data, so it inherits the row's
+  // durability. The ring is a capped FIFO built for notice HISTORY, where
+  // eviction lost a pointer and the text survived on screen. Now eviction
+  // would destroy the draft outright - so a last-copy statement is not
+  // evictable history, it is the last copy.
+  it("keeps a last-copy statement when the notice ring overflows", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.clientActionId === second.clientActionId,
+        ),
+    ).toHaveLength(1);
+
+    // A busy chat buries it - a pane left inactive while ordinary notices
+    // arrive is exactly how this happens, and the mount replay never runs.
+    for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS * 2; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: `The approval request is no longer pending (${index}).`,
+          severity: "warning",
+          clientActionId: `approval-${index}`,
+        },
+      });
+    }
+
+    const state = harness.handle.store.getState();
+    const survivor = state.errorNotices.filter(
+      (notice) => notice.clientActionId === second.clientActionId,
+    );
+    expect(survivor).toHaveLength(1);
+    expect(survivor[0].message).toContain("World");
+    // Ordinary history still rotates - the exemption is for last-copy
+    // records, not a licence for the ring to grow without bound.
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.code === "APPROVAL_NOT_PENDING",
+      ).length,
+    ).toBeLessThanOrEqual(MAX_ERROR_NOTICE_RECORDS);
+  });
+
+  // The exemption above is only safe because a last-copy record cannot pile
+  // up: one per settled send. Dedupe on insert is what guarantees that, and
+  // it is also the answer to a re-emitting path appending the same statement
+  // forever - the hazard the ring's append-only shape used to carry.
+  it("keeps one last-copy record per send however often it is appended", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    const notice = {
+      code: "SEND_NOT_RECORDED",
+      message: "A message was not recorded. Copy it from here to resend: draft",
+      severity: "warning" as const,
+      clientActionId: "send-1",
+    };
+    for (let index = 0; index < 5; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice,
+      });
+    }
+
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter((entry) => entry.clientActionId === "send-1"),
+    ).toHaveLength(1);
+  });
+
+  // Attachment loss was detected by text-EMPTINESS, which is a proxy for
+  // "had attachments" and fails on the mixed case: text plus an image quotes
+  // the text and says nothing, so following the advice resends an incomplete
+  // request. Detection has to be structural.
+  it("warns about attachments a mixed-content statement cannot carry", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        IMAGE_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (entry) => entry.clientActionId === second.clientActionId,
+      );
+    if (notice === undefined) throw new Error("Expected a statement");
+    // The text is carried...
+    expect(notice.message).toContain("Review this screenshot");
+    // ...and the image it cannot carry is called out rather than dropped in
+    // silence behind a quote that looks complete.
+    expect(notice.message).toContain("attachment");
   });
 
   // THREAD 3: the statement tells the user to resend. If the displaced action

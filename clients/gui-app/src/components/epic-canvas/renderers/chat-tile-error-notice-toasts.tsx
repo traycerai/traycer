@@ -9,7 +9,7 @@ import {
   type DeliveredNoticeTracker,
 } from "@/stores/chats/chat-session-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
+import { noticeCarriesOnlyCopy } from "@/stores/chats/chat-queue-reconciler";
 import {
   reportableErrorToast,
   reportableWarningToast,
@@ -80,15 +80,6 @@ function rememberErrorNotice(
   if (tracker.notices.has(notice)) return false;
   tracker.notices.add(notice);
   return true;
-}
-
-/**
- * Whether this notice inlines content nothing else holds any more - the store
- * settled the send and dropped its row, so the message body in the notice is
- * the last copy. Such a notice is replayed on focus and never expires.
- */
-function noticeCarriesOnlyCopy(notice: ChatErrorNotice): boolean {
-  return notice.code === SEND_NOT_RECORDED_NOTICE_CODE;
 }
 
 function showErrorNoticeToast(notice: ChatErrorNotice): void {

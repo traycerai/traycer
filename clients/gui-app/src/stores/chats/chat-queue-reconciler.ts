@@ -5,7 +5,10 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  collectImageAttachmentsFromJSONContent,
+  extractPlainTextFromComposerJSONContent,
+} from "@/lib/composer/tiptap-json-content";
 import type {
   AcceptedChatAction,
   FailedSendRestorationState,
@@ -26,6 +29,20 @@ import type {
  * send is settled, its row is gone, and the text is right here.
  */
 export const SEND_NOT_RECORDED_NOTICE_CODE = "SEND_NOT_RECORDED";
+
+/**
+ * Whether this notice inlines content nothing else holds any more. Both passes
+ * settle the send and drop its row, so the message body in the notice IS the
+ * draft - not a pointer to one.
+ *
+ * That makes it data rather than notice history, and it inherits every
+ * durability obligation the row had: the store never evicts it from the
+ * capped ring, and the toast layer both replays it on focus and refuses to
+ * expire it. One definition, because all three would otherwise drift apart.
+ */
+export function noticeCarriesOnlyCopy(notice: ChatErrorNotice): boolean {
+  return notice.code === SEND_NOT_RECORDED_NOTICE_CODE;
+}
 
 /**
  * Input for queue reconciliation. Contains the immutable state slices needed
@@ -100,9 +117,11 @@ export type ReconcileSnapshotPatch = {
  * every later snapshot and pushes stale text back into the composer after the
  * user has already resent it.
  *
- * `extractPlainTextFromComposerJSONContent` is text-only: a send whose body
- * was entirely an image attachment has no text to carry, and says so rather
- * than rendering an empty quote.
+ * Text is all it can carry - `imageAttachment` / `attachmentGroup` nodes
+ * project to `""` - so whenever the original content held attachments the
+ * statement says so outright, in the mixed case as well as the
+ * attachment-only one. Silently quoting the caption of an image send would
+ * send someone back with an incomplete request believing it was whole.
  */
 function unrecoverableSendNotice(
   clientActionId: string,
@@ -110,16 +129,38 @@ function unrecoverableSendNotice(
   circumstance: string,
 ): ChatErrorNotice {
   const text = extractPlainTextFromComposerJSONContent(content).trim();
+  // Detected STRUCTURALLY, not by text-emptiness. Emptiness was standing in
+  // for "had attachments", and the proxy fails on the mixed case: an image
+  // plus a caption has text, so it took the quote-the-text arm and the image
+  // vanished behind a statement that looked complete.
+  const images = collectImageAttachmentsFromJSONContent(content);
   const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
+  const attachments =
+    images.length === 0
+      ? ""
+      : ` It also carried ${images.length} image ${images.length === 1 ? "attachment" : "attachments"} that cannot be carried here - re-add ${images.length === 1 ? "it" : "them"} before resending.`;
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
-    message:
-      text.length === 0
-        ? `${preamble} It had no text to recover - any attachments on it are lost.`
-        : `${preamble} Copy it from here to resend: ${text}`,
+    message: messageBody(preamble, text, images.length, attachments),
     severity: "warning",
     clientActionId,
   };
+}
+
+function messageBody(
+  preamble: string,
+  text: string,
+  imageCount: number,
+  attachments: string,
+): string {
+  if (text.length > 0)
+    return `${preamble} Copy it from here to resend: ${text}`.concat(
+      attachments,
+    );
+  if (imageCount > 0) {
+    return `${preamble} It carried no text - only ${imageCount} image ${imageCount === 1 ? "attachment" : "attachments"}, which cannot be recovered here.`;
+  }
+  return `${preamble} It had no recoverable content.`;
 }
 
 /**
