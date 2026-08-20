@@ -1480,14 +1480,6 @@ export interface CliInstallManifestSnapshot {
   } | null;
 }
 
-/**
- * What an atomic maintenance install submission answers.
- *
- * `lane-busy` is main's verdict that the exclusive mutation lane was already
- * occupied at submission time, so NOTHING was enqueued — the compatibility
- * lane maps it to the protocol's `already-updating`. Every other arm is the
- * controller's own per-intent outcome, unchanged and mapped as before.
- */
 /** Which Doctor repair to run; both are controller lifecycle intents. */
 export type DoctorRepairIntent = "converge-ready" | "register-service";
 
@@ -1529,6 +1521,14 @@ export type DoctorRepairDispatch =
   | { readonly kind: "host-changed"; readonly message: string }
   | { readonly kind: "dispatched"; readonly outcome: MutationOutcome<null> };
 
+/**
+ * What an atomic maintenance install submission answers.
+ *
+ * `lane-busy` is main's verdict that the exclusive mutation lane was already
+ * occupied at submission time, so NOTHING was enqueued — the compatibility
+ * lane maps it to the protocol's `already-updating`. Every other arm is the
+ * controller's own per-intent outcome, unchanged and mapped as before.
+ */
 export type MaintenanceInstallDispatch =
   | {
       readonly kind: "lane-busy";

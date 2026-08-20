@@ -1,12 +1,13 @@
 import { log } from "../app/logger";
 import { refreshRegistryUpdateState } from "../ipc/host-management-ipc";
 import { isHostRemovedByUser } from "../host/host-removal-state";
-import type {
-  ActivateInstalledOk,
-  ApplyStagedOk,
-  ConvergeReadyOk,
-  HostControllerStatus,
-  MutationOutcome,
+import {
+  backgroundMutationOutcome,
+  type ActivateInstalledOk,
+  type ApplyStagedOk,
+  type ConvergeReadyOk,
+  type HostControllerStatus,
+  type MutationOutcome,
 } from "../host/host-controller-types";
 import type { HostActivationState } from "../host/host-state";
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
@@ -496,7 +497,9 @@ export async function runLaunchHostConvergeReconcile(
     // `recovery === null` keeps this from re-running a recovery the pre-stage
     // pass already attempted, since repeating a failure seconds later helps
     // nobody.
-    outcome = await hostController.convergeReady(false, { kind: "background" });
+    outcome = backgroundMutationOutcome(
+      await hostController.convergeReady(false, { kind: "background" }),
+    );
   }
 
   const effectiveOutcome = outcome ?? recovery;
@@ -576,5 +579,7 @@ async function recoverAfterFailedApply(
     "[host-controller] launch converge recovering an absent service after a failed apply",
     { applyKind: applied.kind },
   );
-  return hostController.convergeReady(false, { kind: "background" });
+  return backgroundMutationOutcome(
+    await hostController.convergeReady(false, { kind: "background" }),
+  );
 }

@@ -132,6 +132,7 @@ import {
   type LifecycleAdmissionBlock,
   type MutationLaneStatus,
   type MutationProgress,
+  type ReprovisionGuardVerdict,
 } from "../host-controller-types";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
 import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
@@ -564,10 +565,10 @@ describe("mutation lane: wait-never-reject", () => {
       data: { activated: true },
     });
 
-    const first = await controller.respawn();
+    const first = await controller.respawn({ kind: "background" });
     expect(first.kind).toBe("failed");
 
-    const second = await controller.respawn();
+    const second = await controller.respawn({ kind: "background" });
     expect(second.kind).toBe("ok");
   });
 
@@ -596,9 +597,9 @@ describe("mutation lane: wait-never-reject", () => {
     });
 
     await Promise.all([
-      controller.respawn(),
+      controller.respawn({ kind: "background" }),
       controller.applyStaged("manual", false),
-      controller.respawn(),
+      controller.respawn({ kind: "background" }),
     ]);
 
     expect(maxConcurrentHolders).toBe(1);
@@ -698,7 +699,7 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -1118,8 +1119,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
     });
 
     const [first, second] = await Promise.all([
-      controller.respawn(),
-      controller.respawn(),
+      controller.respawn({ kind: "background" }),
+      controller.respawn({ kind: "background" }),
     ]);
 
     expect(restartCalls).toBe(1);
@@ -1181,8 +1182,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
       return { data: { activated: true } };
     });
 
-    await controller.respawn();
-    await controller.respawn();
+    await controller.respawn({ kind: "background" });
+    await controller.respawn({ kind: "background" });
 
     expect(restartCalls).toBe(2);
   });
@@ -1217,7 +1218,7 @@ describe("two lanes: mutation vs download independence", () => {
       return {};
     });
 
-    const respawnPromise = controller.respawn();
+    const respawnPromise = controller.respawn({ kind: "background" });
     await flushMicrotasks();
 
     const stageLatestPromise = controller.stageLatest();
@@ -1284,7 +1285,7 @@ describe("two lanes: mutation vs download independence", () => {
 
     // A mutation starts WHILE the probe above is still pending, and stays
     // active (gated on restartGate).
-    const respawnPromise = controller.respawn();
+    const respawnPromise = controller.respawn({ kind: "background" });
     await flushMicrotasks();
 
     probeGate.resolve(undefined);
@@ -1646,7 +1647,7 @@ describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)"
       return { outcome: "stamped" };
     });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     expect(runBundledTraycerCliJson).toHaveBeenCalledTimes(1);
@@ -1692,7 +1693,7 @@ describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup
       throw new Error("failed to seed a held lock for this test");
     }
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("deferred");
     await held.handle.release();
@@ -2671,7 +2672,7 @@ describe("yank/apply ordering", () => {
       return { data: {} };
     });
 
-    const restart = controller.respawn();
+    const restart = controller.respawn({ kind: "background" });
     await vi.waitFor(() => {
       // `--force` distinguishes respawn (the explicit force path - the
       // Settings Force-restart offer, tray restart) from the cooperative
@@ -3049,7 +3050,11 @@ describe("platform matrix", () => {
         Promise.resolve({ kind: "abandon", message: "host changed" }),
     });
 
-    expect(outcome).toEqual({ kind: "failed", message: "host changed" });
+    // `abandoned`, not `failed`: the refusal classification travels in the
+    // settled outcome so every coalesced waiter reads the same verdict, and
+    // so the Doctor console can render it as "declined" instead of counting
+    // it toward its recurrence lock.
+    expect(outcome).toEqual({ kind: "abandoned", message: "host changed" });
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(await isHostRemovedByUser()).toBe(true);
   });
@@ -3123,6 +3128,160 @@ describe("platform matrix", () => {
     // job's short-circuit and never asked.
     expect(guardAsked).toBe(true);
     expect(await isHostRemovedByUser()).toBe(false);
+  });
+
+  it("two coalesced user-repairs for the same host both receive the guard's refusal", async () => {
+    // Two windows submit the identical repair for the same host; the second
+    // JOINS the first's in-flight job, so only the first intent's guard ever
+    // runs. The refusal must ride the SHARED settled outcome — as the
+    // `abandoned` arm — because any state parked with one caller is dead for
+    // the other, which would then misread the result as a genuine failure
+    // and count it toward the Doctor console's recurrence lock.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const guardGate = deferred<ReprovisionGuardVerdict>();
+    const first = controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => guardGate.promise,
+    });
+    let secondGuardAsked = false;
+    const second = controller.convergeReady(false, {
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        secondGuardAsked = true;
+        return Promise.resolve({ kind: "proceed" });
+      },
+    });
+
+    guardGate.resolve({ kind: "abandon", message: "host changed" });
+    await expect(first).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    await expect(second).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    // Proves the two really were ONE job — the joiner's own guard never ran.
+    expect(secondGuardAsked).toBe(false);
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+  });
+
+  it("a queued user-repair restart asks its guard at the head of the lane and abandons after a host swap", async () => {
+    // A restart queues exactly like the reprovisions, so the identity
+    // question must be answered when the restart is about to FIRE, not when
+    // it was submitted: the host it named can be replaced while it waits
+    // behind an install, and a forced restart against the replacement kills
+    // sessions nobody asked about.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const installGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await installGate.promise;
+      return { data: { action: "noop", version: "1.7.0" } };
+    });
+    const occupy = controller.convergeReady(false, { kind: "background" });
+
+    let guardAsked = false;
+    const restart = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "abandon", message: "host changed" });
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+    });
+    expect(guardAsked).toBe(false);
+
+    installGate.resolve();
+    await occupy;
+    await expect(restart).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    expect(guardAsked).toBe(true);
+    // The restart itself never ran — the only CLI traffic was the converge
+    // that occupied the lane.
+    const restartCalls = vi
+      .mocked(streamBundledTraycerCliJson)
+      .mock.calls.filter((call) => call[0].args.includes("restart"));
+    expect(restartCalls).toEqual([]);
+  });
+
+  it("a user-repair respawn does not coalesce onto a background respawn", async () => {
+    // Same rule as the converge twin: joining the background job would hand
+    // the repair that job's guard-free policy. Keyed apart, the user repair
+    // runs as its own lane job and its guard is actually consulted.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const restartGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await restartGate.promise;
+      return { data: { activated: true } };
+    });
+    const background = controller.respawn({ kind: "background" });
+    let guardAsked = false;
+    const repair = controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => {
+        guardAsked = true;
+        return Promise.resolve({ kind: "abandon", message: "host changed" });
+      },
+    });
+
+    restartGate.resolve();
+    await expect(background).resolves.toEqual({
+      kind: "ok",
+      value: { activated: true },
+    });
+    // Had they coalesced, the repair would have resolved the background
+    // restart's outcome and never asked.
+    await expect(repair).resolves.toEqual({
+      kind: "abandoned",
+      message: "host changed",
+    });
+    expect(guardAsked).toBe(true);
+  });
+
+  it("a user-repair respawn keeps the removed-by-user deferral and clears nothing", async () => {
+    // A restart is NOT a reprovision. Even asked for by a person, it defers
+    // on the removal sentinel — only Install host / Register service mean
+    // "give me the host back", so only they clear it.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    await markHostRemovedByUser();
+
+    const outcome = await controller.respawn({
+      kind: "user-repair",
+      targetHostId: "local-host",
+      guard: () => Promise.resolve({ kind: "proceed" }),
+    });
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_REMOVED_BY_USER_MESSAGE,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
   });
 
   it("F8b: CLI registerService treats a readiness timeout as non-converged and never reports registration success", async () => {
@@ -4887,7 +5046,7 @@ describe("respawn (fixup B14)", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     await markHostRemovedByUser();
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome).toEqual({
       kind: "deferred",
@@ -4918,7 +5077,7 @@ describe("respawn (fixup B14)", () => {
       new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("deferred");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
@@ -5546,7 +5705,9 @@ describe("Class B CLI-owned caller publication", () => {
     });
     configureRestartAndStamp();
 
-    await expect(controller.respawn()).resolves.toMatchObject({
+    await expect(
+      controller.respawn({ kind: "background" }),
+    ).resolves.toMatchObject({
       kind: "ok",
       value: { activated: true },
     });
@@ -5602,7 +5763,7 @@ describe("recoverIfDown", () => {
     const gate = deferred<{ data: unknown }>();
     vi.mocked(streamBundledTraycerCliJson).mockReturnValueOnce(gate.promise);
 
-    const respawnPromise = controller.respawn();
+    const respawnPromise = controller.respawn({ kind: "background" });
     await flushMicrotasks();
 
     const recovered = await controller.recoverIfDown();
@@ -5895,7 +6056,7 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     });
     configureStampAndServiceAttestation();
 
-    expect((await controller.respawn()).kind).toBe("ok");
+    expect((await controller.respawn({ kind: "background" })).kind).toBe("ok");
     expectCommandGenerationWasStamped();
   });
 
@@ -6150,7 +6311,7 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValueOnce({
       data: { activated: true },
     });
-    const respawnOutcome = await controller.respawn();
+    const respawnOutcome = await controller.respawn({ kind: "background" });
     expect(respawnOutcome.kind).toBe("ok");
 
     // Fixup C2: the title's own claim - "no durable pending-pin state" -
@@ -6209,7 +6370,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
         reason: "ready",
       });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     // The retry is a FULL cycle - a second register, not a second wait on
@@ -6222,7 +6383,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     const controller = stagePackagedMacWorld();
     vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -6261,7 +6422,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
       return NOT_READY;
     });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     // The point of the guard: no second bootout, no second wait.
@@ -6276,7 +6437,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     // host being evicted, still answering because teardown has not finished.
     // Reachable, and worth nothing as evidence.
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     expect(waitForHostReady).toHaveBeenCalledTimes(2);
@@ -6294,7 +6455,7 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
         : "enabled",
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     expect(waitForHostReady).toHaveBeenCalledTimes(1);
@@ -6339,7 +6500,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const controller = stagePackagedMacWorld();
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
@@ -6362,7 +6523,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       new Error("takeover exploded"),
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -6389,7 +6550,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       ),
     );
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("deferred");
     if (outcome.kind === "deferred") {
@@ -6416,7 +6577,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       reason: "pid metadata never appeared",
     });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -6457,7 +6618,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
         : "enabled",
     );
 
-    const respawnOutcome = await controller.respawn();
+    const respawnOutcome = await controller.respawn({ kind: "background" });
     const registerOutcome = await controller.registerService({
       kind: "background",
     });
@@ -6479,7 +6640,7 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     // resurrect the exact registration the user just removed.
     vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
 
     expect(outcome.kind).toBe("failed");
     if (outcome.kind === "failed") {
@@ -6565,7 +6726,7 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
     // A completely unrelated mutation starts while the out-of-lane takeover
     // call above is still in flight - `respawn`'s own restart call is gated
     // too, so its mutation stays active for the assertion below.
-    const respawnPromise = controller.respawn();
+    const respawnPromise = controller.respawn({ kind: "background" });
     await flushMicrotasks();
 
     if (takeoverEvents.onEvent === null) {
@@ -6617,7 +6778,7 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
       return { data: { activated: true } };
     });
 
-    const outcome = await controller.respawn();
+    const outcome = await controller.respawn({ kind: "background" });
     unsubscribe();
 
     expect(outcome.kind).toBe("ok");

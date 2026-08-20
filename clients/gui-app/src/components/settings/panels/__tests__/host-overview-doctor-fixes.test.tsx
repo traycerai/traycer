@@ -30,7 +30,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -39,11 +39,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import {
-  QueryClient,
-  QueryClientProvider,
-  useMutation,
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -51,16 +47,18 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
-  HostRestartRequestResult,
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
+import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
+  ExternalHostRestartTrigger,
   openHostOverviewMenu,
   buildOverviewHostFixture,
   buildOverviewManagement,
@@ -108,6 +106,13 @@ const DOCTOR_WITHOUT_RESTART = [
   "host.update.install",
 ] as const;
 
+// Both lists above omit `diagnostics.logs.tail`; only DOCTOR_WITHOUT_RESTART
+// also omits `host.restart`, which is the axis the remote-restart builder
+// varies. The alias keeps that call site readable — selecting a constant
+// named for what it lacks (logs) to mean "restart present" made readers check
+// the list twice.
+const DOCTOR_WITH_RESTART = DOCTOR_WITHOUT_LOGS;
+
 const RECENT_CRASH_MARKERS: HostDoctorIssue = {
   code: "RECENT_CRASH_MARKERS",
   severity: "warning",
@@ -142,21 +147,78 @@ const FREE_PORT_ISSUE: HostDoctorIssue = {
   details: { port: 8765, conflictingPid: 4242, conflictingProcess: "node" },
 };
 
-function ExternalHostRestartTrigger(props: {
-  readonly mutationFn: () => Promise<HostRestartRequestResult>;
-  readonly onReady: (mutate: () => void) => void;
-}): null {
-  const { mutate } = useMutation({
-    mutationKey: runnerMutationKeys.hostRestart(),
-    mutationFn: props.mutationFn,
+/**
+ * The one place these suites mount the panel. Everything the three scenario
+ * builders used to repeat — the fixture, the negotiated-method record, the
+ * scope override, the host binding, the runner host, the QueryClient and the
+ * render tree — lives here exactly once; each wrapper below supplies only
+ * what its scenario varies.
+ */
+function renderDoctorPanel(options: {
+  readonly hostId: string;
+  readonly isLocalMachine: boolean;
+  readonly negotiatedMethods: readonly string[];
+  readonly overrideHandlers: MockHandlerMap<HostRpcRegistry>;
+  readonly management: IHostManagement | null;
+  readonly extra: ReactNode | undefined;
+}): {
+  readonly fixture: OverviewHostFixture;
+  readonly queryClient: QueryClient;
+} {
+  const fixture = buildOverviewHostFixture({
+    hostId: options.hostId,
+    isLocalMachine: options.isLocalMachine,
+    overrideHandlers: options.overrideHandlers,
   });
-  const { onReady } = props;
-  useEffect(() => {
-    onReady(() => {
-      mutate();
-    });
-  }, [mutate, onReady]);
-  return null;
+  recordNegotiatedHostMethods(options.hostId, options.negotiatedMethods);
+
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId: options.hostId,
+      isLocalMachine: options.isLocalMachine,
+      connectable: true,
+    }),
+    hostId: options.hostId,
+    status: "ready",
+    client: fixture.client,
+  };
+  hostBindingMock.current = { hostClient: fixture.client };
+
+  const runnerHost: IRunnerHost = new MockRunnerHost({
+    signInUrl: "https://example.invalid/signin",
+    authnBaseUrl: "https://example.invalid",
+    // A live snapshot, so a local variant is a RUNNING local host and gets
+    // the RPC page rather than the recovery console.
+    localHost: options.isLocalMachine
+      ? {
+          hostId: options.hostId,
+          availability: "available" as const,
+          websocketUrl: "ws://127.0.0.1:8765",
+          version: "1.5.0",
+          pid: 4821,
+          systemHostName: options.hostId,
+          displayName: options.hostId,
+        }
+      : null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+    hostManagement: options.management,
+  });
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        {options.extra ?? null}
+        <HostSettingsPanel />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+  return { fixture, queryClient };
 }
 
 function renderDoctor(options: {
@@ -168,10 +230,13 @@ function renderDoctor(options: {
   readonly management: IHostManagement;
   readonly queryClient: QueryClient;
 } {
-  const hostId = options.isLocalMachine ? "host-local" : "host-remote";
-  const fixture = buildOverviewHostFixture({
-    hostId,
+  const management = buildOverviewManagement({
+    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
+  });
+  const { queryClient } = renderDoctorPanel({
+    hostId: options.isLocalMachine ? "host-local" : "host-remote",
     isLocalMachine: options.isLocalMachine,
+    negotiatedMethods: OVERVIEW_METHODS,
     overrideHandlers: {
       "host.doctor": () => {
         if (options.doctorFails) {
@@ -188,59 +253,9 @@ function renderDoctor(options: {
         };
       },
     },
+    management: options.withBridge ? management : null,
+    extra: options.extra,
   });
-  recordNegotiatedHostMethods(hostId, OVERVIEW_METHODS);
-
-  const management = buildOverviewManagement({
-    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
-  });
-
-  scopeOverrides.current = {
-    host: hostScopeOptionFixture({
-      hostId,
-      isLocalMachine: options.isLocalMachine,
-      connectable: true,
-    }),
-    hostId,
-    status: "ready",
-    client: fixture.client,
-  };
-  hostBindingMock.current = { hostClient: fixture.client };
-
-  const runnerHost: IRunnerHost = new MockRunnerHost({
-    signInUrl: "https://example.invalid/signin",
-    authnBaseUrl: "https://example.invalid",
-    // A live snapshot, so the local variant is a RUNNING local host and gets
-    // the RPC page rather than the recovery console.
-    localHost: options.isLocalMachine
-      ? {
-          hostId,
-          availability: "available" as const,
-          websocketUrl: "ws://127.0.0.1:8765",
-          version: "1.5.0",
-          pid: 4821,
-          systemHostName: hostId,
-          displayName: hostId,
-        }
-      : null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-    hostManagement: options.withBridge ? management : null,
-  });
-
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        {options.extra ?? null}
-        <HostSettingsPanel />
-      </RunnerHostProvider>
-    </QueryClientProvider>,
-  );
   return { management, queryClient };
 }
 
@@ -423,11 +438,22 @@ function renderDoctorLogs(options: {
   readonly management: IHostManagement;
   readonly rpcLogCalls: { count: number };
 } {
-  const hostId = options.isLocalMachine ? "host-local" : "host-remote";
   const rpcLogCalls = { count: 0 };
-  const fixture = buildOverviewHostFixture({
-    hostId,
+  const management = buildOverviewManagement({
+    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
+    getHostLogs: vi.fn(() =>
+      Promise.resolve({
+        path: "/tmp/host.log",
+        tail: "bridge-line-1\nbridge-line-2",
+      }),
+    ),
+  });
+  renderDoctorPanel({
+    hostId: options.isLocalMachine ? "host-local" : "host-remote",
     isLocalMachine: options.isLocalMachine,
+    negotiatedMethods: options.advertiseLogs
+      ? OVERVIEW_METHODS
+      : DOCTOR_WITHOUT_LOGS,
     overrideHandlers: {
       "host.doctor": () => ({
         status: "ok" as const,
@@ -445,65 +471,9 @@ function renderDoctorLogs(options: {
         };
       },
     },
+    management: options.withBridge ? management : null,
+    extra: undefined,
   });
-  recordNegotiatedHostMethods(
-    hostId,
-    options.advertiseLogs ? OVERVIEW_METHODS : DOCTOR_WITHOUT_LOGS,
-  );
-
-  const management = buildOverviewManagement({
-    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
-    getHostLogs: vi.fn(() =>
-      Promise.resolve({
-        path: "/tmp/host.log",
-        tail: "bridge-line-1\nbridge-line-2",
-      }),
-    ),
-  });
-
-  scopeOverrides.current = {
-    host: hostScopeOptionFixture({
-      hostId,
-      isLocalMachine: options.isLocalMachine,
-      connectable: true,
-    }),
-    hostId,
-    status: "ready",
-    client: fixture.client,
-  };
-  hostBindingMock.current = { hostClient: fixture.client };
-
-  const runnerHost: IRunnerHost = new MockRunnerHost({
-    signInUrl: "https://example.invalid/signin",
-    authnBaseUrl: "https://example.invalid",
-    localHost: options.isLocalMachine
-      ? {
-          hostId,
-          availability: "available" as const,
-          websocketUrl: "ws://127.0.0.1:8765",
-          version: "1.5.0",
-          pid: 4821,
-          systemHostName: hostId,
-          displayName: hostId,
-        }
-      : null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-    hostManagement: options.withBridge ? management : null,
-  });
-
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <HostSettingsPanel />
-      </RunnerHostProvider>
-    </QueryClientProvider>,
-  );
   return { management, rpcLogCalls };
 }
 
@@ -605,10 +575,12 @@ function renderRemoteDoctorRestart(options: {
 }): {
   readonly fixture: OverviewHostFixture;
 } {
-  const hostId = "host-remote";
-  const fixture = buildOverviewHostFixture({
-    hostId,
+  const { fixture } = renderDoctorPanel({
+    hostId: "host-remote",
     isLocalMachine: false,
+    negotiatedMethods: options.advertiseRestart
+      ? DOCTOR_WITH_RESTART
+      : DOCTOR_WITHOUT_RESTART,
     overrideHandlers: {
       "host.doctor": () => ({
         status: "ok" as const,
@@ -616,49 +588,16 @@ function renderRemoteDoctorRestart(options: {
         triviallyGreenIssueCodes: [],
       }),
     },
-  });
-  recordNegotiatedHostMethods(
-    hostId,
-    options.advertiseRestart ? DOCTOR_WITHOUT_LOGS : DOCTOR_WITHOUT_RESTART,
-  );
-
-  const management = buildOverviewManagement({
-    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
-  });
-
-  scopeOverrides.current = {
-    host: hostScopeOptionFixture({
-      hostId,
-      isLocalMachine: false,
-      connectable: true,
+    // Always bridged, unlike the two builders above: these scenarios pin the
+    // RPC-capability split on a REMOTE host, where the local bridge existing
+    // must not matter.
+    management: buildOverviewManagement({
+      installedRecord: vi.fn(() =>
+        Promise.resolve(makeInstalledRecord("1.5.0")),
+      ),
     }),
-    hostId,
-    status: "ready",
-    client: fixture.client,
-  };
-  hostBindingMock.current = { hostClient: fixture.client };
-
-  const runnerHost: IRunnerHost = new MockRunnerHost({
-    signInUrl: "https://example.invalid/signin",
-    authnBaseUrl: "https://example.invalid",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-    hostManagement: management,
+    extra: undefined,
   });
-
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <HostSettingsPanel />
-      </RunnerHostProvider>
-    </QueryClientProvider>,
-  );
   return { fixture };
 }
 

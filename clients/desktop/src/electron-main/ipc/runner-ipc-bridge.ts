@@ -96,6 +96,7 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  GuardedMutationOutcome,
   HostControllerStatus,
   LifecycleAdmissionBlock,
   InstallVersionOk,
@@ -375,7 +376,7 @@ export interface IpcHostController {
   convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
-  ): Promise<MutationOutcome<ConvergeReadyOk>>;
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
     trigger: ApplyStagedTrigger,
@@ -390,9 +391,11 @@ export interface IpcHostController {
   ): Promise<MutationOutcome<InstallVersionOk>>;
   registerService(
     intent: LocalHostMutationIntent,
-  ): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
-  respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
+  respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
   >;
@@ -400,7 +403,7 @@ export interface IpcHostController {
     pid: number | null,
     port: number | null,
     intent: LocalHostMutationIntent,
-  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
   removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
   isPendingRevisionRefreshQuarantined(): boolean;

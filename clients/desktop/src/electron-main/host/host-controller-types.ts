@@ -176,6 +176,47 @@ export type MutationOutcome<TOk> =
   | { readonly kind: "installed-not-converged"; readonly message: string }
   | { readonly kind: "failed"; readonly message: string };
 
+// The lane-head identity guard refused a `user-repair` intent: the local host
+// is no longer the one the repair named, so the job mutated NOTHING.
+//
+// A distinct arm rather than `failed`, and a widening of the intent-taking
+// methods' return union rather than of `MutationOutcome` itself:
+//
+//   - Coalesced waiters share ONE settled outcome. When two windows submit
+//     the same repair for the same host, the second submission JOINS the
+//     first's promise and its own intent never runs - so any per-caller
+//     state (a closure the guard arms) is dead for the joiner, which would
+//     misread the shared `failed` as a genuine error and count it toward the
+//     Doctor console's recurrence lock. The classification has to travel IN
+//     the outcome every waiter receives.
+//   - No unguarded mutation can produce it, so putting it in
+//     `MutationOutcome` would force every switch over that union - including
+//     the renderer's - to handle an arm that cannot occur there. The IPC
+//     handlers that supply guards classify it into their own result shapes;
+//     it never crosses the wire.
+export interface AbandonedByGuard {
+  readonly kind: "abandoned";
+  readonly message: string;
+}
+
+/** What an intent-taking (guardable) mutation resolves. */
+export type GuardedMutationOutcome<TOk> =
+  MutationOutcome<TOk> | AbandonedByGuard;
+
+/**
+ * Narrows a guarded outcome for a caller that submitted a `background`
+ * intent. A background intent carries no guard, so `abandoned` cannot occur
+ * on that path; mapping it to `failed` rather than asserting it away keeps
+ * the caller total if the invariant ever breaks.
+ */
+export function backgroundMutationOutcome<TOk>(
+  outcome: GuardedMutationOutcome<TOk>,
+): MutationOutcome<TOk> {
+  return outcome.kind === "abandoned"
+    ? { kind: "failed", message: outcome.message }
+    : outcome;
+}
+
 export interface ConvergeReadyOk {
   readonly running: boolean;
   readonly version: string | null;

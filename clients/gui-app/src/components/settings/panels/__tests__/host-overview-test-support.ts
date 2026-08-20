@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { useMutation } from "@tanstack/react-query";
 import {
   HostClient,
   type IHostQueryInvalidator,
@@ -15,8 +17,10 @@ import type {
   HostControllerStatus,
   HostInstalledRecord,
   HostRegistryUpdateState,
+  HostRestartRequestResult,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
+import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type {
   HostAvailableManifest,
@@ -68,6 +72,33 @@ export async function openHostOverviewMenu(): Promise<void> {
     button: 0,
   });
   await screen.findByTestId("host-overview-restart");
+}
+
+/**
+ * Mounts nothing and fires one host-restart mutation on demand, under the
+ * SAME mutation key the Overview's own restart button uses.
+ *
+ * Shared by the doctor-fixes and local-maintenance-fallback suites: both pin
+ * how the panel reacts to a restart that some OTHER surface started (the
+ * pending flag, the disabled states), so the trigger has to be an outside
+ * component publishing on `runnerMutationKeys.hostRestart()` rather than a
+ * click on the panel itself.
+ */
+export function ExternalHostRestartTrigger(props: {
+  readonly mutationFn: () => Promise<HostRestartRequestResult>;
+  readonly onReady: (mutate: () => void) => void;
+}): null {
+  const { mutate } = useMutation({
+    mutationKey: runnerMutationKeys.hostRestart(),
+    mutationFn: props.mutationFn,
+  });
+  const { onReady } = props;
+  useEffect(() => {
+    onReady(() => {
+      mutate();
+    });
+  }, [mutate, onReady]);
+  return null;
 }
 
 /**

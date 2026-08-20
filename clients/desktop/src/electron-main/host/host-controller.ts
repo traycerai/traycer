@@ -55,12 +55,14 @@ import {
 } from "./host-state";
 import {
   HOST_REMOVED_BY_USER_MESSAGE,
+  type AbandonedByGuard,
   type ActivateInstalledOk,
   type ApplyStagedOk,
   type ApplyStagedTrigger,
   type BusyContinuation,
   type ConvergeReadyOk,
   type DownloadLaneStatus,
+  type GuardedMutationOutcome,
   type HostControllerIntent,
   type HostControllerStatus,
   type InstallVersionOk,
@@ -840,12 +842,15 @@ export class HostController {
   // race the deletion), so a LATER, non-overlapping call with the same key
   // still runs fresh rather than replaying a stale result. Every call site
   // below derives its key from the intent's OWN distinguishing parameters
-  // (e.g. `force`, `pin`) - two `respawn()`s always coalesce; two
-  // `installVersion` calls only coalesce when the pin AND force both match.
+  // (e.g. `force`, `pin`) - two background `respawn()`s always coalesce; two
+  // `installVersion` calls only coalesce when the pin AND force both match;
+  // guarded intents additionally key on the intent kind and target host
+  // (`reprovisionCoalesceKeySuffix`), so a user repair never joins a
+  // background job and inherits its skipped guard.
 
   private readonly inFlightMutations = new Map<
     string,
-    Promise<MutationOutcome<unknown>>
+    Promise<MutationOutcome<unknown> | AbandonedByGuard>
   >();
 
   // Apply and activation both run asynchronous eligibility/download-lane
@@ -875,46 +880,57 @@ export class HostController {
     return job;
   }
 
-  private enqueueMutation<T>(
+  // Generic over the RESULT union, not the ok-value: an intent-taking
+  // mutation resolves `GuardedMutationOutcome` (its lane head can abandon),
+  // everything else plain `MutationOutcome`, and both flow through this one
+  // lane. Whatever the job settles with is what EVERY coalesced waiter
+  // receives - which is why a guard refusal must be an outcome arm rather
+  // than per-caller state (see `AbandonedByGuard`).
+  private enqueueMutation<
+    R extends MutationOutcome<unknown> | AbandonedByGuard,
+  >(
     kind: MutationKind,
     coalesceKey: string,
-    fn: () => Promise<MutationOutcome<T>>,
-  ): Promise<MutationOutcome<T>> {
+    fn: () => Promise<R>,
+  ): Promise<R | { readonly kind: "failed"; readonly message: string }> {
     const existing = this.inFlightMutations.get(coalesceKey);
     if (existing !== undefined) {
-      return existing as Promise<MutationOutcome<T>>;
+      return existing as Promise<
+        R | { readonly kind: "failed"; readonly message: string }
+      >;
     }
-    const job = this.mutationTail.then(async () => {
-      this.mutationEpoch += 1;
-      this.mutationStatus = {
-        kind,
-        progress: null,
-        startedAt: new Date().toISOString(),
-      };
-      this.publishMutationStatus();
-      try {
-        return await fn();
-      } catch (err) {
-        log.warn("[host-controller] mutation intent threw", { kind, err });
-        return {
-          kind: "failed",
-          message: describeError(err),
-        } as MutationOutcome<T>;
-      } finally {
+    const job = this.mutationTail.then(
+      async (): Promise<
+        R | { readonly kind: "failed"; readonly message: string }
+      > => {
         this.mutationEpoch += 1;
-        this.mutationStatus = null;
+        this.mutationStatus = {
+          kind,
+          progress: null,
+          startedAt: new Date().toISOString(),
+        };
         this.publishMutationStatus();
-        this.inFlightMutations.delete(coalesceKey);
-        if (this.stageLatestPending) {
-          this.stageLatestPending = false;
-          void this.stageLatest();
+        try {
+          return await fn();
+        } catch (err) {
+          log.warn("[host-controller] mutation intent threw", { kind, err });
+          return {
+            kind: "failed",
+            message: describeError(err),
+          };
+        } finally {
+          this.mutationEpoch += 1;
+          this.mutationStatus = null;
+          this.publishMutationStatus();
+          this.inFlightMutations.delete(coalesceKey);
+          if (this.stageLatestPending) {
+            this.stageLatestPending = false;
+            void this.stageLatest();
+          }
         }
-      }
-    });
-    this.inFlightMutations.set(
-      coalesceKey,
-      job as Promise<MutationOutcome<unknown>>,
+      },
     );
+    this.inFlightMutations.set(coalesceKey, job);
     this.mutationTail = job.then(
       () => undefined,
       () => undefined,
@@ -2104,8 +2120,8 @@ export class HostController {
   async convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
-  ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return this.enqueueMutation<ConvergeReadyOk>(
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>> {
+    return this.enqueueMutation<GuardedMutationOutcome<ConvergeReadyOk>>(
       "ensure",
       // The intent is part of the coalesce key, not decoration, and so is the
       // host it targets. A repair that coalesced onto a background converge
@@ -2152,13 +2168,13 @@ export class HostController {
    * question the IPC handler asked before enqueueing, then clear the removal
    * sentinel so the reprovision is not swallowed by it.
    *
-   * Returns a `failed` outcome to ABANDON the job, or `null` to proceed. A
-   * background intent is always `null` and touches nothing - the background
+   * Returns an `abandoned` outcome to ABANDON the job, or `null` to proceed.
+   * A background intent is always `null` and touches nothing - the background
    * paths are byte-for-byte what they were.
    */
   private async admitReprovision(
     intent: LocalHostMutationIntent,
-  ): Promise<{ readonly kind: "failed"; readonly message: string } | null> {
+  ): Promise<AbandonedByGuard | null> {
     const abandoned = await this.runLaneHeadGuard(intent);
     if (abandoned !== null) return abandoned;
     if (intent.kind === "background") return null;
@@ -2185,11 +2201,11 @@ export class HostController {
    */
   private async runLaneHeadGuard(
     intent: LocalHostMutationIntent,
-  ): Promise<{ readonly kind: "failed"; readonly message: string } | null> {
+  ): Promise<AbandonedByGuard | null> {
     if (intent.kind === "background") return null;
     const verdict = await intent.guard();
     return verdict.kind === "abandon"
-      ? { kind: "failed", message: verdict.message }
+      ? { kind: "abandoned", message: verdict.message }
       : null;
   }
 
@@ -2687,22 +2703,20 @@ export class HostController {
             };
           }
 
-          const outcome = await this.enqueueMutation<ApplyStagedOk>(
-            "apply",
-            `apply:${trigger}:${force}`,
-            async () => {
-              if (trigger === "launch" && (await isHostRemovedByUser())) {
-                return {
-                  kind: "deferred",
-                  message: HOST_REMOVED_BY_USER_MESSAGE,
-                };
-              }
-              if (await this.isPackagedMacOwned()) {
-                return this.applyStagedPackagedMac(eligibleStage.fingerprint);
-              }
-              return this.applyStagedCliOwned(force, eligibleStage.fingerprint);
-            },
-          );
+          const outcome = await this.enqueueMutation<
+            MutationOutcome<ApplyStagedOk>
+          >("apply", `apply:${trigger}:${force}`, async () => {
+            if (trigger === "launch" && (await isHostRemovedByUser())) {
+              return {
+                kind: "deferred",
+                message: HOST_REMOVED_BY_USER_MESSAGE,
+              };
+            }
+            if (await this.isPackagedMacOwned()) {
+              return this.applyStagedPackagedMac(eligibleStage.fingerprint);
+            }
+            return this.applyStagedCliOwned(force, eligibleStage.fingerprint);
+          });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
         return {
@@ -2855,56 +2869,50 @@ export class HostController {
           await this.stageLatest();
           await this.awaitDownloadLaneIdle();
 
-          const outcome = await this.enqueueMutation<ActivateInstalledOk>(
-            "activate",
-            `activate:${force}`,
-            async () => {
-              // A ready update supersedes activation debt - prevents the
-              // restart-old -> stamp -> restart-new double cycle. The reconcile
-              // already ran above; this only re-reads the (now-fresh) state and
-              // performs the apply/activate choreography, no further download.
-              const installed = await readDesktopHostInstallRecord(this.layout);
-              const staged = await readDesktopHostStagedRecord(this.layout);
-              if (
-                deriveUpdateReady(
-                  installed?.version ?? null,
-                  staged?.version ?? null,
-                )
-              ) {
-                const eligibleStage = this.eligibleStage;
-                if (eligibleStage === null) {
-                  return {
-                    kind: "deferred",
-                    message:
-                      "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
-                  };
-                }
-                const applied = (await this.isPackagedMacOwned())
-                  ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
-                  : await this.applyStagedCliOwned(
-                      force,
-                      eligibleStage.fingerprint,
-                    );
-                if (applied.kind === "stage-fingerprint-mismatch") {
-                  return applied;
-                }
-                return applied.kind === "ok"
-                  ? {
-                      kind: "ok",
-                      value: { activated: applied.value.runningActivated },
-                    }
-                  : applied;
+          const outcome = await this.enqueueMutation<
+            MutationOutcome<ActivateInstalledOk>
+          >("activate", `activate:${force}`, async () => {
+            // A ready update supersedes activation debt - prevents the
+            // restart-old -> stamp -> restart-new double cycle. The reconcile
+            // already ran above; this only re-reads the (now-fresh) state and
+            // performs the apply/activate choreography, no further download.
+            const installed = await readDesktopHostInstallRecord(this.layout);
+            const staged = await readDesktopHostStagedRecord(this.layout);
+            if (
+              deriveUpdateReady(
+                installed?.version ?? null,
+                staged?.version ?? null,
+              )
+            ) {
+              const eligibleStage = this.eligibleStage;
+              if (eligibleStage === null) {
+                return {
+                  kind: "deferred",
+                  message:
+                    "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
+                };
               }
-              if (await this.isPackagedMacOwned()) {
-                return this.runLockedMacActivationCycle(
-                  force,
-                  "activate",
-                  false,
-                );
+              const applied = (await this.isPackagedMacOwned())
+                ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
+                : await this.applyStagedCliOwned(
+                    force,
+                    eligibleStage.fingerprint,
+                  );
+              if (applied.kind === "stage-fingerprint-mismatch") {
+                return applied;
               }
-              return this.activateInstalledCliOwned(force);
-            },
-          );
+              return applied.kind === "ok"
+                ? {
+                    kind: "ok",
+                    value: { activated: applied.value.runningActivated },
+                  }
+                : applied;
+            }
+            if (await this.isPackagedMacOwned()) {
+              return this.runLockedMacActivationCycle(force, "activate", false);
+            }
+            return this.activateInstalledCliOwned(force);
+          });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
         return {
@@ -2957,7 +2965,7 @@ export class HostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>> {
-    return this.enqueueMutation<InstallVersionOk>(
+    return this.enqueueMutation<MutationOutcome<InstallVersionOk>>(
       "install",
       `install:${pin}:${force}`,
       async () => {
@@ -3065,8 +3073,8 @@ export class HostController {
 
   async registerService(
     intent: LocalHostMutationIntent,
-  ): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return this.enqueueMutation<ServiceRegistrationOk>(
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>> {
+    return this.enqueueMutation<GuardedMutationOutcome<ServiceRegistrationOk>>(
       "register",
       // Intent- and target-discriminated for the same reasons
       // `convergeReady`'s key is.
@@ -3186,7 +3194,7 @@ export class HostController {
   }
 
   async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return this.enqueueMutation<ServiceRegistrationOk>(
+    return this.enqueueMutation<MutationOutcome<ServiceRegistrationOk>>(
       "deregister",
       "deregister",
       async () => {
@@ -3228,11 +3236,28 @@ export class HostController {
   // `host restart` runs the cooperative shutdown claim, and the busy host
   // that made the user reach for Force restart denies it - the forced
   // restart would report the very declined outcome it exists to override.
-  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return this.enqueueMutation<ActivateInstalledOk>(
+  async respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+    return this.enqueueMutation<GuardedMutationOutcome<ActivateInstalledOk>>(
       "respawn",
-      "respawn",
+      // Intent- and target-discriminated like the reprovision keys. Two
+      // background respawns still collapse to one restart; a user repair is
+      // its own job so it cannot join a background restart and skip the
+      // guard question below.
+      `respawn:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
+        // Guard only - NOT `admitReprovision`. A restart is not a
+        // reprovision: it must keep the removed-by-user deferral below and
+        // clears nothing. Asked at the head of the lane because this intent
+        // QUEUES behind whatever is running - a doctor-recommended restart
+        // can wait minutes behind an install, and the host it named can be
+        // replaced in that window; firing then would force-restart a host
+        // nobody asked about, killing its active sessions. Runs before
+        // `notifyRespawning`, which clears the renderer-facing snapshot - an
+        // abandoned job must leave no trace it was ever admitted.
+        const abandoned = await this.runLaneHeadGuard(intent);
+        if (abandoned !== null) return abandoned;
         // Fixup B14: Remove Traycer may have persisted the removed-by-user
         // sentinel but failed/been interrupted mid-uninstall, leaving
         // remaining bytes on disk - without this check, Restart/Retry would
@@ -3310,7 +3335,7 @@ export class HostController {
     if (this.mutationStatus !== null) {
       return { kind: "suppressed" };
     }
-    return this.enqueueMutation<ActivateInstalledOk>(
+    return this.enqueueMutation<MutationOutcome<ActivateInstalledOk>>(
       "recoverIfDown",
       "recoverIfDown",
       async () => {
@@ -3369,8 +3394,8 @@ export class HostController {
     pid: number | null,
     port: number | null,
     intent: LocalHostMutationIntent,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return this.enqueueMutation<ActivateInstalledOk>(
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+    return this.enqueueMutation<GuardedMutationOutcome<ActivateInstalledOk>>(
       "freePortAndRestart",
       // Target-discriminated like the reprovision keys: `pid`/`port` alone
       // name a process, not the host that recorded it, so two repairs from
@@ -3441,7 +3466,7 @@ export class HostController {
   // ---- uninstallHost (Settings; no sentinel) -------------------------------
 
   async uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>> {
-    return this.enqueueMutation<UninstallOk>(
+    return this.enqueueMutation<MutationOutcome<UninstallOk>>(
       "uninstallHost",
       `uninstallHost:${all}`,
       async () => {
@@ -3490,7 +3515,7 @@ export class HostController {
     // they still execute their job body but immediately no-op).
     await markHostRemovedByUser();
     this.abortInFlightDownload();
-    return this.enqueueMutation<RemoveTraycerOk>(
+    return this.enqueueMutation<MutationOutcome<RemoveTraycerOk>>(
       "removeTraycer",
       "removeTraycer",
       async () => {

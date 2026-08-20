@@ -9,6 +9,7 @@ import type {
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
+  GuardedMutationOutcome,
   LifecycleAdmissionBlock,
   LocalHostMutationIntent,
 } from "../../host/host-controller-types";
@@ -235,19 +236,21 @@ interface HandlerBridge {
         version: string,
         force: boolean,
       ) => Promise<MutationOutcome<InstallVersionOk>>;
-      respawn: () => Promise<MutationOutcome<{ readonly activated: boolean }>>;
+      respawn: (
+        intent: LocalHostMutationIntent,
+      ) => Promise<GuardedMutationOutcome<{ readonly activated: boolean }>>;
       convergeReady: (
         force: boolean,
         intent: LocalHostMutationIntent,
-      ) => Promise<MutationOutcome<null>>;
+      ) => Promise<GuardedMutationOutcome<null>>;
       registerService: (
         intent: LocalHostMutationIntent,
-      ) => Promise<MutationOutcome<null>>;
+      ) => Promise<GuardedMutationOutcome<null>>;
       freePortAndRestart: (
         pid: number | undefined,
         port: number | undefined,
         intent: LocalHostMutationIntent,
-      ) => Promise<MutationOutcome<{ readonly activated: boolean }>>;
+      ) => Promise<GuardedMutationOutcome<{ readonly activated: boolean }>>;
     };
   };
 }
@@ -1480,9 +1483,8 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       }),
     ).resolves.toEqual({
       kind: "lane-busy",
-      // A login-item refresh is NOT update work. Reporting it as
-      // `already-updating` would arm the caller's accepted-update latch to
-      // wait on progress this operation never publishes.
+      // An `install` occupying the lane IS update work, so this arm may
+      // honestly become the protocol's `already-updating`.
       updateInFlight: true,
       message: laneBusyRestartMessage("install"),
     });
@@ -1968,11 +1970,109 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     await expect(intent.guard()).resolves.toEqual({ kind: "proceed" });
   });
 
+  it("queued restart hands the controller a user-repair intent", async () => {
+    // The third sibling. A restart queues exactly like converge/register, so
+    // a pre-enqueue check alone proves nothing about the host a zero-argument
+    // respawn would eventually force-restart — the identity question has to
+    // ride the intent to the head of the lane.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    const respawn = vi.fn((_intent: LocalHostMutationIntent) =>
+      Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+    );
+    bridge.options.hostController.respawn = respawn;
+
+    await expect(
+      handler(null, { repair: "restart", expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({ kind: "applied" });
+    expect(respawn).toHaveBeenCalledTimes(1);
+
+    const [intent] = respawn.mock.calls[0] ?? [];
+    if (intent?.kind !== "user-repair") {
+      throw new Error("expected a user-repair intent");
+    }
+    await expect(intent.guard()).resolves.toEqual({ kind: "proceed" });
+    writeEnrollment("some-other-host");
+    await expect(intent.guard()).resolves.toEqual({
+      kind: "abandon",
+      message: expect.stringContaining("host changed"),
+    });
+  });
+
+  it("a LATE identity refusal on the queued restart reports declined, not a failure", async () => {
+    // Same presentation rule as the lifecycle repairs: an identity refusal
+    // noticed at the head of the lane must render exactly like one noticed
+    // before enqueueing, or the recurrence lock counts it as a failure.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+    bridge.options.hostController.respawn = async (
+      intent: LocalHostMutationIntent,
+    ) => {
+      if (intent.kind !== "user-repair")
+        throw new Error("expected user-repair");
+      writeEnrollment("some-other-host");
+      const verdict = await intent.guard();
+      return verdict.kind === "abandon"
+        ? { kind: "abandoned" as const, message: verdict.message }
+        : { kind: "ok" as const, value: { activated: true } };
+    };
+
+    await expect(
+      handler(null, { repair: "restart", expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: expect.stringContaining("host changed"),
+    });
+  });
+
+  it("the watched restart passes a user-repair intent and reports a late refusal as declined", async () => {
+    // `traycerHostRestartIfIdle` is admitted only against an empty lane, but
+    // admission-to-execution still crosses a microtask boundary, so the
+    // guard re-asks the identity question at the head of the lane and its
+    // refusal renders as the same `declined` the pre-submit check resolves.
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerHostRestartIfIdle,
+    );
+    bridge.options.hostController.respawn = async (
+      intent: LocalHostMutationIntent,
+    ) => {
+      if (intent.kind !== "user-repair")
+        throw new Error("expected user-repair");
+      writeEnrollment("some-other-host");
+      const verdict = await intent.guard();
+      return verdict.kind === "abandon"
+        ? { kind: "abandoned" as const, message: verdict.message }
+        : { kind: "ok" as const, value: { activated: true } };
+    };
+
+    await expect(
+      handler(null, { expectedHostId: LIVE_HOST_ID }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: expect.stringContaining("host changed"),
+    });
+  });
+
   it("a LATE identity refusal is reported like an early one, not as a failure", async () => {
     // The presentation must not depend on WHEN the mismatch was noticed. A
-    // guard refusal arrives as the same `{kind:"failed"}` a real error does,
-    // so the handler asks its own closure what it decided. Getting this wrong
-    // is not cosmetic: the legacy console counts a failure toward the
+    // guard refusal arrives as the `abandoned` arm of the SHARED settled
+    // outcome — not as caller-local state, which a waiter that coalesced
+    // onto another window's identical repair would never see. Getting this
+    // wrong is not cosmetic: the legacy console counts a failure toward the
     // recurrence lock that disables Doctor after three clicks.
     writeEnrollment(LIVE_HOST_ID);
     const invoke = RunnerHostInvoke;
@@ -1992,7 +2092,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       writeEnrollment("some-other-host");
       const verdict = await intent.guard();
       return verdict.kind === "abandon"
-        ? { kind: "failed" as const, message: verdict.message }
+        ? { kind: "abandoned" as const, message: verdict.message }
         : { kind: "ok" as const, value: null };
     };
 
@@ -2026,7 +2126,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       writeEnrollment("some-other-host");
       const verdict = await intent.guard();
       return verdict.kind === "abandon"
-        ? { kind: "failed" as const, message: verdict.message }
+        ? { kind: "abandoned" as const, message: verdict.message }
         : { kind: "ok" as const, value: { activated: true } };
     };
 

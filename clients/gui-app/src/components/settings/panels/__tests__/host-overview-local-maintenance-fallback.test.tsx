@@ -36,12 +36,8 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { useEffect, type ReactNode } from "react";
-import {
-  QueryClient,
-  QueryClientProvider,
-  useMutation,
-} from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -81,6 +77,7 @@ import {
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
+  ExternalHostRestartTrigger,
   buildOverviewHostFixture,
   buildOverviewManagement,
   openHostOverviewAdvanced,
@@ -288,23 +285,6 @@ function fallbackScope(
     client,
     localMaintenanceFallback: true,
   };
-}
-
-function ExternalHostRestartTrigger(props: {
-  readonly mutationFn: () => Promise<HostRestartRequestResult>;
-  readonly onReady: (mutate: () => void) => void;
-}): null {
-  const { mutate } = useMutation({
-    mutationKey: runnerMutationKeys.hostRestart(),
-    mutationFn: props.mutationFn,
-  });
-  const { onReady } = props;
-  useEffect(() => {
-    onReady(() => {
-      mutate();
-    });
-  }, [mutate, onReady]);
-  return null;
 }
 
 function renderOverview(input: {
