@@ -765,6 +765,13 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerRegistryCheck,
         RunnerHostInvoke.traycerFreePortAndRestart,
         RunnerHostInvoke.traycerCliManifestRead,
+        // The maintenance-RPC projections the GUI's local fallback serves
+        // when a local host too old for the v1.2.0 `host.*` maintenance
+        // family negotiated it away. Registered by the same
+        // `registerHostManagementIpc` call as the block above.
+        RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+        RunnerHostInvoke.traycerMaintenanceDoctor,
+        RunnerHostInvoke.traycerMaintenanceInstallationInfo,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
         // which is now invoked from `RunnerIpcBridge.install()` rather than
         // wired by the host. They cover recent docs, window effects, GPU,
