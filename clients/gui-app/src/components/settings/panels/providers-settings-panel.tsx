@@ -78,7 +78,7 @@ import {
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
-import { ProviderSectionHub } from "./provider-section-hub";
+import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
   providerTabInputs,
@@ -908,24 +908,6 @@ function ProviderDetail({
   // by provider, so a provider switch still discards the draft - a key typed
   // for one provider must never appear in another's field.
   const [apiKeyDraft, setApiKeyDraft] = useState("");
-  // Phone-only: whether `ProviderSectionHub`'s grid is open. Held here rather
-  // than inside the hub so it resets per provider for free - `ProvidersRailLayout`
-  // keys this component by host+provider, so every provider is entered with its
-  // sections enumerated, which is the whole point of the grid.
-  //
-  // Collapsed on arrival for a DEEP LINK, and only then: `focusTab` means the
-  // caller (the model picker's "Add API key" CTA, say) already named the
-  // section, so opening a chooser over it would be asking a question that was
-  // answered. Read straight from the store during the initial render, which is
-  // before `ProvidersRailLayout`'s mount effect clears it - a later remount
-  // reads `null` and opens expanded, which is what a manual visit should do.
-  // Compared against the RESOLVED tab so a deep link naming a section this
-  // provider does not support (which lands on `tabs[0]` instead) still gets the
-  // grid it needs.
-  const [hubExpanded, setHubExpanded] = useState<boolean>(() => {
-    const focusTab = useProvidersFocusStore.getState().focusTab;
-    return focusTab === null || focusTab !== activeTab;
-  });
   const [addProfileOpen, setAddProfileOpen] = useState(false);
   const [failedProfileAttempt, setFailedProfileAttempt] =
     useState<FailedProviderProfileAttempt | null>(null);
@@ -1046,13 +1028,6 @@ function ProviderDetail({
             const next = tabs.find((tab) => tab === value);
             if (next === undefined) return;
             onActiveTabChange(next);
-            // Collapsing HERE, on the selection itself, rather than in the hub
-            // tile's own handler: Radix activates a trigger from mouseDown,
-            // from keyboard roving focus, and from `Enter`/`Space`, and this is
-            // the one place all three arrive at. The tile keeps a click handler
-            // only for the case that never reaches here - re-picking the
-            // section that is already active, which must still close the grid.
-            setHubExpanded(false);
           }}
           // `gap-0`, with the rail-to-body spacing moved INSIDE the scroll box
           // as `pt-4`. With a gap here the scroll box would start 4 units below
@@ -1060,19 +1035,22 @@ function ProviderDetail({
           // by the body, the clip edge and the rule are the same line.
           className="flex flex-1 flex-col gap-0 md:min-h-0"
         >
-          {/* Two presentations of ONE selection. The pointer-width rail is the
-              line bar; below `md` it is `ProviderSectionHub`, because the bar's
-              `flex-wrap` is what a phone gets - two ragged rows of the pane's
-              fourth chrome row. The branch is presentation only: both render
-              Radix tab triggers against the same `Tabs` value, so the bodies
-              below and the one-mounted-pane invariant are untouched by it. */}
+          {/* Two presentations of ONE selection, off the same `tabs` list and
+              the same labels. The pointer-width rail is the line bar; below
+              `md` it is a dropdown, because the bar's `flex-wrap` is what a
+              phone gets - two ragged rows of the pane's fourth chrome row.
+
+              The branch is presentation only. The desktop arm's triggers write
+              the `Tabs` value directly; the phone arm cannot (a select item is
+              not a tab trigger) and calls `onActiveTabChange` instead, which is
+              the same prop this component's `onValueChange` above calls. Either
+              way `Tabs` stays controlled from one place, so the bodies below
+              and the one-mounted-pane invariant are untouched by the swap. */}
           {isMobile ? (
-            <ProviderSectionHub
+            <ProviderSectionSelect
               tabs={tabs}
               activeTab={activeTab}
-              state={state}
-              expanded={hubExpanded}
-              onExpandedChange={setHubExpanded}
+              onSelect={onActiveTabChange}
               labelFor={(tab) =>
                 providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)
               }
@@ -1119,26 +1097,26 @@ function ProviderDetail({
             <TabsContent
               key={tab}
               value={tab}
-              // An open section grid owns the screen: the grid is the question
-              // "which section?", and the previous section's body answering a
-              // different one underneath it is noise on a phone, where the two
-              // together are taller than the viewport.
+              // Radix names a pane after the TRIGGER that selects it
+              // (`aria-labelledby={triggerId}`), which on a phone names an
+              // element that does not exist - the dropdown replaces the whole
+              // `TabsList`, triggers included. So the phone arm labels the pane
+              // by its section instead, and drops the reference that would
+              // otherwise dangle. Caller props spread AFTER Radix's own in
+              // `Tabs.Content`, so both keys land.
               //
-              // HIDDEN, not unmounted. `hidden` keeps the active body mounted
-              // with its queries, scroll position and half-typed fields
-              // intact, so opening the grid stays a cancellable gesture
-              // (Collapse returns you to exactly what you left).
-              //
-              // The key is spread CONDITIONALLY because Radix mounts every
-              // pane's div - active or not (its Presence force-mounts
-              // function children; only the BODY inside is gated) - and hides
-              // the inactive ones purely through a computed `hidden` that
-              // caller props spread over. Passing the key with `false` or
-              // `undefined` therefore un-hides every INACTIVE pane too, and
-              // seven empty-but-visible panes' vertical paddings stack into a
-              // band of dead space above or below the active body (before it
-              // for late tabs, after it for early ones).
-              {...(isMobile && hubExpanded ? { hidden: true } : {})}
+              // Spread CONDITIONALLY, because on the desktop arm the trigger is
+              // real and Radix's wiring is the better one.
+              {...(isMobile
+                ? {
+                    "aria-labelledby": undefined,
+                    "aria-label": providerTabLabel(
+                      tab,
+                      PROVIDER_TAB_LABELS,
+                      state.providerId,
+                    ),
+                  }
+                : {})}
               className="-mx-5 mt-0 px-5 pt-4 pb-5 md:min-h-0 md:overflow-y-auto"
             >
               <ProviderTabBody

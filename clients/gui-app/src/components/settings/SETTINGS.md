@@ -109,7 +109,17 @@ Supporting pieces, all viewport-agnostic where possible:
   reach Reset before the field it acts on (WCAG 2.4.3 / 1.3.2). No `order-*`
   on interactive content: source order is the only order.
 - The Providers rail collapses below `md` into a full-width provider `Select`
-  above the detail pane. `EnvOverrideEditor` rows restack onto two lines below
+  above the detail pane, and the detail pane's own tab rail collapses into a
+  second `Select` (`provider-section-select.tsx`) in the rail's slot - so
+  picking a section is the same gesture as picking the provider one row above
+  it, rather than a bespoke one. Both arms read the same `tabs` list and the
+  same `providerTabLabel`; only the container differs, and `Tabs` stays
+  controlled by the panel, so exactly one section body is mounted either way.
+  Rows are icon + label only: the state a section is in belongs in its BODY,
+  one tap away, and a two-line row inside a menu is a card in other clothes.
+  The phone arm has no tab TRIGGERS, so it labels each pane with `aria-label`
+  and clears the `aria-labelledby` Radix would otherwise point at a trigger
+  that is not rendered. `EnvOverrideEditor` rows restack onto two lines below
   `sm` and hide the column header.
 - `settings-touch-targets.css` (imported by `settings-layout.tsx`, scoped
   under `[data-settings-touch-scope]`) enlarges the _hit areas_ of
