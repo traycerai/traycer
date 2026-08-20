@@ -18,11 +18,13 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import { EpicHostActivityStreams } from "./epic-host-activity-streams";
 import {
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 import {
+  markAgentActivityReconnecting,
   openAgentActivityStream,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
@@ -35,7 +37,9 @@ import {
   openCloudNotificationsStream,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
-import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
+import { useNotificationFeedModeFor } from "@/lib/notifications/notification-feed-mode";
+import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
   readFocusedHostNotificationPresence,
@@ -45,8 +49,10 @@ import {
 } from "@/lib/notifications/notification-presence";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useAuthService, useHostClient } from "@/lib/host";
+import { useAuthService } from "@/lib/host";
+import { useNotificationHost } from "@/hooks/notifications/use-notification-host";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
@@ -95,6 +101,27 @@ interface FocusedNotificationScope {
 }
 
 /**
+ * Whether an upsert for `entity` arriving from `hostId` names the
+ * notification scope the user is LOOKING AT right now - the only case the
+ * feed handler's terminal-severity auto-consume may fire for. A null origin
+ * on the active scope means "not host-bound", which any host may match.
+ */
+function upsertTargetsActiveEntity(
+  activeEntity: FocusedNotificationScope | null,
+  hostId: string,
+  entity: HostNotificationsEntityRef,
+): boolean {
+  if (activeEntity === null) return false;
+  if (
+    activeEntity.originHostId !== null &&
+    activeEntity.originHostId !== hostId
+  ) {
+    return false;
+  }
+  return notificationEntitiesMatch(activeEntity.entity, entity);
+}
+
+/**
  * Mounted inside the app shell post-auth. Opens the notifications stream as
  * soon as the user is signed in and tears it down on sign-out / token
  * expiry. On sign-out - and on transitions between two distinct signed-in
@@ -115,17 +142,81 @@ export function NotificationsSessionProvider(
   const localHostEntry = useReactiveLocalHostEntry();
   const streamAuth = useStreamAuthRevalidator();
   const localStreamClient = useHostStreamClientFor(localHostEntry, streamAuth);
+  // Negotiated against the client the streams are actually opened on, not the
+  // app-wide active host - those differ whenever a tab is bound to a remote
+  // host, and reading the remote manifest here selected mixed mode from one
+  // host while consuming the other host's snapshots.
+  const notificationFeedMode = useNotificationFeedModeFor(localStreamClient);
+  // The session body itself consumes the mode (through
+  // `useMergedNotificationsActions`), and a component cannot read a context it
+  // renders. So the outer shell owns the negotiation and the provider, and the
+  // body sits underneath it - taking the entry and client as props so the
+  // transient stream client is built exactly once.
+  return (
+    <NotificationFeedModeContext.Provider value={notificationFeedMode}>
+      <NotificationsSessionBody
+        navigate={props.navigate}
+        localHostEntry={localHostEntry}
+        localStreamClient={localStreamClient}
+        notificationFeedMode={notificationFeedMode}
+      >
+        {props.children}
+      </NotificationsSessionBody>
+    </NotificationFeedModeContext.Provider>
+  );
+}
+
+interface NotificationsSessionBodyProps extends NotificationsSessionProviderProps {
+  readonly localHostEntry: HostDirectoryEntry | null;
+  readonly localStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
+  readonly notificationFeedMode: "local" | "cloud" | "upgrade-required";
+}
+
+function NotificationsSessionBody(
+  props: NotificationsSessionBodyProps,
+): ReactNode {
+  const localHostEntry = props.localHostEntry;
+  const localStreamClient = props.localStreamClient;
+  const notificationFeedMode = props.notificationFeedMode;
+  // Raw negotiation state, read beside the mode: `unknown` marks a client
+  // whose handshake has not landed, which the stream-transition effect must
+  // treat as "hold the previous projection", never as a downgrade decision.
+  const cloudFeedSupport = useStreamMethodSupportFor(
+    localStreamClient,
+    "host.notifications.cloudFeed.subscribe",
+  );
   const localHostId = localHostEntry?.hostId ?? null;
   const queryClient = useQueryClient();
   const authService = useAuthService();
-  const hostClient = useHostClient();
+  // Same cascade as the local streams' `onAuthError`, hoisted to a stable
+  // identity so a remote activity stream is not torn down and reopened on
+  // every render of this provider.
+  const onRemoteActivityAuthError = useCallback((): void => {
+    void authService.revalidateCurrentContext();
+  }, [authService]);
+  // The NOTIFICATION host's own client - the same resolver every other
+  // downstream consumer of these streams uses, so the canceller below and the
+  // frames driving it name one machine by construction.
+  //
+  // It is a CANCELLER, and that is why it cannot be the app-wide client:
+  // `invalidateNotificationIndicators` releases the in-flight
+  // `host.notifications.indicatorState` read sitting behind the queries it
+  // invalidates, and those reads went out on this host's client
+  // (`useHostNotificationIndicators` resolves the notification host too). The
+  // coordinator keys a cancellation by `(hostId, userId, method, params)` and
+  // `HostClient.cancelActiveReadFor` takes the host from the CLIENT, not from
+  // the `hostId` argument beside it - so the app-wide client cancelled under
+  // whichever host was effective. While a tab was bound to a remote host that
+  // left the local host's coordinated read running, to re-resolve the
+  // just-invalidated query with its pre-frame answer, and cancelled the remote
+  // host's identical read for a frame that was never about it.
+  const notificationHostClient = useNotificationHost().client;
   const showNotification = useNotificationShow();
   const { activate } = useNotificationActivationWithNavigate(props.navigate);
   const mergedActions = useMergedNotificationsActions();
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
-  const notificationFeedMode = useNotificationFeedMode();
   const disposerRef = useRef<(() => void) | null>(null);
   const activityDisposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
@@ -243,17 +334,19 @@ export function NotificationsSessionProvider(
       useAppLocalNotificationsStore
         .getState()
         .markEntityAsRead(scope.originHostId, scope.entity, Date.now());
-      if (notificationFeedMode === "cloud") {
-        // The v1 entity RPC consumes ONE host's SQLite; in cloud mode the
-        // rows in view can belong to any host, so consumption has to address
-        // the entries themselves.
-        markCloudEntityRead(scope);
-        return;
-      }
-      // The local notification RPC addresses the connected local host. A tile
-      // bound to another host must not acknowledge the same entity there.
+      // BOTH calls in mixed mode, and no early return between them. The host
+      // feed is the exact local durable-home partition while the cloud fan-out
+      // covers its complement, so each addresses rows the other cannot: an
+      // early return after the cloud call left every local-homed row unread.
+      //
+      // The host-binding guard still applies to the local half. The local
+      // notification RPC addresses the CONNECTED host, so a tile bound to
+      // another host must not acknowledge the same entity there.
       if (scope.originHostId === null || scope.originHostId === localHostId) {
         markEntityRead(scope.entity);
+      }
+      if (notificationFeedMode === "cloud") {
+        markCloudEntityRead(scope);
       }
     },
     [localHostId, markEntityRead, markCloudEntityRead, notificationFeedMode],
@@ -280,8 +373,17 @@ export function NotificationsSessionProvider(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (localHostId !== hostId) return;
-      if (frame.kind === "snapshot") {
-        invalidateNotificationIndicators(queryClient, hostId, hostClient);
+      // `partitionSnapshot` is a `snapshot` for every purpose here: `@1.2`
+      // defines it by extending the frozen V11 snapshot, so it carries the
+      // same `attention` / `recent` pages and only narrows WHICH rows they
+      // hold. Omitting it would drop completion receipts for the whole local
+      // partition on every mixed-mode session.
+      if (frame.kind === "snapshot" || frame.kind === "partitionSnapshot") {
+        invalidateNotificationIndicators(
+          queryClient,
+          hostId,
+          notificationHostClient,
+        );
         recordCompletions(
           [...frame.attention.entries, ...frame.recent.entries].map(
             (entry) => ({
@@ -295,7 +397,11 @@ export function NotificationsSessionProvider(
       }
       if (frame.kind === "cleared" || frame.kind === "removed") {
         removeObservedCompletions(hostId, frame.removedIds);
-        invalidateNotificationIndicators(queryClient, hostId, hostClient);
+        invalidateNotificationIndicators(
+          queryClient,
+          hostId,
+          notificationHostClient,
+        );
         return;
       }
       if (frame.kind === "readStateChanged") {
@@ -304,13 +410,17 @@ export function NotificationsSessionProvider(
         // unrelated rows the protocol has no entity refs for - full-invalidate
         // rather than leave those entities' indicators stale.
         if (frame.removedIds.length > 0) {
-          invalidateNotificationIndicators(queryClient, hostId, hostClient);
+          invalidateNotificationIndicators(
+            queryClient,
+            hostId,
+            notificationHostClient,
+          );
         } else {
           invalidateNotificationIndicatorsForEntities(
             queryClient,
             hostId,
             frame.entityRefs,
-            hostClient,
+            notificationHostClient,
           );
         }
         return;
@@ -320,13 +430,17 @@ export function NotificationsSessionProvider(
       // Same reasoning as above: a surviving upsert's `removedIds` can name
       // entities this frame carries no ref for.
       if (frame.removedIds.length > 0) {
-        invalidateNotificationIndicators(queryClient, hostId, hostClient);
+        invalidateNotificationIndicators(
+          queryClient,
+          hostId,
+          notificationHostClient,
+        );
       } else if (entity !== null) {
         invalidateNotificationIndicatorsForEntities(
           queryClient,
           hostId,
           [entity],
-          hostClient,
+          notificationHostClient,
         );
       }
       if (entity === null) return;
@@ -337,16 +451,11 @@ export function NotificationsSessionProvider(
           semanticId: frame.entry.id,
         },
       ]);
-      const activeEntity = activeEntityRef.current;
+      if (!upsertTargetsActiveEntity(activeEntityRef.current, hostId, entity)) {
+        return;
+      }
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
-      if (
-        activeEntity === null ||
-        (activeEntity.originHostId !== null &&
-          activeEntity.originHostId !== hostId) ||
-        !notificationEntitiesMatch(activeEntity.entity, entity)
-      )
-        return;
       if (!isTerminalSeverity) return;
       consumeEntity({ originHostId: hostId, entity });
     },
@@ -355,7 +464,7 @@ export function NotificationsSessionProvider(
       consumeEntity,
       recordCompletions,
       removeObservedCompletions,
-      hostClient,
+      notificationHostClient,
       queryClient,
     ],
   );
@@ -421,17 +530,33 @@ export function NotificationsSessionProvider(
 
   // A host switch only invalidates host-owned truth. Collaboration/system
   // rows are not scoped to a host and must survive the swap untouched.
-  const resetHostReplica = useCallback((): void => {
+  const resetHostReplica = useCallback(
+    (departedHostId: string): void => {
+      activeEntityRef.current = null;
+      useHostNotificationsStore.getState().reset();
+      // Scoped to the slice that actually departed. The map holds a slice per
+      // host, so the old whole-map reset erased still-open REMOTE streams'
+      // activity whenever any slice happened to be local-served (and kept the
+      // departed slice when it was not). Those remote streams do not resend
+      // their state merely because this store was cleared, so running agents
+      // vanished - or a dead host's agents lingered - until the next frame.
+      useAgentActivityStore.getState().resetHost(departedHostId);
+      resetCloudRelaySession();
+      clearNotificationIndicatorCaches(queryClient);
+    },
+    [queryClient, resetCloudRelaySession],
+  );
+
+  // The host replica alone, for a change of PROJECTION rather than of host.
+  // Deliberately narrower than `resetHostReplica`: the agent-activity slice is
+  // keyed by host and says nothing about notification home partitions, so
+  // wiping it here would blank running agents for a feed-mode flip. The
+  // indicator caches DO go, because their `home` selector moves with the mode.
+  const resetHostProjection = useCallback((): void => {
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().reset();
-    // A local activity view belongs solely to the departed host. Cloud
-    // activity is a per-user union and remains valid across host switches.
-    if (useAgentActivityStore.getState().servedBy === "local") {
-      useAgentActivityStore.getState().reset();
-    }
-    resetCloudRelaySession();
     clearNotificationIndicatorCaches(queryClient);
-  }, [queryClient, resetCloudRelaySession]);
+  }, [queryClient]);
 
   // Cloud rows are a relay-session snapshot, not a durable replica. A lost
   // binding or replacement stream client starts a new ownership epoch and
@@ -448,7 +573,7 @@ export function NotificationsSessionProvider(
     activeEntityRef.current = null;
     useHostNotificationsStore.getState().setConnectionStatus("connecting");
     useCloudNotificationsStore.getState().setConnectionState("reconnecting");
-    useAgentActivityStore.setState({ connectionStatus: "reconnecting" });
+    markAgentActivityReconnecting();
   }, []);
 
   // StrictMode mounts, cleans up, then re-mounts effects. Returning Zustand's
@@ -531,155 +656,169 @@ export function NotificationsSessionProvider(
     });
   }, [notificationFeedMode, markCloudEntityRead]);
 
-  const openForCurrentUser = useCallback((): void => {
-    if (
-      getNotificationsStreamFactoryOverride() === null &&
-      localStreamClient === null
-    ) {
-      return;
-    }
-    // Same recovery contract as EpicSessionProvider: an `UNAUTHORIZED`
-    // terminal close means the host couldn't accept the current context
-    // bearer. Re-validate against AuthnV3 so the cascade either rotates the
-    // context credentials (transient) or tears the session down via sign-out.
-    const onAuthError = (): void => {
-      void authService.revalidateCurrentContext();
-    };
-    const onEntitlementDenied = (): void => {
-      // Dormant defense for a future server-side entitlement gate: preserve a
-      // defined unavailable wall and revalidate auth instead of leaving the
-      // session in an unclassified terminal state.
-      useAuthStore.getState().setSubscriptionStatus("FREE");
-      void authService.revalidateCurrentContext();
-    };
-    if (localHostId === null) return;
-    const streamHostId = localHostId;
-    // ONE reconnect policy for this host, handed to every stream opened below
-    // (redesign P4.1 / connection-registry §6). This is the single wiring
-    // point for all four, which is exactly why the acquisition belongs here:
-    // four stores each constructing their own scheduler was the scattered
-    // ownership the consolidation removes. Each store still opens its OWN
-    // lane off it, so their backoffs stay independent.
-    const hostConnection = acquireHostConnection(streamHostId);
-    hostConnectionRef.current = hostConnection;
-    const reconnect = hostConnection.reconnect;
-    openedStreamClientRef.current = localStreamClient;
-    const createNotificationsStream = (
-      callbacks: NotificationsStreamCallbacks,
-    ) => {
-      const override = getNotificationsStreamFactoryOverride();
-      if (override !== null) {
-        return override(callbacks);
+  const openForCurrentUser = useCallback(
+    (settledFeedMode: "local" | "cloud" | "upgrade-required"): void => {
+      if (
+        getNotificationsStreamFactoryOverride() === null &&
+        localStreamClient === null
+      ) {
+        return;
       }
-      if (localStreamClient === null) {
-        throw new Error(
-          "NotificationsSessionProvider: local host stream client missing at open time.",
+      // Same recovery contract as EpicSessionProvider: an `UNAUTHORIZED`
+      // terminal close means the host couldn't accept the current context
+      // bearer. Re-validate against AuthnV3 so the cascade either rotates the
+      // context credentials (transient) or tears the session down via sign-out.
+      const onAuthError = (): void => {
+        void authService.revalidateCurrentContext();
+      };
+      const onEntitlementDenied = (): void => {
+        // Dormant defense for a future server-side entitlement gate: preserve a
+        // defined unavailable wall and revalidate auth instead of leaving the
+        // session in an unclassified terminal state.
+        useAuthStore.getState().setSubscriptionStatus("FREE");
+        void authService.revalidateCurrentContext();
+      };
+      if (localHostId === null) return;
+      const streamHostId = localHostId;
+      // ONE reconnect policy for this host, handed to every stream opened
+      // below (redesign P4.1 / connection-registry §6). This is the single
+      // wiring point for all of them, which is exactly why the acquisition
+      // belongs here: each store constructing its own scheduler was the
+      // scattered ownership the consolidation removes. Each store still opens
+      // its OWN lane off it, so their backoffs stay independent.
+      const hostConnection = acquireHostConnection(streamHostId);
+      hostConnectionRef.current = hostConnection;
+      const reconnect = hostConnection.reconnect;
+      openedStreamClientRef.current = localStreamClient;
+      const createNotificationsStream = (
+        callbacks: NotificationsStreamCallbacks,
+      ) => {
+        const override = getNotificationsStreamFactoryOverride();
+        if (override !== null) {
+          return override(callbacks);
+        }
+        if (localStreamClient === null) {
+          throw new Error(
+            "NotificationsSessionProvider: local host stream client missing at open time.",
+          );
+        }
+        return new NotificationsStreamClient({
+          wsStreamClient: localStreamClient,
+          callbacks,
+        });
+      };
+      // Host-selected activity planes (#906) replaced the notifications-room
+      // awareness reader that used to carry agent-activity presence, and moved it
+      // out of the cloud-only branch. Ours contributed only the local-host pin, so
+      // this takes that structure with `localStreamClient`: agent activity is
+      // read from the LOCAL host's stream, never a remote one.
+      if (localStreamClient !== null) {
+        activityDisposerRef.current = openAgentActivityStream(
+          streamHostId,
+          reconnect,
+          localStreamClient,
+          onAuthError,
         );
       }
-      return new NotificationsStreamClient({
-        wsStreamClient: localStreamClient,
-        callbacks,
-      });
-    };
-    // Host-selected activity planes (#906) replaced the notifications-room
-    // awareness reader that used to carry agent-activity presence, and moved it
-    // out of the cloud-only branch. Ours contributed only the local-host pin, so
-    // this takes that structure with `localStreamClient`: agent activity is
-    // read from the LOCAL host's stream, never a remote one.
-    if (localStreamClient !== null) {
-      activityDisposerRef.current = openAgentActivityStream(
-        reconnect,
-        localStreamClient,
-        onAuthError,
-      );
-    }
-    if (notificationFeedMode === "cloud") {
-      if (localStreamClient === null) return;
-      // The cloud feed owns host/agent rows only. Collaboration events are
-      // still written to the per-user Notifications room, so cloud mode must
-      // keep that replica live alongside the relay or sharing notifications
-      // disappear after the mode-transition reset below.
-      disposerRef.current = openNotificationsStream(
-        reconnect,
-        createNotificationsStream,
-        onAuthError,
-      );
-      cloudDisposerRef.current = openCloudNotificationsStream(
-        reconnect,
-        localStreamClient,
-        onAuthError,
-        onEntitlementDenied,
-        ({ rows, arrivals }) => {
-          recordCompletions(
-            rows.map((row) => ({
-              entry: row.entry,
-              originHostId: row.originHostId,
-              semanticId: row.entryId,
-            })),
-          );
-          displayCloudSnapshotArrivals(arrivals, {
-            showNotification,
-            playChime: playNotificationChime,
-            onToastClick: (row) => onToastClickRef.current(row),
-          });
-        },
-      );
-      return;
-    }
-    if (notificationFeedMode === "upgrade-required") {
-      useCloudNotificationsStore.getState().setConnectionState("unavailable");
-      return;
-    }
-    // Every transport session starts with a baseline snapshot. Keep durable,
-    // bounded receipts for replay bookkeeping, but never treat a row from
-    // this independently ordered feed as causal evidence over a renderer-local
-    // failure.
-    disposerRef.current = openNotificationsStream(
-      reconnect,
-      createNotificationsStream,
-      onAuthError,
-    );
-    if (
-      hostDisposerRef.current === null &&
-      getNotificationsStreamFactoryOverride() === null &&
-      localStreamClient !== null
-    ) {
-      hostDisposerRef.current = openHostNotificationsStream(
-        reconnect,
-        localStreamClient,
-        onAuthError,
-        {
-          windowId,
-          now: () => Date.now(),
-          displayChannelEmission: (entries) => {
-            displayHostChannelEmission(
-              entries,
-              {
-                showNotification,
-                playChime: playNotificationChime,
-                onToastClick: (row) => onToastClickRef.current(row),
-              },
-              streamHostId,
+      if (settledFeedMode === "cloud") {
+        if (localStreamClient === null) return;
+        // The cloud feed owns host/agent rows only. Collaboration events are
+        // still written to the per-user Notifications room, so cloud mode must
+        // keep that replica live alongside the relay or sharing notifications
+        // disappear after the mode-transition reset below.
+        disposerRef.current = openNotificationsStream(
+          reconnect,
+          createNotificationsStream,
+          onAuthError,
+        );
+        cloudDisposerRef.current = openCloudNotificationsStream(
+          reconnect,
+          localStreamClient,
+          onAuthError,
+          onEntitlementDenied,
+          ({ rows, arrivals }) => {
+            recordCompletions(
+              rows.map((row) => ({
+                entry: row.entry,
+                originHostId: row.originHostId,
+                semanticId: row.entryId,
+              })),
             );
+            displayCloudSnapshotArrivals(arrivals, {
+              showNotification,
+              playChime: playNotificationChime,
+              onToastClick: (row) => onToastClickRef.current(row),
+            });
           },
-          onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
-          onPresenceChanged: (frame) => onPresenceChanged(frame, streamHostId),
-          onStreamOpened: onHostStreamOpened,
-        },
-      );
-    }
-  }, [
-    localStreamClient,
-    authService,
-    recordCompletions,
-    localHostId,
-    windowId,
-    showNotification,
-    onFeedFrame,
-    onPresenceChanged,
-    onHostStreamOpened,
-    notificationFeedMode,
-  ]);
+        );
+      }
+      if (settledFeedMode === "upgrade-required") {
+        useCloudNotificationsStore.getState().setConnectionState("unavailable");
+        return;
+      }
+      // Every transport session starts with a baseline snapshot. Keep durable,
+      // bounded receipts for replay bookkeeping, but never treat a row from
+      // this independently ordered feed as causal evidence over a renderer-local
+      // failure.
+      //
+      // LOCAL MODE ONLY. This opens the legacy whole-origin Yjs replica
+      // (`useNotificationsStore`), which mixed mode does not read: there the
+      // local lane comes from the per-host store that `openHostNotificationsStream`
+      // below fills, and `merged-notifications` concatenates that with the cloud
+      // rows. The completion receipts are unaffected - they are recorded in
+      // `onFeedFrame`, which belongs to the host stream and runs in both modes -
+      // so opening this one in mixed mode would be a second subscription whose
+      // rows nothing reads.
+      if (settledFeedMode === "local") {
+        disposerRef.current = openNotificationsStream(
+          reconnect,
+          createNotificationsStream,
+          onAuthError,
+        );
+      }
+      if (
+        hostDisposerRef.current === null &&
+        getNotificationsStreamFactoryOverride() === null &&
+        localStreamClient !== null
+      ) {
+        hostDisposerRef.current = openHostNotificationsStream(
+          reconnect,
+          localStreamClient,
+          onAuthError,
+          {
+            windowId,
+            now: () => Date.now(),
+            displayChannelEmission: (entries) => {
+              displayHostChannelEmission(
+                entries,
+                {
+                  showNotification,
+                  playChime: playNotificationChime,
+                  onToastClick: (row) => onToastClickRef.current(row),
+                },
+                streamHostId,
+              );
+            },
+            onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
+            onPresenceChanged: (frame) =>
+              onPresenceChanged(frame, streamHostId),
+            onStreamOpened: onHostStreamOpened,
+          },
+        );
+      }
+    },
+    [
+      localStreamClient,
+      authService,
+      recordCompletions,
+      localHostId,
+      windowId,
+      showNotification,
+      onFeedFrame,
+      onPresenceChanged,
+      onHostStreamOpened,
+    ],
+  );
 
   // Auth identity transitions own the replica-reset responsibility: sign-out
   // and user-switch both require wiping the prior-user Y.Doc before the next
@@ -759,20 +898,56 @@ export function NotificationsSessionProvider(
       priorLocalHostId !== null && priorLocalHostId !== localHostId;
     if (clientSwapped || hostSwitchedAcrossDisconnect) {
       tearDown();
-      resetHostReplica();
+      // Across a switch the departed slice is the PRIOR host; a client swap
+      // keeps the same host id, so that slice is the one being replaced.
+      resetHostReplica(priorLocalHostId ?? localHostId);
     }
-    if (previousFeedModeRef.current !== notificationFeedMode) {
-      previousFeedModeRef.current = notificationFeedMode;
+    // The mode this pass DECIDES on. A rebuilt stream client reports every
+    // method's support as `unknown` until its handshake lands, so the raw
+    // negotiation reads `local` for a beat even when the same cloud-capable
+    // host is coming right back. That beat is "not yet re-decided", not a
+    // capability downgrade: deciding on it would tear the mixed projection
+    // down (discarding the retained local-partition rows the disconnect path
+    // deliberately preserves), open the whole-origin feed, then reset again
+    // when negotiation lands. Hold the previously decided projection until
+    // the client actually answers.
+    const settledFeedMode =
+      cloudFeedSupport === "unknown" && previousFeedModeRef.current !== null
+        ? previousFeedModeRef.current
+        : notificationFeedMode;
+    if (previousFeedModeRef.current !== settledFeedMode) {
+      // A CHANGE of projection, not the first read of one. The ref starts
+      // `null` so the initial pass always lands here, but there is no prior
+      // question for those rows to have been answered under - and a replica
+      // retained across a remount (an offline client whose capability is still
+      // pending) is exactly what must survive.
+      const projectionChanged = previousFeedModeRef.current !== null;
+      previousFeedModeRef.current = settledFeedMode;
       tearDown();
+      // The cloud relay is session-owned and must restart across a capability
+      // change. The local feed is re-subscribed in both modes, so the STREAM
+      // survives the transition - but its accumulated rows and cursors do not.
+      //
+      // What changes across this boundary is what those rows MEAN. Local mode
+      // asks the host for its whole origin; mixed mode asks for the exact
+      // `home: local` partition. The retained replica was filled under the old
+      // question and is read under the new one, so a local->mixed flip
+      // reinterprets whole-origin rows as the local partition and the arriving
+      // cloud snapshot double-counts every cloud-homed replica among them
+      // until a fresh partition snapshot lands - indefinitely, if that stream
+      // is slow or offline. Dropping the replica makes the window a brief
+      // empty rather than a confidently wrong merge.
+      if (projectionChanged) resetHostProjection();
       // A cloud-to-local capability change must never leave cloud rows on
       // screen. Renderer-local failure rows survive either direction because
       // no host or cloud feed can reproduce them.
       resetCloudRelaySession();
-      // Entering either cloud-only state must also discard the retained v1
-      // cursor and rows. Selectors are gated, but this prevents a later mode
-      // transition from treating stale local pagination as current truth.
-      if (notificationFeedMode !== "local") {
-        useHostNotificationsStore.getState().reset();
+      // Entering either cloud-facing state also discards the retained v1 room
+      // replica: the collaboration stream reopens in cloud mode and lands its
+      // own baseline snapshot, and global rows are part of the merged feed's
+      // local lane now - retained pre-transition rows would render as current
+      // until that baseline arrived.
+      if (settledFeedMode !== "local") {
         useNotificationsStore.getState().reset();
       }
     }
@@ -797,7 +972,7 @@ export function NotificationsSessionProvider(
       resetCloudRelayOwnership();
     }
     if (!anyStreamOpen(openStreams)) {
-      openForCurrentUser();
+      openForCurrentUser(settledFeedMode);
     }
   }, [
     localHostId,
@@ -806,11 +981,13 @@ export function NotificationsSessionProvider(
     localStreamClient,
     tearDown,
     resetHostReplica,
+    resetHostProjection,
     resetCloudRelayOwnership,
     resetCloudRelaySession,
     markHostReplicaDisconnected,
     openForCurrentUser,
     notificationFeedMode,
+    cloudFeedSupport,
   ]);
 
   useEffect(() => {
@@ -824,7 +1001,18 @@ export function NotificationsSessionProvider(
     };
   }, [tearDown]);
 
-  return <>{props.children}</>;
+  // Rendered, not opened inline: each remote host's stream client comes from
+  // a hook, and hooks cannot be called per item of a changing list. The local
+  // host's activity stream stays above, on the G8 local-host pin.
+  return (
+    <>
+      <EpicHostActivityStreams
+        localHostId={localHostId}
+        onAuthError={onRemoteActivityAuthError}
+      />
+      {props.children}
+    </>
+  );
 }
 
 /**

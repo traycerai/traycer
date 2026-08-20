@@ -5,6 +5,10 @@ const useHostNotificationIndicatorsMock = vi.hoisted(() =>
     isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
+    // The host that ANSWERED. `useNotificationIndicators` files the response
+    // under it, so a mock that omits it buckets under nothing and every
+    // host-scoped indicator this suite asserts goes dark.
+    hostId: "host-test",
   })),
 );
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
@@ -225,6 +229,7 @@ describe("TabStrip title", () => {
       isFetching: false,
       error: null,
       refetch: () => Promise.resolve(),
+      hostId: "host-test",
     });
   });
 
@@ -354,6 +359,7 @@ describe("TabStrip title", () => {
       isFetching: false,
       error: null,
       refetch: () => Promise.resolve(),
+      hostId: "host-test",
     });
 
     renderTabStrip(TAB, true);
@@ -386,6 +392,7 @@ describe("TabStrip title", () => {
       isFetching: false,
       error: null,
       refetch: () => Promise.resolve(),
+      hostId: "host-test",
     });
 
     renderTabStrip(TAB, true);
@@ -418,6 +425,7 @@ describe("TabStrip title", () => {
       isFetching: false,
       error: null,
       refetch: () => Promise.resolve(),
+      hostId: "host-test",
     });
 
     renderTabStrip(TAB, true);
@@ -450,6 +458,7 @@ describe("TabStrip title", () => {
       isFetching: false,
       error: null,
       refetch: () => Promise.resolve(),
+      hostId: "host-test",
     });
 
     renderTabStrip(TAB, true);

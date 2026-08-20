@@ -46,6 +46,19 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
   return hostState.client;
 }
 
+// The merged-notification actions this provider mounts address the LOCAL
+// notification host. The real hook resolves that through `useHostClientFor`,
+// which reaches the host runtime provider this suite does not mount - so it is
+// stubbed to the same client the streams here are opened on.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationHostId: () =>
+    hostState.client === null ? null : mockLocalHostEntry.hostId,
+  useNotificationHost: () => ({
+    hostId: hostState.client === null ? null : mockLocalHostEntry.hostId,
+    client: hostState.client,
+  }),
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ hostClient: requireHostClient() }),
   useHostClient: () => requireHostClient(),
@@ -57,6 +70,18 @@ vi.mock("@/lib/host", () => ({
 // Feed-mode capability still reads the app-wide stream binding.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: () => feedSupport.value,
+  useStreamMethodSchemaVersion: (method: string) =>
+    method === "host.notifications.cloudFeed.subscribe"
+      ? { major: 1, minor: 1 }
+      : { major: 1, minor: 2 },
+  // The provider negotiates the feed mode against the client it opened the
+  // streams on, so it reads the `For` variants; the harness answers the same
+  // way regardless of which client is passed.
+  useStreamMethodSupportFor: () => feedSupport.value,
+  useStreamMethodSchemaVersionFor: (_client: unknown, method: string) =>
+    method === "host.notifications.cloudFeed.subscribe"
+      ? { major: 1, minor: 1 }
+      : { major: 1, minor: 2 },
 }));
 
 // Per G8 the provider binds to the LOCAL host, so these two hooks replace
@@ -420,7 +445,20 @@ describe("cloud-mode view consumption", () => {
     });
     expect(readAtFor("entry-local")).not.toBeNull();
     expect(readAtFor("entry-foreign")).toBeNull();
-    expect(calls.hostMarkRead).toEqual([]);
+    // The host call now fires too, and that is the merged behaviour rather
+    // than a leak. Mixed mode serves TWO partitions: the cloud rows above and
+    // the host's own local durable-home rows, which only this RPC can mark
+    // read. It cannot reach a cloud row - the assertions above are what prove
+    // the foreign one stayed unread - so issuing it costs nothing when the
+    // focused entity has no local-partition rows, while skipping it left every
+    // local-homed row permanently unread.
+    //
+    // The origin guard is what still matters here, and it holds: the focused
+    // scope names this host.
+    expect(calls.hostMarkRead).toEqual([
+      { kind: "entity", entity: { epicId: EPIC_ID } },
+      { kind: "entity", entity: { epicId: EPIC_ID, chatId: CHAT_ID } },
+    ]);
   });
 
   it("marks a pending approval or interview read when the chat is visited", async () => {

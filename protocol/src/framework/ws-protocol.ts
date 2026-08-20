@@ -138,6 +138,12 @@ export type FatalErrorDetails = {
    */
   readonly retryable?: boolean;
   /**
+   * A separately-transported recovery action for a refused local WAL store.
+   * Optional and additive: old GUI clients ignore it, while the GUI route that
+   * can actually invoke a rebind never has to parse a human error string.
+   */
+  readonly localStoreRemedy?: string;
+  /**
    * Present exactly when this connection is being closed by a host that is
    * deliberately restarting - see {@link HostRestartIntent} and
    * {@link HOST_RESTARTING_FATAL_CODE}. Additive and optional in both
@@ -299,6 +305,7 @@ export const fatalErrorDetailsSchema = z.object({
   // timeout) that the client recovers from with plain reconnect backoff, not
   // credential revalidation.
   retryable: z.boolean().optional(),
+  localStoreRemedy: z.string().min(1).optional(),
   // Additive/optional, same rule as `retryable`: absent from every host that
   // predates the restart tombstone, and stripped by every client that does.
   restartIntent: hostRestartIntentSchema.optional(),

@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   data: undefined as ChatBackupStatusResponse | undefined,
   ready: true,
   bound: true,
+  noCloudTask: false,
+  lastQueryEnabled: undefined as boolean | undefined,
 }));
 
 // The Epic SESSION's host, not the app-wide one: the indicator asks
@@ -33,10 +35,20 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === null ? null : { hostId },
 }));
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: mocks.data }),
+  useHostQuery: (args: { options: { enabled: boolean | undefined } }) => {
+    mocks.lastQueryEnabled = args.options.enabled;
+    return { data: mocks.data };
+  },
 }));
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({ isReady: mocks.ready }),
+}));
+// Only the no-cloud-task selector is pinned - the open-epic store context it
+// would need for real is the session's, which these tests do not stand up.
+// The agent-activity read stays real against the registry the tests DO use.
+vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
+  useEpicChatBackupHasNoCloudTask: () => mocks.noCloudTask,
 }));
 // Pin only the copy formatter. `useSampledNow` remains real because the
 // active/idle classification must still compare against the live clock.
@@ -58,12 +70,34 @@ describe("useEpicChatBackupStatus", () => {
     mocks.data = undefined;
     mocks.ready = true;
     mocks.bound = true;
+    mocks.noCloudTask = false;
+    mocks.lastQueryEnabled = undefined;
   });
 
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
     resetAgentActivity();
+  });
+
+  it("stays silent on a local-homed epic even while every chat reads behind", () => {
+    // On a local home every chat is honestly `behind` forever - there is no
+    // cloud task to publish into - so "N chats not backed up" would present a
+    // by-design state as an actionable failure. The query is disabled rather
+    // than its answer discarded: there is nothing worth polling for.
+    mocks.noCloudTask = true;
+    mocks.data = {
+      chats: [
+        statusRow({ chatId: "chat-a" }),
+        statusRow({
+          chatId: "chat-b",
+          halted: { cause: "conflict", since: 1 },
+        }),
+      ],
+    };
+    render(<EpicBackupStatusIndicator epicId="epic-a" />);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(mocks.lastQueryEnabled).toBe(false);
   });
 
   it("stays silent when every chat is backed up", () => {

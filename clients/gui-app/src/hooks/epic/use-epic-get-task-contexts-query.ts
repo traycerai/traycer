@@ -12,6 +12,21 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
+  /**
+   * The subset of `tasksById` the host marked local-homed - `@1.1`'s
+   * `localHomedTaskIds` sibling.
+   *
+   * Carried rather than dropped because `tasks` is a `z.record`, so the home
+   * marker could NOT be added to the row itself (the additivity gate treats a
+   * record's value schema as opaque). A consumer that projects only
+   * `response.tasks` therefore loses the one fact the minor was added to
+   * carry, and a context-only search hit - a local epic matched by branch,
+   * path, or PR - reads as cloud-backed.
+   *
+   * Empty means the host said nothing (an older host, or an `@1.0`
+   * negotiation), which reads as cloud-or-unknown and never as local.
+   */
+  readonly localHomedTaskIds: ReadonlySet<string>;
   readonly isFetching: boolean;
   readonly error: Error | null;
 }
@@ -54,6 +69,7 @@ function combineTaskContextResults(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
 ): EpicTaskContexts {
   const tasksById = new Map<string, ListTaskLight>();
+  const localHomedTaskIds = new Set<string>();
   for (const result of results) {
     if (result.data === undefined) continue;
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
@@ -61,9 +77,13 @@ function combineTaskContextResults(
         tasksById.set(taskId, resolution.task);
       }
     }
+    for (const taskId of result.data.localHomedTaskIds ?? []) {
+      localHomedTaskIds.add(taskId);
+    }
   }
   return {
     tasksById,
+    localHomedTaskIds,
     isFetching: results.some((result) => result.isFetching),
     // Older host: method unsupported → degrade silently to an empty map.
     error:

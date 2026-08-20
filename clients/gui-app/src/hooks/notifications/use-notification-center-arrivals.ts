@@ -35,14 +35,25 @@ export interface NotificationCenterArrivalsResult {
  *   key membership. A retitle (same `feedId`, unchanged `occurrenceKey`)
  *   never reaches this branch, since the keys are equal.
  * - A brand-new `feedId` (absent from `previousEntries` entirely) counts only
- *   if it sorts ahead of wherever the previous front `feedId` now sits: a
- *   genuine live arrival is always the newest thing in the full chronological
- *   order, while an appended older page (Load more attention / Load older
- *   activity) can only ever land after everything already loaded. The
- *   reference point is the previous front's `feedId` (not its occurrence
+ *   if it sorts ahead of wherever the previous front `feedId` of ITS OWN PLANE
+ *   now sits: a genuine live arrival is always the newest thing in its lane's
+ *   chronological order, while an appended older page (Load more attention /
+ *   Load older activity) can only ever land after everything already loaded.
+ *   The reference point is the previous front's `feedId` (not its occurrence
  *   key), since a recurring front row keeps its `feedId` even as its own key
  *   changes - this keeps the positional split well-defined even when the
  *   front row itself recurred in the same update.
+ *
+ * ## Why the positional rule is PER PLANE
+ *
+ * Mixed mode is two ordered lanes concatenated, not one clock: every local row
+ * precedes every cloud row regardless of timestamp, because `updatedAt` means
+ * different things in the two origins. A single global front therefore made
+ * the rule unsatisfiable for the trailing lane - with any local row loaded, a
+ * brand-new cloud occurrence lands after the global front by construction and
+ * read as paginated history, so live cloud arrivals never reached the "N new"
+ * affordance while the reader was scrolled away. Comparing within the lane
+ * restores the meaning the rule had when there was only one.
  *
  * Returns `[]` when `previousEntries` is empty (nothing loaded yet - not an
  * arrival).
@@ -55,10 +66,32 @@ export function computeLiveArrivalKeys(
   const previousOccurrenceKeyByFeedId = new Map(
     previousEntries.map((entry) => [entry.feedId, entry.occurrenceKey]),
   );
-  const previousFrontFeedId = previousEntries[0].feedId;
-  const previousFrontIndexNow = currentEntries.findIndex(
-    (entry) => entry.feedId === previousFrontFeedId,
-  );
+  // Each lane's own front, and each lane's own position index. A lane the
+  // reader has nothing loaded from has no front, so its first rows are a first
+  // page rather than an arrival - the same rule the whole list already had.
+  const previousFrontFeedIdByPlane = new Map<string, string>();
+  for (const entry of previousEntries) {
+    const plane = arrivalPlaneOf(entry.feedId);
+    if (!previousFrontFeedIdByPlane.has(plane)) {
+      previousFrontFeedIdByPlane.set(plane, entry.feedId);
+    }
+  }
+  const indexWithinPlane = new Map<string, number>();
+  const planeIndexByEntry: number[] = [];
+  const planeOfEntry: string[] = [];
+  currentEntries.forEach((entry) => {
+    const plane = arrivalPlaneOf(entry.feedId);
+    const next = indexWithinPlane.get(plane) ?? 0;
+    indexWithinPlane.set(plane, next + 1);
+    planeIndexByEntry.push(next);
+    planeOfEntry.push(plane);
+  });
+  const previousFrontIndexByPlane = new Map<string, number>();
+  currentEntries.forEach((entry, index) => {
+    const plane = planeOfEntry[index];
+    if (previousFrontFeedIdByPlane.get(plane) !== entry.feedId) return;
+    previousFrontIndexByPlane.set(plane, planeIndexByEntry[index]);
+  });
 
   const arrivals: string[] = [];
   currentEntries.forEach((entry, index) => {
@@ -68,11 +101,30 @@ export function computeLiveArrivalKeys(
       arrivals.push(entry.occurrenceKey);
       return;
     }
-    if (previousFrontIndexNow !== -1 && index < previousFrontIndexNow) {
+    const previousFrontIndex = previousFrontIndexByPlane.get(
+      planeOfEntry[index],
+    );
+    if (
+      previousFrontIndex !== undefined &&
+      planeIndexByEntry[index] < previousFrontIndex
+    ) {
       arrivals.push(entry.occurrenceKey);
     }
   });
   return arrivals;
+}
+
+/**
+ * Which ordered lane a feed id belongs to.
+ *
+ * Derived from the id rather than passed in: `MergedNotificationOccurrenceEntry`
+ * is deliberately just `(feedId, occurrenceKey)`, and the `cloud:` prefix is
+ * the same discriminator `parseFeedId` reads. Host / app-local / global rows
+ * are one interleaved lane (the protocol's `local` home), matching how
+ * `useMergedNotificationRows` concatenates them.
+ */
+function arrivalPlaneOf(feedId: string): string {
+  return feedId.startsWith("cloud:") ? "cloud" : "local";
 }
 
 /**

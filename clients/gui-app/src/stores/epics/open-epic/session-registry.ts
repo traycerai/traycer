@@ -309,6 +309,20 @@ export class OpenEpicSessionRegistry {
   }
 
   /**
+   * Every live session handle, in no particular order and WITHOUT touching
+   * MRU ordering.
+   *
+   * Added for the agent-activity host fan-out (`s5-parity-gaps` gap 1): the
+   * hosts whose activity a user can actually see are the hosts their open
+   * epics are bound to, and that set is only knowable from here. Passive, so
+   * it must not make an epic count as recently used - the same reason
+   * `peek()` exists.
+   */
+  liveHandles(): readonly OpenEpicStoreHandle[] {
+    return Array.from(this.entries.values(), (entry) => entry.handle);
+  }
+
+  /**
    * How many separate buffers are retained for an epic.
    *
    * A test seam, and a necessary one: the projection deliberately merges every

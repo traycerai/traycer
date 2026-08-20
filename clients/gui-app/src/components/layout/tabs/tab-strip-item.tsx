@@ -40,6 +40,7 @@ import {
   useRegisteredEpicTitleGenerating,
 } from "@/lib/epic-selectors";
 import { displayTitle } from "@/lib/display-title";
+import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
@@ -103,7 +104,7 @@ interface TabItemProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinned: boolean | null;
+  readonly taskPinnedState: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -164,7 +165,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     onOpenInNewWindow,
     canOpenInNewWindow,
     onSplitCommand,
-    taskPinned,
+    taskPinnedState,
     isTaskPinPending,
     onSetTaskPinned,
   } = props;
@@ -450,7 +451,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         canCloseOtherTabs={canCloseOtherTabs}
         canOpenInNewWindow={canOpenInNewWindow}
         canEditTitle={canEditTitle}
-        taskPinned={taskPinned}
+        taskPinnedState={taskPinnedState}
         isTaskPinPending={isTaskPinPending}
         onCloseOtherTabs={onCloseOtherTabs}
         onDuplicateTab={onDuplicateTab}

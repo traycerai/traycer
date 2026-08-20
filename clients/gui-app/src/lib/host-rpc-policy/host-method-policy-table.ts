@@ -413,6 +413,13 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // Explicit, state-changing local-store repair: rapid confirmation clicks
+  // must stay ordered and must never be coalesced into one implicit claim.
+  "host.rebindLocalStore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
   // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch

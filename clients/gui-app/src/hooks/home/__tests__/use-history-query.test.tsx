@@ -32,6 +32,7 @@ const testState = vi.hoisted(() => {
     activityWorktrees: [] as readonly WorktreeHostEntryV12[],
     activityError: null as Error | null,
     taskContexts: new Map<string, ListTaskLight>(),
+    localHomedTaskIds: new Set<string>(),
     taskContextsError: null as Error | null,
     refetch: vi.fn(),
     fetchNextPage: vi.fn(),
@@ -102,6 +103,10 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
         return task === undefined ? [] : [[taskId, task] as const];
       }),
     ),
+    // `epic.getTaskContexts@1.2`'s sibling home-marker list. Kept on the fake
+    // because the projection now READS it - a context-only hit is the one path
+    // where nothing else can say the epic is local-homed.
+    localHomedTaskIds: testState.localHomedTaskIds,
     isFetching: false,
     error: testState.taskContextsError,
   }),
@@ -127,6 +132,7 @@ describe("useHistoryQuery", () => {
     testState.activityError = null;
     testState.taskContexts = new Map();
     testState.taskContextsError = null;
+    testState.localHomedTaskIds = new Set<string>();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
   });

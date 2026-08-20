@@ -26,6 +26,12 @@
  *                    the root Epic doc.
  * - `permissionChanged` - permission change for the subscribing user.
  * - `cloudSyncStatus`  - host-observed Tiptap/cloud room connection state.
+ *                    Also the carrier for the optional status keys added by
+ *                    later minors: `durability` / `pauseReason` (**@1.3**),
+ *                    `promotionState` (**@1.4**), and the s5 status pass's
+ *                    widened `pauseReason` + `localProtection` + `freshness`
+ *                    (**@1.5**). No new frame kind - it is the same
+ *                    host-observed tick.
  * - `pong`         - heartbeat response.
  * - `artifactRoomSnapshot`  - initial state for a healthy artifact-room doc keyed by
  *                    `artifactRoomId`. Binary payload is `Y.encodeStateAsUpdate`
@@ -131,6 +137,218 @@ export const epicCloudSyncStatusSchema = z.enum([
 ]);
 export type EpicCloudSyncStatus = z.infer<typeof epicCloudSyncStatusSchema>;
 
+/**
+ * Where the open epic is currently durable. This deliberately answers a
+ * different question from {@link epicCloudSyncStatusSchema}: a local mirror
+ * can report its local connection as healthy while cloud sync is paused.
+ */
+export const epicDurabilityStatusSchema = z.enum([
+  "local",
+  "promoting",
+  "paused",
+  "offline",
+]);
+export type EpicDurabilityStatus = z.infer<typeof epicDurabilityStatusSchema>;
+
+/**
+ * The live state behind a durable promotion reservation. `pending` means the
+ * one-way reservation survived but no uploader is running in this process;
+ * `active` means the host is presently attempting the promotion. This stays
+ * separate from the frozen durability enum so an older GUI keeps its existing
+ * `promoting` behavior while a negotiated @1.4 peer can render the distinction.
+ * This is a closed wire union: a future unrecognised durable source state must
+ * be omitted, falling back to today's rendering just as it does for a host
+ * that does not speak @1.4, rather than widening this released enum.
+ */
+export const epicPromotionStateSchema = z.enum(["pending", "active"]);
+export type EpicPromotionState = z.infer<typeof epicPromotionStateSchema>;
+
+/**
+ * The two pause reasons the renderer must act on differently. The persisted
+ * registry field is intentionally wider, so the host maps recognised values
+ * to this closed wire union and omits unknown values.
+ */
+export const epicDurabilityPauseReasonSchema = z.enum([
+  "entitlement-lapsed",
+  "access-revoked",
+]);
+export type EpicDurabilityPauseReason = z.infer<
+  typeof epicDurabilityPauseReasonSchema
+>;
+
+/**
+ * `@1.5` widening of {@link epicDurabilityPauseReasonSchema} for
+ * **`s5-orphaned-epic-recovery`** (which supersedes
+ * `s4-tombstone-pause-reason-surfacing` and absorbs its enum widening).
+ *
+ * The three added reasons are delete-path states the host already records
+ * durably and had no way to say on the wire:
+ *
+ * - `delete-pending-acknowledgement` - informational; the delete is recorded
+ *   locally and is waiting for the cloud to acknowledge it.
+ * - `delete-tombstone-unscoped-cleared` - informational; an unscoped tombstone
+ *   was cleared, so the pause is bookkeeping rather than a user decision.
+ * - `orphaned-local-edits-after-cloud-delete` - the ACTIONABLE one: completion
+ *   was refused to protect never-uploaded bytes, so the epic holds local edits
+ *   the deleted cloud copy never received. Making such an epic reachable at all
+ *   is the other half of that ticket; this value is what that recovery surface
+ *   renders and acts on.
+ *
+ * Value growth, so it is emission-gated rather than backfilled: the `@1.3` /
+ * `@1.4` enum above stays FROZEN and a peer that negotiated those minors must
+ * never be sent one of the new values - its schema REFUSES them, where an
+ * unrecognised reason is meant to degrade to a neutral paused state. The host
+ * maps the wider persisted registry value onto whichever closed union the
+ * negotiated minor speaks, and omits the key when that minor has no member for
+ * it.
+ */
+export const epicDurabilityPauseReasonSchemaV15 = z.enum([
+  "entitlement-lapsed",
+  "access-revoked",
+  "delete-pending-acknowledgement",
+  "delete-tombstone-unscoped-cleared",
+  "orphaned-local-edits-after-cloud-delete",
+]);
+export type EpicDurabilityPauseReasonV15 = z.infer<
+  typeof epicDurabilityPauseReasonSchemaV15
+>;
+
+/**
+ * `@1.5` widening of {@link epicDurabilityStatusSchema} for
+ * **`s5-unarmed-session`** and the status-truthfulness class rule it cites.
+ *
+ * Through `@1.4` the durability datum is optional and has no indeterminate
+ * member, so "the host cannot answer" and "there is nothing to worry about"
+ * are the SAME wire state - an absent key - and the renderer resolves that
+ * ambiguity in the reassuring direction. That is precisely the defect: a
+ * session with no local protection renders identically to a protected one.
+ *
+ * `unknown` makes the indeterminate state expressible POSITIVELY, and `cloud`
+ * does the same for the calm state: the epic is cloud-homed and served by a
+ * live cloud connection, so there is no local-durability claim to make. Both
+ * exist because the absence rule (see the frame below) leaves absence meaning
+ * UNKNOWN, never synced - so "fine" needs its own member or it has no
+ * representation at all. Review found the earlier revision of this minor
+ * saying both that absence means unknown AND that a peer can tell unknown
+ * from fine, which cannot simultaneously hold with a five-member enum; the
+ * client was resolving the contradiction by reading absence-beside-armed as
+ * the calm arm, which is precisely the silence-as-reassurance inference this
+ * minor exists to break.
+ *
+ * Value growth on the same emission-gated terms as the pause-reason widening:
+ * `@1.3` / `@1.4` stay frozen and are never sent `unknown` or `cloud`.
+ */
+export const epicDurabilityStatusSchemaV15 = z.enum([
+  "local",
+  "promoting",
+  "paused",
+  "offline",
+  "unknown",
+  "cloud",
+]);
+export type EpicDurabilityStatusV15 = z.infer<
+  typeof epicDurabilityStatusSchemaV15
+>;
+
+/**
+ * Whether this session has local (WAL) protection at all -
+ * **`s5-unarmed-session`**.
+ *
+ * A DIFFERENT question from {@link epicDurabilityStatusSchemaV15}, which says
+ * where the epic is durable given a working local store. When the local store
+ * is refused - fence lost, topology refused, a mid-migration throw, a
+ * split-device layout - the session serves cloud-only with no WAL behind it,
+ * and today that fact never reaches the wire at all. While disconnected such a
+ * session is strictly LESS durable than pre-WAL builds, so silence is not an
+ * acceptable rendering of it.
+ *
+ * - `armed`       - a local store is armed for this session; edits are
+ *                   WAL-durable before the cloud acknowledges them.
+ * - `unavailable` - no local store is armed. Offline edits live only in the
+ *                   doc and do not survive process exit, graceful quit
+ *                   included.
+ * - `unknown`     - the host cannot currently determine it. Rendered as
+ *                   unknown, never as protected.
+ *
+ * Optional on the frame, and its absence at `@1.5` means `unknown` - the same
+ * conservative reading as `durability`, for the same reason.
+ */
+export const epicLocalProtectionSchema = z.enum([
+  "armed",
+  "unavailable",
+  "unknown",
+]);
+export type EpicLocalProtection = z.infer<typeof epicLocalProtectionSchema>;
+
+/**
+ * How the served document stands relative to the cloud -
+ * **`s5-mirror-first-serving`**.
+ *
+ * Mirror-first serving paints a WAL-backed root before cloud revalidation, so
+ * availability and freshness stop being the same fact and the renderer needs a
+ * datum that can say "this is a local copy" while the document is already
+ * usable. The first snapshot of a mirror must read `local-copy`, `syncing` or
+ * `stale` - never `current`.
+ *
+ * A NEW datum, not a relabelling. `snapshot-meta.lastSyncedAt` is
+ * repo/workspace freshness and `local_room_confirmation.updated_at` is an
+ * upload-frontier confirmation; neither answers "when was this DOCUMENT last
+ * reconciled against the cloud", so neither may be reused here without an
+ * equivalence proof.
+ */
+export const epicCloudFreshnessStateSchema = z.enum([
+  /** Served from the local mirror; no cloud contact has been made yet. */
+  "local-copy",
+  /** Cloud is attached to the same Y.Doc and reconciliation is in flight. */
+  "syncing",
+  /** Known to be behind the cloud, or too old to claim otherwise. */
+  "stale",
+  /** A full root cloud reconciliation succeeded and recorded its timestamp. */
+  "current",
+]);
+export type EpicCloudFreshnessState = z.infer<
+  typeof epicCloudFreshnessStateSchema
+>;
+
+/**
+ * The states expressible WITHOUT a recorded reconciliation timestamp.
+ * `current` is deliberately absent: a closed mirror does not refresh in the
+ * background, so a transition label alone cannot survive a restart, and only a
+ * successful full root cloud reconciliation may record the timestamp that
+ * licenses the `current` claim.
+ */
+export const epicCloudFreshnessUnknownStateSchema = z.enum([
+  "local-copy",
+  "syncing",
+  "stale",
+]);
+export type EpicCloudFreshnessUnknownState = z.infer<
+  typeof epicCloudFreshnessUnknownStateSchema
+>;
+
+/**
+ * The conservative freshness datum: a recorded last-cloud-sync timestamp, or
+ * an explicit statement that there is none. Structural rather than a nullable
+ * number, so `current` is UNREACHABLE without the timestamp that licenses it -
+ * the safety contract holds by construction instead of by convention.
+ */
+export const epicCloudFreshnessSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("lastCloudSyncAt"),
+    /**
+     * Epoch milliseconds of the last SUCCESSFUL full root cloud reconciliation
+     * for this epic. Persisted, so it survives a restart of a closed mirror.
+     */
+    reconciledAtEpochMs: z.number().int().nonnegative(),
+    state: epicCloudFreshnessStateSchema,
+  }),
+  z.object({
+    kind: z.literal("freshnessUnknown"),
+    state: epicCloudFreshnessUnknownStateSchema,
+  }),
+]);
+export type EpicCloudFreshness = z.infer<typeof epicCloudFreshnessSchema>;
+
 // ─── Frozen `epic.subscribe@1.0` server-frame set (as shipped) ────────────
 //
 // IMMUTABLE. A renderer that negotiated @1.0 agreed to exactly these frame
@@ -154,11 +372,13 @@ const epicSubscribeSnapshotServerFrameSchemaV10 = z.object({
 });
 
 /**
- * Every frozen `@1.0` frame EXCEPT `snapshot`, shared verbatim by `@1.0`,
- * `@1.1` and `@1.2`: across those three minors only the snapshot frame's
- * `meta` differs, so this remainder is defined once and spread into each.
+ * The frozen `@1.0` frames between `snapshot` and `cloudSyncStatus`. Two frame
+ * positions vary by minor - `snapshot` (whose `meta` grows at `@1.2`) and
+ * `cloudSyncStatus` (whose optional status keys grow at `@1.3`+) - so the
+ * remainder is split around them and spread into each minor's union instead of
+ * being duplicated.
  */
-const epicSubscribeSharedNonSnapshotServerFrameSchemasV10 = [
+const epicSubscribeServerFrameSchemasBeforeCloudSyncStatus = [
   /**
    * Metadata-only frame emitted at the start of the `epic.subscribe`
    * lifecycle, BEFORE the host's Tiptap WS sync completes. Carries the
@@ -196,12 +416,16 @@ const epicSubscribeSharedNonSnapshotServerFrameSchemasV10 = [
     permissionRole: permissionRoleSchema.nullable(),
     hasBinaryPayload: z.literal(false),
   }),
-  z.object({
-    kind: z.literal("cloudSyncStatus"),
-    epicId: z.string(),
-    status: epicCloudSyncStatusSchema,
-    hasBinaryPayload: z.literal(false),
-  }),
+] as const;
+
+const epicSubscribeCloudSyncStatusServerFrameSchemaV10 = z.object({
+  kind: z.literal("cloudSyncStatus"),
+  epicId: z.string(),
+  status: epicCloudSyncStatusSchema,
+  hasBinaryPayload: z.literal(false),
+});
+
+const epicSubscribeServerFrameSchemasAfterCloudSyncStatus = [
   z.object({
     kind: z.literal("pong"),
     hasBinaryPayload: z.literal(false),
@@ -316,6 +540,17 @@ const epicSubscribeSharedNonSnapshotServerFrameSchemasV10 = [
 ] as const;
 
 /**
+ * Every frozen `@1.0` frame EXCEPT `snapshot`, shared verbatim by `@1.0`,
+ * `@1.1` and `@1.2`: across those three minors only the snapshot frame's
+ * `meta` differs, so this remainder is defined once and spread into each.
+ */
+const epicSubscribeSharedNonSnapshotServerFrameSchemasV10 = [
+  ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
+  epicSubscribeCloudSyncStatusServerFrameSchemaV10,
+  ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
+] as const;
+
+/**
  * The complete frozen `@1.0` frame set: `snapshot` followed by the remainder,
  * in their original order, so `@1.0`/`@1.1` union membership is byte-for-byte
  * what shipped.
@@ -324,6 +559,7 @@ const epicSubscribeSharedServerFrameSchemasV10 = [
   epicSubscribeSnapshotServerFrameSchemaV10,
   ...epicSubscribeSharedNonSnapshotServerFrameSchemasV10,
 ] as const;
+
 
 export const epicSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
   "kind",
@@ -448,7 +684,8 @@ export const epicSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
 /**
  * The `@1.2` snapshot frame - identical to
  * {@link epicSubscribeSnapshotServerFrameSchemaV10} except that `meta`
- * carries the room identity.
+ * carries the room identity. Later minors (`@1.3`+) keep this exact frame:
+ * their growth rides the `cloudSyncStatus` frame instead.
  */
 const epicSubscribeSnapshotServerFrameSchemaV12 = z.object({
   kind: z.literal("snapshot"),
@@ -465,8 +702,111 @@ export const epicSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
   epicSubscribeRootDirtyServerFrameSchema,
 ]);
 
+// ─── `epic.subscribe@1.3` - additive per-epic durability status ───────────
+//
+// The fields live on the existing cloudSyncStatus frame, rather than adding a
+// new kind, because it is the same host-observed connection tick. They are
+// optional so a @1.3 GUI remains compatible with an older host. @1.0 through
+// @1.2 remain frozen: the resolver omits these keys unless this minor was
+// negotiated.
+const epicSubscribeCloudSyncStatusServerFrameSchemaV13 = z.object({
+  kind: z.literal("cloudSyncStatus"),
+  epicId: z.string(),
+  status: epicCloudSyncStatusSchema,
+  durability: epicDurabilityStatusSchema.optional(),
+  // Meaningful only with durability=paused. Kept optional (rather than a
+  // discriminated union) so an unrecognised host registry value degrades to a
+  // neutral paused state and the additive compatibility gate stays simple.
+  pauseReason: epicDurabilityPauseReasonSchema.optional(),
+  hasBinaryPayload: z.literal(false),
+});
+
+export const epicSubscribeServerFrameSchemaV13 = z.discriminatedUnion("kind", [
+  epicSubscribeSnapshotServerFrameSchemaV12,
+  ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
+  epicSubscribeCloudSyncStatusServerFrameSchemaV13,
+  ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
+  epicSubscribeDirtySnapshotServerFrameSchema,
+  epicSubscribeArtifactRoomDirtyServerFrameSchema,
+  epicSubscribeRootDirtyServerFrameSchema,
+]);
+
+// ─── `epic.subscribe@1.4` - additive live promotion state ─────────────────
+//
+// `durability` remains exactly the @1.3 field: existing clients use
+// `promoting` as they always have. The optional field below gives a negotiated
+// peer the missing distinction between an in-progress upload and a durable,
+// currently wedged reservation. @1.3 remains frozen and the host gates this
+// key on the negotiated minor.
+const epicSubscribeCloudSyncStatusServerFrameSchemaV14 = z.object({
+  kind: z.literal("cloudSyncStatus"),
+  epicId: z.string(),
+  status: epicCloudSyncStatusSchema,
+  durability: epicDurabilityStatusSchema.optional(),
+  pauseReason: epicDurabilityPauseReasonSchema.optional(),
+  promotionState: epicPromotionStateSchema.optional(),
+  hasBinaryPayload: z.literal(false),
+});
+
+export const epicSubscribeServerFrameSchemaV14 = z.discriminatedUnion("kind", [
+  epicSubscribeSnapshotServerFrameSchemaV12,
+  ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
+  epicSubscribeCloudSyncStatusServerFrameSchemaV14,
+  ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
+  epicSubscribeDirtySnapshotServerFrameSchema,
+  epicSubscribeArtifactRoomDirtyServerFrameSchema,
+  epicSubscribeRootDirtyServerFrameSchema,
+]);
+
+// ─── `epic.subscribe@1.5` - one additive minor for the s5 status pass ─────
+//
+// THREE tickets land on this one frame because they are three readings of the
+// same host-observed connection tick, and splitting them across three minors
+// would make a peer's rendering depend on which subset it happened to
+// negotiate:
+//
+// - `s5-orphaned-epic-recovery` widens `pauseReason` (three delete-path
+//   reasons, one of them actionable).
+// - `s5-unarmed-session` adds `localProtection`, and widens `durability` with
+//   `unknown` so an indeterminate answer is expressible rather than silent.
+// - `s5-mirror-first-serving` adds `freshness`, the conservative
+//   last-cloud-sync datum a mirror-first open must paint with.
+//
+// Every key stays optional, so an older GUI negotiates down to @1.4 (or lower)
+// and keeps exactly its current rendering. @1.0 through @1.4 remain FROZEN:
+// the two widened enums carry values those minors' schemas REFUSE, so the host
+// gates emission on the negotiated version rather than assuming the peer will
+// tolerate them.
+//
+// ABSENCE RULE for a negotiated @1.5 peer: an absent `durability` or
+// `localProtection` key means UNKNOWN, never "synced" and never "protected".
+// Optionality here is a wire-compat affordance (an older host on this line may
+// omit them), not permission to render silence as reassurance - that reading
+// is the class of status defect this minor exists to correct.
+const epicSubscribeCloudSyncStatusServerFrameSchemaV15 = z.object({
+  kind: z.literal("cloudSyncStatus"),
+  epicId: z.string(),
+  status: epicCloudSyncStatusSchema,
+  durability: epicDurabilityStatusSchemaV15.optional(),
+  pauseReason: epicDurabilityPauseReasonSchemaV15.optional(),
+  promotionState: epicPromotionStateSchema.optional(),
+  localProtection: epicLocalProtectionSchema.optional(),
+  freshness: epicCloudFreshnessSchema.optional(),
+  hasBinaryPayload: z.literal(false),
+});
+
+export const epicSubscribeServerFrameSchemaV15 = z.discriminatedUnion("kind", [
+  epicSubscribeSnapshotServerFrameSchemaV12,
+  ...epicSubscribeServerFrameSchemasBeforeCloudSyncStatus,
+  epicSubscribeCloudSyncStatusServerFrameSchemaV15,
+  ...epicSubscribeServerFrameSchemasAfterCloudSyncStatus,
+  epicSubscribeDirtySnapshotServerFrameSchema,
+  epicSubscribeArtifactRoomDirtyServerFrameSchema,
+  epicSubscribeRootDirtyServerFrameSchema,
+]);
+
 /** The latest installed shape. Host code builds frames against this. */
-export const epicSubscribeServerFrameSchema = epicSubscribeServerFrameSchemaV12;
+export const epicSubscribeServerFrameSchema = epicSubscribeServerFrameSchemaV15;
 export type EpicSubscribeServerFrame = z.infer<
   typeof epicSubscribeServerFrameSchema
 >;
@@ -535,5 +875,29 @@ export const epicSubscribeV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: epicSubscribeOpenRequestSchema,
   serverFrameSchema: epicSubscribeServerFrameSchemaV12,
+  clientFrameSchema: epicSubscribeClientFrameSchema,
+});
+
+export const epicSubscribeV13 = defineStreamRpcContract({
+  method: "epic.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: epicSubscribeOpenRequestSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV13,
+  clientFrameSchema: epicSubscribeClientFrameSchema,
+});
+
+export const epicSubscribeV14 = defineStreamRpcContract({
+  method: "epic.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: epicSubscribeOpenRequestSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV14,
+  clientFrameSchema: epicSubscribeClientFrameSchema,
+});
+
+export const epicSubscribeV15 = defineStreamRpcContract({
+  method: "epic.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: epicSubscribeOpenRequestSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV15,
   clientFrameSchema: epicSubscribeClientFrameSchema,
 });

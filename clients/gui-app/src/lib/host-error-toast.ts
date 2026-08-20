@@ -7,6 +7,11 @@ import { emitHostErrorNotification } from "@/stores/notifications/app-local-noti
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  epicShareRefusalFromErrorCode,
+  type EpicShareRefusal,
+  type EpicSharePromotionPendingReason,
+} from "@traycer/protocol/host/epic/share-refusal";
 
 /**
  * Maps a HostRpcError to the appropriate toast copy mandated by the
@@ -126,6 +131,19 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   if (error.code === "E_HOST_UNSUPPORTED") {
     return "This needs a newer Traycer host. Update the host to continue.";
   }
+  // BEFORE the `FORBIDDEN` arm, and that ordering is the fix -
+  // `s5-status-truthfulness` instance 5. A free-tier owner's share used to
+  // arrive as a plain 403/`FORBIDDEN` and land on that arm, so the app told a
+  // user they lacked permission on their OWN epic. It is a plan limit, not an
+  // authorization failure, and the two need different words and different
+  // next steps.
+  const shareRefusal = epicShareRefusalFromErrorCode(error.code);
+  if (shareRefusal !== null) return shareRefusalMessage(shareRefusal);
+  return codeKeyedMessage(error, fallback);
+}
+
+/** The plain `code` switchboard, split out to keep either half readable. */
+function codeKeyedMessage(error: HostRpcError, fallback: string): string {
   if (error.code === "FORBIDDEN") {
     return "You don't have permission to do that.";
   }
@@ -160,6 +178,47 @@ function hostErrorToastForSimpleCode(
     return "This terminal is being deleted. Try again in a moment.";
   }
   return null;
+}
+
+/**
+ * Honest copy for each way the share gate refuses -
+ * `s5-status-truthfulness` instance 5, rendering half.
+ *
+ * Every one of these used to collapse into one of two useless sentences:
+ * "You don't have permission to do that." (false about the user's own
+ * account) or the bare "Couldn't invite collaborators." fallback, which lost
+ * the reason and any retry guidance. The host now sends a distinct code per
+ * outcome, so each one can say what happened and what to do next.
+ *
+ * The `promotion-pending` reasons are split rather than sharing one string
+ * BECAUSE their advice differs: three of them mean "wait", and `failed` is
+ * the one where waiting is not the answer. Collapsing them would re-lose
+ * exactly what the taxonomy recovered.
+ */
+function shareRefusalMessage(refusal: EpicShareRefusal): string {
+  switch (refusal.kind) {
+    case "needs-cloud-sync":
+      return "Sharing needs cloud sync, which isn't on your plan. Upgrade from your account menu → Manage subscription. The epic keeps working locally either way.";
+    case "not-owned":
+      return "This epic was created on this machine by a different account, so it can't be shared from yours. Sign in with the account that created it.";
+    case "promotion-pending":
+      return sharePendingMessage(refusal.reason);
+    case "refused":
+      return "Couldn't share this epic right now.";
+  }
+}
+
+function sharePendingMessage(reason: EpicSharePromotionPendingReason): string {
+  switch (reason) {
+    case "recent-attempt":
+      return "This epic is still being copied to the cloud. Nothing is lost — try inviting again in a moment.";
+    case "busy":
+      return "This epic is busy right now, so it hasn't finished reaching the cloud. Let the current work settle, then invite again.";
+    case "offline":
+      return "Couldn't reach the cloud to finish copying this epic. Check your connection and invite again.";
+    case "failed":
+      return "This epic couldn't be copied to the cloud, so there's nothing for a collaborator to open yet. Retrying won't help on its own — reopen the epic, or contact support if it persists.";
+  }
 }
 
 /**

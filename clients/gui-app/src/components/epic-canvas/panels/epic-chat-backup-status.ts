@@ -7,7 +7,10 @@ import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { useRegisteredEpicActiveAgentIds } from "@/lib/epic-selectors";
+import {
+  useEpicChatBackupHasNoCloudTask,
+  useRegisteredEpicActiveAgentIds,
+} from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import type { ChatsSlice } from "@/stores/epics/open-epic/types";
@@ -75,12 +78,20 @@ export function useEpicChatBackupStatus(
 ): EpicChatBackupStatus | null {
   const client = useHostClientForHostId(useEpicSessionHostId());
   const readiness = useReactiveHostReadiness(client);
+  // A local-homed (or mid-promotion) epic has no cloud task to back chats up
+  // into, so every chat is honestly `behind` forever - a by-design state, not
+  // the actionable failure this indicator exists to surface. Read from the
+  // open epic's own stream (the session provider keeps it live), so promotion
+  // completing reveals the indicator without a refetch race. The query is
+  // disabled rather than the result discarded: there is nothing worth polling
+  // for while the answer is known to be structural.
+  const noCloudTask = useEpicChatBackupHasNoCloudTask();
   const query = useHostQuery({
     cacheKeyIdentity: undefined,
     client,
     method: "epic.chatBackupStatus",
     params: { epicId },
-    options: { poll: true },
+    options: { poll: true, enabled: !noCloudTask },
   });
   const workingChatIds = useRegisteredEpicActiveAgentIds(epicId);
   const chatsById = useEpicChatProjections(epicId);
@@ -89,6 +100,7 @@ export function useEpicChatBackupStatus(
   // whatever re-renders this component next.
   const now = useSampledNow();
 
+  if (noCloudTask) return null;
   if (!readiness.isReady || query.data === undefined) return null;
   const view = backupStatusView(query.data.chats, {
     workingChatIds,

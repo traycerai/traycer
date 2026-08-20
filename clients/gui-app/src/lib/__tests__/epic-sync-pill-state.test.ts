@@ -15,6 +15,14 @@ const HEALTHY_INPUTS: EpicSyncPillInputs = {
   hostDirtyState: "clean",
   hasUnsyncedLocalChanges: false,
   hasConnectedOnce: true,
+  // A pre-@1.4 peer, which is what every case in this file was written
+  // against. The undefined key PLUS a handshake that never negotiated the
+  // legs is how the derivation identifies one, so these keep asserting
+  // exactly the behaviour they always did.
+  durability: undefined,
+  localProtection: undefined,
+  durabilityLegsNegotiated: false,
+  cloudFreshness: undefined,
 };
 
 const HOST_TRANSPORT_STATUSES: readonly StreamConnectionStatus[] = [
@@ -48,6 +56,10 @@ function allCombinations(): readonly EpicSyncPillInputs[] {
               hostDirtyState,
               hasUnsyncedLocalChanges,
               hasConnectedOnce,
+              durability: undefined,
+              localProtection: undefined,
+              durabilityLegsNegotiated: false,
+              cloudFreshness: undefined,
             })),
           ),
         ),
@@ -91,13 +103,39 @@ describe("deriveEpicSyncPillState", () => {
     expect(result).toBe("offlineWithHostPending");
   });
 
-  it("cloud reconnecting with known host-durable work reads offlineChangesSavedLocally", () => {
+  it("cloud reconnecting with host-pending work makes no durability claim on a pre-@1.4 peer", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       cloudSyncStatus: "reconnecting",
       hostDirtyState: "dirty",
     });
     expect(result).toBe("offlineWithHostPending");
+  });
+
+  it("an ARMED session with the cloud down claims local durability", () => {
+    // The positive statement the claim needs. Without `armed` this returns
+    // `offlineWithHostPending` and `offlineChangesSavedLocally` is
+    // unreachable - a union member, a pill rendering and its tests for a
+    // state the derivation never produced.
+    expect(
+      deriveEpicSyncPillState({
+        ...HEALTHY_INPUTS,
+        cloudSyncStatus: "disconnected",
+        hostDirtyState: "dirty",
+        localProtection: "armed",
+      }),
+    ).toBe("offlineChangesSavedLocally");
+  });
+
+  it("keeps unknown protection on the no-claim state", () => {
+    expect(
+      deriveEpicSyncPillState({
+        ...HEALTHY_INPUTS,
+        cloudSyncStatus: "disconnected",
+        hostDirtyState: "dirty",
+        localProtection: "unknown",
+      }),
+    ).toBe("offlineWithHostPending");
   });
 
   it("warns immediately without calling renderer-only work saved locally while the cloud is down", () => {
@@ -219,6 +257,10 @@ describe("deriveEpicSyncPillState", () => {
         hostDirtyState: "unknown",
         hasUnsyncedLocalChanges: false,
         hasConnectedOnce: true,
+        durability: undefined,
+        localProtection: undefined,
+        durabilityLegsNegotiated: false,
+        cloudFreshness: undefined,
       });
       expect(result).toBe("connected");
     });
@@ -231,8 +273,258 @@ describe("deriveEpicSyncPillState", () => {
         hostDirtyState: "unknown",
         hasUnsyncedLocalChanges: true,
         hasConnectedOnce: true,
+        durability: undefined,
+        localProtection: undefined,
+        durabilityLegsNegotiated: false,
+        cloudFreshness: undefined,
       });
       expect(result).toBe("offlineWithUnsavedChanges");
     });
+  });
+
+  // ── `s5-status-truthfulness` instance 1 ─────────────────────────────────
+  //
+  // The pill and the durability badge are mounted inches apart by the epic
+  // shell, and the pill ignored durability entirely. A local-homed epic's
+  // `LocalRoomConnection` reports connected + clean, so the settled free-tier
+  // session rendered "All changes synced" beside "Stored locally", about an
+  // epic no cloud has ever seen. Every case below returns `synced` on the
+  // pre-fix derivation.
+  describe("the synced claim needs a cloud durability fact behind it", () => {
+    it("keeps a negotiated @1.4 peer's omitted legs indeterminate", () => {
+      // The schema marks every `@1.4` leg optional and an absent one means
+      // UNKNOWN. Presence-probing alone read this frame as a pre-`@1.4` peer
+      // and claimed "All changes synced" off an absence - the negotiated
+      // handshake is what tells the two silences apart.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: undefined,
+          localProtection: undefined,
+          durabilityLegsNegotiated: true,
+        }),
+      ).toBe("connected");
+    });
+
+    it("still claims synced for a genuinely pre-@1.4 peer", () => {
+      expect(deriveEpicSyncPillState(HEALTHY_INPUTS)).toBe("synced");
+    });
+
+    it("does not claim synced for a local-homed epic", () => {
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "local",
+          localProtection: "armed",
+        }),
+      ).toBe("storedLocally");
+    });
+
+    it("does not claim synced while an epic is still promoting", () => {
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "promoting",
+          localProtection: "armed",
+        }),
+      ).toBe("storedLocally");
+    });
+
+    it("does not claim saved-on-device when a NEGOTIATED peer omits the protection key", () => {
+      // The sibling of the synced-claim case above, and the path that kept
+      // reading an absence as protection after that one was fixed.
+      // `storedLocally` tells the reader their bytes are on this disk, which
+      // is every bit as positive a claim as "All changes synced" - a
+      // negotiated `@1.4` peer omitting the optional key is stating UNKNOWN
+      // per the schema's own absence rule, and unknown licenses neither.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "local",
+          localProtection: undefined,
+          durabilityLegsNegotiated: true,
+        }),
+      ).toBe("connected");
+    });
+
+    it("does not claim saved-on-device while protection is UNAVAILABLE", () => {
+      // "Stored locally" is a durability claim, and the local-room connection
+      // satisfying `cloudSyncStatus: "connected"` says nothing about it: an
+      // unavailable session's edits live only in the document and are lost on
+      // process exit, graceful quit included. The pill must not encourage
+      // closing work that is not persisted anywhere.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "local",
+          localProtection: "unavailable",
+        }),
+      ).toBe("unprotected");
+    });
+
+    it("claims nothing on a local epic whose protection is UNKNOWN", () => {
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "local",
+          localProtection: "unknown",
+        }),
+      ).toBe("connected");
+    });
+
+    it("does not claim synced when the host says durability is unknown", () => {
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "unknown",
+          localProtection: "unknown",
+        }),
+      ).toBe("connected");
+    });
+
+    it("does not claim synced on an absent durability key alone", () => {
+      // The @1.4 absence rule. A peer that speaks the minor and says nothing
+      // about durability has said UNKNOWN, and the calm claim needs the
+      // positive `armed` beside it before it may render.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: undefined,
+          localProtection: "unknown",
+        }),
+      ).toBe("connected");
+    });
+
+    it("claims synced only on the POSITIVE cloud member, never on an absence", () => {
+      // `durability: "cloud"` is the `@1.4` statement the calm claim rests
+      // on. Absence beside `armed` used to buy the same rendering, which let
+      // a schema-permitted omission read as "All changes synced".
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "cloud",
+          localProtection: "armed",
+        }),
+      ).toBe("synced");
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: undefined,
+          localProtection: "armed",
+        }),
+      ).not.toBe("synced");
+    });
+
+    it("keeps a pre-@1.4 peer on exactly its old rendering", () => {
+      expect(deriveEpicSyncPillState(HEALTHY_INPUTS)).toBe("synced");
+    });
+  });
+
+  // ── `s5-unarmed-session`, rendering half ────────────────────────────────
+  describe("an unprotected session may not read as offline-but-saved", () => {
+    it("warns when the cloud is down and there is no local WAL", () => {
+      // Pre-fix this is `offlineWithHostPending` - "Offline — changes
+      // pending" - which implies something is holding the work. Nothing is.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          cloudSyncStatus: "disconnected",
+          hostDirtyState: "dirty",
+          durability: undefined,
+          localProtection: "unavailable",
+        }),
+      ).toBe("unprotected");
+    });
+
+    it("stays quiet about protection while the cloud IS connected", () => {
+      // The work is reaching the cloud, so the pill has nothing alarming to
+      // say; the durability badge carries the protection warning instead.
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: undefined,
+          localProtection: "unavailable",
+        }),
+      ).toBe("connected");
+    });
+  });
+});
+
+/**
+ * The ninth leg - `s5-mirror-first-serving`.
+ *
+ * Every other case in this file is about where WORK is going. These are about
+ * what the reader is LOOKING at, which mirror-first serving made a separate
+ * question: the host paints a WAL-backed document before reconciling it, so
+ * "nothing outstanding, cloud link up" stopped implying "this is the cloud's
+ * document".
+ */
+describe("cloud freshness gates the synced claim", () => {
+  /**
+   * The `@1.4` shape of {@link HEALTHY_INPUTS}: a positively-armed session
+   * with no local-durability claim, i.e. durable in the cloud. Without a
+   * freshness statement this is the one combination that legitimately reads
+   * `synced`, which is what makes it the right baseline to perturb.
+   */
+  const CLOUD_DURABLE_ARMED: EpicSyncPillInputs = {
+    ...HEALTHY_INPUTS,
+    durability: "cloud",
+    localProtection: "armed",
+    cloudFreshness: undefined,
+  };
+
+  it("still claims synced when the host states the document is current", () => {
+    expect(
+      deriveEpicSyncPillState({
+        ...CLOUD_DURABLE_ARMED,
+        cloudFreshness: {
+          kind: "lastCloudSyncAt",
+          reconciledAtEpochMs: 1_700_000_000_000,
+          state: "current",
+        },
+      }),
+    ).toBe("synced");
+  });
+
+  it("keeps its exact pre-@1.4 answer when the host says nothing about freshness", () => {
+    // The additive property, asserted rather than assumed: the host omits this
+    // key wherever the question does not apply, and a peer below @1.4 cannot
+    // send it at all. Neither may lose its current rendering.
+    expect(deriveEpicSyncPillState(CLOUD_DURABLE_ARMED)).toBe("synced");
+  });
+
+  it.each([
+    { state: "local-copy" as const },
+    { state: "syncing" as const },
+    { state: "stale" as const },
+  ])(
+    "refuses the synced claim over a document the host calls $state",
+    ({ state }) => {
+      const result = deriveEpicSyncPillState({
+        ...CLOUD_DURABLE_ARMED,
+        cloudFreshness: { kind: "freshnessUnknown", state },
+      });
+      // Neutral, not alarming: the WORK really is safe in the cloud, so the
+      // pill claims nothing rather than warning about durability it has no
+      // reason to doubt. The document's own staleness is the badge's line.
+      expect(result).toBe("connected");
+      expect(result).not.toBe("synced");
+    },
+  );
+
+  it("refuses it for a TIMESTAMPED non-current document too, so the stamp is not mistaken for currency", () => {
+    // A recorded reconciliation is evidence about the PAST. Reading the mere
+    // presence of a timestamp as currency would be the absence-as-reassurance
+    // inference one level down.
+    expect(
+      deriveEpicSyncPillState({
+        ...CLOUD_DURABLE_ARMED,
+        cloudFreshness: {
+          kind: "lastCloudSyncAt",
+          reconciledAtEpochMs: 1_700_000_000_000,
+          state: "stale",
+        },
+      }),
+    ).toBe("connected");
   });
 });

@@ -26,7 +26,12 @@ import { useAuthService } from "@/lib/host";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
-import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  setEpicLocalHomeInCloudTaskCaches,
+  updateEpicTitleInCloudTaskCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
+import { setCloudEpicTasksPageLocalHome } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { hostQueryKeys } from "@/lib/query-keys";
 import {
   claimDesktopEpicOwnership,
   getDesktopEpicOwnershipBridge,
@@ -821,6 +826,13 @@ export function EpicSessionProvider(
     queryClient,
     userId: cloudTasksUserId,
   });
+  useEpicHomeCacheSync({
+    activeHostId: session?.hostId ?? null,
+    epicId,
+    handle,
+    queryClient,
+    userId: cloudTasksUserId,
+  });
 
   return (
     <EpicSessionContext.Provider value={handle}>
@@ -872,4 +884,65 @@ function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
 function normalizeGeneratedTitle(title: string): string | null {
   const trimmed = title.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Keeps the History list's `home` marker in step with the OPEN epic's own
+ * durability - `s4-promotion-task-list-invalidation`, folded into
+ * `s5-status-truthfulness`.
+ *
+ * Sibling of {@link useCloudTaskTitleCacheSync}, and here for the same reason:
+ * `epic.listTasks` is manual-refresh-only, the open epic's stream is the only
+ * live source of the fact, and a Zustand store has no query client to push it
+ * from. The two writes this repairs are a local-first `epic.create` (whose
+ * `TaskLight` cache patch cannot carry `home` at all) and a promotion
+ * completing (which previously updated only the open-epic store).
+ *
+ * `getTaskContexts` is INVALIDATED rather than patched: its `localHomedTaskIds`
+ * is a response-level sibling list, so there is no per-row edit to make, and
+ * that query is the tab strip's only source of the marker.
+ */
+function useEpicHomeCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
+  const { activeHostId, epicId, handle, queryClient, userId } = args;
+  useEffect(() => {
+    if (activeHostId === null) return;
+    if (handle === null) return;
+    if (queryClient === undefined) return;
+    if (userId === null) return;
+
+    let lastSyncedLocalHome: boolean | null = null;
+    const syncHome = (): void => {
+      const state = handle.store.getState();
+      // Only a FRESH cloud-status frame for this open cycle is evidence. The
+      // pre-connect default is not a statement about home, and writing it into
+      // the cache would be this window inventing the very fact it is here to
+      // relay.
+      if (!state.hasFreshCloudSyncStatus) return;
+      const status = state.durabilityStatus ?? null;
+      if (status === null || status === "unknown") return;
+      const localHome = status === "local" || status === "promoting";
+      if (localHome === lastSyncedLocalHome) return;
+      lastSyncedLocalHome = localHome;
+      setEpicLocalHomeInCloudTaskCaches(
+        queryClient,
+        { hostId: activeHostId, userId },
+        epicId,
+        localHome,
+      );
+      // The retained "Show more" tails live in the pages store, exactly as
+      // they do for the pin patch - a promoted row loaded through pagination
+      // kept `home: "local"` (and its cloud-only actions disabled) until a
+      // reset or refresh without this half.
+      setCloudEpicTasksPageLocalHome(activeHostId, userId, epicId, localHome);
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          activeHostId,
+          "epic.getTaskContexts",
+        ),
+      });
+    };
+
+    syncHome();
+    return handle.store.subscribe(syncHome);
+  }, [activeHostId, epicId, handle, queryClient, userId]);
 }

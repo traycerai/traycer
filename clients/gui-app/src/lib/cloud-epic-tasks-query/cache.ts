@@ -169,6 +169,63 @@ export function setEpicPinnedInTaskContextsCaches(
   );
 }
 
+/**
+ * Keeps the cached `home` marker in step with what the epic's own stream says
+ * - `s4-promotion-task-list-invalidation`.
+ *
+ * `epic.listTasks` is `staleTime: Infinity` and manual-refresh-only, so a row's
+ * `home` is frozen at whatever the page said when it loaded. Two writes made
+ * that stale on purpose:
+ *
+ *  - `epic.create` patches its returned `TaskLight` straight into the cache,
+ *    and that type has nowhere to carry `home` - so a local-first epic entered
+ *    the list looking cloud-backed from the instant it was created.
+ *  - promotion completing flips the epic to cloud-durable, and nothing told
+ *    the list; the row kept `home: "local"`.
+ *
+ * Both surface the same way: History offers (or withholds) the cloud-only pin
+ * action for a row whose real home is the opposite, and pin is one of the
+ * mutations that patches this cache - so using it cannot self-heal the marker.
+ * The open epic's `cloudSyncStatus` frames are the authority the list lacks.
+ */
+export function setEpicLocalHomeInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  localHome: boolean,
+): void {
+  patchMatchingQueries(
+    queryClient,
+    (query) => cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+    (response: ListTasksResponse) =>
+      setEpicLocalHomeInCloudTasksResponse(response, epicId, localHome),
+  );
+}
+
+/** Identity-preserving per-row home patch, same contract as the pin patch. */
+export function setEpicLocalHomeInCloudTasksResponse(
+  response: ListTasksResponse,
+  epicId: string,
+  localHome: boolean,
+): ListTasksResponse {
+  const tasks = response.tasks.map((task) => {
+    if (task.epic?.light?.id !== epicId) return task;
+    const current = "home" in task ? task.home : undefined;
+    if (localHome) {
+      return current === "local" ? task : { ...task, home: "local" as const };
+    }
+    // Promoted: DROP the key rather than writing `home: "cloud"`. The protocol
+    // reserves `cloud` for host-side tagging that nothing emits yet, and
+    // absence is what every other cloud-homed row in this page carries - so
+    // this leaves the patched row indistinguishable from a refetched one.
+    if (current === undefined) return task;
+    const { home: _home, ...withoutHome } = task;
+    return withoutHome;
+  });
+  const changed = tasks.some((task, index) => task !== response.tasks[index]);
+  return changed ? { ...response, tasks } : response;
+}
+
 function patchMatchingQueries<TResponse>(
   queryClient: QueryClient,
   predicate: (query: Query) => boolean,

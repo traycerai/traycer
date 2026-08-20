@@ -17,6 +17,12 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { CommentSidebar } from "@/components/comments/comment-sidebar";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 
 const EPIC_ID = "epic-1";
@@ -82,6 +88,11 @@ function threadFixture(): CommentThreadWire {
 
 let queryClient: QueryClient;
 let messenger: MockHostMessenger<HostRpcRegistry>;
+/** Cloud-homed open-epic session for the read-failure suite: the sidebar now
+ *  reads durability via `useEpicDurabilityStatus`, which requires a live
+ *  epic session. Default is non-local so those cases still exercise the RPC
+ *  path rather than the local-mode gate. */
+let defaultEpicHandle: OpenEpicStoreHandle;
 
 beforeEach(() => {
   respondToListThreads = () => ({ threads: [] });
@@ -105,6 +116,15 @@ beforeEach(() => {
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   hostClientRef.current = spine.createRequester(mockLocalHostEntry);
+  defaultEpicHandle = createOpenEpicStore({
+    epicId: EPIC_ID,
+    streamClientFactory: noopEpicStreamClientFactory,
+    userId: "user-1",
+    onAuthError: null,
+  });
+  // Cloud-backed epics leave durability unset; only local lifecycle states
+  // populate this field. That keeps the normal list-query assertions below.
+  defaultEpicHandle.store.setState({ durabilityStatus: null });
 
   otherHostListCalls = 0;
   let otherRequestCount = 0;
@@ -134,6 +154,7 @@ afterEach(() => {
   cleanup();
   queryClient.clear();
   hostClientRef.current = null;
+  defaultEpicHandle.dispose();
   otherHostClientRef.current = null;
   useCommentThreadsStore.setState({
     activeByEpicId: {},
@@ -144,19 +165,30 @@ afterEach(() => {
   });
 });
 
-function renderSidebar() {
+const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
+function renderSidebar(epicHandle: OpenEpicStoreHandle) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <CommentSidebar
-        epicId={EPIC_ID}
-        hostClient={hostClientRef.current}
-        artifactType="spec"
-        artifactId={ARTIFACT_ID}
-        anchorPositions={{ positions: new Map() }}
-        currentUserId="user-1"
-        canModerate={false}
-        onActivateThread={() => undefined}
-      />
+      <EpicSessionContext.Provider value={epicHandle}>
+        <CommentSidebar
+          epicId={EPIC_ID}
+          hostClient={hostClientRef.current}
+          artifactType="spec"
+          artifactId={ARTIFACT_ID}
+          anchorPositions={{ positions: new Map() }}
+          currentUserId="user-1"
+          canModerate={false}
+          onActivateThread={() => undefined}
+        />
+      </EpicSessionContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -199,7 +231,7 @@ describe("<CommentSidebar /> read failures", () => {
         resolveResponse = resolve;
       });
 
-    renderSidebar();
+    renderSidebar(defaultEpicHandle);
 
     await waitFor(() => {
       expect(loadingPanel()).not.toBeNull();
@@ -221,7 +253,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be loaded when the cold query is disabled without a host client", async () => {
     hostClientRef.current = null;
 
-    renderSidebar();
+    renderSidebar(defaultEpicHandle);
 
     expect(
       await screen.findByText("Comments couldn't be loaded."),
@@ -235,7 +267,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be LOADED - never that there are none - when the cold read fails", async () => {
     respondToListThreads = unavailableHost;
 
-    renderSidebar();
+    renderSidebar(defaultEpicHandle);
 
     expect(
       await screen.findByText(
@@ -258,7 +290,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("still renders the empty state when the read SUCCEEDS with no threads", async () => {
     respondToListThreads = () => ({ threads: [] });
 
-    renderSidebar();
+    renderSidebar(defaultEpicHandle);
 
     expect(await screen.findByText(/No open comments/)).not.toBeNull();
     expect(unavailablePanel()).toBeNull();
@@ -268,7 +300,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("keeps the last successful threads on screen when a REFETCH fails", async () => {
     respondToListThreads = () => ({ threads: [threadFixture()] });
 
-    renderSidebar();
+    renderSidebar(defaultEpicHandle);
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
 
     respondToListThreads = unavailableHost;
@@ -292,6 +324,104 @@ describe("<CommentSidebar /> read failures", () => {
 
     expect(unavailablePanel()).toBeNull();
     expect(screen.getByText(QUOTED_TEXT)).not.toBeNull();
+  });
+});
+
+describe("<CommentSidebar /> local durability honesty", () => {
+  let epicHandle: OpenEpicStoreHandle | null = null;
+  let listThreadsCalls = 0;
+
+  beforeEach(() => {
+    listThreadsCalls = 0;
+    respondToListThreads = () => {
+      listThreadsCalls += 1;
+      return { threads: [threadFixture()] };
+    };
+    epicHandle = createOpenEpicStore({
+      epicId: EPIC_ID,
+      streamClientFactory: noopEpicStreamClientFactory,
+      userId: "user-1",
+      onAuthError: null,
+    });
+  });
+
+  afterEach(() => {
+    epicHandle?.dispose();
+    epicHandle = null;
+  });
+
+  it("shows the explicit local comments-unavailable panel without a generic RPC failure", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    // Real open-epic store slot the sidebar reads via useEpicDurabilityStatus.
+    epicHandle.store.setState({ durabilityStatus: "local" });
+
+    renderSidebar(epicHandle);
+
+    expect(
+      await screen.findByText(
+        "Comments need a cloud room, and this epic has none.",
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("This epic is stored on this device."),
+    ).not.toBeNull();
+    // Must not fall into the generic RPC-failure copy.
+    expect(screen.queryByText("Comments couldn't be loaded.")).toBeNull();
+    expect(screen.queryByText(/This doesn't mean there are none/)).toBeNull();
+    expect(screen.queryByText(/No open comments/)).toBeNull();
+    expect(unavailablePanel()).not.toBeNull();
+    // Local mode disables the list query — honesty without a failed RPC.
+    expect(listThreadsCalls).toBe(0);
+    expect(queryStatuses()).not.toContain("error");
+  });
+
+  it("still loads threads for a non-local epic through the real query path", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({ durabilityStatus: null });
+
+    renderSidebar(epicHandle);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+    expect(listThreadsCalls).toBeGreaterThan(0);
+    expect(
+      screen.queryByText("Comments need a cloud room, and this epic has none."),
+    ).toBeNull();
+  });
+
+  it("keeps comments gated through the promoting window, against the same null provider", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    // The reserved-but-pre-cutover state. The promotion is recorded and the
+    // upload is in flight, but the artifact room's collab provider is still
+    // null - so the host answers `no_active_session` and the old gate, keyed
+    // on exactly "local", let the request through to collect it.
+    epicHandle.store.setState({
+      durabilityStatus: "promoting",
+      durabilityPromotionState: "active",
+    });
+
+    renderSidebar(epicHandle);
+
+    expect(
+      await screen.findByText(
+        "Comments need a cloud room, and this epic has none.",
+      ),
+    ).not.toBeNull();
+    // The copy states the condition rather than predicting cloud sync.
+    expect(
+      screen.getByText("This epic is still uploading to the cloud."),
+    ).not.toBeNull();
+    // The defect was a generic failure standing in for a known boundary.
+    expect(screen.queryByText("Comments couldn't be loaded.")).toBeNull();
+    // Arrangement fidelity: the RPC was never issued, so the panel is not
+    // merely the error state wearing better copy.
+    expect(listThreadsCalls).toBe(0);
+    expect(queryStatuses()).not.toContain("error");
   });
 });
 

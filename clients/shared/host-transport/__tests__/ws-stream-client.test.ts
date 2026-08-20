@@ -366,7 +366,14 @@ describe("WsStreamClient", () => {
     expect(subscribeFrame).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      // `@1.5` is the newest installed minor (the s5 status pass: a widened
+      // pause-reason enum plus the `localProtection` and `freshness` keys on
+      // `cloudSyncStatus`, over @1.4's promotion state, @1.3's durability and
+      // @1.2's snapshot-meta roomId).
+      // This literal is the point of the fixture: it pins the version the
+      // client *declares*, which is a distinct fact from the manifest it
+      // advertises, so a bump has to be stated here too.
+      schemaVersion: { major: 1, minor: 5 },
       params: { epicId: "epic-1" },
     });
 
@@ -404,7 +411,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 5 },
       params: { epicId: "epic-1" },
     });
 
@@ -476,7 +483,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 5 },
       params: { epicId: "epic-1" },
     });
 
@@ -1314,7 +1321,57 @@ describe("WsStreamClient", () => {
       GIT_STATUS_VERSION,
     );
     liveGitSession.close();
-    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toBeNull();
+    // Not null: with the last live session gone the client falls back to what
+    // the handshake manifest says a subscribe WOULD negotiate, which is the
+    // same value and is still just as true. The live map is what emptied here
+    // - assert on it through the session that owns routing.
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual(
+      GIT_STATUS_VERSION,
+    );
+  });
+
+  it("answers the schema version for a method no session has subscribed to", async () => {
+    // The pre-check half of the capability cache. `getMethodSupport` has
+    // always answered for every method in the peer's manifest; the version
+    // did not, so a caller gating the OPENING of a stream on its minor could
+    // never satisfy the gate - the only evidence it accepted was published by
+    // the session it was deciding whether to open.
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("git.subscribeStatus", {
+      hostId: "host-1",
+      runningDir: "/repo-a",
+      ignoreWhitespace: false,
+      freshNonce: null,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      client.getMethodSchemaVersion("host.notifications.cloudFeed.subscribe"),
+    ).toBeNull();
+    completeHandshake(sockets[0].socket);
+
+    const cloudFeedVersion = client.getMethodSchemaVersion(
+      "host.notifications.cloudFeed.subscribe",
+    );
+    expect(cloudFeedVersion).not.toBeNull();
+    expect(cloudFeedVersion?.major).toBe(1);
+    // A reconnect may be a different host incarnation, so the prediction is
+    // re-probed on the same terms the support cache is.
+    client.reconnectAll("host-endpoint-change");
+    expect(
+      client.getMethodSchemaVersion("host.notifications.cloudFeed.subscribe"),
+    ).toBeNull();
+
+    session.close();
   });
 
   it("closes the socket after two missed pongs and triggers a reconnect", async () => {
@@ -1400,7 +1457,7 @@ describe("WsStreamClient", () => {
     expect(firstSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 5 },
       params: { epicId: "epic-42" },
     });
 
@@ -1420,7 +1477,7 @@ describe("WsStreamClient", () => {
     expect(secondSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 5 },
       params: { epicId: "epic-42" },
     });
 
@@ -1604,7 +1661,7 @@ describe("WsStreamClient", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 5 },
       params: { epicId: "epic-42" },
     });
     expect(statuses.at(-1)).toBe("open");
@@ -2682,9 +2739,10 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[0].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // `@1.1` is the newest installed minor of the feed (the arm carrying
-      // `host.operation.finished`); the mirrored handshake negotiates it.
-      schemaVersion: { major: 1, minor: 1 },
+      // `@1.2` is the newest installed minor of the feed (it selects the
+      // local durable-home partition, over @1.1's `host.operation.finished`
+      // arm); the mirrored handshake negotiates it.
+      schemaVersion: { major: 1, minor: 2 },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,
@@ -2717,9 +2775,10 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // `@1.1` is the newest installed minor of the feed (the arm carrying
-      // `host.operation.finished`); the mirrored handshake negotiates it.
-      schemaVersion: { major: 1, minor: 1 },
+      // `@1.2` is the newest installed minor of the feed (it selects the
+      // local durable-home partition, over @1.1's `host.operation.finished`
+      // arm); the mirrored handshake negotiates it.
+      schemaVersion: { major: 1, minor: 2 },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,

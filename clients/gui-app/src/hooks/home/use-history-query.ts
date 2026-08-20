@@ -8,6 +8,7 @@ import {
   buildHistoryItemsFromTasks,
   collectHistoryRepos,
   dedupSortWorkspaces,
+  EMPTY_LOCAL_HOMED_TASK_IDS,
   filterHistoryItems,
   historyPullRequestQueryNumber,
   historyPullRequestSearchEpicIds,
@@ -28,7 +29,10 @@ import {
   listCloudTasksRequestForHistorySearch,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTasksCompleteness,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import { patchHistorySearch } from "@/lib/history-search";
@@ -128,7 +132,14 @@ export function useHistoryQuery(
     isQueryDebouncing || tasksQuery.isFetching || tasksQuery.isPlaceholderData;
   const taskContexts = useEpicGetTaskContexts(localTaskIds, currentUserId);
   const baseItems = useMemo(
-    () => buildHistoryItemsFromTasks(tasks, nowMs, currentUserId),
+    // The cloud page carries `home` ON the row, so it needs no sibling list.
+    () =>
+      buildHistoryItemsFromTasks(
+        tasks,
+        nowMs,
+        currentUserId,
+        EMPTY_LOCAL_HOMED_TASK_IDS,
+      ),
     [currentUserId, nowMs, tasks],
   );
   const contextItems = useMemo(
@@ -138,10 +149,21 @@ export function useHistoryQuery(
           Array.from(taskContexts.tasksById.values()),
           nowMs,
           currentUserId,
+          // `epic.getTaskContexts` cannot put `home` on the row, so the home
+          // marker for these arrives beside them. A local epic reached ONLY
+          // through this path - matched by worktree branch, path, or PR
+          // number - has no other source for it.
+          taskContexts.localHomedTaskIds,
         ),
         params.search,
       ),
-    [currentUserId, nowMs, params.search, taskContexts.tasksById],
+    [
+      currentUserId,
+      nowMs,
+      params.search,
+      taskContexts.tasksById,
+      taskContexts.localHomedTaskIds,
+    ],
   );
   // Locally matched tasks are unioned under the cloud page: the cloud rows
   // keep their server order and the id-fetched extras are appended (dedup by
@@ -192,20 +214,39 @@ export function useHistoryQuery(
     const facets = canUseServerFacets
       ? mapHistoryFacets(tasksQuery.data.facets)
       : EMPTY_FACETS;
-    const availableWorkspaces =
-      facets.workspaces.length > 0
-        ? facets.workspaces.map((workspace) => workspace.workspace)
-        : collectHistoryWorkspaces(allItems);
+    const completeness = canUseServerFacets
+      ? (tasksQuery.data.completeness ?? null)
+      : null;
+    // `facets: "partial"` is the host saying the server's own faceting ran
+    // over a DIFFERENT set from the rows it returned - host rows were injected
+    // beside them. Preferring the server arrays outright then hid the filter
+    // OPTION for a repo or workspace that exists only on this device, so a
+    // displayed local epic could not be filtered to. Union instead: the server
+    // counts stay the (partial) counts, but every displayed row can be
+    // selected.
+    const unionLocalOptions = completeness?.facets === "partial";
+    const availableWorkspaces = availableFilterWorkspaces(
+      facets.workspaces.map((workspace) => workspace.workspace),
+      allItems,
+      unionLocalOptions,
+    );
+    const availableRepos = availableFilterRepos(
+      facets.repos.map((repo) => repo.label),
+      allItems,
+      unionLocalOptions,
+    );
     return {
       items,
-      availableRepos:
-        facets.repos.length > 0
-          ? facets.repos.map((repo) => repo.label)
-          : collectHistoryRepos(allItems),
+      availableRepos,
       availableWorkspaces,
       totalCount: items.length,
       facets,
       worktreesByEpicId,
+      // Only from a SETTLED page. While the query is debouncing or serving
+      // placeholder data the statement describes a different request than the
+      // rows on screen, which is the same reason the server facets are
+      // suppressed above.
+      completeness,
     };
   }, [
     allItems,
@@ -253,6 +294,15 @@ export interface HistoryFetchResult {
   totalCount: number;
   facets: HistoryFacets;
   worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>;
+  /**
+   * The host's own statement about what this page is (`epic.listTasks@1.4`).
+   *
+   * `null` when the host did not say - an older host, or a pre-`@1.4`
+   * negotiation - and that must be read as "unknown", never as complete. The
+   * render sites only ever ADD a caveat from this, so an absent statement
+   * leaves exactly today's rendering.
+   */
+  completeness: ListTasksCompleteness | null;
 }
 
 export interface HistoryFacets {
@@ -337,6 +387,50 @@ function filterHistoryItemsLocally(
     workspaceMatchMode: search.workspaceMode,
     ownershipScopes: search.ownershipScopes,
   });
+}
+
+/**
+ * The workspace filter options.
+ *
+ * An empty server array means the server did not facet at all, so the options
+ * come entirely from the rows. A `partial` one means it faceted a DIFFERENT
+ * set from the rows, so the locally-held rows' workspaces are unioned in - or
+ * a device-only workspace has no option to select even though its epic is on
+ * screen. Otherwise the server's own list stands.
+ */
+function availableFilterWorkspaces(
+  serverWorkspaces: ReadonlyArray<HistoryWorkspaceRef>,
+  allItems: ReadonlyArray<HistoryItem>,
+  unionLocalOptions: boolean,
+): ReadonlyArray<HistoryWorkspaceRef> {
+  if (serverWorkspaces.length === 0) return collectHistoryWorkspaces(allItems);
+  if (!unionLocalOptions) return serverWorkspaces;
+  return dedupSortWorkspaces(
+    serverWorkspaces,
+    collectHistoryWorkspaces(allItems),
+  );
+}
+
+/** Repo filter options, on the same three-way rule as the workspaces above. */
+function availableFilterRepos(
+  serverRepos: ReadonlyArray<string>,
+  allItems: ReadonlyArray<HistoryItem>,
+  unionLocalOptions: boolean,
+): ReadonlyArray<string> {
+  if (serverRepos.length === 0) return collectHistoryRepos(allItems);
+  if (!unionLocalOptions) return serverRepos;
+  return unionSortedLabels(serverRepos, collectHistoryRepos(allItems));
+}
+
+/** Server-provided labels first (their order is the server's ranking), then
+ * any label only the locally-held rows carry. */
+function unionSortedLabels(
+  serverLabels: ReadonlyArray<string>,
+  localLabels: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const seen = new Set(serverLabels);
+  const extras = localLabels.filter((label) => !seen.has(label));
+  return extras.length === 0 ? serverLabels : [...serverLabels, ...extras];
 }
 
 function collectHistoryWorkspaces(

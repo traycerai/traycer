@@ -9,6 +9,11 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import {
+  useEpicCommentsHaveNoCloudRoom,
+  useEpicDurabilityStatus,
+} from "@/lib/epic-selectors";
+import type { EpicDurabilityStatusV15 } from "@traycer/protocol/host/epic/subscribe";
+import {
   useActiveThreadId,
   useCommentThreadsStore,
 } from "@/stores/comments/comment-threads-store";
@@ -68,13 +73,21 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const activeThreadId = useActiveThreadId(epicId);
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
+  const durabilityStatus = useEpicDurabilityStatus();
+  // Covers the `promoting` window too - see `commentsHaveNoCloudRoom`. Keyed
+  // on exactly `"local"`, this gate re-enabled comments mid-promotion against
+  // a null provider and the user got a generic RPC failure for a state the
+  // host can name. The STICKY hook holds that answer across a stream
+  // reconnect, which clears the store's durability slots and would otherwise
+  // re-open the panel against the same absent room.
+  const localCommentsUnavailable = useEpicCommentsHaveNoCloudRoom();
 
   const query = useEpicCommentThreadsForClient({
     client: hostClient,
     epicId,
     artifactType: artifactType,
     artifactId: artifactId,
-    options: { enabled: true },
+    options: { enabled: !localCommentsUnavailable },
   });
 
   const sorted = useMemo(() => {
@@ -93,7 +106,8 @@ export function CommentSidebar(props: CommentSidebarProps) {
   // that is disabled because no host client is ready is unknown for the same
   // reason: it has never produced a snapshot.
   const isUnavailable =
-    query.data === undefined && query.fetchStatus !== "fetching";
+    localCommentsUnavailable ||
+    (query.data === undefined && query.fetchStatus !== "fetching");
 
   const handleExpandedChange = useCallback(
     (threadId: string, next: boolean) => {
@@ -134,6 +148,8 @@ export function CommentSidebar(props: CommentSidebarProps) {
         <SidebarBody
           isLoading={query.isLoading}
           isUnavailable={isUnavailable}
+          localCommentsUnavailable={localCommentsUnavailable}
+          durabilityStatus={durabilityStatus}
           sorted={sorted}
           filter={filter}
           epicId={epicId}
@@ -158,6 +174,8 @@ interface SidebarBodyProps {
    *  is unknown rather than empty. See where it is derived in
    *  {@link CommentSidebar}. */
   readonly isUnavailable: boolean;
+  readonly localCommentsUnavailable: boolean;
+  readonly durabilityStatus: EpicDurabilityStatusV15 | null;
   readonly sorted: ReadonlyArray<SortedThread>;
   readonly filter: CommentThreadStatusFilter;
   readonly epicId: string;
@@ -190,7 +208,12 @@ function SidebarBody(props: SidebarBodyProps) {
   // Ordered ahead of the empty state on purpose: both render zero threads, and
   // only one of them knows that to be true.
   if (props.isUnavailable) {
-    return <UnavailableState />;
+    return (
+      <UnavailableState
+        localCommentsUnavailable={props.localCommentsUnavailable}
+        durabilityStatus={props.durabilityStatus}
+      />
+    );
   }
   if (props.sorted.length === 0) {
     return (
@@ -257,7 +280,10 @@ function EmptyState({ filter, onPromptDraft }: EmptyStateProps) {
  * emits a `<warning>` for an unavailable artifact instead of an empty list
  * (`protocol/src/comments/comments-xml-formatting.ts`).
  */
-function UnavailableState() {
+function UnavailableState(props: {
+  readonly localCommentsUnavailable: boolean;
+  readonly durabilityStatus: EpicDurabilityStatusV15 | null;
+}) {
   return (
     <div
       data-slot="comment-sidebar-unavailable"
@@ -272,14 +298,31 @@ function UnavailableState() {
       <MessageSquareWarning className="size-6 text-muted-foreground" />
       <div className="flex flex-col gap-1">
         <p className="text-ui-sm text-muted-foreground">
-          Comments couldn't be loaded.
+          {props.localCommentsUnavailable
+            ? "Comments need a cloud room, and this epic has none."
+            : "Comments couldn't be loaded."}
         </p>
         <p className="text-ui-xs text-muted-foreground/80">
-          This doesn't mean there are none.
+          {props.localCommentsUnavailable
+            ? localBoundaryDetail(props.durabilityStatus)
+            : "This doesn't mean there are none."}
         </p>
       </div>
     </div>
   );
+}
+
+/**
+ * The condition, not a prediction.
+ *
+ * The old copy said "Comments are available after cloud sync", which promises
+ * an event that for a free-tier account never comes - the same doctrine the
+ * History pin control already adopted. These state what is true right now.
+ */
+function localBoundaryDetail(status: EpicDurabilityStatusV15 | null): string {
+  return status === "promoting"
+    ? "This epic is still uploading to the cloud."
+    : "This epic is stored on this device.";
 }
 
 function emptyMessageFor(filter: CommentThreadStatusFilter): string {

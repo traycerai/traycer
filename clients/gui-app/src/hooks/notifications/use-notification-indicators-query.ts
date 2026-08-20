@@ -1,32 +1,42 @@
 import { useMemo } from "react";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
-  mergeHostPendingForkIntoCloudIndicators,
+  mergeLocalPartitionIntoCloudIndicators,
   selectCloudNotificationIndicatorProjection,
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
 /**
- * Per-entity indicator flags for one surface, from whichever feed is
+ * Per-entity indicator flags for one surface, from whichever feeds are
  * authoritative - mirroring how the notification center itself is mode-aware.
  *
- * In cloud mode the flags come from the cloud snapshot this client already
- * holds. That is the only derivation that can be correct across hosts: an
- * entry produced on host B never enters host A's SQLite, so the host's v1
- * `indicatorState` (computed over ONE host's rows and its own `read_at`)
- * cannot light a tab bound to host A, and its read state only clears once a
- * marker has round-tripped back down to that specific host. Deriving from the
- * store the popover renders also makes the icon and the row it represents
- * incapable of disagreeing, including while the cloud is degraded.
+ * ## Mixed mode is two EXACT partitions, ORed
  *
- * Fork pending state is the exception: it is authoritative on the connected
- * host's fork notice board rather than in any feed row. The host RPC therefore
- * runs in both modes; cloud mode imports only `pendingFork` from it and keeps
- * every feed-derived bit attached to the cloud snapshot.
+ * The mode label is still `cloud`, but its inputs are two disjoint
+ * durable-home partitions: the host's `indicatorState@1.1` response under
+ * `home: "local"`, and the cloud snapshot. A foreign cloud row never enters
+ * the local origin and a local-homed row is absent from the cloud partition,
+ * so the per-flag OR neither drops a notification nor double-counts one.
+ *
+ * That disjointness is what licenses folding host feed bits in at all. Before
+ * the `home` selector the host answered over its WHOLE SQLite, where an entry
+ * produced on host B never appears - so its answer could not light a tab bound
+ * to host A, and only the host-local `pendingFork` bit was safe to import.
+ * `pendingFork` still comes from the host in both modes, but it now arrives as
+ * one flag of the partition rather than as a special case: fork truth lives on
+ * the connected host's notice board, which is part of that host's local plane.
+ *
+ * The cloud store keeps owning optimistic cloud-row reads, so its visible row
+ * and its contribution to the indicator stay coherent while a mark-read
+ * mutation is in flight.
+ *
+ * ## Local mode
+ *
+ * The whole-origin host path, for old/methodless hosts and the local-only
+ * product. Only mixed mode asks the host to restrict itself to `home: local`.
  *
  * App-local failure rows contribute in BOTH modes - they are client-side
  * state, neither host nor cloud state - and are folded in downstream by
@@ -42,17 +52,21 @@ import {
  * could light it from an unrelated chat of the same name on the connected
  * machine.
  *
- * `null` still means the app-wide active host, and it is the right answer for
- * exactly one shape of caller: one whose ids are EPIC ids, which are shared
- * cloud entities rather than host-owned ones. Callers whose chat ids span
- * several hosts cannot use this hook at all - one hook call is one host - and
- * reach for `ChatIndicatorHostScopes` instead.
+ * `null` means the NOTIFICATION host - the machine whose feed the centre
+ * renders - and it is the right answer for exactly one shape of caller: one
+ * whose ids are EPIC ids, which are shared cloud entities rather than
+ * host-owned ones. Callers whose chat ids span several hosts cannot use this
+ * hook at all - one hook call is one host - and reach for
+ * `ChatIndicatorHostScopes` instead.
  */
 export interface UseNotificationIndicatorsArgs {
-  /** The host that OWNS these ids; `null` for the app-wide active host. */
+  /** The host that OWNS these ids; `null` for the notification host. */
   readonly hostId: string | null;
   readonly epicIds: ReadonlyArray<string>;
   readonly chatIds: ReadonlyArray<string>;
+  /** Chat ids do not encode durable home; callers that select a home provide
+   * their owning epic for exact partitioning. */
+  readonly chatEpicIds?: Readonly<Record<string, string>>;
   readonly enabled: boolean;
 }
 
@@ -60,17 +74,27 @@ export function useNotificationIndicators(
   args: UseNotificationIndicatorsArgs,
 ): SurfaceNotificationIndicators {
   const feedMode = useNotificationFeedMode();
-  const isCloud = feedMode === "cloud";
-  const activeHostId = useAddressableHostId();
+  const isMixed = feedMode === "cloud";
   const hostIndicators = useHostNotificationIndicators({
     hostId: args.hostId,
     epicIds: args.epicIds,
     chatIds: args.chatIds,
+    chatEpicIds: args.chatEpicIds,
+    home: isMixed ? "local" : undefined,
     enabled: args.enabled,
   });
+  // The SAME owner as the RPC, read off the response rather than looked up
+  // again: the query resolved the host it ASKED (the caller-named owner, or
+  // the notification host for `null`), so the answer must be filed under that
+  // host. Keying it by the ACTIVE host put host A's local-only indicators in
+  // host B's `byOriginHostId` bucket whenever the two differed - host-bound
+  // consumers then hid A's approval/failure indicators and could decorate B's
+  // same-id tabs with them. Taking the id from the query instead of asking a
+  // second hook is what makes the two unable to disagree.
+  const readHostId = hostIndicators.hostId;
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   const cloudIndicators = useMemo<SurfaceNotificationIndicators>(() => {
-    if (!isCloud || !args.enabled) return EMPTY_INDICATOR_STATE_RESPONSE;
+    if (!isMixed || !args.enabled) return EMPTY_INDICATOR_STATE_RESPONSE;
     const projection = selectCloudNotificationIndicatorProjection(
       cloudRows,
       args.epicIds,
@@ -80,12 +104,9 @@ export function useNotificationIndicators(
       ...projection.aggregate,
       byOriginHostId: projection.byOriginHostId,
     };
-  }, [isCloud, args.enabled, cloudRows, args.epicIds, args.chatIds]);
-  // The origin these host rows are filed under is the host the RPC actually
-  // read - the caller-named owner when present, the active host otherwise.
-  const readHostId = args.hostId ?? activeHostId;
-  return isCloud
-    ? mergeHostPendingForkIntoCloudIndicators(
+  }, [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds]);
+  return isMixed
+    ? mergeLocalPartitionIntoCloudIndicators(
         cloudIndicators,
         hostIndicators.data,
         readHostId,

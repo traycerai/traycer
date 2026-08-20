@@ -3,7 +3,12 @@ import {
   epicSubscribeServerFrameSchema,
   type EpicArtifactRoomAvailability,
   type EpicCloudSyncStatus,
+  type EpicDurabilityPauseReasonV15,
+  type EpicDurabilityStatusV15,
+  type EpicCloudFreshness,
+  type EpicLocalProtection,
   type EpicMigrationPhase,
+  type EpicPromotionState,
   type EpicSubscribeClientFrame,
   type EpicSubscribeServerFrame,
 } from "@traycer/protocol/host/epic/subscribe";
@@ -163,7 +168,10 @@ export interface EpicStreamCallbacks {
    * renderer→host `/stream` lifecycle: the local stream can be open while
    * the host is offline from Tiptap Cloud.
    */
-  readonly onCloudSyncStatus: (status: EpicCloudSyncStatus) => void;
+  readonly onCloudSyncStatus: (
+    status: EpicCloudSyncStatus,
+    durability: EpicCloudSyncDurability,
+  ) => void;
   /**
    * Fires once when the host decides this epic needs a major migration -
    * before any `migrationProgress` tick. Drives the migration-progress modal
@@ -228,6 +236,84 @@ export interface EpicStreamClientOptions {
  * becomes a typed variant of `EpicSubscribeServerFrame` - downstream code
  * never sees the wire envelope directly.
  */
+/**
+ * The `epic.subscribe` minor that introduced `durability: "unknown"`,
+ * `localProtection`, and `freshness`. Named once here because it is the ONE
+ * fact that makes an absent leg readable, and a literal `1.5` spelled at the
+ * comparison site is a literal nobody updates when the next minor lands.
+ */
+const EPIC_SUBSCRIBE_DURABILITY_LEGS_VERSION = { major: 1, minor: 5 } as const;
+
+/**
+ * The durability half of a `cloudSyncStatus` frame, as ONE value.
+ *
+ * Grouped rather than passed as four positional arguments: `@1.5` made this
+ * four legs that are read TOGETHER (see the absence rule below), and four
+ * trailing `undefined`s at a call site is exactly how a leg ends up in the
+ * wrong slot.
+ *
+ * ABSENT MEANS UNKNOWN on every field, never "synced" and never "protected".
+ * These used to be projected down onto the frozen `@1.4` unions, so a host
+ * saying `unknown` reached the renderer as `undefined` and rendered as the
+ * calm value - the ambiguity `epic.subscribe@1.5` exists to remove.
+ */
+export type EpicCloudSyncDurability = {
+  readonly durability: EpicDurabilityStatusV15 | undefined;
+  readonly pauseReason: EpicDurabilityPauseReasonV15 | undefined;
+  readonly promotionState: EpicPromotionState | undefined;
+  /** Whether this session has local WAL protection. */
+  readonly localProtection: EpicLocalProtection | undefined;
+  /**
+   * How the served document stands relative to the cloud - `@1.5`,
+   * `s5-mirror-first-serving`.
+   *
+   * Carried in the same value as the durability legs because it is read WITH
+   * them and against them: mirror-first serving is exactly the state where
+   * "the bytes are safe here" and "this is what the cloud has" disagree, so a
+   * surface that saw one without the other would be back to guessing.
+   *
+   * `undefined` is unknown. A host that says nothing about freshness has not
+   * said the document is current.
+   */
+  readonly freshness: EpicCloudFreshness | undefined;
+  /**
+   * Whether the peer that sent this frame speaks the `@1.5` durability legs
+   * at all - carried WITH them because it is the only thing that makes their
+   * absence readable.
+   *
+   * Every `@1.5` key above is optional on the wire, and the schema's absence
+   * rule says an absent one means UNKNOWN. A renderer with only the values in
+   * hand cannot honour that: absence looks identical whether it came from a
+   * `@1.4` peer that has no opinion (render as before) or a `@1.5` peer that
+   * declined to state one (render conservatively). Probing presence to tell
+   * them apart resolves the permitted omission as "old peer", which is the
+   * silence-reads-as-reassurance inference this minor exists to break.
+   *
+   * Read off the SESSION's negotiated version, not the client-wide one: two
+   * epic streams on one client can sit on different minors after a reconnect.
+   * `false` while the handshake has not settled, which is the same
+   * conservative default a pre-handshake caller already had.
+   */
+  readonly peerSpeaksDurabilityLegs: boolean;
+};
+
+/**
+ * "The host told us nothing about durability." Exported so a test fixture
+ * states that intent once instead of spelling five `undefined`s, which is
+ * indistinguishable from having forgotten one.
+ *
+ * `peerSpeaksDurabilityLegs: false` belongs to that same statement: a peer we
+ * heard nothing from is a peer we cannot hold to the absence rule.
+ */
+export const NO_CLOUD_SYNC_DURABILITY: EpicCloudSyncDurability = {
+  durability: undefined,
+  pauseReason: undefined,
+  promotionState: undefined,
+  localProtection: undefined,
+  freshness: undefined,
+  peerSpeaksDurabilityLegs: false,
+};
+
 export class EpicStreamClient {
   private readonly session: IStreamSession;
   private readonly epicId: string;
@@ -354,6 +440,25 @@ export class EpicStreamClient {
     this.session.close();
   }
 
+  /**
+   * Whether THIS session negotiated the minor that added the durability legs.
+   *
+   * `getNegotiatedSchemaVersion()` rather than the client-wide
+   * `getMethodSchemaVersion("epic.subscribe")`: the client-wide reader reports
+   * whichever live session it reaches first, so with two epics open it can
+   * describe the other one's handshake. A `null` (handshake not settled, or
+   * dropped by a disconnect) reads as `false` - the same conservative answer a
+   * caller had before any handshake, never a floor to assume.
+   */
+  private peerSpeaksDurabilityLegs(): boolean {
+    const negotiated = this.session.getNegotiatedSchemaVersion();
+    if (negotiated === null) return false;
+    if (negotiated.major !== EPIC_SUBSCRIBE_DURABILITY_LEGS_VERSION.major) {
+      return negotiated.major > EPIC_SUBSCRIBE_DURABILITY_LEGS_VERSION.major;
+    }
+    return negotiated.minor >= EPIC_SUBSCRIBE_DURABILITY_LEGS_VERSION.minor;
+  }
+
   private handleServerFrame(
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
@@ -394,7 +499,26 @@ export class EpicStreamClient {
         return;
       }
       case "cloudSyncStatus": {
-        this.callbacks.onCloudSyncStatus(frame.status);
+        this.callbacks.onCloudSyncStatus(
+          frame.status,
+          // Passed through at their `@1.5` width now that the renderer half of
+          // the s5 status pass exists. The projection that used to sit here
+          // narrowed `durability: "unknown"` to `undefined`, which handed the
+          // renderer exactly the ambiguity this minor was added to remove.
+          //
+          // The frame is already validated against the negotiated contract
+          // upstream, so a value that reaches here is one this line speaks.
+          {
+            durability: frame.durability,
+            pauseReason: frame.pauseReason,
+            promotionState:
+              "promotionState" in frame ? frame.promotionState : undefined,
+            localProtection:
+              "localProtection" in frame ? frame.localProtection : undefined,
+            freshness: "freshness" in frame ? frame.freshness : undefined,
+            peerSpeaksDurabilityLegs: this.peerSpeaksDurabilityLegs(),
+          },
+        );
         return;
       }
       case "epicDeleted": {

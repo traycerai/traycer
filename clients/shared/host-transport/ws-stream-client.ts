@@ -214,6 +214,23 @@ export class WsStreamClient<
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
   private readonly methodSupport = new Map<string, StreamMethodSupport>();
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
+  /**
+   * What a subscribe on each method WOULD negotiate, derived from the peer's
+   * process manifest at any session's handshake - the version half of the
+   * cacheable pre-check {@link getMethodSupport} already provides, and the
+   * only evidence available for a method no session has opened yet.
+   *
+   * `methodSchemaVersions` above cannot answer that: it is rebuilt purely from
+   * LIVE sessions, so it stays empty for every method this client has not
+   * subscribed to. Two documented pre-checks read through it and were dead in
+   * exactly that state - `useGlobalResourcesPreCheckUnsupported`, whose whole
+   * premise is "the verdict available BEFORE any global stream is opened", and
+   * the notification feed mode, which gated OPENING the cloud feed on a
+   * version only that feed's own open session could have published. The second
+   * was a deadlock: the mode could never leave `local`, so the cloud stream
+   * never opened, so the version never arrived.
+   */
+  private readonly manifestSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private readonly closedListeners = new Set<() => void>();
   /**
@@ -412,10 +429,21 @@ export class WsStreamClient<
     return this.methodSupport.get(method) ?? "unknown";
   }
 
+  /**
+   * A LIVE session's negotiated version wins; otherwise the version the
+   * peer's manifest says a subscribe would settle on. The order matters and
+   * is not a preference: an open session has already declared a version on
+   * the wire, and the manifest cache is a prediction of that same value - so
+   * only where there is nothing live to report does the prediction speak.
+   */
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,
   ): SchemaVersion | null {
-    return this.methodSchemaVersions.get(method) ?? null;
+    return (
+      this.methodSchemaVersions.get(method) ??
+      this.manifestSchemaVersions.get(method) ??
+      null
+    );
   }
 
   subscribeMethodSupport(listener: () => void): () => void {
@@ -670,6 +698,18 @@ export class WsStreamClient<
       if (method === subscribedMethod) {
         changed =
           this.updateMethodSupport(method, subscribedMethodSupport) || changed;
+        // The subscribing session publishes its own negotiated version, which
+        // is the real thing rather than a prediction of it. Recording the
+        // prediction too keeps the entry alive across that session's disposal,
+        // when the live map drops back to nothing but the peer's manifest is
+        // still just as true as it was a moment earlier.
+        changed =
+          this.recordManifestSchemaVersion(
+            method,
+            myManifest,
+            theirManifest,
+            true,
+          ) || changed;
         continue;
       }
       const compat = checkStreamMethodCompatibility(
@@ -684,10 +724,52 @@ export class WsStreamClient<
           method,
           compat.ok ? "supported" : "unsupported",
         ) || changed;
+      changed =
+        this.recordManifestSchemaVersion(
+          method,
+          myManifest,
+          theirManifest,
+          compat.ok,
+        ) || changed;
     }
     if (changed) {
       this.notifyMethodSupportListeners();
     }
+  }
+
+  /**
+   * Caches what a subscribe on `method` would put on the wire, from the peer's
+   * manifest alone.
+   *
+   * `bridgeable` is `checkStreamMethodCompatibility`'s verdict, and gating on
+   * it is what makes the arithmetic below exact rather than approximate: it is
+   * the proof that the majors match and that the older side's minor has a
+   * contract in the registry, which is the precondition
+   * {@link prepareStreamSubscribeRequest} is written against. An unbridgeable
+   * method has no version a subscribe could declare, so it caches none.
+   */
+  private recordManifestSchemaVersion(
+    method: string,
+    myManifest: ConnectionManifest,
+    theirManifest: ConnectionManifest,
+    bridgeable: boolean,
+  ): boolean {
+    const previous = this.manifestSchemaVersions.get(method) ?? null;
+    const next = bridgeable
+      ? predictedSubscribeSchemaVersion(
+          myManifest[method] ?? null,
+          theirManifest[method] ?? null,
+        )
+      : null;
+    if (previous?.major === next?.major && previous?.minor === next?.minor) {
+      return false;
+    }
+    if (next === null) {
+      this.manifestSchemaVersions.delete(method);
+      return true;
+    }
+    this.manifestSchemaVersions.set(method, next);
+    return true;
   }
 
   private updateMethodSupportFromManifest(
@@ -713,10 +795,16 @@ export class WsStreamClient<
     // routing while this session negotiates again.
     const versionChanged =
       this.reconcileMethodSchemaVersion(reconnectingMethod);
-    if (!hadMethodSupport && !versionChanged) {
+    // The manifest predictions are derived from the SAME evidence
+    // `methodSupport` is, so they are re-probed on the same terms: a new
+    // incarnation may answer a different set of methods at different minors,
+    // and a stale prediction is worse than none because it reads as learned.
+    const hadManifestVersions = this.manifestSchemaVersions.size > 0;
+    if (!hadMethodSupport && !versionChanged && !hadManifestVersions) {
       return;
     }
     this.methodSupport.clear();
+    this.manifestSchemaVersions.clear();
     this.notifyMethodSupportListeners();
   }
 
@@ -2117,6 +2205,29 @@ class StreamSession<
 interface PreparedStreamSubscribeRequest {
   readonly onWireVersion: SchemaVersion;
   readonly onWirePayload: unknown;
+}
+
+/**
+ * The version {@link prepareStreamSubscribeRequest} would declare, without the
+ * payload transform - the whole of what a manifest can predict about a
+ * subscribe that has not happened.
+ *
+ * The rule is copied deliberately rather than shared through that function:
+ * the transform half needs a live `params` value, which is precisely what a
+ * pre-check does not have. Both sides encode the framework's asymmetric
+ * contract - the older side never transforms, so the newer side declares the
+ * older minor - and must move together.
+ *
+ * `null` when either side does not carry the method at all, or across a major
+ * skew, which streams have no bridge for.
+ */
+function predictedSubscribeSchemaVersion(
+  mine: SchemaVersion | null,
+  theirs: SchemaVersion | null,
+): SchemaVersion | null {
+  if (mine === null || theirs === null) return null;
+  if (mine.major !== theirs.major) return null;
+  return mine.minor <= theirs.minor ? mine : theirs;
 }
 
 /**

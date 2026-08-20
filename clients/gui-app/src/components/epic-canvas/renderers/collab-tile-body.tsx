@@ -33,6 +33,7 @@ import {
   useEpicArtifactBodyAvailability,
   useEpicArtifactBodyAwareness,
   useEpicArtifactFragment,
+  useEpicCommentsHaveNoCloudRoom,
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
   useOpenEpicId,
@@ -46,6 +47,7 @@ import {
   useDraftRange,
   useFlashThread,
   useHoverThreadId,
+  type DraftRange,
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
@@ -224,6 +226,42 @@ function CollabTileSkeleton(props: {
   );
 }
 
+/**
+ * The empty-doc authoring placeholder ("Describe what you want to build…").
+ * A container (any artifact with children) renders its child index below the
+ * body, so the placeholder both fights that index and prompts the wrong
+ * thing - suppressed when children exist; the body stays editable for an
+ * optional overview.
+ */
+function bodyPlaceholderText(
+  nodeType: CollabTileBodyEditorProps["node"]["type"],
+  hasChildren: boolean,
+): string {
+  if (hasChildren) return "";
+  return isEpicArtifactKind(nodeType)
+    ? EPIC_NODE_PLACEHOLDER_TEXT[nodeType]
+    : "Start writing…";
+}
+
+/**
+ * The draft selection range, only when THIS tile's artifact owns it - a
+ * sibling pane's draft in the same Epic must not decorate this editor.
+ */
+function draftRangeOwnedByTile(
+  draft: DraftRange | null,
+  tileId: string,
+  artifactId: string,
+): { readonly from: number; readonly to: number } | null {
+  if (
+    draft === null ||
+    draft.tileId !== tileId ||
+    draft.artifactId !== artifactId
+  ) {
+    return null;
+  }
+  return { from: draft.from, to: draft.to };
+}
+
 function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const {
     node,
@@ -260,9 +298,19 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     [profile],
   );
 
-  // Comments wiring - chat tiles get `null` and the toolbar / shortcut
-  // surfaces simply don't render; everything else opts in.
-  const commentsSupported = commentArtifactKind !== null;
+  // Local artifact rooms deliberately have no comment-thread provider. Do not
+  // let a person invest a draft in an action that the host can only reject as
+  // `no_active_session`; the comments panel explains this boundary directly.
+  //
+  // `commentsHaveNoCloudRoom`, not `!== "local"`: the reserved-but-pre-cutover
+  // `promoting` window has the same null provider and used to slip through.
+  //
+  // The STICKY hook rather than the bare predicate: a stream reconnect clears
+  // the store's durability slots, and for the few frames before the
+  // replacement arrives the raw answer flips to "comments are fine" on an epic
+  // that has no room - long enough to start a draft the restored gate wipes.
+  const noCloudRoom = useEpicCommentsHaveNoCloudRoom();
+  const commentsSupported = commentArtifactKind !== null && !noCloudRoom;
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const activeThreadId = useActiveThreadId(epicId);
@@ -287,6 +335,9 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const revealCommentsPanel = useLeftPanelStore((s) => s.revealCommentsPanel);
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
+  useEffect(() => {
+    if (noCloudRoom) setDraft(epicId, null);
+  }, [noCloudRoom, epicId, setDraft]);
   const resolvedThreadIds = useMemo(
     () =>
       (threadsQuery.data?.threads ?? []).reduce(
@@ -308,10 +359,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     [threadsQuery.data],
   );
   const ownedDraftRange = useMemo(
-    () =>
-      draft !== null && draft.tileId === tileId && draft.artifactId === node.id
-        ? { from: draft.from, to: draft.to }
-        : null,
+    () => draftRangeOwnedByTile(draft, tileId, node.id),
     [draft, tileId, node.id],
   );
 
@@ -332,14 +380,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       ).started;
   }, [commentsSupported, epicId, viewTabId, tileId, node.id, setDraft]);
 
-  // A container (any artifact with children) renders its child index below the
-  // body, so the empty-doc authoring placeholder ("Describe what you want to
-  // build…") both fights that index and prompts the wrong thing. Suppress it
-  // when children exist; the body stays editable for an optional overview.
   const hasChildren = useChildIdsOf(node.id).length > 0;
-  const kindPlaceholder = isEpicArtifactKind(node.type)
-    ? EPIC_NODE_PLACEHOLDER_TEXT[node.type]
-    : "Start writing…";
   const editor = useCollabTileEditor({
     doc,
     fragment,
@@ -348,7 +389,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     user,
     onCommentShortcut,
     anchorScope: commentsSupported ? { epicId, artifactId: node.id } : null,
-    placeholderText: hasChildren ? "" : kindPlaceholder,
+    placeholderText: bodyPlaceholderText(node.type, hasChildren),
     titlePlaceholderText: ARTIFACT_TITLE_PLACEHOLDER,
   });
   const artifactImagePaste = useArtifactImagePaste(editor, epicId, node.id);
@@ -594,7 +635,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             />
           ) : null}
         </div>
-        {editor !== null && commentArtifactKind !== null ? (
+        {editor !== null && commentsSupported ? (
           <>
             <FloatingDraftPopover
               epicId={epicId}

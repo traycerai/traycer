@@ -83,9 +83,12 @@ describe("combineTaskPinnedStateResults", () => {
       { data: undefined },
     ]);
 
+    // The map holds `TaskPinnedState`, not a bare boolean: `home` rides along
+    // so a row can disable its cloud-only pin action without a second lookup.
+    // No local-home set is supplied here, so `home` is absent for both.
     expect([...pinnedStates.entries()]).toEqual([
-      ["epic-a", true],
-      ["epic-b", false],
+      ["epic-a", { pinned: true, home: undefined }],
+      ["epic-b", { pinned: false, home: undefined }],
     ]);
   });
 });

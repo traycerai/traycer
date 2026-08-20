@@ -774,6 +774,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         .sort(),
     [tree, filterVisibleIds],
   );
+  // Every chat in this tree belongs to THIS epic, and mixed mode's host leg
+  // asks for the `home: local` partition per chat - which the host can only
+  // resolve with the chat's owning epic. Without the map those chats fall out
+  // of the local partition and their indicators silently read as clear.
+  const indicatorChatEpicIds = useMemo(
+    () =>
+      Object.fromEntries(indicatorChatIds.map((chatId) => [chatId, epicId])),
+    [indicatorChatIds, epicId],
+  );
   const epicSessionHostId = useEpicSessionHostId();
   const notificationIndicators = useNotificationIndicators({
     // The chats in this tree are THIS Epic session's, and the session's host is
@@ -785,6 +794,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     hostId: epicSessionHostId,
     epicIds: [],
     chatIds: indicatorChatIds,
+    chatEpicIds: indicatorChatEpicIds,
     enabled: indicatorChatIds.length > 0,
   });
   const openTileContentIds = useOpenTileContentIds(tabId);

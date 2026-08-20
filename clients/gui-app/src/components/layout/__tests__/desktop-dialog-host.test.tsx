@@ -448,6 +448,7 @@ function createDirtyEpicHandle(
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
     hasDirtySnapshotForOpenCycle: true,
+    durabilityLegsNegotiated: false,
     snapshotMeta: null,
     permissionRole: null,
     connectionStatus: "open",

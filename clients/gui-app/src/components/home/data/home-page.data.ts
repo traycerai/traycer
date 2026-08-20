@@ -1,6 +1,8 @@
 import type {
   PermissionRole,
   ListTaskLight,
+  ListTaskLightV13,
+  ListTaskLightV14,
   TaskOwnershipScope,
   TaskWorkspaceIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -49,6 +51,18 @@ export interface HistoryItem {
   ownership: HistoryOwnershipScope;
   permissionRole: PermissionRole | null;
   isPinned: boolean;
+  /** True only for a host-synthesized local-home task row. Missing legacy
+   *  fixtures and callers are cloud-backed. */
+  isLocalHome?: boolean;
+  /**
+   * True for a cloud-homed epic the host re-admitted to discovery because its
+   * delete was refused to protect never-uploaded bytes
+   * (`s5-orphaned-epic-recovery`). The server no longer lists this epic at
+   * all, so without the marker the row would read as an ordinary task and the
+   * one thing the user needs to know about it - that the cloud copy is gone
+   * and only this device's edits remain - would be invisible again.
+   */
+  isPreservedOrphan?: boolean;
 }
 
 export interface HistoryFilters {
@@ -71,10 +85,51 @@ const HISTORY_GROUP_LABELS: Record<HistoryRecencyBucket, string> = {
   earlier: "Earlier",
 };
 
+/** "No host-supplied home markers" - stated once so a call site cannot be
+ * read as having forgotten the argument. */
+export const EMPTY_LOCAL_HOMED_TASK_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * `localHomedTaskIds` is a REQUIRED argument, not an optional one: the two
+ * response shapes that feed this projection carry the home marker in two
+ * different places. `epic.listTasks@1.3` puts `home` on the row; a `z.record`
+ * forced `epic.getTaskContexts@1.2` to put it in a sibling id list instead.
+ * A caller with the sibling in hand and no parameter to pass it through
+ * silently projects every context row as cloud-backed, which is exactly what
+ * happened to worktree/branch/PR search hits. Callers with no id list pass
+ * `EMPTY_LOCAL_HOMED_TASK_IDS` and say so.
+ */
+/**
+ * Local home, from EITHER carrier.
+ *
+ * `epic.listTasks@1.3` puts `home` on the row; `epic.getTaskContexts@1.2` had
+ * to put it in a response-level sibling list, because its `tasks` is a
+ * `z.record` whose value schema the additivity gate treats as opaque. A row
+ * reached through the second path carries no `home` at all, so checking only
+ * the row would read every context-only search hit as cloud-backed.
+ */
+function isLocalHomedRow(
+  task: ListTaskLight | ListTaskLightV13 | ListTaskLightV14,
+  epicId: string,
+  localHomedTaskIds: ReadonlySet<string>,
+): boolean {
+  if ("home" in task && task.home === "local") return true;
+  return localHomedTaskIds.has(epicId);
+}
+
+/** `@1.4`'s row-level preservation marker: the cloud task is already deleted
+ * and the row exists only so this device's edits stay reachable. */
+function isPreservedOrphanRow(
+  task: ListTaskLight | ListTaskLightV13 | ListTaskLightV14,
+): boolean {
+  return "preservation" in task && task.preservation === "orphaned-local-edits";
+}
+
 export function buildHistoryItemsFromTasks(
-  tasks: ReadonlyArray<ListTaskLight>,
+  tasks: ReadonlyArray<ListTaskLight | ListTaskLightV13 | ListTaskLightV14>,
   nowMs: number,
   userId: string | null,
+  localHomedTaskIds: ReadonlySet<string>,
 ): ReadonlyArray<HistoryItem> {
   return tasks.flatMap((task, index): HistoryItem[] => {
     const epic = task.epic?.light;
@@ -90,6 +145,8 @@ export function buildHistoryItemsFromTasks(
           nowMs,
           role: task.epic?.permission?.role ?? null,
           isPinned: task.pinned ?? false,
+          isLocalHome: isLocalHomedRow(task, epic.id, localHomedTaskIds),
+          isPreservedOrphan: isPreservedOrphanRow(task),
         }),
       ];
     }
@@ -111,6 +168,8 @@ export function buildHistoryItemsFromTasks(
         nowMs,
         role: task.phase?.permission?.role ?? null,
         isPinned: false,
+        isLocalHome: false,
+        isPreservedOrphan: false,
       }),
     ];
   });
@@ -126,6 +185,8 @@ function buildHistoryItem(args: {
   nowMs: number;
   role: PermissionRole | null;
   isPinned: boolean;
+  isLocalHome: boolean;
+  isPreservedOrphan: boolean;
 }): HistoryItem {
   const {
     light,
@@ -137,6 +198,8 @@ function buildHistoryItem(args: {
     nowMs,
     role,
     isPinned,
+    isLocalHome,
+    isPreservedOrphan,
   } = args;
   const ownership = light.createdBy === userId ? "mine" : "shared";
   return {
@@ -162,6 +225,8 @@ function buildHistoryItem(args: {
     ownership,
     permissionRole: historyPermissionRole(ownership, role),
     isPinned,
+    isLocalHome,
+    isPreservedOrphan,
   };
 }
 

@@ -62,6 +62,18 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => mockLocalHostEntry.hostId,
 }));
 
+// The indicator query binds to the NOTIFICATION host rather than the app-wide
+// active one, so mocking the active-host hooks alone leaves it with a null
+// client and the query never leaves `isPending`. See `use-notification-host`
+// on why the two must not be allowed to diverge here.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationHostId: () => mockLocalHostEntry.hostId,
+  useNotificationHost: () => ({
+    hostId: mockLocalHostEntry.hostId,
+    client: requireHostClient(),
+  }),
+}));
+
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));

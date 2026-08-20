@@ -111,6 +111,13 @@ type ListHarnessesResponse = ResponseOfMethod<
   HostRpcRegistry,
   "agent.gui.listHarnesses"
 >;
+type ListTasksResponse = ResponseOfMethod<HostRpcRegistry, "epic.listTasks">;
+type ListTasksRequest = RequestOfMethod<HostRpcRegistry, "epic.listTasks">;
+
+const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
+  tasks: [],
+  hasMore: false,
+};
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -124,6 +131,9 @@ interface StartupConsumersOptions {
   ) => Promise<GetTaskContextsResponse> | GetTaskContextsResponse;
   readonly listHarnesses: () =>
     Promise<ListHarnessesResponse> | ListHarnessesResponse;
+  readonly listTasks?: (
+    params: ListTasksRequest,
+  ) => Promise<ListTasksResponse> | ListTasksResponse;
   readonly onMethod: (method: string) => void;
 }
 
@@ -165,6 +175,7 @@ function buildQueryClient(): QueryClient {
 function buildMessengerFactory(
   options: StartupConsumersOptions,
 ): MessengerFactory<HostRpcRegistry> {
+  const listTasks = options.listTasks ?? (() => EMPTY_LIST_TASKS_RESPONSE);
   return (args) =>
     new MockHostMessenger<HostRpcRegistry>({
       registry: args.registry,
@@ -181,6 +192,10 @@ function buildMessengerFactory(
         "agent.gui.listHarnesses": () => {
           options.onMethod("agent.gui.listHarnesses");
           return options.listHarnesses();
+        },
+        "epic.listTasks": (params) => {
+          options.onMethod("epic.listTasks");
+          return listTasks(params);
         },
       },
     });

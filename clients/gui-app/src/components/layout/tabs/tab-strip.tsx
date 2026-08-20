@@ -49,7 +49,11 @@ import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
-import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import {
+  useEpicTaskPinnedStates,
+  type TaskPinnedState,
+} from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useLiveChatEpicIdsForEpics } from "@/lib/registries/epic-session-registry";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -83,12 +87,22 @@ function TabStripBody() {
     () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
     [allTabs],
   );
+  const indicatorChatEpicIds = useLiveChatEpicIdsForEpics(indicatorEpicIds);
+  const indicatorChatIds = useMemo(
+    () => Object.keys(indicatorChatEpicIds),
+    [indicatorChatEpicIds],
+  );
   const notificationIndicators = useNotificationIndicators({
-    // Epic ids only, so the app-wide active host is the right one to ask: an
-    // Epic is a shared cloud entity, not a host-owned record.
+    // Epic ids only, so the notification host is the right one to ask: an
+    // Epic is a shared cloud entity, not a host-owned record, and the strip's
+    // lights should agree with the feed the notification centre renders.
     hostId: null,
     epicIds: indicatorEpicIds,
-    chatIds: [],
+    chatIds: indicatorChatIds,
+    // The live chats' owning epics, so mixed mode's `home: local` partition
+    // can classify each chat id by durable home - without the map those chats
+    // fall out of the partition and their contribution reads as clear.
+    chatEpicIds: indicatorChatEpicIds,
     enabled: indicatorEpicIds.length > 0,
   });
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
@@ -327,7 +341,7 @@ interface HeaderStripItemRendererProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -419,7 +433,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -453,7 +467,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       onOpenInNewWindow={props.onOpenInNewWindow}
       canOpenInNewWindow={props.canOpenInNewWindow}
       onSplitCommand={props.onSplitCommand}
-      taskPinned={
+      taskPinnedState={
         props.tab.kind === "epic"
           ? (props.taskPinnedStates.get(props.tab.epicId) ?? null)
           : null

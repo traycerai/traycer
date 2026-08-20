@@ -2,9 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
-import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   Analytics,
   AnalyticsEvent,
@@ -12,7 +10,10 @@ import {
 } from "@/lib/analytics";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import {
+  useNotificationHost,
+  useNotificationHostId,
+} from "@/hooks/notifications/use-notification-host";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
@@ -30,7 +31,6 @@ import {
 } from "@/lib/notifications/notification-category";
 import {
   classifyNotificationLifecycle,
-  compareAttentionOrder,
   compareFeedIdAscending,
   type NotificationAttentionTier,
 } from "@/lib/notifications/notification-lifecycle";
@@ -82,6 +82,7 @@ import {
   type HostNotificationsCloudFeedClearAllRequest,
   type HostNotificationsClearAllRequest,
   type HostNotificationsEntityRef,
+  HOST_NOTIFICATIONS_HOME_ORDER,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
@@ -90,6 +91,7 @@ import {
   parseProviderPackNotificationAttribution,
   providerPackViewingLocalityFromShell,
   type ProviderPackNotificationAttribution,
+  type ProviderPackViewingLocalityContext,
 } from "@/lib/notifications/provider-pack-notification-attribution";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -226,7 +228,10 @@ export function mergedUnreadCount(input: {
  * from without recomputing their own source subscriptions. */
 function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
-  const activeHostId = useAddressableHostId();
+  // The host that SERVED these rows, not whichever host is app-wide active -
+  // `originHostId` routes activation and names the machine in the row, so the
+  // active host's id here sent a local row's click to a different machine.
+  const notificationHostId = useNotificationHostId();
   const hostIds = useHostNotificationIds();
   const appLocalIds = useAppLocalNotificationIds();
   const globalIds = useNotificationEntryIds();
@@ -242,22 +247,32 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
       .map((id) => globalEntriesById.get(id))
       .filter((entry): entry is NotificationEntry => entry !== undefined);
     if (feedMode === "cloud") {
-      const rows: MergedNotificationRow[] = [
-        ...Object.values(cloudRows)
-          .filter(
-            (row): row is HostNotificationsCloudFeedRow => row !== undefined,
-          )
-          .map(rowFromCloudFeedRow),
+      // The host and cloud projections are ordered lanes, not two clocks.
+      // `updatedAt` has distinct semantics in each plane, so only compare
+      // timestamps inside one lane and concatenate them in protocol order.
+      // App-local failure rows and global notices are this machine's
+      // client-side state - no host or cloud feed can reproduce them - so
+      // they ride in the LOCAL lane beside the `home: local` partition rows.
+      const localRows = [
+        ...hostIds.map((id) =>
+          rowFromHostEntryForOrigin(hostById[id], notificationHostId),
+        ),
         ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
       ];
-      rows.sort(compareFeedCandidates);
-      return rows;
+      localRows.sort(compareFeedCandidates);
+      const remoteRows = Object.values(cloudRows)
+        .filter(
+          (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+        )
+        .map(rowFromCloudFeedRow);
+      remoteRows.sort(compareFeedCandidates);
+      return [...localRows, ...remoteRows];
     }
     if (feedMode === "upgrade-required") return [];
     const rows: MergedNotificationRow[] = [
       ...hostIds.map((id) =>
-        rowFromHostEntryForOrigin(hostById[id], activeHostId),
+        rowFromHostEntryForOrigin(hostById[id], notificationHostId),
       ),
       ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
       ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
@@ -273,7 +288,7 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
     appLocalById,
     globalIds,
     globalEntries,
-    activeHostId,
+    notificationHostId,
   ]);
 }
 
@@ -341,30 +356,60 @@ export function useAttentionNotificationIds(): ReadonlyArray<string> {
         } => entry.classification.section === "attention",
       )
       .map(({ row, classification }) => ({ row, tier: classification.tier }));
-    attentionRows.sort((a, b) => {
-      const tierOrder = compareAttentionOrder(
-        { tier: a.tier, createdAt: a.row.createdAt, feedId: a.row.feedId },
-        { tier: b.tier, createdAt: b.row.createdAt, feedId: b.row.feedId },
-      );
-      // Only re-order by machine when attention tier is equal — never
-      // promote a failure over a blocking remote row.
-      if (a.tier !== b.tier) return tierOrder;
-      return compareProviderPackLocalFirst(
-        {
-          attribution: a.row.providerPackAttribution,
-          createdAt: a.row.createdAt,
-          feedId: a.row.feedId,
-        },
-        {
-          attribution: b.row.providerPackAttribution,
-          createdAt: b.row.createdAt,
-          feedId: b.row.feedId,
-        },
-        viewing,
-      );
-    });
+    attentionRows.sort((a, b) =>
+      comparePartitionedAttentionOrder(a, b, viewing),
+    );
     return attentionRows.map((entry) => entry.row.feedId);
   }, [rows, hasLocalHost, localHostId]);
+}
+
+/**
+ * Attention retains its severity tiers across planes, but once two rows share
+ * a tier their plane is the protocol ordering key. This deliberately never
+ * compares a local `updatedAt` to a cloud relay timestamp.
+ *
+ * Inside one plane, this machine's pack-store rows lead the ones it only heard
+ * about (D7). `compareProviderPackLocalFirst` carries the same newest-first
+ * then `feedId` tail `compareFeedCandidates` does, so the locality key is the
+ * only thing it adds below the plane.
+ */
+function comparePartitionedAttentionOrder(
+  left: AttentionOrderEntry,
+  right: AttentionOrderEntry,
+  viewing: ProviderPackViewingLocalityContext,
+): number {
+  if (left.tier !== right.tier) {
+    return left.tier === "blocking" ? -1 : 1;
+  }
+  const planeDelta =
+    notificationPlaneOrder(left.row) - notificationPlaneOrder(right.row);
+  if (planeDelta !== 0) return planeDelta;
+  return compareProviderPackLocalFirst(
+    {
+      attribution: left.row.providerPackAttribution,
+      createdAt: left.row.createdAt,
+      feedId: left.row.feedId,
+    },
+    {
+      attribution: right.row.providerPackAttribution,
+      createdAt: right.row.createdAt,
+      feedId: right.row.feedId,
+    },
+    viewing,
+  );
+}
+
+/**
+ * Lane order, DERIVED from the wire contract rather than restated here.
+ *
+ * The host lane is the protocol's `"local"` home. Keeping local numeric
+ * literals meant a change to the wire-level order would leave the GUI
+ * silently disagreeing with the summaries, cursors and other clients that do
+ * follow `HOST_NOTIFICATIONS_HOME_ORDER`.
+ */
+function notificationPlaneOrder(row: MergedNotificationRow): number {
+  const home = row.source === "cloud" ? "cloud" : "local";
+  return HOST_NOTIFICATIONS_HOME_ORDER.indexOf(home);
 }
 
 /** Every non-attention row, chronological, filtered by the open-session
@@ -387,8 +432,16 @@ export function useRecentNotificationIds(): ReadonlyArray<string> {
       .filter((row) => classifyNotificationLifecycle(row).section === "recent")
       .filter((row) => categories.has(row.category))
       .filter((row) => !unreadOnly || row.readAt === null)
-      .sort((a, b) =>
-        compareProviderPackLocalFirst(
+      .sort((a, b) => {
+        // Plane FIRST, exactly as the Attention projection orders: the two
+        // lanes carry clocks with different semantics, so a cloud relay
+        // timestamp must never be compared against a local `createdAt` -
+        // protocol order decides between lanes, the comparator below decides
+        // within one.
+        const planeDelta =
+          notificationPlaneOrder(a) - notificationPlaneOrder(b);
+        if (planeDelta !== 0) return planeDelta;
+        return compareProviderPackLocalFirst(
           {
             attribution: a.providerPackAttribution,
             createdAt: a.createdAt,
@@ -400,8 +453,8 @@ export function useRecentNotificationIds(): ReadonlyArray<string> {
             feedId: b.feedId,
           },
           viewing,
-        ),
-      )
+        );
+      })
       .map((row) => row.feedId);
   }, [rows, unreadOnly, categories, hasLocalHost, localHostId]);
 }
@@ -414,18 +467,22 @@ function rowFromLocalFeedId(input: {
   readonly globalEntry: NotificationEntry | null;
   readonly hostOriginId: string | null;
 }): MergedNotificationRow | null {
+  // Mode gates ONCE, at the top: every local-plane source renders in both
+  // real modes now - host rows as the mixed feed's `home: local` partition,
+  // app-local and global rows because no host or cloud feed can reproduce
+  // them - so the only mode with nothing to say is upgrade-required.
+  if (input.feedMode === "upgrade-required") return null;
   switch (input.parsed.source) {
     case "host":
-      return input.feedMode !== "local" || input.hostEntry === null
+      return input.hostEntry === null
         ? null
         : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
     case "app-local":
-      return input.feedMode === "upgrade-required" ||
-        input.appLocalEntry === null
+      return input.appLocalEntry === null
         ? null
         : rowFromAppLocalEntry(input.appLocalEntry);
     case "global":
-      return input.feedMode === "upgrade-required" || input.globalEntry === null
+      return input.globalEntry === null
         ? null
         : rowFromGlobalEntry(input.globalEntry);
     case "cloud":
@@ -445,7 +502,7 @@ export function useMergedNotificationRow(
   feedId: string,
 ): MergedNotificationRow | null {
   const feedMode = useNotificationFeedMode();
-  const activeHostId = useAddressableHostId();
+  const notificationHostId = useNotificationHostId();
   const parsed = parseFeedId(feedId);
   const hostEntry = useHostNotificationById(
     parsed?.source === "host" ? parsed.sourceId : "",
@@ -467,18 +524,22 @@ export function useMergedNotificationRow(
     hostEntry,
     appLocalEntry,
     globalEntry,
-    hostOriginId: activeHostId,
+    hostOriginId: notificationHostId,
   });
 }
 
 export function useMergedNotificationUnreadCount(): number {
   const feedMode = useNotificationFeedMode();
   const hostUnread = useHostNotificationUnreadCount();
+  const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
-    return (cloudSummary?.unreadCount ?? 0) + appLocalUnread + globalUnread;
+    if (hostSummary === null || cloudSummary === null) return 0;
+    return (
+      hostUnread + cloudSummary.unreadCount + appLocalUnread + globalUnread
+    );
   }
   if (feedMode === "upgrade-required") return 0;
   return mergedUnreadCount({
@@ -501,12 +562,21 @@ export type NotificationBellState =
  * number, per the "never present a stale/understated count as exact"
  * invariant.
  *
- * `unknown` renders identically to `clear` (no dot, plain bell) - a bare gray
- * dot with no path forward was confusing whether the cause was "still
- * connecting" or "this host will never support notifications". It stays a
- * distinct kind rather than folding into `clear` outright because analytics
- * still needs to bucket "confirmed zero" separately from "we don't know" (see
- * the open-lifecycle tracking in `notifications-bell.tsx`).
+ * `unknown` RENDERS DISTINGUISHABLY from `clear` - `s5-parity-gaps` gap 3,
+ * and `s5-status-truthfulness`'s class rule.
+ *
+ * It used to render identically: no dot, plain bell. The reasoning was that a
+ * bare gray dot with no path forward was confusing about whether the cause was
+ * "still connecting" or "this host will never support notifications" - a real
+ * objection, and the wrong conclusion. The modern free tier selects
+ * mixed/cloud mode, where an unavailable cloud summary drives this straight to
+ * `unknown`, so the case is the STEADY STATE for those users rather than a
+ * connecting blip. Rendered as `clear` it is a positive claim that nothing is
+ * waiting, made by a UI that does not know.
+ *
+ * The confusion objection is answered where it actually belongs - in the
+ * indicator's own affordance (a muted outline dot with an explanatory label)
+ * rather than by suppressing the state.
  */
 export function useNotificationBellState(): NotificationBellState {
   const feedMode = useNotificationFeedMode();
@@ -518,12 +588,19 @@ export function useNotificationBellState(): NotificationBellState {
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
   if (feedMode === "cloud") {
-    if (cloudSummary === null) return { kind: "unknown" };
-    const attention = cloudSummary.attentionCount + appLocalUnread;
+    if (hostSummary === null || cloudSummary === null) {
+      return { kind: "unknown" };
+    }
+    const attention =
+      hostSummary.attentionCount + cloudSummary.attentionCount + appLocalUnread;
     if (attention > 0) {
       return { kind: "attention", count: attention };
     }
-    return cloudSummary.unreadCount + appLocalUnread + globalUnread > 0
+    return hostSummary.unreadCount +
+      cloudSummary.unreadCount +
+      appLocalUnread +
+      globalUnread >
+      0
       ? { kind: "quietDot" }
       : { kind: "clear" };
   }
@@ -540,13 +617,15 @@ export function useNotificationBellState(): NotificationBellState {
 }
 
 /** Screen-reader label matching the visual bell state exactly - never a bare
- * count with no state context. `unknown` shares `clear`'s label since both
- * render the same plain bell with no indicator. */
+ * count with no state context. `unknown` has its OWN label now: it renders its
+ * own indicator, and a screen-reader user hearing "Notifications" for a state
+ * that visibly differs is the same false-clear one layer down. */
 export function notificationBellAccessibleLabel(
   state: NotificationBellState,
 ): string {
   switch (state.kind) {
     case "unknown":
+      return "Notifications, status unavailable";
     case "clear":
       return "Notifications";
     case "quietDot":
@@ -569,35 +648,33 @@ export interface NotificationCenterHostState {
 
 /** Active-host subtitle/partial-state selector for the center header. */
 export function useNotificationCenterHostState(): NotificationCenterHostState {
-  const activeHostId = useAddressableHostId();
-  const hostEntry = useHostDirectoryEntry(activeHostId ?? "");
+  const notificationHostId = useNotificationHostId();
+  const hostEntry = useHostDirectoryEntry(notificationHostId ?? "");
   const feedMode = useNotificationFeedMode();
   const localSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  // The cloud relay is the complete authority once the host confirms support.
-  // The v1 replica is intentionally discarded at the mode boundary, so using
-  // its null summary here would make an exact cloud feed look perpetually cold.
+  // In mixed mode BOTH summaries are exact partitions. A null in either lane
+  // makes the unified center partial rather than pretending the other lane is
+  // complete truth.
   const summary = feedMode === "cloud" ? cloudSummary : localSummary;
   return {
     hostLabel: hostEntry?.label ?? null,
-    isPartial: activeHostId === null || summary === null,
+    isPartial:
+      notificationHostId === null ||
+      summary === null ||
+      (feedMode === "cloud" && localSummary === null),
   };
 }
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const feedMode = useNotificationFeedMode();
-  // APP-WIDE BY INTENT. These actions mark notifications read ON a host, and
-  // the host is the one whose feed the bell is showing - an app-wide fact. A
-  // scoped panel's host would mark the wrong feed read, so this must not follow
-  // a re-provided binding even if one is ever mounted above it. Resolved from
-  // the effective host rather than read off the spine, which stopped naming one
-  // when P4.2 deleted the active slot.
-  const binding = useHostBinding();
-  const effectiveHostId = useEffectiveHostId();
-  const client = useMemo(
-    () => resolveAppWideHostClient(binding, effectiveHostId),
-    [binding, effectiveHostId],
-  );
+  // Bound to the host that OWNS the notification streams, not the app-wide
+  // active host. Every mutation below addresses a row that came from that
+  // host's origin store (or its relayed cloud lane), so routing them anywhere
+  // else marks the wrong store read and pages the wrong cursor.
+  const notificationHost = useNotificationHost();
+  const notificationHostId = notificationHost.hostId;
+  const client = notificationHost.client;
   const queryClient = useQueryClient();
   const globalMarkAsRead = useNotificationsStore((state) => state.markAsRead);
   const globalMarkAllAsRead = useNotificationsStore(
@@ -608,6 +685,10 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   );
   const appLocalMarkAllAsRead = useAppLocalNotificationsStore(
     (state) => state.markAllAsRead,
+  );
+  const globalClearAll = useNotificationsStore((state) => state.clearAll);
+  const appLocalClearAll = useAppLocalNotificationsStore(
+    (state) => state.clearAll,
   );
   const hostNextCursor = useHostNotificationsStore(
     selectHostNotificationRecentCursor,
@@ -812,6 +893,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     method: "host.notifications.markAllRead",
     mapVariables: (variables) => ({
       beforeUpdatedAt: variables.beforeUpdatedAt,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.markAllRead(),
@@ -878,6 +960,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "recent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.loadMore(),
@@ -923,6 +1006,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "attention",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.loadMoreAttention(),
@@ -974,6 +1058,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "unreadRecent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor ?? undefined,
+      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
     }),
     options: {
       mutationKey: notificationsMutationKeys.loadMoreUnreadRecent(),
@@ -1032,17 +1117,18 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           cloudMarkRead.mutate({ entryId: target.sourceId });
           return;
         }
-        if (parsed.source === "global") {
+        if (parsed.source === "host") {
           if (feedMode === "upgrade-required") return;
-          globalMarkAsRead(parsed.sourceId);
+          if (client === null) return;
+          markHostRead.mutate({
+            feedId,
+            sourceId: parsed.sourceId,
+          });
           return;
         }
-        if (feedMode !== "local") return;
-        if (client === null) return;
-        markHostRead.mutate({
-          feedId,
-          sourceId: parsed.sourceId,
-        });
+        // Only `global` remains once the three cases above return.
+        if (feedMode === "upgrade-required") return;
+        globalMarkAsRead(parsed.sourceId);
       },
       markAllAsRead: () => {
         if (feedMode === "cloud") {
@@ -1052,6 +1138,16 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           // cloud-only early return below.
           appLocalMarkAllAsRead(Date.now());
           globalMarkAllAsRead();
+          // The HOST leg runs before that early return too, and for the same
+          // independence reason: the host plane is a separate origin store
+          // whose liveness is the notification host's, not the relay's. A
+          // mark-all issued while the cloud is reconnecting must still clear
+          // the live host's `home: local` partition, or those rows stay
+          // unread behind an enabled button. Marking read never resolves the
+          // underlying question or permission request.
+          if (client !== null && notificationHostId !== null) {
+            markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
+          }
           if (cloudConnectionState !== "connected" || cloudVersion === null) {
             return;
           }
@@ -1101,16 +1197,17 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (feedMode !== "local") return;
         globalMarkAllAsRead();
         appLocalMarkAllAsRead(Date.now());
-        // The host mutation applies only against an ACTIVE host. A disconnect keeps the runtime binding
-        // (`client !== null`) and the retained host replica, but drops the
-        // active host id to null and degrades the exact summary to unknown;
-        // firing the host mutation then only yields an unbound-rejection error toast
-        // while the rendered rows cannot change. Gate BOTH on the same
-        // authoritative active-host signal (read fresh at click time, the same
-        // value `useAddressableHostId` projects), NOT `client !== null`. The
-        // local global/app-local mark-all above always run. Marking read never
-        // resolves the underlying question or permission request.
-        if (client !== null && client.getActiveHostId() !== null) {
+        // The host mutation applies only against a LIVE notification host. A
+        // disconnect keeps the runtime binding (`client !== null`) and the
+        // retained host replica, but the reactive local-host entry goes away
+        // and the exact summary degrades to unknown; firing the host mutation
+        // then only yields an unbound-rejection error toast while the
+        // rendered rows cannot change. Gate BOTH on that same liveness signal
+        // - the one that also picked the client these rows came from - NOT on
+        // `client !== null`. The local global/app-local mark-all above always
+        // run. Marking read never resolves the underlying question or
+        // permission request.
+        if (client !== null && notificationHostId !== null) {
           markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
         }
       },
@@ -1139,40 +1236,55 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         cloudClear.mutate({ entryId: row.sourceId });
       },
       clearAll: () => {
-        if (feedMode === "cloud") {
-          if (cloudVersion === null) return;
-          // Send the version of the snapshot the user is LOOKING AT, not
-          // whatever the cloud head has reached by the time this lands. The
-          // fan-out then covers exactly the rows on screen, and an entry that
-          // arrives in between survives however many times a lost-response
-          // retry replays this call.
-          cloudClearAll.mutate({ observedVersion: cloudVersion });
-          return;
-        }
-        if (
-          feedMode === "local" &&
-          client !== null &&
-          client.getActiveHostId() !== null
-        ) {
+        if (feedMode === "upgrade-required") return;
+        // The confirmation this sits behind promises "every notification
+        // currently visible in this feed", and in mixed mode the feed renders
+        // four lanes, not one. So the fan-out is the same shape mark-all
+        // already has: every CLOUD-INDEPENDENT lane runs unconditionally, and
+        // the cloud call is the one leg gated on the relay.
+        //
+        // The renderer-local lanes are pure client state, so they clear
+        // whatever the relay and the host are doing.
+        appLocalClearAll();
+        globalClearAll();
+        // The host plane is a separate origin store whose liveness is the
+        // NOTIFICATION host's, not the relay's - the same gate mark-all uses,
+        // and deliberately not `client !== null`, which survives a disconnect
+        // that has already taken the rows' host away. It runs in mixed mode
+        // too: the rows it clears are that host's `home: local` partition,
+        // which the cloud does not hold and `cloudClearAll` therefore cannot
+        // reach.
+        if (client !== null && notificationHostId !== null) {
           clearHostAll.mutate({ beforeUpdatedAt: Date.now() });
         }
+        if (feedMode !== "cloud" || cloudVersion === null) return;
+        // Send the version of the snapshot the user is LOOKING AT, not
+        // whatever the cloud head has reached by the time this lands. The
+        // fan-out then covers exactly the rows on screen, and an entry that
+        // arrives in between survives however many times a lost-response
+        // retry replays this call.
+        cloudClearAll.mutate({ observedVersion: cloudVersion });
       },
       loadMoreHost: () => {
-        if (feedMode !== "local") return;
+        if (feedMode === "upgrade-required") return;
         if (hostNextCursor === null || client === null) return;
         loadMoreHost.mutate({ cursor: hostNextCursor });
       },
       canLoadMoreHost:
-        feedMode === "local" && hostNextCursor !== null && client !== null,
+        feedMode !== "upgrade-required" &&
+        hostNextCursor !== null &&
+        client !== null,
       isLoadingMoreHost: loadMoreHost.isPending,
       hasHostLoadError,
       loadMoreAttention: () => {
-        if (feedMode !== "local") return;
+        if (feedMode === "upgrade-required") return;
         if (hostAttentionCursor === null || client === null) return;
         loadMoreAttention.mutate({ cursor: hostAttentionCursor });
       },
       canLoadMoreAttention:
-        feedMode === "local" && hostAttentionCursor !== null && client !== null,
+        feedMode !== "upgrade-required" &&
+        hostAttentionCursor !== null &&
+        client !== null,
       isLoadingMoreAttention: loadMoreAttention.isPending,
       hasAttentionLoadError,
       // Unlike the other two tracks, a `null` cursor here is ambiguous on its
@@ -1182,12 +1294,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       // it: only once a page has actually loaded does a `null` cursor mean
       // genuine exhaustion.
       loadMoreUnreadRecent: () => {
-        if (feedMode !== "local") return;
+        if (feedMode === "upgrade-required") return;
         if (client === null) return;
         loadMoreUnreadRecent.mutate({ cursor: hostUnreadRecentCursor });
       },
       canLoadMoreUnreadRecent:
-        feedMode === "local" &&
+        feedMode !== "upgrade-required" &&
         client !== null &&
         (hostUnreadRecentCursor !== null || !unreadRecentHasLoadedOnce),
       isLoadingMoreUnreadRecent: loadMoreUnreadRecent.isPending,
@@ -1198,6 +1310,8 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       globalMarkAllAsRead,
       appLocalMarkAsRead,
       appLocalMarkAllAsRead,
+      globalClearAll,
+      appLocalClearAll,
       markHostRead,
       markHostAllRead,
       clearHostAll,
@@ -1212,6 +1326,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       unreadRecentHasLoadedOnce,
       hasUnreadRecentLoadError,
       client,
+      notificationHostId,
       feedMode,
       cloudVersion,
       cloudConnectionState,

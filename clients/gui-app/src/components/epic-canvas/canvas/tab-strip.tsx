@@ -259,9 +259,22 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
+  // Every chat and terminal-agent tab on this strip belongs to the strip's
+  // epic; naming the owner lets each host layer ask for its exact
+  // `home: local` partition in mixed mode instead of the pendingFork-only
+  // import a whole-origin answer permits.
+  const chatEpicIds = useMemo(
+    () =>
+      Object.fromEntries(
+        indicatorScopes.flatMap((scope) =>
+          scope.chatIds.map((chatId) => [chatId, epicId]),
+        ),
+      ),
+    [indicatorScopes, epicId],
+  );
 
   return (
-    <ChatIndicatorHostScopes scopes={indicatorScopes}>
+    <ChatIndicatorHostScopes scopes={indicatorScopes} chatEpicIds={chatEpicIds}>
       <div
         ref={stripRef}
         data-testid="tab-strip"

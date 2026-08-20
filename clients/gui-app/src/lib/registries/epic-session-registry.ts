@@ -1,4 +1,10 @@
-import { createContext } from "react";
+import {
+  createContext,
+  useCallback,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
@@ -85,6 +91,27 @@ registry.setReleaseListener((epicId) => {
 });
 
 /**
+ * The distinct hosts the user's OPEN epics are bound to, sorted for a stable
+ * identity.
+ *
+ * This is the producer set for agent activity (`s5-parity-gaps` gap 1).
+ * Production used to read activity from the local host and nothing else, so a
+ * cloud-homed epic being worked from a remote host rendered as idle. Fanning
+ * out over every host in the directory would be the other extreme - a relay
+ * connection per machine the account has ever registered - and it is not what
+ * the defect asks for. The hosts a person can actually observe activity on are
+ * the ones their open epics are bound to, and those hosts are already dialed.
+ */
+export function openEpicHostIds(): readonly string[] {
+  const hostIds = new Set<string>();
+  for (const handle of registry.liveHandles()) {
+    const hostId = getEpicSessionHandleHostId(handle);
+    if (hostId !== null) hostIds.add(hostId);
+  }
+  return [...hostIds].sort((left, right) => left.localeCompare(right));
+}
+
+/**
  * Test / production seam. Defaults to real `EpicStreamClient`; tests swap
  * via `__setEpicStreamClientFactoryForTests(...)` so the provider can be
  * mounted in jsdom without a live host.
@@ -112,6 +139,74 @@ export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {
  */
 export function getOpenEpicRegistry(): OpenEpicSessionRegistry {
   return registry;
+}
+
+const EMPTY_LIVE_CHAT_EPIC_IDS: Readonly<Record<string, string>> = {};
+
+/**
+ * The chat ids that still exist in the currently-live sessions for a set of
+ * task tabs, each mapped to its OWNING epic. Notification task rollups use
+ * the key set as a whitelist: deleting a chat removes its id here
+ * immediately, so its historical notification can stay in the bell without
+ * continuing to bubble up to the task tab. The epic mapping rides along
+ * because mixed mode's `home: local` indicator partition can only classify a
+ * chat id by durable home through its parent epic - ids alone are host-minted
+ * and encode nothing.
+ */
+export function useLiveChatEpicIdsForEpics(
+  epicIds: ReadonlyArray<string>,
+): Readonly<Record<string, string>> {
+  const canonicalEpicIds = useMemo(
+    () =>
+      [...new Set(epicIds)].sort((left, right) => left.localeCompare(right)),
+    [epicIds],
+  );
+  const snapshotCache = useRef<{
+    readonly signature: string;
+    readonly chatEpicIds: Readonly<Record<string, string>>;
+  } | null>(null);
+  const subscribe = useCallback(
+    (listener: () => void): (() => void) => {
+      let storeUnsubscribers: Array<() => void> = [];
+      const bindStores = (): void => {
+        for (const unsubscribe of storeUnsubscribers) unsubscribe();
+        storeUnsubscribers = canonicalEpicIds.flatMap((epicId) => {
+          const handle = registry.peek(epicId);
+          return handle === null ? [] : [handle.store.subscribe(listener)];
+        });
+      };
+      bindStores();
+      const unsubscribeRegistry = registry.subscribe(() => {
+        bindStores();
+        listener();
+      });
+      return () => {
+        unsubscribeRegistry();
+        for (const unsubscribe of storeUnsubscribers) unsubscribe();
+      };
+    },
+    [canonicalEpicIds],
+  );
+  const getSnapshot = useCallback((): Readonly<Record<string, string>> => {
+    const entries = canonicalEpicIds.flatMap((epicId) =>
+      (registry.peek(epicId)?.store.getState().chats.allIds ?? []).map(
+        (chatId): readonly [string, string] => [chatId, epicId],
+      ),
+    );
+    entries.sort(([left], [right]) => left.localeCompare(right));
+    const snapshot: Readonly<Record<string, string>> =
+      Object.fromEntries(entries);
+    const signature = JSON.stringify(entries);
+    const cached = snapshotCache.current;
+    if (cached?.signature === signature) return cached.chatEpicIds;
+    snapshotCache.current = { signature, chatEpicIds: snapshot };
+    return snapshot;
+  }, [canonicalEpicIds]);
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => EMPTY_LIVE_CHAT_EPIC_IDS,
+  );
 }
 
 /**

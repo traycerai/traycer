@@ -3,6 +3,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
@@ -250,7 +251,10 @@ describe("<EpicConnectionToasts />", () => {
     // Transport open + cloud caught up is what latches "connected once".
     act(() => {
       streams[0].callbacks.onConnectionStatus("open", null);
-      streams[0].callbacks.onCloudSyncStatus("connected");
+      streams[0].callbacks.onCloudSyncStatus(
+        "connected",
+        NO_CLOUD_SYNC_DURABILITY,
+      );
     });
 
     act(() => {

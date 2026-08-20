@@ -51,6 +51,32 @@ export const RPC_ERROR_CODES = [
   // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
   // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
   "MESSAGE_TOO_LARGE",
+  // ─── Share-gate refusal taxonomy (s5-share-error-taxonomy) ──────────────
+  //
+  // The wire encoding of `EpicShareRefusal` (see
+  // `host/epic/share-refusal.ts`), which replaces the `SHARE_*` message-PREFIX
+  // pseudo-types the share gate used to emit. Two facts that had justified the
+  // prefixes were checked and are false: additive codes here ARE old-client
+  // safe (an unrecognised code narrows to `RPC_ERROR` while the 4xx status
+  // survives - `ws-rpc-client.ts`), and no OSS client parses those prefixes.
+  //
+  // One code per USER-DISTINGUISHABLE refusal, because the code is the only
+  // typed channel on the response error envelope (`{ code, message }`) and the
+  // GUI must branch on the refusal AND, for a pending promotion, on its
+  // reason - "still copying" and "the cloud is unreachable" need different
+  // copy and different retry guidance. Keeping the reason in the message would
+  // reproduce the defect this ticket exists to remove.
+  //
+  // Every share refusal has a code here, including the generic member: a
+  // refusal with no typed home is what dropped `EpicShareNotOwnedError` into a
+  // 500.
+  "E_SHARE_NEEDS_CLOUD_SYNC",
+  "E_SHARE_NOT_OWNED",
+  "E_SHARE_PENDING_RECENT_ATTEMPT",
+  "E_SHARE_PENDING_BUSY",
+  "E_SHARE_PENDING_OFFLINE",
+  "E_SHARE_PENDING_FAILED",
+  "E_SHARE_REFUSED",
   // A latest-checkpoint fork (`epic.createChat`'s `forkSource: {boundary:
   // "latest"}`, and the A2A `agent.fork`/`forkAgent` tool that shares the same
   // seed builder) named a source chat with no assistant record to fork from

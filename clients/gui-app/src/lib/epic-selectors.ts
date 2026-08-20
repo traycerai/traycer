@@ -37,6 +37,12 @@ import type {
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type {
+  EpicCloudFreshness,
+  EpicCloudFreshnessState,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
+} from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -53,7 +59,7 @@ import {
   type AgentActivityTier,
 } from "@/lib/agent-activity";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
-import { useEpicStore } from "@/hooks/use-epic-store";
+import { useEpicStore, useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
 import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
@@ -150,6 +156,181 @@ export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);
 }
 
+// Maybe-scoped rather than throwing outside <EpicSessionProvider>: the
+// comment sidebar renders outside the session tree in some mounts, and "no
+// session" is honestly the same answer as "the host has not said" - null.
+export function useEpicDurabilityStatus(): NonNullable<
+  OpenEpicState["durabilityStatus"]
+> | null {
+  return useMaybeEpicStore((s) => s.durabilityStatus ?? null, null);
+}
+
+export function useEpicDurabilityPauseReason(): NonNullable<
+  OpenEpicState["durabilityPauseReason"]
+> | null {
+  return useMaybeEpicStore((s) => s.durabilityPauseReason ?? null, null);
+}
+
+/**
+ * Whether this epic has no cloud comment room, and therefore no comments.
+ *
+ * ## Why a shared predicate and not `status === "local"` at each gate
+ *
+ * Two gates - the sidebar and the collab tile - each compared to the literal
+ * `"local"`, and both missed `promoting`. `promoting` is the reserved-but-
+ * pre-cutover window: the promotion is recorded, the upload is in flight, and
+ * the artifact room's collab provider is STILL null. So comments re-enabled
+ * themselves partway through promotion, the core threw a typed
+ * `no_active_session`, and the user was shown "Comments couldn't be loaded" /
+ * "Couldn't post comment" - a generic failure standing in for a boundary the
+ * host knows exactly.
+ *
+ * `unknown` is deliberately NOT here. It means the host could not answer, and
+ * the honest response to that is the ordinary read path plus whatever it
+ * reports - not a confident claim that comments do not exist. Guessing in
+ * either direction on `unknown` is the class of defect `s5-status-truthfulness`
+ * exists to correct.
+ */
+export function commentsHaveNoCloudRoom(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): boolean {
+  if (status === "local" || status === "promoting") return true;
+  // A preserved orphan: the epic was paused because its CLOUD copy was
+  // deleted while never-uploaded local edits survived. The cloud comment room
+  // went with the cloud copy, so enabling comments here offers actions that
+  // can only fail against an absent room. The other pause reasons make no
+  // such claim - an entitlement lapse or revoked access leaves the room in
+  // place, merely unreachable, which is not this predicate's question.
+  return (
+    status === "paused" &&
+    pauseReason === "orphaned-local-edits-after-cloud-delete"
+  );
+}
+
+/**
+ * {@link commentsHaveNoCloudRoom}, held across a subscription cycle's reset.
+ *
+ * ## Why the raw predicate is not enough AT A GATE
+ *
+ * The open-epic store clears `durabilityStatus` and `durabilityPauseReason`
+ * whenever a subscription cycle starts, deliberately: last cycle's answer is
+ * not evidence about this cycle's peer. So between a reconnect and the
+ * replacement `cloudSyncStatus` frame the predicate sees `null` and answers
+ * `false`.
+ *
+ * For the sync pill an unknown collapses toward silence, which is the safe
+ * direction. Here it collapses the other way: `false` re-enables the comment
+ * shortcut, toolbar, popovers and thread query against an epic that still has
+ * no cloud room. A draft begun in that window is wiped by the very frame that
+ * restores the gate, and a request sent from it could only fail.
+ *
+ * The latch is sound because a cloud comment room is a property of the EPIC,
+ * not of the subscription cycle - a local-homed epic does not acquire one by
+ * reconnecting. Only a POSITIVE statement writes it, `null` leaves the
+ * previous answer standing, and it is keyed by epic so a different one never
+ * inherits it.
+ *
+ * ## Why the absent statement still splits two ways
+ *
+ * Treating every `null` as "gate it" would disable comments FOREVER on any
+ * peer below `@1.4`, which cannot emit the key at all - the population that
+ * has always had working comments. `durabilityLegsNegotiated` separates a peer
+ * that has not answered YET from one that CANNOT, exactly as it does in the
+ * sync pill: the first waits behind the conservative gate, the second keeps
+ * its released behaviour.
+ */
+export function useEpicCommentsHaveNoCloudRoom(): boolean {
+  const status = useEpicDurabilityStatus();
+  const pauseReason = useEpicDurabilityPauseReason();
+  // `useMaybeEpicStore`, matching every sibling above: this gate renders in
+  // the comments sidebar, which mounts outside an Epic session in its own
+  // tests and in any host-scoped surface that has no open epic.
+  const retainedStatus = useMaybeEpicStore(
+    (s) => s.retainedDurabilityStatus ?? null,
+    null,
+  );
+  const retainedPauseReason = useMaybeEpicStore(
+    (s) => s.retainedDurabilityPauseReason ?? null,
+    null,
+  );
+  const durabilityLegsNegotiated = useMaybeEpicStore(
+    (s) => s.durabilityLegsNegotiated,
+    false,
+  );
+  // This cycle's own answer wins whenever it has one.
+  if (status !== null) return commentsHaveNoCloudRoom(status, pauseReason);
+  // No statement yet. A peer that never negotiated the legs cannot produce
+  // one at all, so gating on its silence would disable comments forever on
+  // every pre-`@1.4` host - the population that has always had them.
+  if (!durabilityLegsNegotiated) return false;
+  if (retainedStatus !== null) {
+    return commentsHaveNoCloudRoom(retainedStatus, retainedPauseReason);
+  }
+  // A negotiated peer that has not spoken yet, about an epic nothing has ever
+  // said anything about. Withholding the affordance is the only direction
+  // here that cannot offer an action the host will reject.
+  return true;
+}
+
+/**
+ * Whether this epic has no cloud task for its chats to back up into.
+ *
+ * The chat-backup twin of {@link commentsHaveNoCloudRoom}, and a separate
+ * predicate rather than a reuse because the two gate DIFFERENT surfaces on the
+ * same wire fact and may yet diverge: comments need the cloud comment room,
+ * chat backup needs the cloud task row the publisher addresses. Today both
+ * are absent through exactly the `local` and `promoting` window.
+ *
+ * The consumer is the sidebar's backup-status indicator: on a local-homed
+ * epic every chat is honestly `behind` forever (there is nothing to publish
+ * into), so rendering "N chats not backed up" there presents a by-design
+ * state as an actionable failure. `unknown` is deliberately NOT gated, per
+ * the `s5-status-truthfulness` rule {@link commentsHaveNoCloudRoom} states:
+ * the host could not answer, so the ordinary surface renders what the backup
+ * query reports.
+ */
+export function chatBackupHasNoCloudTask(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): boolean {
+  if (status === "local" || status === "promoting") return true;
+  // Same fact as the comments predicate: the orphan pause means the cloud
+  // TASK ROW is deleted, so there is nothing for the publisher to back a
+  // chat up into and "N chats not backed up" would present a by-design
+  // preservation state as an actionable failure.
+  return (
+    status === "paused" &&
+    pauseReason === "orphaned-local-edits-after-cloud-delete"
+  );
+}
+
+/**
+ * Tolerant of a missing session on purpose: the only caller is the Epic
+ * sidebar's backup indicator, which is a sibling of the canvas and mounts on
+ * split surfaces that have no `<EpicSessionProvider>` above them. The strict
+ * read threw straight through the surface's error boundary and blanked it.
+ *
+ * With no open epic the answer is `false` - "nothing here says there is no
+ * cloud task" - which is the same fail-open direction the host-side gate uses:
+ * a wrong `true` silently hides a real backup failure, a wrong `false` only
+ * shows an indicator that the query then finds nothing to report.
+ */
+export function useEpicChatBackupHasNoCloudTask(): boolean {
+  const status = useMaybeEpicStore((s) => s.durabilityStatus ?? null, null);
+  const pauseReason = useMaybeEpicStore(
+    (s) => s.durabilityPauseReason ?? null,
+    null,
+  );
+  return chatBackupHasNoCloudTask(status, pauseReason);
+}
+
+export function useEpicDurabilityPromotionState(): NonNullable<
+  OpenEpicState["durabilityPromotionState"]
+> | null {
+  return useEpicStore((s) => s.durabilityPromotionState ?? null);
+}
+
 /**
  * Host dirtiness is known only after this subscription cycle's atomic @1.1
  * snapshot. A clean-looking map before then (or under a negotiated @1.0 host)
@@ -190,7 +371,176 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       hostDirtyState: selectHostDirtyState(s),
       hasUnsyncedLocalChanges: s.isDirty,
       hasConnectedOnce: s.hasConnectedOnce,
+      // The two legs the pill used to ignore entirely. Without them the pill
+      // could derive `synced` from a `LocalRoomConnection` and render "All
+      // changes synced" beside the badge's "Stored locally" -
+      // `s5-status-truthfulness` instance 1.
+      durability: s.durabilityStatus ?? undefined,
+      localProtection: s.localProtection ?? undefined,
+      durabilityLegsNegotiated: s.durabilityLegsNegotiated,
+      // The ninth leg, and the one that is about the DOCUMENT rather than
+      // about where the work is going - `s5-mirror-first-serving`.
+      cloudFreshness: s.cloudFreshness ?? undefined,
     }),
+  );
+}
+
+/**
+ * The ONE reading of the `@1.4` durability pair, for every surface that
+ * renders it - `s5-status-truthfulness`.
+ *
+ * The class this closes is that the host derives honest state, the protocol
+ * used to drop it, and each renderer null-rendered into the calm value
+ * independently. Five instances of that were found; fixing them one at a time
+ * leaves the sixth for a user to find, so the reading lives here and the
+ * components render what it says.
+ *
+ * The `indeterminate` arm is the whole point: `unknown`, and an absence from a
+ * peer that CAN speak `@1.4`, both land there, and no surface may resolve
+ * either one as protected or synced.
+ */
+export type EpicDurabilityView =
+  /** A pre-`@1.4` peer. Renders exactly as it did before this minor. */
+  | { readonly kind: "legacy"; readonly status: EpicDurabilityStatusV15 | null }
+  /** The host stated where the epic is durable. */
+  | {
+      readonly kind: "stated";
+      readonly status: Exclude<EpicDurabilityStatusV15, "unknown" | "cloud">;
+      readonly protection: EpicLocalProtection;
+    }
+  /**
+   * Durable in the cloud. The calm arm - but calm about DURABILITY only:
+   * protection is the independent axis, and `unavailable` beside `cloud`
+   * still means offline edits die with the process, so the leg rides along
+   * for the risk copy instead of being swallowed by the calm verdict.
+   */
+  | { readonly kind: "cloudDurable"; readonly protection: EpicLocalProtection }
+  /** The host cannot say, or said it has no local protection. */
+  | {
+      readonly kind: "indeterminate";
+      readonly protection: EpicLocalProtection;
+    };
+
+export function deriveEpicDurabilityView(
+  status: EpicDurabilityStatusV15 | null,
+  protection: EpicLocalProtection | null,
+  peerSpeaksDurabilityLegs: boolean,
+): EpicDurabilityView {
+  // Which SILENCE this is, decided by the handshake rather than by the shape
+  // of the frame.
+  //
+  // The shipping host emits `localProtection` on every `@1.4` frame, so a
+  // presence probe agrees with the negotiated minor against it - but the
+  // schema marks every `@1.4` leg optional and states that an absent one means
+  // UNKNOWN, so a peer omitting one is speaking the contract, not failing it.
+  // Reading that omission as "old peer" resolves a stated unknown into the
+  // pre-`@1.4` silent rendering, which is the silence-as-reassurance inference
+  // this minor exists to break. `peerSpeaksDurabilityLegs` is `false` until the
+  // session's handshake settles, so an unheard peer still keeps its prior
+  // rendering and the additive minor stays additive.
+  //
+  // Presence is still honoured as the other direction: a peer that SENT the
+  // key demonstrably speaks it, whatever the negotiated version reader says.
+  if (protection === null && !peerSpeaksDurabilityLegs) {
+    return { kind: "legacy", status };
+  }
+  // Absence from a peer that speaks the legs is the wire contract's UNKNOWN.
+  const stated: EpicLocalProtection = protection ?? "unknown";
+  if (status === "cloud") {
+    // The POSITIVE cloud-durable statement the `@1.4` enum carries. Calm
+    // rests on this member alone - never on an absence. The protection leg is
+    // KEPT, not resolved by the calm: the axes are independent, and a stated
+    // `unavailable` beside `cloud` is exactly the "No local backup" risk the
+    // badge exists to surface.
+    return { kind: "cloudDurable", protection: stated };
+  }
+  if (status === null || status === "unknown") {
+    // The frame's absence rule, stated as code: an absent `durability` key
+    // from a `@1.4` peer means UNKNOWN, never synced. Review found the
+    // earlier arm here resolving absence-beside-`armed` into the calm
+    // rendering, which let a schema-permitted omission claim "All changes
+    // synced" - the silence-as-reassurance inference this minor exists to
+    // break. The shipping host now emits `"cloud"` explicitly, so the calm
+    // case lost nothing.
+    return { kind: "indeterminate", protection: stated };
+  }
+  // `stated` KEEPS its protection leg rather than collapsing to
+  // `indeterminate` when that leg is `unavailable`: the two are separate axes,
+  // and the concrete status is what gates the badge's paused-only remedies
+  // (Upgrade, Export). Rendering both is `epicDurabilityRiskCopy`'s job.
+  return { kind: "stated", status, protection: stated };
+}
+
+/** The composed durability reading for the open epic. */
+export function useEpicDurabilityView(): EpicDurabilityView {
+  // `useShallow` per this file's own object-select rule: the derivation builds
+  // a fresh literal on every call, so a bare select hands `useSyncExternalStore`
+  // a new snapshot each read and the badge re-renders itself to the update-depth
+  // ceiling.
+  return useEpicStore(
+    useShallow((s) =>
+      deriveEpicDurabilityView(
+        s.durabilityStatus ?? null,
+        s.localProtection ?? null,
+        s.durabilityLegsNegotiated,
+      ),
+    ),
+  );
+}
+
+/** Raw `localProtection`, for surfaces that gate on protection alone. */
+export function useEpicLocalProtection(): EpicLocalProtection | null {
+  return useEpicStore((s) => s.localProtection ?? null);
+}
+
+/**
+ * The ONE reading of `@1.4`'s `freshness` datum - `s5-mirror-first-serving`.
+ *
+ * Deliberately the same shape of answer as {@link EpicDurabilityView}, and for
+ * the same reason: the host derives an honest state, every renderer used to
+ * null-render it into the calm value independently, and the fix is one reading
+ * that the components then render.
+ *
+ * `unknown` covers BOTH an absent key and a peer that cannot speak `@1.4`, and
+ * it is deliberately calm - the host omits `freshness` for a local-homed epic
+ * (there is no cloud copy for it to be behind) and for a cloud row it has no
+ * record of. Absence here therefore means "no freshness question applies",
+ * which is why it renders exactly as it did before this minor. The one
+ * inference this type refuses to let a caller make is the opposite one: there
+ * is no arm that turns silence into `current`.
+ */
+export type EpicCloudFreshnessView =
+  | { readonly kind: "unknown" }
+  | {
+      readonly kind: "stated";
+      readonly state: EpicCloudFreshnessState;
+      /**
+       * The last SUCCESSFUL full root reconciliation, or `null` when this host
+       * has never recorded one. `null` beside `current` is structurally
+       * impossible on the wire, which is why the union carries the two
+       * together rather than as independent optionals.
+       */
+      readonly reconciledAtEpochMs: number | null;
+    };
+
+export function deriveEpicCloudFreshnessView(
+  freshness: EpicCloudFreshness | null,
+): EpicCloudFreshnessView {
+  if (freshness === null) return { kind: "unknown" };
+  return freshness.kind === "lastCloudSyncAt"
+    ? {
+        kind: "stated",
+        state: freshness.state,
+        reconciledAtEpochMs: freshness.reconciledAtEpochMs,
+      }
+    : { kind: "stated", state: freshness.state, reconciledAtEpochMs: null };
+}
+
+/** The composed freshness reading for the open epic. */
+export function useEpicCloudFreshnessView(): EpicCloudFreshnessView {
+  // Object-shaped select; see {@link useEpicDurabilityView}.
+  return useEpicStore(
+    useShallow((s) => deriveEpicCloudFreshnessView(s.cloudFreshness ?? null)),
   );
 }
 

@@ -332,6 +332,9 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
+    // The host that ANSWERED - the query files its rows under this origin, so
+    // an omitted field (undefined, not null) would scope them to no host.
+    hostId: "host-1",
   }),
 }));
 

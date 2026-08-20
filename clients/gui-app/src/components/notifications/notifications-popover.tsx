@@ -23,7 +23,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationFilterMenu } from "@/components/notifications/notification-filter-menu";
 import { NotificationRow } from "@/components/notifications/notification-row";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useNotificationHostId } from "@/hooks/notifications/use-notification-host";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationCenterArrivals } from "@/hooks/notifications/use-notification-center-arrivals";
 import { useNotificationCenterScrollAnchor } from "@/hooks/notifications/use-notification-center-scroll-anchor";
@@ -66,6 +66,8 @@ import {
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useAppLocalNotificationUnreadCount } from "@/stores/notifications/app-local-notifications-store";
+import { useHostNotificationUnreadCount } from "@/stores/notifications/host-notifications-store";
+import { useNotificationUnreadCount } from "@/stores/notifications/notifications-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 interface NotificationsPopoverProps {
@@ -106,21 +108,81 @@ function isAttentionSectionVisible(input: {
 function isMarkAllReadDisabled(input: {
   readonly unreadCount: number;
   readonly loadedHostAttentionCount: number;
+  readonly hostUnreadCount: number;
   readonly appLocalUnreadCount: number;
+  readonly globalUnreadCount: number;
   readonly hasActiveHost: boolean;
   readonly cloudConnectionState: CloudNotificationsConnectionState | null;
 }): boolean {
-  if (input.cloudConnectionState !== null) {
-    return (
-      input.unreadCount === 0 ||
-      (input.appLocalUnreadCount === 0 &&
-        input.cloudConnectionState !== "connected")
-    );
-  }
   const actionableHostAttention = input.hasActiveHost
     ? input.loadedHostAttentionCount
     : 0;
+  if (input.cloudConnectionState !== null) {
+    // Mixed mode fans the action out over BOTH planes - the cloud call plus
+    // the host mark-all and its blocking-attention resolve - so the local
+    // Attention rows count here exactly as they do in local mode. Reading
+    // `unreadCount` alone disabled the control in precisely the case the
+    // fan-out was added for: a local `needs_action` row already read via
+    // navigation, still dismissable, and the only thing left to act on.
+    //
+    // Everything on the CLOUD-INDEPENDENT side of the fan-out counts here:
+    // the host plane's own unread rows (its liveness is the notification
+    // host's, not the relay's), plus the app-local and collaboration rows,
+    // which are client-side state. The merged `unreadCount` cannot stand in
+    // for them - it deliberately reads 0 while either summary is null, so a
+    // cloud feed that has not produced a snapshot yet would disable a button
+    // whose host leg is fully actionable.
+    const cloudIndependentWork =
+      actionableHostAttention +
+      (input.hasActiveHost ? input.hostUnreadCount : 0) +
+      input.appLocalUnreadCount +
+      input.globalUnreadCount;
+    if (input.unreadCount === 0 && cloudIndependentWork === 0) return true;
+    // Only the cloud LEG needs its connection: with no cloud-independent work
+    // left, a disconnected relay is the one thing standing between the click
+    // and a no-op.
+    return (
+      cloudIndependentWork === 0 && input.cloudConnectionState !== "connected"
+    );
+  }
   return input.unreadCount === 0 && actionableHostAttention === 0;
+}
+
+/**
+ * What "Clear all" is about to do, which since the mixed-mode fan-out is not
+ * always what the old unconditional sentence claimed.
+ *
+ * The fan-out clears every lane the feed renders, but the CLOUD leg is the one
+ * that needs the relay, and an `unavailable` response is neither queued nor
+ * retried - it just marks the feed unavailable and leaves the rows in the last
+ * snapshot, still on screen. {@link isClearAllDisabled} keeps the button live
+ * in exactly that case ON PURPOSE, so the reachable lanes stay clearable, and
+ * that decision is what makes the copy rather than the gate the thing to fix:
+ * narrowing the button back down would take the working lanes with it.
+ *
+ * Conditioned on there being cloud rows to strand, not merely on the
+ * connection: with an empty or absent cloud snapshot the original sentence is
+ * still exactly true and a warning about nothing is its own noise.
+ */
+function clearAllConfirmDescription(input: {
+  readonly feedMode: NotificationFeedMode;
+  readonly cloudHasSnapshot: boolean;
+  readonly cloudConnectionState: CloudNotificationsConnectionState;
+  readonly cloudTotalCount: number;
+}): string {
+  const cloudRowsStayBehind =
+    input.feedMode === "cloud" &&
+    input.cloudHasSnapshot &&
+    input.cloudTotalCount > 0 &&
+    input.cloudConnectionState !== "connected";
+  if (cloudRowsStayBehind) {
+    return (
+      "This permanently clears every notification except the cloud ones. " +
+      "The cloud feed is disconnected, so those stay in the list until it " +
+      "reconnects."
+    );
+  }
+  return "This permanently clears every notification currently visible in this feed.";
 }
 
 function isClearAllDisabled(input: {
@@ -130,15 +192,27 @@ function isClearAllDisabled(input: {
   readonly cloudTotalCount: number;
   readonly hasActiveHost: boolean;
   readonly hasLoadedHostNotifications: boolean;
+  readonly hasRendererLocalRows: boolean;
 }): boolean {
+  // Same shape as the mark-all gate above, and for the same reason: clearing
+  // fans out over every lane the feed renders, so the button is live while
+  // ANY of them still holds a row. Gating mixed mode on the cloud lane alone
+  // disabled it in exactly the case the fan-out exists for - a populated
+  // host/app-local/global feed behind an empty or unreachable relay.
+  //
+  // The renderer-local lanes need no connection at all; the host lane needs
+  // the notification host, whose liveness is independent of the relay's.
+  const cloudIndependentWork =
+    (input.hasActiveHost && input.hasLoadedHostNotifications) ||
+    input.hasRendererLocalRows;
   if (input.feedMode === "cloud") {
-    return (
-      !input.cloudHasSnapshot ||
-      input.cloudConnectionState !== "connected" ||
-      input.cloudTotalCount === 0
-    );
+    const cloudWork =
+      input.cloudHasSnapshot &&
+      input.cloudConnectionState === "connected" &&
+      input.cloudTotalCount > 0;
+    return !cloudWork && !cloudIndependentWork;
   }
-  return !input.hasActiveHost || !input.hasLoadedHostNotifications;
+  return !cloudIndependentWork;
 }
 
 /** Local-fallback header subtitle text. A partial host state is either
@@ -191,6 +265,11 @@ export function NotificationsPopover(
   const recentIds = useRecentNotificationIds();
   const unreadCount = useMergedNotificationUnreadCount();
   const appLocalUnreadCount = useAppLocalNotificationUnreadCount();
+  // The cloud-independent planes, read raw for the Mark-all gate: the merged
+  // count deliberately reads 0 while either summary is null, which must not
+  // disable a button whose host/global/app-local legs are fully actionable.
+  const hostUnreadCount = useHostNotificationUnreadCount();
+  const globalUnreadCount = useNotificationUnreadCount();
   const actions = useMergedNotificationsActions();
   const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
   const hostState = useNotificationCenterHostState();
@@ -201,6 +280,8 @@ export function NotificationsPopover(
   const cloudHasSnapshot = useCloudNotificationsStore(
     (state) => state.hasSnapshot,
   );
+  // Cloud-lane total, kept separate from the merged occurrence order so the
+  // cloud-only "Clear all" can be gated on the rows it would actually clear.
   const cloudTotalCount = useCloudNotificationsStore(
     (state) => state.summary?.totalCount ?? 0,
   );
@@ -221,9 +302,11 @@ export function NotificationsPopover(
   const notificationsSupport = useStreamMethodSupport(
     "host.notifications.feed.subscribe",
   );
-  // Authoritative active-host signal for the "Mark all read" enablement gate -
-  // `null` during a disconnect even though the runtime binding is retained.
-  const activeHostId = useAddressableHostId();
+  // Authoritative liveness signal for the "Mark all read" / "Clear all"
+  // enablement gates - the SAME notification host the mutations behind those
+  // buttons are bound to, and `null` during a disconnect even though the
+  // runtime binding is retained.
+  const notificationHostId = useNotificationHostId();
   // Loaded HOST Attention rows (feed ids are `host:<id>`); app-local/global
   // attention is locally actionable and already reflected in `unreadCount`.
   const loadedHostAttentionCount = attentionIds.filter((feedId) =>
@@ -282,6 +365,15 @@ export function NotificationsPopover(
   const fullOccurrenceOrder = useMergedNotificationOccurrenceEntries();
   const hasLoadedHostNotifications = fullOccurrenceOrder.some((entry) =>
     entry.feedId.startsWith("host:"),
+  );
+  // Renderer-local lanes - app-local failures and the collaboration room -
+  // are client state, so "Clear all" can always act on them. Read off the
+  // UNFILTERED order for the same reason the host probe above is: the action
+  // clears the whole feed, not the current filter's slice of it.
+  const hasRendererLocalRows = fullOccurrenceOrder.some(
+    (entry) =>
+      entry.feedId.startsWith("app-local:") ||
+      entry.feedId.startsWith("global:"),
   );
   const occurrenceKeyByFeedId = useMemo(
     () =>
@@ -411,8 +503,12 @@ export function NotificationsPopover(
   const isRecentFilteredEmpty =
     !isEmpty && recentIds.length === 0 && isFiltered;
 
+  // The LOCAL partition paginates in both modes: mixed mode keeps the host feed
+  // open and `canLoadMoreHost` / `canLoadMoreUnreadRecent` report its remaining
+  // cursor there, so gating the footer on `local` stranded every local row past
+  // the first page - visible in the store, unreachable from the UI.
   const canLoadOlder =
-    feedMode === "local" &&
+    feedMode !== "upgrade-required" &&
     (unreadOnly ? actions.canLoadMoreUnreadRecent : actions.canLoadMoreHost);
   const isLoadingOlder = unreadOnly
     ? actions.isLoadingMoreUnreadRecent
@@ -449,8 +545,10 @@ export function NotificationsPopover(
           isMarkAllReadDisabled={isMarkAllReadDisabled({
             unreadCount,
             loadedHostAttentionCount,
+            hostUnreadCount,
             appLocalUnreadCount,
-            hasActiveHost: activeHostId !== null,
+            globalUnreadCount,
+            hasActiveHost: notificationHostId !== null,
             cloudConnectionState: cloudPresentationState,
           })}
           showClearAll={feedMode === "cloud" || feedMode === "local"}
@@ -459,8 +557,9 @@ export function NotificationsPopover(
             cloudHasSnapshot,
             cloudConnectionState,
             cloudTotalCount,
-            hasActiveHost: activeHostId !== null,
+            hasActiveHost: notificationHostId !== null,
             hasLoadedHostNotifications,
+            hasRendererLocalRows,
           })}
           onClearAll={handleClearAll}
           onOpenSettings={handleOpenSettings}
@@ -525,7 +624,12 @@ export function NotificationsPopover(
         open={clearAllConfirmOpen}
         onOpenChange={setClearAllConfirmOpen}
         title="Clear all notifications?"
-        description="This permanently clears every notification currently visible in this feed."
+        description={clearAllConfirmDescription({
+          feedMode,
+          cloudHasSnapshot,
+          cloudConnectionState,
+          cloudTotalCount,
+        })}
         cascadeSummary={null}
         actionLabel="Clear all"
         isPending={false}

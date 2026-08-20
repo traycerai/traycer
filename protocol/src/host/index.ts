@@ -12,6 +12,7 @@ export * from "./git-constants";
 export * from "./git-schemas";
 export * from "./identity";
 export * from "./lifecycle";
+export * from "./local-store";
 export * from "./maintenance";
 export * from "./managed-command";
 export * from "./migration";

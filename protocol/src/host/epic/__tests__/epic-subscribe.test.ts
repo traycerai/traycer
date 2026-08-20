@@ -5,6 +5,9 @@ import {
   epicSubscribeServerFrameSchemaV10,
   epicSubscribeServerFrameSchemaV11,
   epicSubscribeServerFrameSchemaV12,
+  epicSubscribeServerFrameSchemaV13,
+  epicSubscribeServerFrameSchemaV14,
+  epicSubscribeServerFrameSchemaV15,
   epicSubscribeV10,
 } from "@traycer/protocol/host/epic/subscribe";
 
@@ -95,6 +98,149 @@ describe("epic.subscribe@1.0 server frames", () => {
         expect(parsed.status).toBe(status);
         expect(parsed.hasBinaryPayload).toBe(false);
       }
+    }
+  });
+
+  it("keeps durability additive for an older renderer", () => {
+    const frame = {
+      kind: "cloudSyncStatus" as const,
+      epicId: "epic-1",
+      status: "connected" as const,
+      durability: "paused" as const,
+      pauseReason: "access-revoked" as const,
+      hasBinaryPayload: false as const,
+    };
+    expect(epicSubscribeServerFrameSchemaV13.parse(frame)).toMatchObject(frame);
+    const legacy = epicSubscribeServerFrameSchemaV11.parse(frame);
+    expect(legacy).toEqual({
+      kind: "cloudSyncStatus",
+      epicId: "epic-1",
+      status: "connected",
+      hasBinaryPayload: false,
+    });
+  });
+
+  it("@1.5 carries the s5 status keys and @1.4 strips them", () => {
+    const frame = {
+      kind: "cloudSyncStatus" as const,
+      epicId: "epic-1",
+      status: "connected" as const,
+      durability: "local" as const,
+      promotionState: "pending" as const,
+      localProtection: "unavailable" as const,
+      freshness: {
+        kind: "freshnessUnknown" as const,
+        state: "local-copy" as const,
+      },
+      hasBinaryPayload: false as const,
+    };
+    expect(epicSubscribeServerFrameSchemaV15.parse(frame)).toMatchObject(frame);
+    // An older renderer keeps exactly its @1.4 rendering: the new KEYS are
+    // stripped rather than refused, which is what makes the minor additive.
+    expect(epicSubscribeServerFrameSchemaV14.parse(frame)).toEqual({
+      kind: "cloudSyncStatus",
+      epicId: "epic-1",
+      status: "connected",
+      durability: "local",
+      promotionState: "pending",
+      hasBinaryPayload: false,
+    });
+  });
+
+  it("@1.5 makes an unarmed session and an unknown durability expressible", () => {
+    const parsed = epicSubscribeServerFrameSchemaV15.parse({
+      kind: "cloudSyncStatus",
+      epicId: "epic-1",
+      status: "connected",
+      durability: "unknown",
+      localProtection: "unavailable",
+      hasBinaryPayload: false,
+    });
+    expect(parsed).toMatchObject({
+      durability: "unknown",
+      localProtection: "unavailable",
+    });
+  });
+
+  it("@1.5 VALUE growth is emission-gated: @1.4 refuses the new enum members", () => {
+    // Unlike a new key, a new enum value is REFUSED by the older minor rather
+    // than stripped - so the host must gate these on the negotiated version.
+    for (const widened of [
+      { durability: "unknown" },
+      { pauseReason: "orphaned-local-edits-after-cloud-delete" },
+      { pauseReason: "delete-pending-acknowledgement" },
+      { pauseReason: "delete-tombstone-unscoped-cleared" },
+    ]) {
+      const frame = {
+        kind: "cloudSyncStatus",
+        epicId: "epic-1",
+        status: "connected",
+        hasBinaryPayload: false,
+        ...widened,
+      };
+      expect(
+        epicSubscribeServerFrameSchemaV15.safeParse(frame).success,
+        JSON.stringify(widened),
+      ).toBe(true);
+      expect(
+        epicSubscribeServerFrameSchemaV14.safeParse(frame).success,
+        JSON.stringify(widened),
+      ).toBe(false);
+    }
+  });
+
+  it("@1.5 keeps the pause reasons the frozen minors already spoke", () => {
+    for (const pauseReason of [
+      "entitlement-lapsed",
+      "access-revoked",
+    ] as const) {
+      const frame = {
+        kind: "cloudSyncStatus" as const,
+        epicId: "epic-1",
+        status: "connected" as const,
+        durability: "paused" as const,
+        pauseReason,
+        hasBinaryPayload: false as const,
+      };
+      expect(epicSubscribeServerFrameSchemaV15.parse(frame)).toMatchObject(
+        frame,
+      );
+      expect(epicSubscribeServerFrameSchemaV13.parse(frame)).toMatchObject(
+        frame,
+      );
+    }
+  });
+
+  it("@1.5 cannot claim `current` freshness without a reconciliation timestamp", () => {
+    const timestamped = {
+      kind: "cloudSyncStatus" as const,
+      epicId: "epic-1",
+      status: "connected" as const,
+      freshness: {
+        kind: "lastCloudSyncAt" as const,
+        reconciledAtEpochMs: 1_700_000_000_000,
+        state: "current" as const,
+      },
+      hasBinaryPayload: false as const,
+    };
+    expect(epicSubscribeServerFrameSchemaV15.parse(timestamped)).toMatchObject(
+      timestamped,
+    );
+    // The whole point of the conservative datum: no timestamp, no `current`.
+    expect(
+      epicSubscribeServerFrameSchemaV15.safeParse({
+        ...timestamped,
+        freshness: { kind: "freshnessUnknown", state: "current" },
+      }).success,
+    ).toBe(false);
+    for (const state of ["local-copy", "syncing", "stale"] as const) {
+      expect(
+        epicSubscribeServerFrameSchemaV15.safeParse({
+          ...timestamped,
+          freshness: { kind: "freshnessUnknown", state },
+        }).success,
+        state,
+      ).toBe(true);
     }
   });
 

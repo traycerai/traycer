@@ -466,10 +466,82 @@ function mergeIndicatorFlags(
 }
 
 /**
+ * ORs the host's EXACT local durable-home partition into the cloud partition.
+ *
+ * This supersedes the pendingFork-only import below, and the reason is the
+ * `home: "local"` request selector rather than a change of mind about
+ * authority. That helper was written when the host's `indicatorState` answered
+ * over its WHOLE SQLite: rows produced on host B never enter host A's database,
+ * so folding host A's answer into a cross-host cloud view could neither light
+ * nor clear correctly, and only the host-local `pendingFork` bit was safe to
+ * take. With `@1.1`'s selector the host answers for its local-homed partition
+ * ONLY, and the cloud snapshot is exactly the complement - so the two are
+ * disjoint and a per-flag OR neither drops a row nor double-counts one.
+ *
+ * `byOriginHostId` gets the same treatment for the ACTIVE host's bucket alone:
+ * the local partition belongs to that origin and to no other, so merging it
+ * into every bucket would let one host's local rows decorate a tab bound to
+ * another.
+ */
+export function mergeLocalPartitionIntoCloudIndicators(
+  cloud: SurfaceNotificationIndicators,
+  hostLocal: HostNotificationsIndicatorStateResponse,
+  originHostId: string | null,
+): SurfaceNotificationIndicators {
+  const aggregate = orIndicatorResponses(cloud, hostLocal);
+  if (originHostId === null || cloud.byOriginHostId === undefined) {
+    return { ...aggregate, byOriginHostId: cloud.byOriginHostId };
+  }
+  const scoped =
+    cloud.byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE;
+  return {
+    ...aggregate,
+    byOriginHostId: {
+      ...cloud.byOriginHostId,
+      [originHostId]: orIndicatorResponses(scoped, hostLocal),
+    },
+  };
+}
+
+function orIndicatorResponses(
+  base: HostNotificationsIndicatorStateResponse,
+  overlay: HostNotificationsIndicatorStateResponse,
+): HostNotificationsIndicatorStateResponse {
+  return {
+    epics: orIndicatorRecord(base.epics, overlay.epics),
+    chats: orIndicatorRecord(base.chats, overlay.chats),
+  };
+}
+
+/**
+ * `Object.hasOwn` rather than an inline `=== undefined`: the wire type is a
+ * `z.record`, which TypeScript widens to a TOTAL `Record<string, T>`, so the
+ * inline check reads as dead code to the checker while being the only thing
+ * standing between a partition that lacks the id and a `.pendingApproval` on
+ * `undefined`.
+ */
+function orIndicatorRecord(
+  base: HostNotificationsIndicatorStateResponse["epics"],
+  overlay: HostNotificationsIndicatorStateResponse["epics"],
+): HostNotificationsIndicatorStateResponse["epics"] {
+  const merged = { ...base };
+  for (const [id, state] of Object.entries(overlay)) {
+    merged[id] = mergeIndicatorFlags(
+      Object.hasOwn(merged, id) ? merged[id] : undefined,
+      state,
+    );
+  }
+  return merged;
+}
+
+/**
  * Cloud mode has two deliberately separate authorities: feed rows own the
  * read/unread and approval/interview flags across hosts, while the connected
  * host's fork notice board owns `pendingFork`. Merge only that one host-local
  * bit so local SQLite read markers can never override the cloud feed view.
+ *
+ * Retained for the callers that hold a WHOLE-origin host response rather than
+ * a `home: "local"` partition - it is the only safe fold for one of those.
  */
 export function mergeHostPendingForkIntoCloudIndicators(
   cloud: SurfaceNotificationIndicators,

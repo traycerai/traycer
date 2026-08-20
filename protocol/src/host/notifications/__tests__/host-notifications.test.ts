@@ -18,6 +18,7 @@ import {
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListUpgradeV10ToV20,
+  hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListDowngradeV21ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
@@ -960,7 +961,7 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
 });
 
 describe("host.notifications registry membership", () => {
-  it("registers list majors 1 and 2 with the V10↔V20 upgrade/downgrade bridges", () => {
+  it("registers list majors 1 and 2 with the V10↔V22 upgrade/downgrade bridges", () => {
     expect(
       hostRpcRegistry["host.notifications.list"][1].versions[0].contract,
     ).toBe(hostNotificationsListV10);
@@ -973,7 +974,42 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsListUpgradeV10ToV20);
     expect(
       hostRpcRegistry["host.notifications.list"][2].downgradePathsFromLatest[1],
-    ).toBe(hostNotificationsListDowngradeV21ToV10);
+    ).toBe(hostNotificationsListDowngradeV22ToV10);
+  });
+
+  it("REFUSES a local-home selector on the v1 bridge instead of widening it to whole-origin", () => {
+    // `@1.0` has no durable-home selector, and there is nothing on that line
+    // that means "the local partition". Discarding `home` answered a request
+    // for ONE partition with every row the host holds plus a whole-origin
+    // cursor - and the only caller that sends `home` is merging the result
+    // with a cloud lane, so it would have duplicated every cloud-homed row and
+    // then paginated the wrong scope. Same treatment the `attention`
+    // projection already gets one path up.
+    expect(
+      hostNotificationsListDowngradeV22ToV10.downgradeRequest({
+        filter: "recent",
+        limit: 25,
+        home: "local",
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED",
+        message:
+          "The local durable-home projection has no representation in host.notifications.list@1.0",
+      },
+    });
+  });
+
+  it("still bridges a home-less v2.2 request down to v1.0", () => {
+    // The refusal above is scoped to the selector, not to the whole minor: a
+    // caller that never asked for a partition keeps the released bridge.
+    expect(
+      hostNotificationsListDowngradeV22ToV10.downgradeRequest({
+        filter: "recent",
+        limit: 25,
+      }),
+    ).toEqual({ ok: true, value: { filter: "all", limit: 25 } });
   });
 
   it("registers one flat unary contract per non-list method", () => {

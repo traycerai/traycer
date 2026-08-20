@@ -80,6 +80,15 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostIdRef.value,
 }));
 
+// The notification centre reads its host from `useNotificationHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationHostId: () => activeHostIdRef.value,
+  useNotificationHost: () => ({ hostId: activeHostIdRef.value, client: null }),
+}));
+
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -631,7 +640,13 @@ describe("cloud feed projection authority", () => {
     useCloudNotificationsStore.getState().reset();
   });
 
-  it("merges renderer-local failures and Notifications-room collaboration rows with the cloud snapshot", () => {
+  it("concatenates the local lane - host local-home rows, renderer-local failures, collaboration rows - with the cloud partition", () => {
+    // Mixed mode keeps the host feed as the exact local durable-home
+    // partition and the cloud relay as the complementary partition. App-local
+    // failures and Notifications-room collaboration rows are this machine's
+    // client-side state no feed can reproduce, so they ride in the LOCAL lane
+    // beside the partition rows; the two lanes concatenate in protocol order
+    // rather than comparing timestamps across planes.
     applyHostSnapshot([hostDone("local-host", 100, null)], {
       unreadCount: 1,
       attentionCount: 0,
@@ -647,24 +662,105 @@ describe("cloud feed projection authority", () => {
 
     const { result } = renderHook(() => ({
       ids: useMergedNotificationIds(),
-      row: useMergedNotificationRow(cloudNotificationFeedId(cloud.entryId)),
+      hostRow: useMergedNotificationRow(hostFeedId("local-host")),
+      cloudRow: useMergedNotificationRow(
+        cloudNotificationFeedId(cloud.entryId),
+      ),
       unreadCount: useMergedNotificationUnreadCount(),
       bell: useNotificationBellState(),
       hostState: useNotificationCenterHostState(),
     }));
 
     expect(result.current.ids).toEqual([
+      hostFeedId("local-host"),
       appLocalFeedId("local-app"),
       globalFeedId("local-global"),
       cloudNotificationFeedId(cloud.entryId),
     ]);
-    expect(result.current.row?.sourceId).toBe("entry-cloud");
-    expect(result.current.unreadCount).toBe(3);
+    expect(result.current.hostRow?.source).toBe("host");
+    expect(result.current.cloudRow?.sourceId).toBe("entry-cloud");
+    expect(result.current.unreadCount).toBe(4);
+    // The unread app-local failure counts as attention, exactly as it does in
+    // local mode.
     expect(result.current.bell).toEqual({ kind: "attention", count: 1 });
     expect(result.current.hostState.isPartial).toBe(false);
   });
 
+  it("sums exact mixed unread and attention from both partition summaries without double counting", () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("local-prompt", 200, null),
+        hostDone("local-done", 150, null),
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("cloud-done", 9, null),
+        {
+          ...cloudDone("cloud-prompt", 10, null),
+          entry: {
+            ...cloudDone("cloud-prompt", 10, null).entry,
+            kind: "approval.requested",
+            severity: "needs_action",
+            outcome: null,
+            resolvedAt: null,
+            readAt: null,
+          },
+          coalesceKey: "approval.requested:cloud-prompt",
+        },
+      ],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 12,
+    });
+
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      attention: useAttentionNotificationIds(),
+    }));
+
+    // Protocol order: local plane first, then cloud plane.
+    expect(result.current.ids).toEqual([
+      hostFeedId("local-prompt"),
+      hostFeedId("local-done"),
+      cloudNotificationFeedId("cloud-prompt"),
+      cloudNotificationFeedId("cloud-done"),
+    ]);
+    expect(result.current.unreadCount).toBe(4);
+    expect(result.current.bell).toEqual({ kind: "attention", count: 2 });
+    expect(result.current.attention).toEqual([
+      hostFeedId("local-prompt"),
+      cloudNotificationFeedId("cloud-prompt"),
+    ]);
+  });
+
+  it("treats a null host or cloud summary as partial rather than understating the mixed total", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", 7, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() => ({
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      hostState: useNotificationCenterHostState(),
+    }));
+
+    // Host summary is still null (no local partition snapshot landed).
+    expect(result.current.unreadCount).toBe(0);
+    expect(result.current.bell).toEqual({ kind: "unknown" });
+    expect(result.current.hostState.isPartial).toBe(true);
+  });
+
   it("never keeps the attention bell after optimistically marking every cloud failure read", () => {
+    // An EMPTY host snapshot, not an absent one. Mixed mode now reports
+    // `unknown` while either partition's summary is missing rather than
+    // understating the total from the one it has, so a cloud-only arrangement
+    // would assert the partial state instead of this test's subject.
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 0 });
     const failure = cloudFailure("entry-failure", 7, null);
     useCloudNotificationsStore.getState().applySnapshot({
       rows: [failure],
@@ -934,8 +1030,14 @@ describe("useNotificationBellState", () => {
       readonly state: NotificationBellState;
       readonly expected: string;
     }> = [
-      // unknown shares clear's label — both render a plain bell with no indicator.
-      { state: { kind: "unknown" }, expected: "Notifications" },
+      // A THIRD sibling of the flipped false-clear assertion (`s5-parity-gaps`
+      // gap 3): unknown used to share clear's label because both rendered a
+      // plain bell with no indicator. It renders its own indicator now, so a
+      // shared label would be the same false-clear for a screen-reader user.
+      {
+        state: { kind: "unknown" },
+        expected: "Notifications, status unavailable",
+      },
       { state: { kind: "clear" }, expected: "Notifications" },
       {
         state: { kind: "quietDot" },

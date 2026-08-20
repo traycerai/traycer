@@ -10,6 +10,7 @@ import {
   resetCloudEpicTasksPagesForScope,
   resetLastViewedCloudEpicTasksPagesForScope,
   setCloudEpicTasksPagePinned,
+  setCloudEpicTasksPageLocalHome,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 const IDENTITY = "host-a|user-a|{}";
@@ -219,5 +220,32 @@ describe("useCloudEpicTasksPagesStore", () => {
     setCloudEpicTasksPagePinned("host-a", "user-a", "epic-missing", true);
 
     expect(pagesFor(scopedIdentity)).toBe(before);
+  });
+
+  it("patches one epic's home marker across a scope's tails when promotion completes", () => {
+    // The home-marker twin of the pin patch. Promotion completion used to
+    // patch only the TanStack first page, so a row loaded through "Show
+    // more" kept `home: "local"` here and its cloud-only actions stayed
+    // disabled until a reset or refresh.
+    const scopedIdentity = "host-a|user-a|recent";
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.appendPage(scopedIdentity, 0, {
+      tasks: [{ ...epicTask("epic-1", false), home: "local" }],
+      hasMore: true,
+      nextCursor: "next",
+    });
+
+    setCloudEpicTasksPageLocalHome("host-a", "user-a", "epic-1", false);
+
+    const scopedPage = pagesFor(scopedIdentity)?.[0];
+    // Promoted rows DROP the key rather than carrying `home: "cloud"`,
+    // matching what a refetched page would hold.
+    expect(scopedPage?.tasks[0]).not.toHaveProperty("home");
+    expect(scopedPage?.nextCursor).toBe("next");
+
+    setCloudEpicTasksPageLocalHome("host-a", "user-a", "epic-1", true);
+    expect(pagesFor(scopedIdentity)?.[0]?.tasks[0]).toMatchObject({
+      home: "local",
+    });
   });
 });

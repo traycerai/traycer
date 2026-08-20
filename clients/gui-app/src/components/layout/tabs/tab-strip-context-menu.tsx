@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -34,7 +35,7 @@ interface TabContextMenuContentProps {
   readonly canCloseOtherTabs: boolean;
   readonly canOpenInNewWindow: boolean;
   readonly canEditTitle: boolean;
-  readonly taskPinned: boolean | null;
+  readonly taskPinnedState: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
   readonly onCloseOtherTabs: (tab: HeaderTab) => void;
   readonly onDuplicateTab: (tab: HeaderTab) => void;
@@ -45,6 +46,20 @@ interface TabContextMenuContentProps {
   readonly onSetTaskPinned: (pinned: boolean) => void;
 }
 
+/**
+ * The pin item's label. States the CONDITION rather than predicting an event:
+ * "available after cloud sync" promises a sync a free-tier account never gets,
+ * and a stale `home: "local"` reading would keep promising it for an epic
+ * already in the cloud.
+ */
+function pinActionLabel(
+  cloudOnly: boolean,
+  taskPinned: boolean | null,
+): string {
+  if (cloudOnly) return "Pin Task in History \u2014 stored on this device";
+  return taskPinned === true ? "Unpin Task in History" : "Pin Task in History";
+}
+
 export function TabContextMenuContent(
   props: TabContextMenuContentProps,
 ): React.ReactNode {
@@ -53,7 +68,7 @@ export function TabContextMenuContent(
     canCloseOtherTabs,
     canOpenInNewWindow,
     canEditTitle,
-    taskPinned,
+    taskPinnedState,
     isTaskPinPending,
     onCloseOtherTabs,
     onDuplicateTab,
@@ -62,6 +77,12 @@ export function TabContextMenuContent(
     onEditTitle,
     onSetTaskPinned,
   } = props;
+
+  // `null` still means "we do not know yet" and keeps the spinner; the
+  // absent-`home` case (older host, pre-`@1.1` negotiation) reads as
+  // cloud-or-unknown and keeps exactly today's behaviour.
+  const taskPinned = taskPinnedState === null ? null : taskPinnedState.pinned;
+  const cloudOnly = taskPinnedState?.home === "local";
 
   const showDuplicate = tab.canDuplicate;
   const showOpenInNewWindow = tab.canOpenInNewWindow;
@@ -80,18 +101,28 @@ export function TabContextMenuContent(
             </ContextMenuItem>
           ) : null}
           <ContextMenuItem
-            disabled={taskPinned === null || isTaskPinPending}
+            // `cloudOnly` mirrors the History list's `HistoryPinControl`
+            // (`epics-list-panel.tsx`), which already learned this: pin is a
+            // cloud-only personal preference, so offering it on an epic that
+            // lives only on this device is an action the host can only refuse
+            // - and the optimistic toast said it had worked.
+            disabled={taskPinned === null || isTaskPinPending || cloudOnly}
+            data-local-home-pin-unavailable={cloudOnly || undefined}
             onSelect={() => {
-              if (taskPinned === null) return;
+              if (cloudOnly || taskPinned === null) return;
               onSetTaskPinned(!taskPinned);
             }}
             data-testid={`tab-pin-history-${tab.id}`}
           >
             <Pin className={taskPinned === true ? "fill-current" : undefined} />
-            {taskPinned === true
-              ? "Unpin Task in History"
-              : "Pin Task in History"}
-            {taskPinned === null || isTaskPinPending ? (
+            {/*
+              States the CONDITION rather than predicting an event: "available
+              after cloud sync" promises a sync that a free-tier account never
+              gets, and a stale `home: "local"` row would keep promising it for
+              an epic already in the cloud.
+            */}
+            {pinActionLabel(cloudOnly, taskPinned)}
+            {!cloudOnly && (taskPinned === null || isTaskPinPending) ? (
               <AgentSpinningDots
                 className="ml-auto text-muted-foreground"
                 testId={`tab-pin-history-spinner-${tab.id}`}

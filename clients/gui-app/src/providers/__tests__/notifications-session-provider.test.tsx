@@ -6,7 +6,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type {
@@ -30,6 +34,7 @@ import {
   hostNotificationsSubscribeClientFrameSchema,
   type HostNotificationEntry,
   type HostNotificationsCloudFeedRow,
+  type HostNotificationsIndicatorStateResponse,
   type HostNotificationsMarkReadRequest,
   type HostNotificationsSubscribeClientFrame,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -54,6 +59,13 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 interface HostState {
   id: string | null;
   client: HostClient<HostRpcRegistry> | null;
+  /**
+   * The APP-WIDE client, which per G8 is a different machine from the
+   * notification host whenever a tab is bound to a remote one. Left `null` by
+   * default so every existing case keeps seeing one client; a case that needs
+   * the two to disagree sets it, and `useHostClient()` follows it.
+   */
+  appWideClient: HostClient<HostRpcRegistry> | null;
 }
 
 interface StreamState {
@@ -62,7 +74,11 @@ interface StreamState {
   useClientSupport: boolean;
 }
 
-const hostState = vi.hoisted<HostState>(() => ({ id: "host-a", client: null }));
+const hostState = vi.hoisted<HostState>(() => ({
+  id: "host-a",
+  client: null,
+  appWideClient: null,
+}));
 const streamState = vi.hoisted<StreamState>(() => ({
   client: null,
   cloudFeedSupport: null,
@@ -76,22 +92,63 @@ const mockAuth = {
   revalidateCurrentContext: vi.fn(() => Promise.resolve(null)),
 };
 
+// The merged-notification actions this provider mounts address the LOCAL
+// notification host. The real hook resolves that through `useHostClientFor`,
+// which reaches the host runtime provider this suite does not mount - so it is
+// stubbed to the same client the streams here are opened on.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationHostId: () => hostState.id,
+  useNotificationHost: () => ({
+    hostId: hostState.id,
+    client: hostState.client,
+  }),
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
-  useHostClient: () => hostState.client,
+  useHostClient: () => hostState.appWideClient ?? hostState.client,
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => hostState.client,
   useAuthService: () => mockAuth,
 }));
 
-// Feed-mode capability still reads the app-wide stream binding, so this mock
-// stays pointed at `stream-runtime-context` even though the provider no longer
-// takes its CLIENT from there (see the two hooks mocked below).
+// Feed-mode capability now reads the EXPLICIT client the provider opened its
+// streams on, so the `For` variants take that client as an argument instead of
+// reaching for the app-wide binding. The app-wide pair is still exported for
+// the surfaces that legitimately use it, so both stay mocked here.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: (method: keyof HostStreamRpcRegistry & string) =>
     streamState.useClientSupport
       ? (streamState.client?.getMethodSupport(method) ?? null)
       : streamState.cloudFeedSupport,
+  useStreamMethodSchemaVersion: (
+    method: keyof HostStreamRpcRegistry & string,
+  ) => {
+    if (streamState.useClientSupport) {
+      return streamState.client?.getMethodSchemaVersion(method) ?? null;
+    }
+    return method === "host.notifications.cloudFeed.subscribe"
+      ? { major: 1, minor: 1 }
+      : { major: 1, minor: 2 };
+  },
+  useStreamMethodSupportFor: (
+    client: WsStreamClient<HostStreamRpcRegistry> | null,
+    method: keyof HostStreamRpcRegistry & string,
+  ) =>
+    streamState.useClientSupport
+      ? (client?.getMethodSupport(method) ?? null)
+      : streamState.cloudFeedSupport,
+  useStreamMethodSchemaVersionFor: (
+    client: WsStreamClient<HostStreamRpcRegistry> | null,
+    method: keyof HostStreamRpcRegistry & string,
+  ) => {
+    if (streamState.useClientSupport) {
+      return client?.getMethodSchemaVersion(method) ?? null;
+    }
+    return method === "host.notifications.cloudFeed.subscribe"
+      ? { major: 1, minor: 1 }
+      : { major: 1, minor: 2 };
+  },
 }));
 
 // Per the G8 decision the provider binds to the LOCAL host, not the app-wide
@@ -250,6 +307,7 @@ import { useNotificationsPopoverStore } from "@/stores/notifications/notificatio
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
+  getEpicAgentActivity,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
 
@@ -528,6 +586,11 @@ function createHostClient(
           markReadCalls.push(request);
           return {};
         },
+        // Held open forever. The only thing that may settle it is the
+        // coordinator releasing the read, which is exactly the effect the
+        // canceller-binding case below measures.
+        "host.notifications.indicatorState": () =>
+          new Promise<HostNotificationsIndicatorStateResponse>(() => undefined),
       },
     }),
     findHostById: (hostId) =>
@@ -543,6 +606,35 @@ function createHostClient(
   // `hostState.id` names some other host, which is exactly what the bound slot
   // did before.
   return client.createRequesterForHostId(mockLocalHostEntry.hostId);
+}
+
+/**
+ * The APP-WIDE client for a session whose active host is a REMOTE machine -
+ * the G8 case where "the notification host" and "the host the rest of the app
+ * is pointed at" are two different computers.
+ *
+ * Its own runtime answers nothing: a canceller taken from here is wrong not
+ * because this host would refuse the release but because the coordinator keys
+ * one by `(hostId, userId, method, params)`, so a release issued through this
+ * client names `mock-remote` and cannot reach a read issued to `mock-local`.
+ */
+function createAppWideRemoteHostClient(): HostClient<HostRpcRegistry> {
+  const queryClient = new QueryClient();
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "remote-request-1",
+      handlers: {},
+    }),
+    findHostById: (hostId) =>
+      hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+  });
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+  );
+  return client.createRequesterForHostId(mockRemoteHostEntry.hostId);
 }
 
 function setFocusedChat(epicId: string, chatId: string): void {
@@ -647,6 +739,7 @@ describe("<NotificationsSessionProvider />", () => {
     window.localStorage.clear();
     hostState.id = "host-a";
     hostState.client = null;
+    hostState.appWideClient = null;
     streamState.client = null;
     streamState.cloudFeedSupport = "unsupported";
     streamState.useClientSupport = false;
@@ -719,11 +812,18 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     await waitFor(() => {
+      // Mixed mode keeps the host durable-home feed open alongside the cloud
+      // relay. Free-tier local sources (app-local / collaboration room) are
+      // not reopened as streams; retained store rows are ignored by merge.
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
+      // App-local failure rows survive the transition (no feed can reproduce
+      // them); the v1 room replica is discarded and refilled by the reopened
+      // collaboration stream's own baseline below.
       expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
         1,
       );
@@ -766,9 +866,7 @@ describe("<NotificationsSessionProvider />", () => {
       });
     });
 
-    expect([
-      ...(useAgentActivityStore.getState().byEpic.get("epic-1")?.working ?? []),
-    ]).toEqual(["agent-1"]);
+    expect([...getEpicAgentActivity("epic-1").working]).toEqual(["agent-1"]);
     expect(useNotificationsStore.getState().entryIds).toEqual([
       "global-after-cloud",
     ]);
@@ -777,11 +875,11 @@ describe("<NotificationsSessionProvider />", () => {
       streamClient.sessionFor("agent.activity.subscribe").emitStatus("closed");
     });
 
-    expect(useAgentActivityStore.getState()).toMatchObject({
-      connectionStatus: "closed",
-      servedBy: null,
-    });
-    expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
+    // Scoped to the host that closed, and there is only one here.
+    expect([...useAgentActivityStore.getState().byHost.values()]).toMatchObject(
+      [{ connectionStatus: "closed", servedBy: null }],
+    );
+    expect(getEpicAgentActivity("epic-1").working.size).toBe(0);
   });
 
   it("reopens cloud notifications and activity on a replacement local-host client", async () => {
@@ -806,6 +904,7 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
 
@@ -826,6 +925,7 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
     expect(firstClient.sessionFor("agent.activity.subscribe").closeCount).toBe(
@@ -835,9 +935,80 @@ describe("<NotificationsSessionProvider />", () => {
       firstClient.sessionFor("host.notifications.cloudFeed.subscribe")
         .closeCount,
     ).toBe(1);
+    expect(
+      firstClient.sessionFor("host.notifications.feed.subscribe").closeCount,
+    ).toBe(1);
     expect(firstClient.sessionFor("notifications.subscribe").closeCount).toBe(
       1,
     );
+  });
+
+  it("opens both partitioned notification streams only after schema versions negotiate", async () => {
+    const queryClient = new QueryClient();
+    const incompleteClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = incompleteClient;
+    streamState.cloudFeedSupport = "supported";
+    streamState.useClientSupport = true;
+    // Real client has no negotiated methods yet — mixed mode must stay local.
+    vi.spyOn(incompleteClient, "getMethodSupport").mockReturnValue("supported");
+    vi.spyOn(incompleteClient, "getMethodSchemaVersion").mockImplementation(
+      (method: string) =>
+        method === "host.notifications.cloudFeed.subscribe"
+          ? { major: 1, minor: 0 }
+          : { major: 1, minor: 1 },
+    );
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect([...incompleteClient.subscribedMethods].sort()).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.feed.subscribe",
+        "notifications.subscribe",
+      ]);
+    });
+    expect(incompleteClient.subscribedMethods).not.toContain(
+      "host.notifications.cloudFeed.subscribe",
+    );
+
+    const completeClient = new MockWsStreamClient();
+    vi.spyOn(completeClient, "getMethodSupport").mockReturnValue("supported");
+    vi.spyOn(completeClient, "getMethodSchemaVersion").mockImplementation(
+      (method: string) =>
+        method === "host.notifications.cloudFeed.subscribe"
+          ? { major: 1, minor: 1 }
+          : { major: 1, minor: 2 },
+    );
+    act(() => {
+      streamState.client = completeClient;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect([...completeClient.subscribedMethods].sort()).toEqual([
+        "agent.activity.subscribe",
+        "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
+        // Mixed mode keeps the per-user Notifications room replica live -
+        // collaboration events are still written there, not to the relay.
+        "notifications.subscribe",
+      ]);
+    });
+    streamState.useClientSupport = false;
   });
 
   it("reopens activity after a recoverable terminal close", async () => {
@@ -862,6 +1033,7 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
 
@@ -880,6 +1052,7 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
         "agent.activity.subscribe",
       ]);
       act(() => {
@@ -888,7 +1061,9 @@ describe("<NotificationsSessionProvider />", () => {
           .emitClosed(fatalClose("INCOMPATIBLE"));
         vi.advanceTimersByTime(2 * HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
       });
-      expect(streamClient.subscribedMethods).toHaveLength(4);
+      // The four initial streams plus the single recoverable reopen above -
+      // an INCOMPATIBLE close must add nothing more.
+      expect(streamClient.subscribedMethods).toHaveLength(5);
     } finally {
       vi.useRealTimers();
     }
@@ -916,12 +1091,16 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
 
     const baseline = cloudRow("entry-baseline", 7);
+    const cloudSession = streamClient.sessionFor(
+      "host.notifications.cloudFeed.subscribe",
+    );
     act(() => {
-      streamClient.session.emitServerFrame({
+      cloudSession.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
         connectionState: "connected",
@@ -934,7 +1113,7 @@ describe("<NotificationsSessionProvider />", () => {
 
     const arrived = cloudRow("entry-arrived", 8);
     act(() => {
-      streamClient.session.emitServerFrame({
+      cloudSession.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
         connectionState: "connected",
@@ -954,7 +1133,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     act(() => {
-      streamClient.session.emitServerFrame({
+      cloudSession.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
         connectionState: "connected",
@@ -967,6 +1146,10 @@ describe("<NotificationsSessionProvider />", () => {
   });
 
   it("never lets an independently arriving cloud completion consume a local failure", async () => {
+    // `sessionFor`, not `.session`: mixed mode opens the host feed stream
+    // AFTER the cloud one, so the bare accessor - which answers with the
+    // LAST session opened - would deliver this cloud snapshot to the host
+    // feed handler, which does not record cloud receipts.
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
@@ -994,14 +1177,16 @@ describe("<NotificationsSessionProvider />", () => {
     const baseline = cloudRow("cloud-entry-baseline", 10);
 
     act(() => {
-      streamClient.session.emitServerFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        connectionState: "connected",
-        version: 1,
-        rows: [baseline],
-        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
-      });
+      streamClient
+        .sessionFor("host.notifications.cloudFeed.subscribe")
+        .emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 1,
+          rows: [baseline],
+          summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        });
     });
     const baselineObservation = await waitFor(() => {
       const observation = useAppLocalNotificationsStore
@@ -1049,14 +1234,16 @@ describe("<NotificationsSessionProvider />", () => {
       originHostId: "host-b",
     };
     act(() => {
-      streamClient.session.emitServerFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        connectionState: "connected",
-        version: 2,
-        rows: [baseline, otherHostCompletion],
-        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
-      });
+      streamClient
+        .sessionFor("host.notifications.cloudFeed.subscribe")
+        .emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 2,
+          rows: [baseline, otherHostCompletion],
+          summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+        });
     });
     await waitFor(() => {
       expect(
@@ -1087,14 +1274,16 @@ describe("<NotificationsSessionProvider />", () => {
     });
     const staleCompletion = cloudRow("cloud-entry-stale", 5);
     act(() => {
-      streamClient.session.emitServerFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        connectionState: "connected",
-        version: 1,
-        rows: [baseline, staleCompletion],
-        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
-      });
+      streamClient
+        .sessionFor("host.notifications.cloudFeed.subscribe")
+        .emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 1,
+          rows: [baseline, staleCompletion],
+          summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+        });
     });
     expect(
       useAppLocalNotificationsStore
@@ -1117,14 +1306,16 @@ describe("<NotificationsSessionProvider />", () => {
       },
     };
     act(() => {
-      streamClient.session.emitServerFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        connectionState: "connected",
-        version: 3,
-        rows: [baseline, otherHostCompletion, arrived],
-        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
-      });
+      streamClient
+        .sessionFor("host.notifications.cloudFeed.subscribe")
+        .emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 3,
+          rows: [baseline, otherHostCompletion, arrived],
+          summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+        });
     });
     await waitFor(() => {
       expect(
@@ -1162,6 +1353,7 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
     act(() => {
@@ -1202,9 +1394,11 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
       expect(useCloudNotificationsStore.getState().hasSnapshot).toBe(false);
       expect(useCloudNotificationsStore.getState().connectionState).toBe(
@@ -1236,6 +1430,7 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
     });
     act(() => {
@@ -1258,6 +1453,7 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "notifications.subscribe",
         "host.notifications.cloudFeed.subscribe",
+        "host.notifications.feed.subscribe",
       ]);
       const cloud = useCloudNotificationsStore.getState();
       expect(cloud.hasSnapshot).toBe(false);
@@ -1289,6 +1485,9 @@ describe("<NotificationsSessionProvider />", () => {
       resetAuth("signed-in", "alice@example.com", "alice@example.com");
     });
     await waitFor(() => {
+      // The stream-factory override is the local-mode test harness path: it
+      // suppresses the host durable-home feed so this case can isolate the
+      // cloud entitlement wall without mixed-plane stream noise.
       expect(streamClient.subscribedMethods).toEqual([
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
@@ -1656,8 +1855,12 @@ describe("<NotificationsSessionProvider />", () => {
       expect(useNotificationsStore.getState().entries).toHaveLength(1);
       expect(useHostNotificationsStore.getState().byId).toEqual({});
       expect(useHostNotificationsStore.getState().summary).toBeNull();
-      expect(useAgentActivityStore.getState().servedBy).toBeNull();
-      expect(useAgentActivityStore.getState().byEpic).toEqual(new Map());
+      expect(
+        [...useAgentActivityStore.getState().byHost.values()].every(
+          (host) => host.servedBy === null,
+        ),
+      ).toBe(true);
+      expect(getEpicAgentActivity("epic-1").working.size).toBe(0);
       expect(
         Object.keys(useAppLocalNotificationsStore.getState().byId),
       ).not.toHaveLength(0);
@@ -1874,8 +2077,11 @@ describe("<NotificationsSessionProvider />", () => {
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
 
-    // (2) Disconnect → summary unknown, rows preserved; unknown renders like clear
-    // (no indicator) so the bell stays quiet while status is unresolved.
+    // (2) Disconnect → summary unknown, rows preserved. The bell SAYS so now:
+    // a sibling of the flipped `notifications-bell.test.tsx` assertion, this
+    // one also encoded "unknown renders like clear (no indicator)" -
+    // `s5-parity-gaps` gap 3. The rows-preserved half of the case is
+    // unchanged; only the false-clear expectation moves.
     act(() => {
       streamClient.session.emitStatus("reconnecting");
     });
@@ -1883,11 +2089,13 @@ describe("<NotificationsSessionProvider />", () => {
     expect(
       useHostNotificationsStore.getState().byId["connected-host-row"],
     ).toBeDefined();
-    expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
+    expect(
+      screen.getByTestId("notifications-unknown-indicator"),
+    ).not.toBeNull();
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Notifications" }),
+      screen.getByRole("button", { name: "Notifications, status unavailable" }),
     ).not.toBeNull();
 
     // (3) Reconnect open + fresh atomic snapshot → exact summary + badge.
@@ -2801,6 +3009,74 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
+  it("releases the in-flight indicator read on the NOTIFICATION host, not the app-wide one", async () => {
+    // Set BEFORE the render: the feed handler captures its canceller in a
+    // `useCallback`, so a client swapped in afterwards is never the one under
+    // test. The two hosts disagreeing is the whole point of G8 and the only
+    // configuration in which this binding is observable at all - notifications
+    // come from `mock-local` while the rest of the app addresses
+    // `mock-remote`.
+    hostState.appWideClient = createAppWideRemoteHostClient();
+    const { queryClient, streamClient } =
+      await renderHostNotificationsProvider();
+    const notificationClient = hostState.client;
+    if (notificationClient === null) throw new Error("no notification client");
+
+    const key = indicatorKey("epic-a", "chat-a");
+    let readOutcome: "pending" | "released" | "resolved" | "failed" = "pending";
+    void queryClient
+      .fetchQuery({
+        queryKey: key,
+        retry: false,
+        queryFn: () => {
+          // Deliberately signal-LESS. `cancelActiveRead` exists for exactly
+          // the bespoke query fns that predate `requestWithSignal`, and one
+          // that forwarded its signal would be released by `cancelQueries`
+          // before the canceller was ever consulted - measuring nothing.
+          const read = notificationClient.request(
+            "host.notifications.indicatorState",
+            { epicIds: ["epic-a"], chatIds: ["chat-a"] },
+          );
+          void read.then(
+            () => {
+              readOutcome = "resolved";
+            },
+            (error: unknown) => {
+              readOutcome =
+                error instanceof HostRequestControlFlowError
+                  ? "released"
+                  : "failed";
+            },
+          );
+          return read;
+        },
+      })
+      .catch(() => undefined);
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+    });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 0, attentionCount: 0 },
+      });
+    });
+
+    // The coordinator keys a release by `(hostId, userId, method, params)`, so
+    // this only settles when the canceller the provider passed is bound to
+    // `mock-local`. Handed the app-wide client it names `mock-remote`, the
+    // release reaches nothing, and this read stays open to re-resolve the
+    // just-invalidated query with its pre-frame answer.
+    await waitFor(() => {
+      expect(readOutcome).toBe("released");
+    });
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {

@@ -8,8 +8,13 @@ import {
 } from "y-protocols/awareness";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
+  EpicCloudFreshness,
   EpicCloudSyncStatus,
+  EpicDurabilityPauseReasonV15,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
   EpicMigrationPhase,
+  EpicPromotionState,
 } from "@traycer/protocol/host/epic/subscribe";
 import type {
   ChatRecordRemovalReason,
@@ -102,6 +107,8 @@ export interface SnapshotFetchError {
    * `describeVersionSkew` (`@/lib/host/version-skew-copy`).
    */
   readonly upgradeGuidance: FatalErrorDetails["upgradeGuidance"];
+  /** The local-store repair copy is carried separately from the error text. */
+  readonly localStoreRemedy?: string;
 }
 
 /**
@@ -185,13 +192,30 @@ function isUnavailableFatal(details: FatalErrorDetails): boolean {
   return isUnavailableEpicCode(details.code);
 }
 
+// `details.reason` is a host-authored string aimed at a log line, which is the
+// right default for codes the renderer has nothing better to say about. The two
+// terminal codes s0 added are the exception: they name a condition the user can
+// understand and, for one of them, act on - so they get copy rather than the
+// raw reason. Unknown codes keep falling through to `reason`.
+function terminalCloseMessage(details: FatalErrorDetails): string {
+  switch (details.code) {
+    case "ROOM_UNINITIALIZED":
+      return "This epic cannot be opened because its collaboration room was never initialized.";
+    case "ENTITLEMENT_REQUIRED":
+      return "Cloud sync is not available on your current plan.";
+    default:
+      return details.reason;
+  }
+}
+
 function snapshotFetchErrorFrom(
   details: FatalErrorDetails,
 ): SnapshotFetchError {
   return {
     code: details.code,
-    message: details.reason,
+    message: terminalCloseMessage(details),
     upgradeGuidance: details.upgradeGuidance,
+    localStoreRemedy: details.localStoreRemedy,
   };
 }
 
@@ -412,6 +436,67 @@ export interface OpenEpicState {
    * proof.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /**
+   * Where the epic is durable, at `@1.4` width.
+   *
+   * `null` here means the host said NOTHING, and at `@1.4` that reads as
+   * unknown - never as synced. It is not a licence for the calm rendering;
+   * see `selectEpicDurabilityView`, which requires a POSITIVE statement
+   * before it will resolve a missing durability claim as fine.
+   */
+  readonly durabilityStatus?: EpicDurabilityStatusV15 | null;
+  /** Present for a recognised paused reason, at `@1.4` width. */
+  readonly durabilityPauseReason?: EpicDurabilityPauseReasonV15 | null;
+  /** Optional @1.3 distinction behind a durable promotion reservation. */
+  readonly durabilityPromotionState?: EpicPromotionState | null;
+  /**
+   * Whether this session has local (WAL) protection - `@1.4`.
+   *
+   * `null` means the host did not say, which is `unknown`: an unarmed session
+   * used to be indistinguishable from an armed one, so the ONLY reading that
+   * closes that hole is that silence is not protection.
+   */
+  readonly localProtection?: EpicLocalProtection | null;
+  /**
+   * How the served document stands relative to the cloud - `@1.4`,
+   * `s5-mirror-first-serving`.
+   *
+   * `null` means the host did not say, and the rule that already governs
+   * `durabilityStatus` and `localProtection` governs this too: silence is
+   * UNKNOWN, and unknown is not `current`. Mirror-first serving makes an epic
+   * usable before it is up to date, so "the document rendered" stopped being
+   * evidence that it is the cloud's document.
+   */
+  readonly cloudFreshness?: EpicCloudFreshness | null;
+  /**
+   * Whether the peer serving this stream negotiated the `@1.4` minor that
+   * carries the three legs above - `s5-status-truthfulness`.
+   *
+   * Recorded because every one of those legs is optional on the wire, so
+   * `null` alone cannot say WHICH silence it is. A pre-`@1.4` peer has no
+   * durability opinion and keeps its prior rendering; a `@1.4` peer that omits
+   * a leg has stated UNKNOWN, and unknown may not render as reassurance. Both
+   * arrive here as `null`, and this bit is what separates them.
+   */
+  readonly durabilityLegsNegotiated: boolean;
+  /**
+   * The last durability the host actually STATED, kept across subscription
+   * cycles - unlike {@link durabilityStatus}, which a reconnect clears.
+   *
+   * The two answer different questions. `durabilityStatus` is "what has THIS
+   * cycle's peer told us", and clearing it is right: last cycle's answer is no
+   * evidence about this one. But where an epic is durable is a property of the
+   * EPIC - a local-homed epic does not acquire a cloud room by reconnecting -
+   * and a gate that fails dangerous on silence needs the retained fact rather
+   * than the cycle's.
+   *
+   * Written only by a positive statement, so it never manufactures an answer
+   * the host has not given, and cleared by `requestFreshSnapshot`, which
+   * bootstraps from scratch rather than reconnecting.
+   */
+  readonly retainedDurabilityStatus?: EpicDurabilityStatusV15 | null;
+  /** The pause reason observed beside {@link retainedDurabilityStatus}. */
+  readonly retainedDurabilityPauseReason?: EpicDurabilityPauseReasonV15 | null;
   /** `true` only after a cloud-status frame for this exact open cycle. */
   readonly hasFreshCloudSyncStatus: boolean;
   /**
@@ -924,6 +1009,29 @@ export function createOpenEpicStore(
   // connection status. The sync pill must instead consult
   // `hasFreshCloudSyncStatus`, which is the per-cycle acknowledgement proof.
   let cloudSyncStatus: EpicCloudSyncStatus = "connected";
+  let durabilityStatus: EpicDurabilityStatusV15 | null = null;
+  let durabilityPauseReason: EpicDurabilityPauseReasonV15 | null = null;
+  let durabilityPromotionState: EpicPromotionState | null = null;
+  let localProtection: EpicLocalProtection | null = null;
+  let cloudFreshness: EpicCloudFreshness | null = null;
+  let durabilityLegsNegotiated = false;
+  /**
+   * The last durability the host actually STATED for this epic, kept across
+   * subscription cycles.
+   *
+   * `durabilityStatus` is cycle-scoped on purpose: last cycle's answer is not
+   * evidence about this cycle's peer, so a reconnect clears it. But where an
+   * epic is DURABLE is a property of the epic, not of the connection - a
+   * local-homed epic does not acquire a cloud room by reconnecting - and gates
+   * that fail dangerous on an absent answer need the retained fact rather than
+   * the cycle's silence. See `useEpicCommentsHaveNoCloudRoom`.
+   *
+   * Only a positive statement writes it, so it never manufactures an answer
+   * the host has not given. Cleared by `requestFreshSnapshot`, which
+   * bootstraps the epic from scratch.
+   */
+  let retainedDurabilityStatus: EpicDurabilityStatusV15 | null = null;
+  let retainedDurabilityPauseReason: EpicDurabilityPauseReasonV15 | null = null;
   let hasFreshCloudSyncStatus = false;
   let currentStatus: StreamConnectionStatus = "connecting";
   // Flips true on the first successful connect so a later drop reads as
@@ -1922,19 +2030,35 @@ export function createOpenEpicStore(
         // blended from, so a reader that needs to know WHERE unsynced work is
         // sitting can never observe the two out of step. Every site that
         // moves `transportStatus` / `cloudSyncStatus` /
-        // `hasFreshCloudSyncStatus` / `hasConnectedOnce`
+        // `hasFreshCloudSyncStatus` / `hasConnectedOnce` / routing durability
         // must set through this.
         const connectionStateSlice = (): Pick<
           OpenEpicState,
           | "connectionStatus"
           | "hostTransportStatus"
           | "cloudSyncStatus"
+          | "durabilityStatus"
+          | "durabilityPauseReason"
+          | "durabilityPromotionState"
+          | "localProtection"
+          | "cloudFreshness"
+          | "durabilityLegsNegotiated"
+          | "retainedDurabilityStatus"
+          | "retainedDurabilityPauseReason"
           | "hasFreshCloudSyncStatus"
           | "hasConnectedOnce"
         > => ({
           connectionStatus: currentStatus,
           hostTransportStatus: transportStatus,
           cloudSyncStatus,
+          durabilityStatus,
+          durabilityPauseReason,
+          durabilityPromotionState,
+          localProtection,
+          cloudFreshness,
+          durabilityLegsNegotiated,
+          retainedDurabilityStatus,
+          retainedDurabilityPauseReason,
           hasFreshCloudSyncStatus,
           hasConnectedOnce,
         });
@@ -2485,10 +2609,27 @@ export function createOpenEpicStore(
                 migration: NOT_ALLOWED_MIGRATION_SLICE,
               });
             },
-            onCloudSyncStatus: (status) => {
+            onCloudSyncStatus: (status, durable) => {
               if (disposed || generation !== streamGeneration) return;
               const previousCloudSyncStatus = cloudSyncStatus;
               cloudSyncStatus = status;
+              durabilityStatus = durable.durability ?? null;
+              durabilityPauseReason =
+                durable.durability === "paused"
+                  ? (durable.pauseReason ?? null)
+                  : null;
+              if (durabilityStatus !== null) {
+                retainedDurabilityStatus = durabilityStatus;
+                retainedDurabilityPauseReason = durabilityPauseReason;
+              }
+              durabilityPromotionState = durable.promotionState ?? null;
+              localProtection = durable.localProtection ?? null;
+              cloudFreshness = durable.freshness ?? null;
+              // Recorded from the SAME frame the legs came on, so the reading
+              // "this peer omitted a leg it speaks" is made against the peer
+              // that actually omitted it rather than against whatever the
+              // handshake looks like by the time a selector runs.
+              durabilityLegsNegotiated = durable.peerSpeaksDurabilityLegs;
               hasFreshCloudSyncStatus = true;
               if (
                 hasConnectedOnce &&
@@ -2542,6 +2683,21 @@ export function createOpenEpicStore(
               const cycleDurabilityState = startedSubscriptionCycle
                 ? resetDurabilityProofForOpenCycle()
                 : null;
+              if (startedSubscriptionCycle) {
+                durabilityStatus = null;
+                durabilityPauseReason = null;
+                durabilityPromotionState = null;
+                localProtection = null;
+                // Cleared with the rest of the cycle's durability proof. A
+                // `current` retained across a re-subscribe would be this
+                // window claiming the new cycle's document is up to date on
+                // the strength of the previous one's reconciliation.
+                cloudFreshness = null;
+                // A re-subscribe can renegotiate onto a different host
+                // incarnation, so the previous cycle's answer is not evidence
+                // about this one's peer.
+                durabilityLegsNegotiated = false;
+              }
               const nextStatus = syncCurrentConnectionStatus();
               hasFreshRootSnapshotForOpenCycle = false;
               set(
@@ -2609,6 +2765,18 @@ export function createOpenEpicStore(
           clearUnsyncedQueue();
           transportStatus = "connecting";
           cloudSyncStatus = "connected";
+          durabilityStatus = null;
+          durabilityPauseReason = null;
+          durabilityPromotionState = null;
+          localProtection = null;
+          cloudFreshness = null;
+          durabilityLegsNegotiated = false;
+          // Cleared HERE and not on an ordinary cycle reset: a re-subscribe is
+          // the same epic reconnecting, while this is a bootstrap from
+          // scratch, and carrying a retained durability across it would be the
+          // previous epic session answering for a new one.
+          retainedDurabilityStatus = null;
+          retainedDurabilityPauseReason = null;
           const cycleDurabilityState = resetDurabilityProofForOpenCycle();
           // A fresh re-subscribe bootstraps from scratch, so the next connect is
           // "connecting", not "reconnecting": clear the latch and let only a

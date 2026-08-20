@@ -74,6 +74,17 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostIdRef.value,
 }));
 
+// The notification centre reads its host from `useNotificationHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  // This suite is about geometry, and never binds a host client - the
+  // mutations behind the feed controls are not what it asserts.
+  useNotificationHostId: () => activeHostIdRef.value,
+  useNotificationHost: () => ({ hostId: activeHostIdRef.value, client: null }),
+}));
+
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
   const actual =
     await importOriginal<

@@ -6,6 +6,7 @@ import {
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
   getTaskContextsResponseSchemaV10,
+  getTaskContextsResponseSchemaV11,
   type ListTaskLight,
   listTaskLightSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -46,11 +47,16 @@ describe("epic.getTaskContexts", () => {
   const v11Contract =
     hostRpcRegistry["epic.getTaskContexts"][1].versions[1].contract;
 
-  it("keeps v1.0 frozen and registers the v1.1 explicit-resolution minor", () => {
+  const v12Contract =
+    hostRpcRegistry["epic.getTaskContexts"][1].versions[2].contract;
+
+  it("keeps v1.0 frozen and registers the v1.1 and v1.2 minors", () => {
     expect(v10Contract.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(v11Contract.method).toBe("epic.getTaskContexts");
     expect(v11Contract.schemaVersion).toEqual({ major: 1, minor: 1 });
-    expect(hostRpcRegistry["epic.getTaskContexts"][1].latestMinor).toBe(1);
+    expect(v12Contract.method).toBe("epic.getTaskContexts");
+    expect(v12Contract.schemaVersion).toEqual({ major: 1, minor: 2 });
+    expect(hostRpcRegistry["epic.getTaskContexts"][1].latestMinor).toBe(2);
     expect(hostRpcRegistry["epic.getTaskContexts"].degrade).toEqual({
       kind: "unsupported",
     });
@@ -60,7 +66,39 @@ describe("epic.getTaskContexts", () => {
     expect(v10Contract.requestSchema).toBe(getTaskContextsRequestSchema);
     expect(v10Contract.responseSchema).toBe(getTaskContextsResponseSchemaV10);
     expect(v11Contract.requestSchema).toBe(getTaskContextsRequestSchema);
-    expect(v11Contract.responseSchema).toBe(getTaskContextsResponseSchema);
+    // FROZEN at the pre-`localHomedTaskIds` union shape: a released client
+    // keeps the exact payload it was built against, so this must name the V11
+    // instance rather than following the latest export.
+    expect(v11Contract.responseSchema).toBe(getTaskContextsResponseSchemaV11);
+    expect(v12Contract.requestSchema).toBe(getTaskContextsRequestSchema);
+    expect(v12Contract.responseSchema).toBe(getTaskContextsResponseSchema);
+  });
+
+  it("adds `localHomedTaskIds` at `@1.2` and nothing else", () => {
+    // Optional, so a host that cannot answer omits it - and the client must
+    // read that absence as "unknown", never as "not local".
+    const parsed = getTaskContextsResponseSchema.parse({ tasks: {} });
+    expect(parsed.localHomedTaskIds).toBeUndefined();
+    expect(
+      getTaskContextsResponseSchema.parse({
+        tasks: {},
+        localHomedTaskIds: ["epic-1"],
+      }).localHomedTaskIds,
+    ).toEqual(["epic-1"]);
+    // The frozen `@1.0`/`@1.1` schemas strip it, which is what keeps the
+    // minor additive.
+    expect(
+      getTaskContextsResponseSchemaV10.parse({
+        tasks: {},
+        localHomedTaskIds: ["epic-1"],
+      }),
+    ).toEqual({ tasks: {} });
+    expect(
+      getTaskContextsResponseSchemaV11.parse({
+        tasks: {},
+        localHomedTaskIds: ["epic-1"],
+      }),
+    ).toEqual({ tasks: {} });
   });
 
   it("round-trips a request within the id cap", () => {

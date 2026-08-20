@@ -25,7 +25,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(() => {
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
     }).not.toThrow();
-    expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(2);
+    // This branch's three status minors re-minted ABOVE the mainline's
+    // roomId minor (@1.2): durability @1.3, promotion @1.4, s5 pass @1.5.
+    expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(5);
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(6);
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,

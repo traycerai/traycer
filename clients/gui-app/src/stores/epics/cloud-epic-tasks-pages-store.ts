@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
-import { setEpicPinnedInCloudTasksResponse } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  setEpicLocalHomeInCloudTasksResponse,
+  setEpicPinnedInCloudTasksResponse,
+} from "@/lib/cloud-epic-tasks-query/cache";
 
 /**
  * Accumulated "Show more" pages for the cloud epic-tasks list, keyed by the
@@ -52,6 +55,11 @@ interface CloudEpicTasksPagesStoreState {
     identityPrefix: string,
     epicId: string,
     pinned: boolean,
+  ) => void;
+  readonly setTaskLocalHome: (
+    identityPrefix: string,
+    epicId: string,
+    localHome: boolean,
   ) => void;
 }
 
@@ -130,6 +138,36 @@ export const useCloudEpicTasksPagesStore =
           : state;
       });
     },
+    setTaskLocalHome: (identityPrefix, epicId, localHome) => {
+      set((state) => {
+        // The home-marker twin of `setTaskPinned`, added because promotion
+        // completing patched only the TanStack first page: a row loaded
+        // through "Show more" lives here, kept `home: "local"`, and its
+        // cloud-only actions (pin) stayed disabled until a reset or refresh.
+        // Same identity-preserving, generation-neutral contract as the pin
+        // patch.
+        const entries = Object.entries(state.pagesByIdentity).map(
+          ([identity, pages]): [string, readonly ListTasksResponse[]] => {
+            if (!identity.startsWith(identityPrefix)) {
+              return [identity, pages];
+            }
+            const nextPages = pages.map((page) =>
+              setEpicLocalHomeInCloudTasksResponse(page, epicId, localHome),
+            );
+            const identityChanged = nextPages.some(
+              (page, index) => page !== pages[index],
+            );
+            return [identity, identityChanged ? nextPages : pages];
+          },
+        );
+        const scopeChanged = entries.some(
+          ([identity, pages]) => pages !== state.pagesByIdentity[identity],
+        );
+        return scopeChanged
+          ? { pagesByIdentity: Object.fromEntries(entries) }
+          : state;
+      });
+    },
   }));
 
 function currentGeneration(
@@ -182,6 +220,24 @@ export function resetCloudEpicTasksPagesForScope(
 }
 
 /**
+ * Drops every accumulated pagination tail for one HOST, every user. A local
+ * store rebind republishes the host's durability store wholesale, so a tail
+ * answered by the abandoned store is stale for whoever loaded it - its rows,
+ * home markers and cursors all name the old store's world.
+ */
+export function resetCloudEpicTasksPagesForHost(hostId: string): void {
+  const state = useCloudEpicTasksPagesStore.getState();
+  const prefix = `${hostId}|`;
+  const identities = new Set([
+    ...Object.keys(state.pagesByIdentity),
+    ...Object.keys(state.generationByIdentity),
+  ]);
+  identities.forEach((identity) => {
+    if (identity.startsWith(prefix)) state.resetIdentity(identity);
+  });
+}
+
+/**
  * Drops only last-viewed pagination tails for one host/user. Recording a view
  * can move rows across page boundaries for that ordering, but leaves cursors
  * for every other sort valid.
@@ -221,4 +277,21 @@ export function setCloudEpicTasksPagePinned(
   useCloudEpicTasksPagesStore
     .getState()
     .setTaskPinned(`${hostId}|${userId}|`, epicId, pinned);
+}
+
+/**
+ * Flips one epic's `home` marker inside every retained "Show more" tail for
+ * one host/user - the pages-store half of the promotion home patch (the
+ * cached first page lives in TanStack Query and is patched by
+ * `setEpicLocalHomeInCloudTaskCaches`).
+ */
+export function setCloudEpicTasksPageLocalHome(
+  hostId: string,
+  userId: string,
+  epicId: string,
+  localHome: boolean,
+): void {
+  useCloudEpicTasksPagesStore
+    .getState()
+    .setTaskLocalHome(`${hostId}|${userId}|`, epicId, localHome);
 }
