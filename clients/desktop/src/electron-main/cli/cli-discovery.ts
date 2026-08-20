@@ -20,6 +20,7 @@ import { config, isDevBuild } from "../../config";
 import { environmentSubdir } from "../host/host-paths";
 import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
 import { log } from "../app/logger";
+import { withDesktopCliLock } from "../host/desktop-cli-lock";
 import devWrapperPaths from "./dev-wrapper-paths.json";
 
 /**
@@ -73,6 +74,19 @@ function resolveCliStagingDir(): string {
 function resolveCliManifestPath(): string {
   return join(resolveCliSlotHome(), "manifest.json");
 }
+
+// The CLI's own `store/paths.ts` `cliLockPath()`, resolved from this side.
+// It must stay literally the same file: the whole point is that a CLI
+// mutation and this desktop-held section exclude each other through ordinary
+// O_CREAT|O_EXCL contention on ONE path.
+function resolveCliLockPath(): string {
+  return join(resolveCliSlotHome(), ".lock");
+}
+
+// Long enough to outlast a CLI-side staging of a ~100 MB binary, which is
+// what this would normally be queued behind.
+const CLI_SLOT_LOCK_WAIT_MS = 15_000;
+const CLI_SLOT_LOCK_POLL_MS = 100;
 
 function resolveDesktopReconcileStatePath(): string {
   return join(resolveCliSlotHome(), "desktop-reconcile.json");
@@ -676,7 +690,54 @@ export async function installBundledCli(opts: {
   readonly version: string;
   readonly source: CliInstallManifest["source"];
 }): Promise<string> {
-  await mkdir(resolveCliBinDir(), { recursive: true, mode: 0o755 });
+  // Under the CLI lock, because this function is not the only writer of the
+  // slot it publishes. The CLI's startup refresh re-stages the same path from
+  // whatever its manifest names, and takes this same lock to do it. Without
+  // participating, the two interleave in a way neither can detect: the
+  // refresh selects source A, this publishes B plus a manifest naming the
+  // slot itself, and the refresh then publishes A over it - after which the
+  // manifest names the slot, so the refresh's own staleness check
+  // short-circuits and never notices the bytes are wrong. The machine runs A
+  // until Desktop reconciles again.
+  //
+  // Best-effort rather than a gate: installing the bundled CLI is part of
+  // app launch and must not fail because another process held a lock. On
+  // contention past the wait it proceeds anyway, which is exactly today's
+  // behaviour, so this is strictly an improvement and never a new failure.
+  // The lock file lives IN the slot home, so that directory has to exist
+  // before it can be opened - `open(path, "wx")` on a missing parent is
+  // ENOENT, not contention. The CLI's own `withCliLock` wrapper ensures the
+  // same directory for the same reason; the shared lock module does not.
+  await mkdir(resolveCliSlotHome(), { recursive: true, mode: 0o700 });
+  const outcome = await withDesktopCliLock(
+    {
+      lockPath: resolveCliLockPath(),
+      reason: "desktop-install-bundled-cli",
+      waitMs: CLI_SLOT_LOCK_WAIT_MS,
+      pollIntervalMs: CLI_SLOT_LOCK_POLL_MS,
+    },
+    () => publishBundledCli(opts),
+  );
+  if (outcome.kind === "acquired") return outcome.result;
+  log.warn("[cli] publishing bundled CLI without the cli-lock", {
+    lockPath: resolveCliLockPath(),
+    holderPid: outcome.holder?.pid ?? null,
+    holderReason: outcome.holder?.reason ?? null,
+  });
+  return publishBundledCli(opts);
+}
+
+async function publishBundledCli(opts: {
+  readonly bundledCliPath: string;
+  readonly version: string;
+  readonly source: CliInstallManifest["source"];
+}): Promise<string> {
+  // 0700, matching the CLI's `ensureCliInstallHomeDir`. A recursive mkdir
+  // does not repair an existing directory's mode, so whichever writer gets
+  // here first on a fresh machine decides it permanently - and this one is
+  // often first. At 0755 it would leave the slot home, which is also where
+  // the credentials file lives, traversable by other local users.
+  await mkdir(resolveCliBinDir(), { recursive: true, mode: 0o700 });
   const stablePath = stableCliBinaryPath();
   if (platform() === "win32") {
     // The slot binary is essentially ALWAYS running on Windows - the host's

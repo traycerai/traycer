@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { delimiter, resolve } from "node:path";
 import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
@@ -303,7 +303,16 @@ async function resolveNodeOnPath(): Promise<string | null> {
     if (entry.length === 0) continue;
     for (const name of names) {
       const candidate = resolve(entry, name);
+      // `access(X_OK)` alone is not enough: execute permission on a
+      // DIRECTORY means "searchable", so a PATH entry holding a directory
+      // called `node` would satisfy it and be returned ahead of the entry
+      // holding the real interpreter - registering a directory as the
+      // service's command. On Windows the check degrades to existence, so
+      // the same applies there for any `node` file that is not a program.
+      // Require a regular file as well, and keep walking otherwise.
       try {
+        const candidateStat = await stat(candidate);
+        if (!candidateStat.isFile()) continue;
         await access(candidate, constants.X_OK);
         return candidate;
       } catch {
