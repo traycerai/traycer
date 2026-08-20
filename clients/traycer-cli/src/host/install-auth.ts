@@ -39,6 +39,20 @@ import type { CommandContext } from "../runner/runner";
 //     host whose provisioning state was set by whichever command installed
 //     it - they create no new unprovisioned host, and a host that was
 //     already unprovisioned self-heals on the next minting client.
+//   - `maybeAutoBootstrap` (host/auto-bootstrap.ts) DOES start a host, so
+//     it belongs in this inventory even though it is not a command. Its
+//     only production caller is `host status` - a read - and both halves
+//     fit it badly: the pre-flight prompts, and a device-flow login inside
+//     a status read is indefensible, while the probe would put a
+//     deadline-bounded wait behind a command whose whole job is to answer
+//     quickly. Auto-bootstrap is a first-run convenience that makes the
+//     host exist so a read can be answered, not a lifecycle command, and
+//     the operator who wants a credentialed host has three explicit ones
+//     that provision. The host it starts self-heals on the next minting
+//     client - which for someone running `host status` is imminent, since
+//     that is what checking status precedes. This is the weakest exclusion
+//     of the four and the one to revisit first if auto-bootstrap ever
+//     grows a caller that is not a read.
 //
 // Pre-flight: a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
@@ -196,27 +210,41 @@ export async function maybeProvisionCredential(
   postSwapAction: "start" | "install" | "none",
   authPreflight: HostInstallAuthPreflight,
 ): Promise<HostCredentialProvisionOutcome | null> {
-  const signedIn =
+  // Nothing was started, so there is nothing to dial - the one gate that
+  // does not depend on the operator's auth state at all. Bytes-only lands
+  // here too: its caller passes `"none"` because it deliberately skips the
+  // whole service lifecycle.
+  if (postSwapAction === "none") {
+    return null;
+  }
+  const preflightSawSignIn =
     authPreflight.state === "signed-in" ||
     authPreflight.state === "signed-in-inline";
+  // Re-read rather than trusting the pre-flight's verdict in EITHER
+  // direction. It was taken before a stage + install that can run for
+  // minutes, and the credentials file moves both ways across that window:
+  // an inline sign-in or a concurrent `traycer login` in another terminal
+  // makes an `unauthenticated` pre-flight stale exactly as a concurrent
+  // sign-out makes a `signed-in` one stale. Gating on the stale verdict
+  // skipped the probe for a run that had perfectly good credentials by the
+  // time the host was up - and the file read is trivial next to the install
+  // that just happened.
+  //
   // Deliberately NOT gated on output mode - `--json` is the automation
   // surface that most needs a credentialed host, and a Desktop shellout
   // racing the GUI's own mint resolves inside the probe (a superseded mint
   // verifies the winner's credential rather than failing).
-  if (postSwapAction === "none" || !signedIn) {
-    return null;
-  }
-  // Re-read rather than reusing the pre-flight's read: an inline sign-in
-  // rewrote the credentials file after it.
   const auth = await resolveHostAuthOrNull(ctx, "provision");
   if (auth === null) {
-    // The pre-flight said signed-in, but the credentials are gone or
-    // unreadable NOW - a concurrent sign-out, or a corrupted file. Silently
-    // returning null here would print a summary claiming a signed-in user
-    // with no provisioning attempt at all, while the just-started host
-    // cannot serve work. Report the one outcome whose human line says the
-    // only thing that helps: sign in again.
-    return { kind: "unauthorized" };
+    // Still nothing to mint with. What that MEANS depends on what the
+    // pre-flight saw: a sign-in that has since disappeared (concurrent
+    // sign-out, corrupted file) must not be reported as a silent no-op -
+    // the summary would claim a signed-in user with no provisioning attempt
+    // while the just-started host cannot serve work, so it gets the one
+    // outcome whose human line says the only thing that helps. A run that
+    // was never signed in has already warned in the pre-flight and needs no
+    // second verdict here.
+    return preflightSawSignIn ? { kind: "unauthorized" } : null;
   }
   const progress = (message: string): void => {
     ctx.progress({
