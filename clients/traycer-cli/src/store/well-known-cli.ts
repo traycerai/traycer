@@ -432,13 +432,11 @@ async function slotRefreshPlan(
   // exists for must keep converging, and a slot that cannot say what it is
   // has no seniority to assert.
   //
-  // Only ever reached with a REGULAR-FILE slot, and that is a safety
-  // precondition rather than an accident of ordering: spawning the slot
-  // runs a CLI that itself refreshes before printing a version, and only a
-  // regular-file slot makes that child stop at the
-  // `resolve(wellKnownPath) === source` check above instead of re-entering
-  // the planner. The symlink arm below asks the same question of the link's
-  // TARGET for that reason - see there.
+  // Only ever reached with a REGULAR-FILE slot, since the symlink arm below
+  // returns first. That ordering is no longer load-bearing for recursion
+  // safety, though it once was argued to be: `slotOutranksRunning` refuses to
+  // spawn this process's own image whatever spelling names it, and that is
+  // the single place the rule is now stated.
   const guardedStage = async (): Promise<SlotRefreshPlan> => {
     if (!anchored && (await slotOutranksRunning(wellKnownPath))) {
       return { kind: "current" };
@@ -464,18 +462,15 @@ async function slotRefreshPlan(
     // over a link that points at a NEWER CLI demotes the registered
     // service, which is the very downgrade the guard exists to prevent.
     //
-    // The question is asked of the link's TARGET, never of the slot, and
-    // the difference is what keeps the probe from re-entering this planner.
-    // `slotOutranksRunning` spawns what it is given, and every packaged CLI
-    // runs this refresh before it parses `--version`. Spawned through a
-    // REGULAR-FILE slot the child self-nominates the slot it was launched
-    // from and stops at the `resolve(wellKnownPath) === source` check
-    // above; spawned through a SYMLINK its `process.execPath` resolves to
-    // the target, that lexical check misses, and it arrives right back here
-    // to spawn a probe of its own - a fresh ~100 MB process per level until
-    // the deadlines unwind. Spawned AS the target it is the ordinary case
-    // again: it sees the same symlinked slot, stages the slot from that
-    // same target, and answers. One copy, no recursion.
+    // The question is asked of the link's TARGET rather than of the slot
+    // because the target is what the bytes ARE - not as a recursion
+    // defence, which it never was. Probing either spelling re-enters this
+    // planner in the child, since the lexical `resolve(wellKnownPath) ===
+    // source` check above cannot see that a symlinked slot and its target
+    // name one file. What ends the recursion is `slotOutranksRunning`
+    // declining to spawn this process's own image: the child launched as
+    // the target asks nothing, stages the slot from itself, de-symlinks it,
+    // and answers. Stated once, there.
     //
     // Preserving the target only on a version answer, rather than on
     // `realpath` succeeding, is the other half. Bytes that resolve are not
@@ -543,19 +538,45 @@ async function slotRefreshPlan(
   return { kind: "adopt", source, sourceStat: mirroredSource };
 }
 
-// Ask the slot binary its version and answer whether it outranks the running
-// process. `true` is the ONLY answer that suppresses an unanchored stage, so
-// every failure - a slot that will not execute, prints garbage, or hangs
-// past the timeout - is `false`: refusing to converge on an unprovable
-// seniority claim would strand the hookless cohort the fallback serves.
+// Ask a candidate binary its version and answer whether it outranks the
+// running process. `true` is the ONLY answer that suppresses an unanchored
+// stage, so every failure - a candidate that will not execute, prints
+// garbage, or hangs past the timeout - is `false`: refusing to converge on an
+// unprovable seniority claim would strand the hookless cohort the fallback
+// serves.
 //
-// The spawned slot runs its own startup refresh first, which cannot recurse:
-// launched FROM the slot it self-nominates, the slot IS the source, and its
-// plan is `current` before any spawn.
-async function slotOutranksRunning(wellKnownPath: string): Promise<boolean> {
+// NEVER spawns this process's own image, and that check lives here rather
+// than at the call sites because it is the whole reason this function is safe
+// to call. What gets spawned is a packaged CLI, and a packaged CLI runs this
+// same refresh before commander parses `--version` - so a probe of ourselves
+// is a probe that re-enters this planner in the child, reaches this line
+// again, and spawns another ~100 MB process per level until the timeouts
+// unwind, orphaning every descendant deeper than the one `execFile` can kill.
+//
+// Two call sites have now been written believing a PATH comparison upstream
+// made that impossible, and both were wrong in the same way: recursion is a
+// question about binary IDENTITY, `resolve` compares SPELLING, and a symlink
+// is precisely where one file has two of them. `resolve(wellKnownPath) ===
+// source` is only accidentally an identity test - true for a regular-file
+// slot, false for a symlinked one naming the very same bytes. So the identity
+// test belongs in front of the spawn, once, where no third call site can
+// reintroduce it, and `canonicalBinaryPath` is what collapses the spellings.
+//
+// `false` is not a bail-out here but the exact answer: nothing is strictly
+// newer than itself. Its effect - stage - is also right, since bytes
+// identical to the running image cannot demote anything, and for the symlink
+// arm it is what finally turns a legacy link into the regular file the
+// copy-not-symlink rule wants.
+async function slotOutranksRunning(candidatePath: string): Promise<boolean> {
+  if (
+    (await canonicalBinaryPath(candidatePath)) ===
+    (await canonicalBinaryPath(process.execPath))
+  ) {
+    return false;
+  }
   let reported: string;
   try {
-    const { stdout } = await execFileAsync(wellKnownPath, ["--version"], {
+    const { stdout } = await execFileAsync(candidatePath, ["--version"], {
       timeout: SLOT_VERSION_PROBE_TIMEOUT_MS,
       windowsHide: true,
     });

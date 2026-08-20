@@ -165,18 +165,55 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 // a symlink re-enters this planner in the child and recurses - and a
 // verdict assertion cannot see that: the recursive and the non-recursive
 // plan agree on the bytes, and differ only in what they spawned.
+//
+// `onSpawn` is what a path assertion still cannot reach: WHAT THE CHILD DOES.
+// A probe launches a packaged CLI, and a packaged CLI runs this same refresh
+// before commander parses `--version` - so "which path was spawned" and "does
+// spawning it recurse" are different questions, and a mock that only prints a
+// canned version answers the first while silently passing the second. A test
+// that cares installs a child here that re-enters the real entry point under
+// the spawned binary's identity, which is the only shape that can fail on
+// recursion. Default `null` - a process that merely prints - keeps every
+// other test in this file at one level.
 const slotProbeControl = vi.hoisted(() => ({
   versionForPath: new Map<string, string>(),
   spawnedPaths: [] as string[],
+  onSpawn: null as ((file: string) => Promise<void>) | null,
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   const { promisify } = await import("node:util");
+  const { readFileSync } = await import("node:fs");
+  // A version belongs to BYTES, not to a path, and the difference is only
+  // invisible while nothing copies. Staging copies: a probe of a slot that
+  // was just staged from a mapped fixture is a probe of that fixture's
+  // image, and it reports that fixture's version - so a path-keyed lookup
+  // alone would answer "not executable" for a binary the map describes,
+  // which reads as a downgrade the production code did not commit. The
+  // mapped path stays the fast path; identical content is how a copy is
+  // recognised as the same program.
+  const versionOf = (file: string): string | undefined => {
+    const direct = slotProbeControl.versionForPath.get(file);
+    if (direct !== undefined) return direct;
+    let bytes: string;
+    try {
+      bytes = readFileSync(file, "utf8");
+    } catch {
+      return undefined;
+    }
+    for (const [path, version] of slotProbeControl.versionForPath) {
+      try {
+        if (readFileSync(path, "utf8") === bytes) return version;
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  };
   const run = (
     file: string,
   ): { readonly error: Error | null; readonly stdout: string } => {
-    slotProbeControl.spawnedPaths.push(file);
-    const mapped = slotProbeControl.versionForPath.get(file);
+    const mapped = versionOf(file);
     if (mapped === undefined) {
       return {
         error: Object.assign(
@@ -194,19 +231,24 @@ vi.mock("node:child_process", async (importOriginal) => {
     _options: unknown,
     callback: (error: Error | null, stdout: string, stderr: string) => void,
   ): unknown => {
+    slotProbeControl.spawnedPaths.push(file);
     const { error, stdout } = run(file);
     callback(error, stdout, "");
     return {};
   };
   Object.defineProperty(mockExecFile, promisify.custom, {
-    value: (file: string) =>
-      new Promise<{ stdout: string; stderr: string }>(
-        (resolvePromise, reject) => {
-          const { error, stdout } = run(file);
-          if (error !== null) reject(error);
-          else resolvePromise({ stdout, stderr: "" });
-        },
-      ),
+    value: async (
+      file: string,
+    ): Promise<{ stdout: string; stderr: string }> => {
+      // Recorded at LAUNCH, before the child runs, so a re-entrant child's
+      // own spawns land after its parent's in `spawnedPaths`.
+      slotProbeControl.spawnedPaths.push(file);
+      const child = slotProbeControl.onSpawn;
+      if (child !== null) await child(file);
+      const { error, stdout } = run(file);
+      if (error !== null) throw error;
+      return { stdout, stderr: "" };
+    },
   });
   return { ...actual, execFile: mockExecFile };
 });
@@ -229,6 +271,7 @@ beforeEach(() => {
   statControl.failEaccesForPath = null;
   slotProbeControl.versionForPath = new Map();
   slotProbeControl.spawnedPaths = [];
+  slotProbeControl.onSpawn = null;
   vi.resetModules();
 });
 
@@ -2170,6 +2213,79 @@ it.skipIf(process.platform === "win32")(
       new Set([resolvedTarget]),
     );
     expect(slotProbeControl.spawnedPaths).not.toContain(wellKnownPath);
+  },
+);
+
+// The three cases above pin WHICH path is probed. None of them can fail on
+// the thing that actually costs users a machine, because their spawned child
+// only prints: a probe launches a packaged CLI, that CLI runs this refresh
+// before commander parses `--version`, and whether IT probes in turn is a
+// question no canned answer is asked.
+//
+// So this one runs the real child. `onSpawn` re-enters the real entry point
+// under the spawned binary's identity - exactly what the operating system
+// would do - and the assertion is on nesting DEPTH, because that is what
+// distinguishes the two outcomes. A planner that lets a child probe does not
+// merely repeat work: each level is a fresh ~100 MB process, `execFile`'s
+// timeout can only kill the level it launched, and every deeper descendant
+// is orphaned. The depth cap is what keeps a regression from hanging this
+// suite instead of failing it; the recursion is otherwise unbounded.
+//
+// A child that spawns nothing is the fix stated as a measurement: maximum
+// depth 1 means every probe in the run was issued by the top-level process.
+it.skipIf(process.platform === "win32")(
+  "packaged, no manifest, legacy SYMLINK to a REAL CLI: the spawned child probes nothing",
+  async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const linkTarget = join(workHome, "newer-cli-the-link-points-at");
+    const targetBytes = "binary B - the newer CLI the legacy link points at";
+    writeFileSync(linkTarget, targetBytes);
+    symlinkSync(linkTarget, wellKnownPath);
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "binary A - an older stray SEA run once");
+    const resolvedTarget = realpathSync(linkTarget);
+    slotProbeControl.versionForPath.set(resolvedTarget, "9.9.9\n");
+
+    let liveDepth = 0;
+    let maxDepth = 0;
+    slotProbeControl.onSpawn = async (file: string): Promise<void> => {
+      liveDepth += 1;
+      maxDepth = Math.max(maxDepth, liveDepth);
+      try {
+        // Past this the run is already a fork bomb and the only question
+        // left is whether the suite reports it or hangs. Thrown rather than
+        // returned because the production catch turns any spawn failure into
+        // `false`, which would otherwise let an unfixed planner unwind
+        // quietly - `maxDepth` is what fails the test either way.
+        if (liveDepth <= 3) {
+          await withExecPath(file, () =>
+            refreshWellKnownSlotIfStale(ENVIRONMENT),
+          );
+        }
+      } finally {
+        liveDepth -= 1;
+      }
+    };
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(maxDepth).toBe(1);
+    // And the end state is still the one the arm exists to produce: the
+    // newer bytes, in a real file. The child de-symlinks the slot from its
+    // own image on the way past, so this run converges rather than staging
+    // again - `current` and `staged` are both correct here, a downgrade is
+    // not.
+    expect(result?.staged).not.toBe("failed");
+    const stat = lstatSync(wellKnownPath);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(targetBytes);
   },
 );
 
