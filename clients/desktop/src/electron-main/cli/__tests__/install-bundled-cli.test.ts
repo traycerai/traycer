@@ -130,7 +130,7 @@ describe("installBundledCli stages a copy that outlives the bundle", () => {
     const bundled = stageBundled("cli-bytes-v1");
     const { installBundledCli } = await import("../cli-discovery");
 
-    const stable = await installBundledCli({
+    const { path: stable } = await installBundledCli({
       bundledCliPath: bundled,
       version: "1.0.0",
       source: "desktop",
@@ -151,7 +151,7 @@ describe("installBundledCli stages a copy that outlives the bundle", () => {
   it("keeps working after the bundle is deleted - the exact class of field report 5", async () => {
     const bundled = stageBundled("cli-bytes-v1");
     const { installBundledCli } = await import("../cli-discovery");
-    const stable = await installBundledCli({
+    const { path: stable } = await installBundledCli({
       bundledCliPath: bundled,
       version: "1.0.0",
       source: "desktop",
@@ -175,7 +175,7 @@ describe("installBundledCli stages a copy that outlives the bundle", () => {
       symlinkSync(join(work, "removed-bundle-target"), legacySlot);
 
       const { installBundledCli } = await import("../cli-discovery");
-      const stable = await installBundledCli({
+      const { path: stable } = await installBundledCli({
         bundledCliPath: bundled,
         version: "2.0.0",
         source: "desktop",
@@ -194,6 +194,43 @@ describe("installBundledCli stages a copy that outlives the bundle", () => {
 // `mkdir` touches it at all, because `mode` applies only to directories the
 // call actually creates. The CLI side pins the mirror of this in
 // `store/__tests__/well-known-cli.test.ts`.
+// The decision the post-timeout path turns on. Publishing without the lock
+// re-admits the interleaving the lock exists to prevent - and because a
+// Desktop manifest names the SLOT as its own binaryPath, the CLI's staleness
+// check short-circuits on the result and never repairs it. So a machine that
+// already has a working CLI defers instead; only one that has none publishes
+// unlocked, where there is no installation to make inconsistent and the
+// alternative is a launch that leaves the host with no `traycer` at all.
+describe("shouldDeferContendedPublish", () => {
+  it("defers when a usable slot binary already exists", async () => {
+    const { shouldDeferContendedPublish, stableCliBinaryPath } =
+      await import("../cli-discovery");
+    mkdirSync(dirname(stableCliBinaryPath()), { recursive: true });
+    writeFileSync(stableCliBinaryPath(), "an existing, working CLI");
+
+    expect(await shouldDeferContendedPublish()).toBe(true);
+  });
+
+  it("publishes unlocked when there is no slot at all", async () => {
+    const { shouldDeferContendedPublish } = await import("../cli-discovery");
+
+    expect(await shouldDeferContendedPublish()).toBe(false);
+  });
+
+  // A directory at the slot is not a CLI. Deferring to it would leave the
+  // machine with nothing runnable while declining to fix that.
+  it.skipIf(process.platform === "win32")(
+    "publishes unlocked when the slot path is a directory rather than a binary",
+    async () => {
+      const { shouldDeferContendedPublish, stableCliBinaryPath } =
+        await import("../cli-discovery");
+      mkdirSync(stableCliBinaryPath(), { recursive: true });
+
+      expect(await shouldDeferContendedPublish()).toBe(false);
+    },
+  );
+});
+
 describe("installBundledCli hardens the slot home it shares with the CLI", () => {
   it.skipIf(process.platform === "win32")(
     "repairs an EXISTING 0755 slot home and bin directory to 0700",
@@ -209,7 +246,7 @@ describe("installBundledCli hardens the slot home it shares with the CLI", () =>
       const bundled = stageBundled("cli-bytes-v1");
       const { installBundledCli } = await import("../cli-discovery");
 
-      const stable = await installBundledCli({
+      const { path: stable } = await installBundledCli({
         bundledCliPath: bundled,
         version: "1.0.0",
         source: "desktop",
@@ -240,7 +277,7 @@ describe("installBundledCli takes the CLI lock", () => {
 
     expect(existsSync(lockPath)).toBe(false);
 
-    const stable = await installBundledCli({
+    const { path: stable } = await installBundledCli({
       bundledCliPath: bundled,
       version: "1.0.0",
       source: "desktop",
@@ -300,12 +337,12 @@ describe("installBundledCli proceeds past lock contention", () => {
   // on. Releasing the lock makes the outcome a consequence of the code under
   // test rather than of the runner.
   //
-  // NOT covered here: the past-the-wait fallback, where the holder never
-  // lets go and the publish proceeds without the lock. Reaching it needs
-  // 15s of real time or a deterministic way to cross it, and neither is
-  // worth it for a three-line branch - but that means the `log.warn` and the
-  // unlocked publish in `installBundledCli` have no test, and this comment
-  // is here so that is a recorded gap rather than an assumed pass.
+  // The past-the-wait fallback is covered by the `shouldDeferContendedPublish`
+  // describe below rather than here: reaching it through `installBundledCli`
+  // needs 15s of real wall clock, and the only faster route is the fake-timer
+  // fast-forward this test exists to avoid. What remains untested is the two
+  // lines that wire that decision to its two outcomes, which this comment
+  // records rather than leaves as an assumed pass.
   it("publishes once a briefly-held lock is released", async () => {
     const bundled = stageBundled("cli-bytes-contended");
     const lockPath = cliLockPath("production");
@@ -342,7 +379,7 @@ describe("installBundledCli proceeds past lock contention", () => {
     // than through any break arbitration.
     rmSync(lockPath, { force: true });
 
-    const stable = await install;
+    const { path: stable } = await install;
 
     expect(readFileSync(stable, "utf8")).toBe("cli-bytes-contended");
     const manifest: { binaryPath: string; version: string } = JSON.parse(

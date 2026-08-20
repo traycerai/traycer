@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { delimiter, resolve } from "node:path";
+import { promisify } from "node:util";
 import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -235,13 +237,96 @@ export async function resolveServiceCliInvocation(
 // nothing, and a working service on a version-scoped path beats no service.
 // That last case is logged, so the eventual breakage has a recorded cause
 // rather than presenting as a service that mysteriously stopped launching.
+// How long the slot's execute probe may take before it is treated as
+// inconclusive. Generous on purpose: a cold ~100 MB SEA on a loaded machine
+// is slow, and the wrong answer here demotes a working slot.
+const execFileAsync = promisify(execFile);
+
+const SLOT_EXEC_PROBE_TIMEOUT_MS = 10_000;
+
+// Whether this path can actually be EXECUTED - answered by executing it,
+// because nothing cheaper answers it.
+//
+// `access(X_OK)` does not: on Linux it reports the file's permission bits and
+// succeeds on a `noexec` mount, so the refusal only ever appears at `execve`.
+// That is precisely the case worth catching, since a copy into a noexec home
+// succeeds at every step and produces a slot that no supervisor can start.
+//
+// Conservative in one direction deliberately. A clean run says yes. A spawn
+// the OS REFUSED says no - EACCES on a noexec mount, ENOEXEC on a corrupt or
+// wrong-architecture copy, EPERM under a policy module. Anything else says
+// YES: a timeout on a loaded machine, or a non-zero exit from a binary that
+// ran perfectly well and disliked its arguments, are not evidence the
+// supervisor cannot start it, and answering "no" there would demote a working
+// slot to a version-scoped path over an unrelated hiccup.
+async function canExecute(path: string): Promise<boolean> {
+  try {
+    await execFileAsync(path, ["--version"], {
+      timeout: SLOT_EXEC_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    return true;
+  } catch (error) {
+    return !isSpawnRefusal(error);
+  }
+}
+
+function isSpawnRefusal(error: unknown): boolean {
+  if (error === null || typeof error !== "object" || !("code" in error)) {
+    return false;
+  }
+  return (
+    error.code === "EACCES" ||
+    error.code === "ENOEXEC" ||
+    error.code === "EPERM"
+  );
+}
+
 async function stagedSlotInvocation(
   environment: Environment,
   binaryPath: string,
 ): Promise<CliInvocation> {
   const staged = await stageWellKnownCliBinary({ environment, binaryPath });
   if (staged.staged !== "failed") {
-    return { command: staged.wellKnownPath, args: [] };
+    // A copy that landed is not the same as a binary that runs, and the gap
+    // between those two has a real population: a hardened Linux install with
+    // `/home` mounted `noexec`. The copy succeeds, the chmod succeeds,
+    // staging reports success - and the resulting unit dies at `ExecStart`
+    // with an execution error even though the package manager's own binary in
+    // `/usr/bin` was perfectly runnable. Registering the slot there converts a
+    // working install into a service that can never start, on a path nothing
+    // rewrites afterwards.
+    //
+    // Affordable exactly here and nowhere else: this is service REGISTRATION,
+    // once per install, not the per-command refresh path.
+    //
+    // Skipped when the running process IS the slot, where the answer is
+    // already settled - this code is executing those very bytes.
+    if (
+      staged.staged === "already-well-known" ||
+      (await canExecute(staged.wellKnownPath))
+    ) {
+      return { command: staged.wellKnownPath, args: [] };
+    }
+    // The slot will not run. Demote ONLY if the source actually would,
+    // because the slot is otherwise still the better registration: it is the
+    // one path stable across upgrades, and trading it for a version-scoped
+    // path that ALSO cannot run gives up that stability for nothing. The
+    // reported failure is specifically the asymmetric one - the package
+    // manager's binary in `/usr/bin` runs, the copy under a `noexec` home
+    // does not - and this is the condition that identifies it.
+    if (!(await canExecute(binaryPath))) {
+      return { command: staged.wellKnownPath, args: [] };
+    }
+    createCliLogger(environment).warn(
+      "staged CLI slot cannot be executed - registering the source binary instead",
+      {
+        environment,
+        binaryPath,
+        wellKnownPath: staged.wellKnownPath,
+      },
+    );
+    return { command: binaryPath, args: [] };
   }
   // A regular file, not merely a path that exists. Staging fails when the
   // slot has been replaced by a DIRECTORY (the rename cannot land on it), and

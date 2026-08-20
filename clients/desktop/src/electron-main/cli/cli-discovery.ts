@@ -682,14 +682,20 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
  * along. The copy is staged beside the slot and renamed over it, so a
  * crash mid-stage never leaves a truncated binary at the stable name.
  *
- * Returns the stable path, or throws if the bundled CLI isn't present (a
- * packaging bug worth surfacing loudly).
+ * Returns the stable path and whether THIS call published to it, or throws if
+ * the bundled CLI isn't present (a packaging bug worth surfacing loudly).
+ *
+ * `published: false` means the CLI lock was held past the wait and a usable
+ * slot already existed, so nothing was written. The path is still returned and
+ * still usable - it is the CLI the machine already had. Callers must not
+ * report an install or an upgrade on a deferral; route it to a retryable
+ * outcome instead.
  */
 export async function installBundledCli(opts: {
   readonly bundledCliPath: string;
   readonly version: string;
   readonly source: CliInstallManifest["source"];
-}): Promise<string> {
+}): Promise<BundledCliInstallResult> {
   // Under the CLI lock, because this function is not the only writer of the
   // slot it publishes. The CLI's startup refresh re-stages the same path from
   // whatever its manifest names, and takes this same lock to do it. Without
@@ -718,13 +724,75 @@ export async function installBundledCli(opts: {
     },
     () => publishBundledCli(opts),
   );
-  if (outcome.kind === "acquired") return outcome.result;
-  log.warn("[cli] publishing bundled CLI without the cli-lock", {
-    lockPath: resolveCliLockPath(),
-    holderPid: outcome.holder?.pid ?? null,
-    holderReason: outcome.holder?.reason ?? null,
-  });
-  return publishBundledCli(opts);
+  if (outcome.kind === "acquired") {
+    return { path: outcome.result, published: true };
+  }
+  // Past the wait. What happens next turns on whether this machine already
+  // has a usable CLI, because the two cases have opposite worst outcomes.
+  //
+  // With one present, publishing anyway would re-admit the exact interleaving
+  // this lock was taken to prevent - and in the case most likely to produce
+  // it, since `traycer cli upgrade` holds this lock across a network download
+  // that routinely outlasts the wait. Two writers would publish a slot and a
+  // manifest in interleaved order, and because a Desktop manifest names the
+  // SLOT as its own `binaryPath`, the CLI's staleness check short-circuits on
+  // it and never repairs the mismatch. That is a machine running one
+  // installation's bytes under another's manifest, indefinitely - the failure
+  // this lock exists for, arrived at through the lock's own fallback.
+  //
+  // So defer instead. The user is not blocked by this: the working CLI they
+  // already have stays exactly where it is, and only the upgrade waits. The
+  // caller routes a deferral into the existing `binary-locked` recovery, the
+  // same one a Windows running-image lock produces, so it surfaces as
+  // "restart to finalize" rather than as a dead end.
+  const existingSlot = stableCliBinaryPath();
+  if (await shouldDeferContendedPublish()) {
+    log.warn("[cli] deferring bundled CLI publish - the cli-lock is held", {
+      lockPath: resolveCliLockPath(),
+      holderPid: outcome.holder?.pid ?? null,
+      holderReason: outcome.holder?.reason ?? null,
+      existingSlot,
+    });
+    return { path: existingSlot, published: false };
+  }
+  // Nothing usable at the slot at all. There is no installation to make
+  // inconsistent, and a Desktop launch that leaves the machine with no CLI is
+  // the worse failure by a wide margin - the bundle-blind host has no
+  // `traycer` to put on PATH, and monitor / title hooks / terminal agents all
+  // exit 127. Publish unlocked.
+  log.warn(
+    "[cli] publishing bundled CLI without the cli-lock - no usable slot",
+    {
+      lockPath: resolveCliLockPath(),
+      holderPid: outcome.holder?.pid ?? null,
+      holderReason: outcome.holder?.reason ?? null,
+    },
+  );
+  return { path: await publishBundledCli(opts), published: true };
+}
+
+/**
+ * Whether a publish that lost the lock race should DEFER rather than proceed
+ * without the lock: true exactly when this machine already has a usable CLI at
+ * the slot.
+ *
+ * Split out and exported because the branch it decides is otherwise reachable
+ * only after a real 15-second wait, and the alternative - fast-forwarding fake
+ * timers past it - is the technique that already produced a macOS-passes /
+ * Linux-CI-fails test here. The decision is the part worth pinning; a test
+ * that has to burn 15 seconds of wall clock to reach it would be the slowest
+ * in the suite and the least reliable.
+ */
+export async function shouldDeferContendedPublish(): Promise<boolean> {
+  return isRegularFile(stableCliBinaryPath());
+}
+
+async function isRegularFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 // Create a directory at 0700, and REPAIR one that already exists.
@@ -753,6 +821,14 @@ async function ensurePrivateDir(path: string): Promise<void> {
   } catch {
     return;
   }
+}
+
+export interface BundledCliInstallResult {
+  // The slot path. Usable whether or not this call wrote to it.
+  readonly path: string;
+  // Whether this call published the bundled bytes and the manifest. False
+  // only when the lock was held and a usable slot already existed.
+  readonly published: boolean;
 }
 
 async function publishBundledCli(opts: {

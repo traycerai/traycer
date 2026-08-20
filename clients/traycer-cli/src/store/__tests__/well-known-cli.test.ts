@@ -1480,12 +1480,18 @@ describe("refreshWellKnownSlotIfStale", () => {
     },
   );
 
-  // Fix 3: staging now runs under `withCliLock` with `waitMs: 0`, and a
-  // busy lock makes the whole refresh a no-op rather than blocking startup
-  // behind another process's staging. Simulated here by holding the exact
-  // same lock (same environment -> same `cliLockPath`) from this test
-  // itself before calling the refresh.
-  it("packaged, the CLI lock is already held: returns null and leaves a stale slot untouched", async () => {
+  // Fix 3: staging runs under `withCliLock`, and for an ordinary command with
+  // `waitMs: 0`, so a busy lock makes the whole refresh a no-op rather than
+  // blocking startup behind another process's staging. Simulated here by
+  // holding the exact same lock (same environment -> same `cliLockPath`) from
+  // this test itself before calling the refresh.
+  //
+  // Reported as `deferred-busy` rather than as `null`, and the distinction is
+  // the point: `null` means the slot is already what it should be, while this
+  // means a refresh was wanted and nobody was able to check. Only the second
+  // one explains a supervisor still running old bytes, so only the second one
+  // is worth a log line.
+  it("packaged, the CLI lock is already held: reports deferred-busy and leaves a stale slot untouched", async () => {
     seaState.current = true;
     const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
       await import("../well-known-cli");
@@ -1511,10 +1517,64 @@ describe("refreshWellKnownSlotIfStale", () => {
         refreshWellKnownSlotIfStale(ENVIRONMENT),
       );
 
-      expect(result).toBeNull();
+      expect(result?.staged).toBe("deferred-busy");
       expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
     } finally {
       await lock.release();
     }
+  });
+
+  // The supervised entry (`traycer host start`) waits for the lock where an
+  // ordinary command does not, because the cost of losing this race is not
+  // symmetric: a short command that skips a refresh is repaired a second
+  // later by the next one, while a supervisor that skips it keeps executing
+  // the old image until something restarts the service.
+  //
+  // Driven by releasing the holder rather than by fast-forwarding timers -
+  // the same reason the Desktop suite does: pumping fake time outruns the
+  // real filesystem I/O the poll loop awaits, which made an equivalent test
+  // pass on macOS and fail on Linux CI.
+  it("packaged, supervised start: WAITS for a held lock and refreshes once it is released", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotForSupervisedStart, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { acquireCliLock } = await import("../cli-lock");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "AAAAAAAAAA");
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "BBBBBBBBBBBB");
+
+    const lock = await acquireCliLock({
+      environment: ENVIRONMENT,
+      reason: "test-hold-for-supervised-contention",
+      waitMs: 0,
+      pollIntervalMs: 100,
+    });
+    let settled = false;
+    const refresh = withExecPath(running, () =>
+      refreshWellKnownSlotForSupervisedStart(ENVIRONMENT),
+    );
+    void refresh.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    // Proves the call is genuinely waiting. Without this the release below
+    // could land before the first acquisition attempt, and the test would be
+    // exercising the uncontended path with extra steps - passing even for a
+    // `waitMs: 0` implementation, which is precisely what it must not do.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(settled).toBe(false);
+
+    await lock.release();
+    const result = await refresh;
+
+    expect(result?.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBBBB");
   });
 });

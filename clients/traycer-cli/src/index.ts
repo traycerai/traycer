@@ -94,7 +94,10 @@ import { serviceUninstallCommand } from "./commands/service-uninstall";
 import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
-import { refreshWellKnownSlotIfStale } from "./store/well-known-cli";
+import {
+  refreshWellKnownSlotForSupervisedStart,
+  refreshWellKnownSlotIfStale,
+} from "./store/well-known-cli";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
 import { finishAndExit, markProcessFatal } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
@@ -251,10 +254,17 @@ export async function canonicalBinaryPath(path: string): Promise<string> {
 // inode, so such a process keeps running the previous version's code no
 // matter what now sits at the path it was launched from - see the caller for
 // why that matters for the supervised entry specifically.
-async function refreshCliSlotBeforeCommand(): Promise<boolean> {
+async function refreshCliSlotBeforeCommand(
+  supervised: boolean,
+): Promise<boolean> {
   const logger = createCliLogger(config.environment);
   try {
-    const refreshed = await refreshWellKnownSlotIfStale(config.environment);
+    // The supervised entry waits for the lock; an ordinary command does not.
+    // See `refreshWellKnownSlotForSupervisedStart` for why the cost of losing
+    // this race is not symmetric between the two.
+    const refreshed = await (supervised
+      ? refreshWellKnownSlotForSupervisedStart(config.environment)
+      : refreshWellKnownSlotIfStale(config.environment));
     if (refreshed === null) return false;
     if (refreshed.staged === "failed") {
       logger.warn("CLI well-known slot refresh failed", {
@@ -263,6 +273,24 @@ async function refreshCliSlotBeforeCommand(): Promise<boolean> {
         errorName: refreshed.errorName,
         errorMessage: refreshed.errorMessage,
       });
+      return false;
+    }
+    if (refreshed.staged === "deferred-busy") {
+      // Logged rather than swallowed, and logged loudest for the supervised
+      // entry: this is the one state where a long-lived host process is about
+      // to run bytes nobody verified, so when that turns up in a report the
+      // reason should already be in the log rather than inferred. Proceeding
+      // is still correct - a supervisor that cannot start because another
+      // process holds a lock is a worse outcome than one running last week's
+      // CLI, and the next command or restart repairs it.
+      logger.warn(
+        "CLI well-known slot refresh deferred - the CLI lock is held",
+        {
+          environment: config.environment,
+          wellKnownPath: refreshed.wellKnownPath,
+          supervised,
+        },
+      );
       return false;
     }
     logger.info("CLI well-known slot refreshed", {
@@ -2379,7 +2407,8 @@ if (isTraycerCliEntrypoint(entryArgv)) {
   // install costs a small manifest read and two stats. Awaited rather than
   // fired and forgotten - a copy racing process exit would be interrupted on
   // every short command and never complete.
-  void refreshCliSlotBeforeCommand()
+  const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
+  void refreshCliSlotBeforeCommand(supervisedStart)
     .then((replacedRunningBinary) => {
       // The refresh repaired the slot for everything that launches from it
       // NEXT, but this process is still executing the bytes it started with:
@@ -2396,10 +2425,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
       // the service manager and the host for the life of the service, and
       // signal delivery for graceful shutdown is not worth re-implementing to
       // save one restart.
-      if (
-        replacedRunningBinary &&
-        argvSelectsSupervisedHostStart(process.argv)
-      ) {
+      if (replacedRunningBinary && supervisedStart) {
         entryLogger.warn("CLI restarting into the refreshed well-known slot", {
           environment: config.environment,
           execPath: process.execPath,

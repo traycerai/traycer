@@ -153,6 +153,44 @@ export async function isPackagedRun(): Promise<boolean> {
 export async function refreshWellKnownSlotIfStale(
   environment: Environment,
 ): Promise<WellKnownCliStageOutcome | null> {
+  return refreshSlot(environment, 0);
+}
+
+// How long the supervised entry waits for the lock. See
+// `refreshWellKnownSlotForSupervisedStart` for why this one waits at all.
+const SUPERVISED_START_LOCK_WAIT_MS = 5_000;
+
+// The same refresh, for the ONE caller that is not a short-lived command:
+// `traycer host start`, the long-lived supervised entry.
+//
+// It waits for the lock where an ordinary command does not, because the cost
+// of losing this race is not symmetric. A `traycer agent list` that skips a
+// refresh is repaired by the next command a second later. A supervisor that
+// skips one keeps executing the previous CLI's image until something restarts
+// the service - which on a user's machine may be days, and is exactly the
+// stale-supervisor failure this whole change exists to end.
+//
+// It waits and then PROCEEDS - it does not exit for a retry, and that is a
+// deliberate limit rather than an oversight. Exiting on contention would put
+// the one long-lived entry point in the product behind a lock another process
+// holds, and a lock that can keep a supervisor from ever starting is a worse
+// user outcome than a supervisor running last week's bytes: stale-but-running
+// beats never-starting, the same rule `stageWellKnownCliBinary` already
+// follows when it prefers a stale slot to no slot. The caller logs the
+// deferral, and the next command or service restart refreshes.
+export async function refreshWellKnownSlotForSupervisedStart(
+  environment: Environment,
+): Promise<WellKnownCliStageOutcome | null> {
+  return refreshSlot(environment, SUPERVISED_START_LOCK_WAIT_MS);
+}
+
+// One implementation behind both wrappers on purpose: the two differ only in
+// how long they are willing to wait, and a second copy of the decision logic
+// is how the two would drift into disagreeing about what "stale" means.
+async function refreshSlot(
+  environment: Environment,
+  lockWaitMs: number,
+): Promise<WellKnownCliStageOutcome | null> {
   if (!(await isPackagedRun())) return null;
   const wellKnownPath = wellKnownCliBinaryPath(environment);
   const running = resolve(process.execPath);
@@ -168,7 +206,7 @@ export async function refreshWellKnownSlotIfStale(
       {
         environment,
         reason: "refresh-well-known-slot",
-        waitMs: 0,
+        waitMs: lockWaitMs,
         pollIntervalMs: 100,
       },
       async () => {
@@ -188,8 +226,12 @@ export async function refreshWellKnownSlotIfStale(
     );
   } catch {
     // Lock busy is the expected outcome under contention, not an error worth
-    // surfacing - and this whole refresh is best-effort besides.
-    return null;
+    // surfacing - and this whole refresh is best-effort besides. Reported as
+    // "deferred" rather than "nothing to do" so the supervised caller can say
+    // so in its log: a refresh that was WANTED and could not run is a
+    // different machine state from a slot that was already current, and only
+    // the first one explains a supervisor still on old bytes.
+    return { staged: "deferred-busy", wellKnownPath };
   }
 }
 
@@ -534,6 +576,12 @@ export type WellKnownCliStageOutcome =
   // Reported rather than silently dropped: the host stays unable to see
   // this install, and callers surface that.
   | { readonly staged: "not-applicable"; readonly wellKnownPath: string }
+  // A refresh was WANTED but another writer held the CLI lock, so nothing was
+  // read or written. Distinct from every outcome above, all of which mean the
+  // slot is in the state it should be: this one means it may not be, and
+  // nobody checked. Produced only by the refresh path - `stageWellKnownCliBinary`
+  // is called with the lock already held and never returns it.
+  | { readonly staged: "deferred-busy"; readonly wellKnownPath: string }
   // Best-effort failure: the caller's primary contract (manifest write,
   // service registration against the real binary) still holds; only the
   // host's view through this slot stays degraded. Callers surface this.

@@ -13,6 +13,7 @@ import {
   stageBundledCliForUpgrade,
   writeCliManifestPendingUpgrade,
   writeDesktopReconcileState,
+  type BundledCliInstallResult,
   type CliDiscoveryResult,
   type CliInstallManifest,
 } from "./cli-discovery";
@@ -155,7 +156,7 @@ export interface ReconcileCliDeps {
     readonly bundledCliPath: string;
     readonly version: string;
     readonly source: CliInstallManifest["source"];
-  }) => Promise<string>;
+  }) => Promise<BundledCliInstallResult>;
   readonly stableCliBinaryPath: () => string;
   readonly stageBundledCliForUpgrade: (opts: {
     readonly bundledCliPath: string;
@@ -294,19 +295,30 @@ export async function reconcileCli(
       // POSIX) so the bundle-blind host has a deterministic, space-free
       // `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for the monitor /
       // title hooks / terminal agents. Nothing else self-heals this slot.
-      const installedPath = await deps.installBundledCli({
+      const installed = await deps.installBundledCli({
         bundledCliPath: bundledPath,
         version: bundledVersion,
         source: "desktop",
       });
+      if (!installed.published) {
+        // Deferred behind the CLI lock. Reporting `installed-bundled` here
+        // would claim a version that was never written, so say nothing was
+        // installed and let the next reconcile try again - the writer holding
+        // the lock is itself publishing a CLI.
+        deps.logger.warn(
+          "[cli-reconcile] fresh install deferred - the CLI lock is held by another writer",
+          { binaryPath: installed.path, version: bundledVersion },
+        );
+        return { kind: "no-installed-cli" };
+      }
       deps.logger.info(
         "[cli-reconcile] fresh install - staged bundled CLI into Desktop slot",
-        { binaryPath: installedPath, version: bundledVersion },
+        { binaryPath: installed.path, version: bundledVersion },
       );
       return {
         kind: "installed-bundled",
         version: bundledVersion,
-        binaryPath: installedPath,
+        binaryPath: installed.path,
       };
     }
     if (discovery.kind === "bundled") {
@@ -329,19 +341,29 @@ export async function reconcileCli(
     bundledPath !== null &&
     !(await deps.stagedFileExists(manifest.binaryPath))
   ) {
-    const installedPath = await deps.installBundledCli({
+    const installed = await deps.installBundledCli({
       bundledCliPath: bundledPath,
       version: bundledVersion,
       source: "desktop",
     });
+    if (!installed.published) {
+      // The heal did not run. Claiming `installed-bundled` would record a
+      // version behind a slot this call never wrote; the next reconcile
+      // re-enters this same branch and heals then.
+      deps.logger.warn(
+        "[cli-reconcile] slot heal deferred - the CLI lock is held by another writer",
+        { binaryPath: installed.path, version: bundledVersion },
+      );
+      return { kind: "no-installed-cli" };
+    }
     deps.logger.info(
       "[cli-reconcile] slot symlink missing - re-staged bundled CLI to heal it",
-      { binaryPath: installedPath, version: bundledVersion },
+      { binaryPath: installed.path, version: bundledVersion },
     );
     return {
       kind: "installed-bundled",
       version: bundledVersion,
-      binaryPath: installedPath,
+      binaryPath: installed.path,
     };
   }
 
@@ -473,21 +495,40 @@ export async function reconcileCli(
   }
 
   try {
-    const installedPath = await deps.installBundledCli({
+    const installed = await deps.installBundledCli({
       bundledCliPath: bundledPath,
       version: bundledVersion,
       source: manifest.source === "desktop" ? "desktop" : manifest.source,
     });
+    if (!installed.published) {
+      // The upgrade was deferred behind the CLI lock - most likely a
+      // `traycer cli upgrade` holding it across its download. Routed to the
+      // SAME retryable outcome a Windows running-image lock produces, so the
+      // renderer offers "restart to finalize" instead of reporting an upgrade
+      // that never happened. The user keeps the CLI they already had.
+      deps.logger.warn(
+        "[cli-reconcile] upgrade deferred - the CLI lock is held by another writer",
+        { from: installedVersion, to: bundledVersion, path: installed.path },
+      );
+      return {
+        kind: "upgrade-blocked",
+        reason: "binary-locked",
+        stagedVersion: bundledVersion,
+        installedVersion,
+        errorMessage:
+          "another writer holds the CLI lock; the upgrade will be retried",
+      };
+    }
     deps.logger.info("[cli-reconcile] upgraded desktop-owned CLI", {
       from: installedVersion,
       to: bundledVersion,
-      path: installedPath,
+      path: installed.path,
     });
     return {
       kind: "upgraded",
       previousVersion: installedVersion,
       newVersion: bundledVersion,
-      binaryPath: installedPath,
+      binaryPath: installed.path,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

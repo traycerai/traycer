@@ -21,6 +21,45 @@ import type { Environment } from "../../runner/environment";
 const seaState = vi.hoisted(() => ({ current: false }));
 vi.mock("node:sea", () => ({ isSea: () => seaState.current }));
 
+// `stagedSlotInvocation` verifies that the path it is about to register can
+// actually be EXECUTED, which is the only way to detect a home directory
+// mounted `noexec`: there the copy and the chmod both succeed and only
+// `execve` refuses. Simulated by refusing the listed paths with EACCES, the
+// same errno that mount flag produces, and letting every other path "run".
+//
+// Callback-style deliberately: `cli-binary.ts` builds its probe with
+// `promisify(execFile)`, and without `util.promisify.custom` on this mock
+// promisify wraps it by the ordinary callback convention. A promise-returning
+// mock would never resolve.
+const execControl = vi.hoisted(() => ({
+  refuseWithEaccesForPaths: [] as string[],
+}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: (
+      file: string,
+      _args: readonly string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ): unknown => {
+      if (execControl.refuseWithEaccesForPaths.includes(file)) {
+        callback(
+          Object.assign(new Error(`simulated EACCES executing ${file}`), {
+            code: "EACCES",
+          }),
+          "",
+          "",
+        );
+        return {};
+      }
+      callback(null, "1.0.0\n", "");
+      return {};
+    },
+  };
+});
+
 // `store/paths` binds its home root from `os.homedir()` at module load -
 // mirror the established pattern
 // (`commands/__tests__/cli-finalize-upgrade.test.ts`) so each test's dynamic
@@ -96,6 +135,7 @@ beforeEach(() => {
   process.argv = [...ORIGINAL_ARGV];
   renameControl.callCount = 0;
   renameControl.failOnCallNumber = null;
+  execControl.refuseWithEaccesForPaths = [];
   mocks.cliLoggerWarnMock.mockClear();
   vi.resetModules();
 });
@@ -914,6 +954,76 @@ describe("resolveServiceCliInvocation", () => {
       renameControl.callCount = 0;
       renameControl.failOnCallNumber = null;
     }
+  });
+
+  // A hardened Linux install with `/home` mounted `noexec`: the copy into
+  // `~/.traycer/cli/bin` succeeds, the chmod succeeds, staging reports
+  // success - and the unit built from it dies at `ExecStart` even though the
+  // package manager's own binary was runnable all along. `access(X_OK)`
+  // cannot see this (Linux answers it from the permission bits and the
+  // refusal appears only at `execve`), which is why the check is an actual
+  // execution.
+  it("registers the source binary when the staged slot cannot execute but the source can", async () => {
+    const binaryPath = join(workHome, "system-binary");
+    writeFileSync(binaryPath, "the package manager's runnable binary");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "apt",
+      pendingUpgrade: null,
+    });
+    const { wellKnownCliBinaryPath } =
+      await import("../../store/well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    // Only the slot is refused - the source runs, which is the asymmetry that
+    // makes falling back to it an improvement rather than a lateral move.
+    execControl.refuseWithEaccesForPaths = [wellKnownPath];
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+    const result = await resolveServiceCliInvocation({
+      environment: ENVIRONMENT,
+      override: null,
+      allowSelfInvocation: false,
+    });
+
+    expect(result).toEqual({ command: binaryPath, args: [] });
+    expect(mocks.cliLoggerWarnMock).toHaveBeenCalledWith(
+      "staged CLI slot cannot be executed - registering the source binary instead",
+      expect.objectContaining({ binaryPath, wellKnownPath }),
+    );
+  });
+
+  // The other half of the same rule. When the source cannot run either,
+  // demoting to it trades away the one property the slot exists for - a path
+  // that survives upgrades - and buys nothing, since the registration would
+  // still name something that does not execute.
+  it("keeps the slot when NEITHER it nor the source can execute", async () => {
+    const binaryPath = join(workHome, "system-binary");
+    writeFileSync(binaryPath, "a binary that does not run either");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      binaryPath,
+      source: "apt",
+      pendingUpgrade: null,
+    });
+    const { wellKnownCliBinaryPath } =
+      await import("../../store/well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    execControl.refuseWithEaccesForPaths = [wellKnownPath, binaryPath];
+    const { resolveServiceCliInvocation } = await import("../cli-binary");
+
+    const result = await resolveServiceCliInvocation({
+      environment: ENVIRONMENT,
+      override: null,
+      allowSelfInvocation: false,
+    });
+
+    expect(result).toEqual({ command: wellKnownPath, args: [] });
+    expect(mocks.cliLoggerWarnMock).not.toHaveBeenCalled();
   });
 
   // The failed-staging fallback prefers an EXISTING slot over the real binary
