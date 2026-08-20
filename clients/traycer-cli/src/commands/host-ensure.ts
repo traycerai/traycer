@@ -34,11 +34,25 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
     // This command can install + register + START a host (three of its four
     // actions), so it owns the same sign-in pre-flight and post-start
     // credential provisioning as `host install` and `host service install` -
-    // see install-auth.ts for the start-capable command inventory. Before
-    // ensureHost: the inline sign-in can block on a human and touches
-    // nothing the cli-lock (taken inside ensureHost) guards. Bytes-only
-    // mirrors host-install: `--no-service-register` starts nothing itself.
-    const authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
+    // see install-auth.ts for the start-capable command inventory.
+    //
+    // Unlike those two, ensure is idempotent and its FOURTH action is a
+    // no-op, so the pre-flight cannot run unconditionally: the desktop calls
+    // ensure on every launch, and a signed-out operator whose host is
+    // already healthy would be prompted to sign in for a command that then
+    // does nothing. `beforeMutate` fires only once provisionHost has
+    // committed to installing/registering/starting - still outside the
+    // cli-lock and ahead of the staging download, so the inline sign-in
+    // neither extends the lock's critical section nor waits out a transfer.
+    //
+    // A no-op therefore leaves this at `not-checked`, which is the honest
+    // report: we never looked, so we make no claim either way about a host
+    // this run did not touch. Bytes-only mirrors host-install -
+    // `--no-service-register` starts nothing itself.
+    let authPreflight: HostInstallAuthPreflight = {
+      state: "not-checked",
+      reason: "nothing-to-start",
+    };
     const result = await ensureHost({
       runtime: ctx.runtime,
       versionRequest: args.versionRequest,
@@ -48,17 +62,21 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       noServiceRegister: args.noServiceRegister,
       force: args.force,
       onProgress: (info) => ctx.progress(info),
+      beforeMutate: async () => {
+        authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
+      },
     });
     // After ensureHost returns - and with it the cli-lock it took - exactly
     // like host-install's post-lock probe. `serviceLifecycle` is non-null on
     // every branch that started or cycled the service, so the two `"none"`
     // cases below are both deliberate:
     //   - `serviceLifecycle === null` is the noop branch: already installed,
-    //     registered AND running, so this command started nothing and the
-    //     host keeps whatever provisioning state the command that installed
-    //     it left behind. Probing a host we did not start would re-run the
-    //     mint on every idempotent desktop call; an already-unprovisioned
-    //     one self-heals on the next minting client, the same argument that
+    //     registered AND running, so this command started nothing (and, per
+    //     `beforeMutate` above, never even ran the pre-flight). The host
+    //     keeps whatever provisioning state the command that installed it
+    //     left behind. Probing a host we did not start would re-run the mint
+    //     on every idempotent desktop call; an already-unprovisioned one
+    //     self-heals on the next minting client, the same argument that
     //     keeps `host restart` unwired (install-auth.ts).
     //   - `postSwapError !== null` means the post-swap start itself failed -
     //     there is nothing listening to dial.

@@ -19,6 +19,17 @@ import type { CommandContext } from "../runner/runner";
 // any one of them silently recreates the unprovisioned-host regression the
 // combined flow fixed.
 //
+// `host ensure` differs from the other two in one way that matters here:
+// it is idempotent, so it alone has an action that starts NOTHING. `host
+// install` always stages and swaps bytes, and `host service install`
+// always registers + starts, so running the pre-flight unconditionally is
+// right for both - whatever it reports is a fact about a host that command
+// just started. Ensure's no-op has no such standing, so it hangs the
+// pre-flight on `provisionHost`'s `beforeMutate` hook and reports
+// `not-checked` when nothing ran. Wiring a start-capable command below,
+// or giving one of the two above a no-op fast path, means answering the
+// same question: does this run actually start a host?
+//
 // Deliberately NOT wired into the remaining start-capable commands, so this
 // boundary is a decision rather than an omission:
 //   - `host start` is the service manager's own entrypoint (what launchd/
@@ -60,7 +71,17 @@ export type HostInstallAuthPreflight =
       // message.
       readonly reason: "noninteractive-cannot-prompt" | "sign-in-incomplete";
     }
-  | { readonly state: "not-checked"; readonly reason: "bytes-only" };
+  // The pre-flight never ran, so this run asserts NOTHING about the
+  // operator's auth state - distinct from `unauthenticated`, which is a
+  // verified negative. `"nothing-to-start"` is `host ensure`'s no-op: it
+  // started no host, so it has no standing to call one unprovisioned (an
+  // already-running host can hold a live delegated credential long after a
+  // local logout, since the host's `aud: "host"` credential lives in the
+  // host's own store, not the CLI credentials file).
+  | {
+      readonly state: "not-checked";
+      readonly reason: "bytes-only" | "nothing-to-start";
+    };
 
 export const SIGN_IN_LATER_HINT =
   "Run `traycer login` to authorize it - no reinstall needed.";

@@ -1,16 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host ensure` is the desktop's idempotent post-auth
-// install+register+start call. It now owns the SAME sign-in pre-flight and
-// post-start credential provisioning as `host install` / `host service
-// install` (see `install-auth.ts`'s start-capable command inventory): the
-// pre-flight runs BEFORE `ensureHost` (it can block on a human and touches
-// nothing `ensureHost`'s inner cli-lock guards), and the provisioning probe
-// runs AFTER `ensureHost` returns, dialed with whatever `postSwapAction`
-// the result's `serviceLifecycle` reports - `"none"` when nothing was
-// started (`serviceLifecycle === null`) or the post-swap start itself
-// failed (`postSwapError !== null`, nothing to dial). This suite pins that
-// wiring, mirroring `service-install.test.ts`'s mocking conventions.
+// install+register+start call. Unlike `host install` / `host service
+// install`, it can also be a NO-OP (already installed + registered +
+// running), so it cannot run the sign-in pre-flight unconditionally - a
+// signed-out operator whose host is already healthy would be prompted to
+// sign in for a command that then does nothing (and, non-interactively,
+// would be told the existing host is "unprovisioned" - a claim that is
+// false for an already-running host, which can hold a live delegated
+// credential long after a local logout). So `host-ensure.ts` hands
+// `runSignInPreflight` to `ensureHost` as its `beforeMutate` hook (threaded
+// straight through to `provisionHost`, see `host/provision.ts`), which
+// invokes it ONLY once the lock-free fast path has declined the no-op
+// return - i.e. only once this call has committed to installing,
+// registering or starting a host. A no-op run therefore never runs the
+// pre-flight, leaving `authPreflight` at its honest default,
+// `{state:"not-checked", reason:"nothing-to-start"}`; the regression suite
+// below pins exactly that. The post-start credential provisioning probe
+// still runs AFTER `ensureHost` returns, dialed with whatever
+// `postSwapAction` the result's `serviceLifecycle` reports - `"none"` when
+// nothing was started (`serviceLifecycle === null`) or the post-swap start
+// itself failed (`postSwapError !== null`, nothing to dial). This suite
+// pins that wiring, mirroring `service-install.test.ts`'s mocking
+// conventions.
 //
 // `runSignInPreflight`/`maybeProvisionCredential` are mocked directly
 // (rather than their transitive dependencies in `../auth/login-flow`,
@@ -23,9 +35,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //
 // `ensureHost` (`../../host/ensure`) is mocked wholesale: its own
 // source-resolution + `provisionHost` core (lock acquisition, install,
-// service lifecycle) has its own coverage elsewhere, and this suite only
-// needs to pin how `host-ensure.ts` THREADS the result through the two new
-// auth steps.
+// service lifecycle, and the `beforeMutate` fast-path gate itself - see
+// `provision.test.ts`) has its own coverage elsewhere. To stay faithful to
+// that gate without reimplementing it, the mock drives its own
+// `beforeMutate` invocation off the SAME kind of signal the real
+// `provisionHost` uses: the configured result's `action`/`serviceLifecycle`
+// (mutating vs. no-op) - see the mock factory below. This suite only needs
+// to pin how `host-ensure.ts` THREADS the callback and the result through
+// the two auth steps.
 
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
@@ -35,9 +52,24 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../host/ensure", () => ({
-  ensureHost: (...callArgs: Parameters<typeof mocks.ensureHostMock>) => {
-    mocks.callOrder.push("ensure");
-    return mocks.ensureHostMock(...callArgs);
+  ensureHost: async (...callArgs: Parameters<typeof mocks.ensureHostMock>) => {
+    mocks.callOrder.push("ensure-enter");
+    const [opts] = callArgs;
+    const result = await mocks.ensureHostMock(...callArgs);
+    // Mirrors `provisionHost`'s own fast-path gate (`host/provision.ts`):
+    // `beforeMutate` runs only once the call has committed to mutating the
+    // host. There is no separate "fast-path state" to read in this
+    // wholesale mock, so the gate is driven off the configured result
+    // itself - the same action/serviceLifecycle fields the REAL
+    // `provisionHost`'s no-op return is built from (see `noopResult`
+    // there).
+    const isMutatingRun =
+      result.serviceLifecycle !== null || result.action !== "noop";
+    if (isMutatingRun) {
+      await opts.beforeMutate?.();
+    }
+    mocks.callOrder.push("ensure-exit");
+    return result;
   },
 }));
 
@@ -115,6 +147,14 @@ function unauthenticatedPreflight(): HostInstallAuthPreflight {
   return { state: "unauthenticated", reason: "noninteractive-cannot-prompt" };
 }
 
+// The pre-flight's own honest "we never looked" default - what
+// `authPreflight` stays at when `beforeMutate` never runs (the no-op fast
+// path). Distinct from `unauthenticatedPreflight()`, which is a VERIFIED
+// negative from a pre-flight that actually ran.
+function notCheckedNothingToStartPreflight(): HostInstallAuthPreflight {
+  return { state: "not-checked", reason: "nothing-to-start" };
+}
+
 function lifecycle(
   overrides: Partial<HostProvisionServiceLifecycle>,
 ): HostProvisionServiceLifecycle {
@@ -158,13 +198,14 @@ describe("buildHostEnsureCommand", () => {
     mocks.callOrder = [];
   });
 
-  it("runs the sign-in pre-flight before ensureHost, and provisions the credential only after ensureHost returns", async () => {
+  it("runs the sign-in pre-flight inside ensureHost's beforeMutate hook, and provisions the credential only after ensureHost returns", async () => {
     const command = buildHostEnsureCommand(baseArgs({}));
     await command(fakeCtx());
 
     expect(mocks.callOrder).toEqual([
+      "ensure-enter",
       "preflight",
-      "ensure",
+      "ensure-exit",
       "credential-provision",
     ]);
   });
@@ -214,10 +255,16 @@ describe("buildHostEnsureCommand", () => {
     const command = buildHostEnsureCommand(baseArgs({}));
     await command(fakeCtx());
 
+    // The noop fixture is exactly the mock's no-op gate (see the mock
+    // factory above): `beforeMutate` never runs, so `authPreflight` here is
+    // the honest "not-checked" default, not the `signedInPreflight()`
+    // `beforeEach` configures the pre-flight mock to return if it WERE
+    // called. Full regression coverage for this gate lives below.
+    expect(mocks.runSignInPreflightMock).not.toHaveBeenCalled();
     expect(mocks.maybeProvisionCredentialMock).toHaveBeenCalledWith(
       expect.anything(),
       "none",
-      signedInPreflight(),
+      notCheckedNothingToStartPreflight(),
     );
 
     // Both `postSwapError` fields are set: every `HostProvisionResult`
@@ -237,6 +284,9 @@ describe("buildHostEnsureCommand", () => {
     const secondCommand = buildHostEnsureCommand(baseArgs({}));
     await secondCommand(fakeCtx());
 
+    // Unlike the noop case above, this fixture DID start something
+    // (`serviceLifecycle !== null`), so the pre-flight ran and the mapping's
+    // third argument is the real signed-in preflight.
     expect(mocks.maybeProvisionCredentialMock).toHaveBeenLastCalledWith(
       expect.anything(),
       "none",
@@ -296,6 +346,66 @@ describe("buildHostEnsureCommand", () => {
     });
     expect(result.human ?? "").toContain(
       "host credential not provisioned (the host did not come up in time)",
+    );
+  });
+
+  it("a no-op run never invokes the pre-flight, so authPreflight stays honest ('not-checked') and the human line makes no unprovisioned claim", async () => {
+    // Reviewer finding this pins directly: the pre-flight used to run
+    // unconditionally before `ensureHost`, so a signed-out operator whose
+    // host was already healthy got prompted to sign in for a command that
+    // then did nothing - and in non-interactive mode the human line falsely
+    // claimed the existing host was "unprovisioned" (an already-running
+    // host can hold a live delegated credential long after a local
+    // logout). `beforeMutate` fixes this by firing only once
+    // `provisionHost`'s fast path has declined the noop return; the mock's
+    // gate mirrors that. Configuring the pre-flight mock to resolve
+    // unauthenticated-IF-CALLED (rather than relying on `beforeEach`'s
+    // signed-in default) means a broken gate would surface here instead of
+    // accidentally passing.
+    mocks.runSignInPreflightMock.mockResolvedValue(unauthenticatedPreflight());
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "noop",
+        serviceLifecycle: null,
+        postSwapError: null,
+      }),
+    );
+
+    const command = buildHostEnsureCommand(baseArgs({}));
+    const result = await command(fakeCtx());
+
+    expect(mocks.runSignInPreflightMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      authPreflight: notCheckedNothingToStartPreflight(),
+    });
+    expect(result.human ?? "").not.toContain("not signed in");
+    expect(result.human ?? "").not.toContain("unprovisioned");
+  });
+
+  it("a mutating run DOES invoke the pre-flight, and a signed-out one truthfully reports the host it just started as unprovisioned", async () => {
+    // Contrast with the no-op case above: this run actually installs/
+    // starts a host, so "unprovisioned" is a truthful claim about a host
+    // THIS command brought up while signed out - there is no false claim to
+    // guard against here, only the requirement that the pre-flight still
+    // runs at all on the mutating path.
+    mocks.runSignInPreflightMock.mockResolvedValue(unauthenticatedPreflight());
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "installed",
+        serviceLifecycle: lifecycle({ postSwapAction: "install" }),
+        postSwapError: null,
+      }),
+    );
+
+    const command = buildHostEnsureCommand(baseArgs({}));
+    const result = await command(fakeCtx());
+
+    expect(mocks.runSignInPreflightMock).toHaveBeenCalledTimes(1);
+    expect(result.data).toMatchObject({
+      authPreflight: unauthenticatedPreflight(),
+    });
+    expect(result.human ?? "").toContain(
+      "not signed in - the host is unprovisioned until you run `traycer login`",
     );
   });
 });
