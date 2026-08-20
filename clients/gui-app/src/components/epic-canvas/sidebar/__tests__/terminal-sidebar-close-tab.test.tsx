@@ -545,13 +545,11 @@ describe("terminal sidebar Close", () => {
         seedEmptyTab();
         expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
       }
-      const { getByTestId } = render(
+      const { getByRole } = render(
         wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
       );
 
-      const close = getByTestId(
-        `epic-terminal-sidebar-kill-menu-${SESSION_ID}`,
-      );
+      const close = getByRole("button", { name: "Close" });
       expect(close.getAttribute("disabled")).toBeNull();
       fireEvent.click(close);
 
@@ -621,22 +619,18 @@ describe("terminal sidebar Close", () => {
       } else {
         seedOpenTerminalTab("host");
       }
-      const { getByTestId } = render(
+      const { getByRole, getByTestId } = render(
         wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
       );
 
-      const dropdownClose = getByTestId(
-        `epic-terminal-sidebar-kill-menu-${SESSION_ID}`,
-      );
+      const dropdownClose = getByRole("button", { name: "Close" });
       expect(dropdownClose.getAttribute("disabled")).not.toBeNull();
       fireEvent.click(dropdownClose);
 
       fireEvent.contextMenu(
         getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
       );
-      const contextClose = getByTestId(
-        `epic-terminal-sidebar-context-kill-${SESSION_ID}`,
-      );
+      const contextClose = getByRole("menuitem", { name: "Close" });
       expect(contextClose.getAttribute("data-disabled")).not.toBeNull();
       fireEvent.keyDown(contextClose, { key: "Enter" });
       fireEvent.click(contextClose);
