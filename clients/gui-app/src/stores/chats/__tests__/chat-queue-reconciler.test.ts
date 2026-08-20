@@ -376,7 +376,7 @@ describe("chat-queue-reconciler", () => {
       // First writer keeps the slot, but the displaced send is stated rather
       // than dropped in silence - and keeps its pending action and optimistic
       // row, so the text the notice points at is still on screen.
-      expect(result.errorNotices).toEqual([
+      expect(result.appendedErrorNotices).toEqual([
         {
           code: "SEND_NOT_RESTORED",
           message:
@@ -403,7 +403,7 @@ describe("chat-queue-reconciler", () => {
       const result = reconcileSnapshotChange(input);
 
       expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
-      expect(result.errorNotices).toEqual([]);
+      expect(result.appendedErrorNotices).toEqual([]);
     });
 
     it("ignores non-send actions during reconciliation", () => {
@@ -922,6 +922,42 @@ describe("chat-queue-reconciler", () => {
 
       expect(result.pendingUserMessages).toEqual([]);
       expect(result.failedSendRestoration).toBe(occupied);
+      // The row is dropped and the slot is taken, so nothing else holds this
+      // send's text - the statement has to carry it.
+      expect(result.appendedErrorNotices).toHaveLength(1);
+      expect(result.appendedErrorNotices[0]).toMatchObject({
+        code: "SEND_NOT_RECORDED",
+        severity: "warning",
+        clientActionId: "action-1",
+      });
+      expect(result.appendedErrorNotices[0].message).toContain("Hello");
+    });
+
+    it("states nothing for a stranded entry already in the transcript", () => {
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const result = reconcileTurnSettled(
+        true,
+        settledInput({
+          messages: [confirmedMessage],
+          failedSendRestoration: {
+            clientActionId: "action-0",
+            content: CONTENT_2,
+            reason: "Message was not accepted.",
+          },
+        }),
+      );
+
+      // Stale bookkeeping: the message reached the transcript, so dropping
+      // the row loses nothing and a notice would be pure noise.
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.appendedErrorNotices).toEqual([]);
     });
   });
 });

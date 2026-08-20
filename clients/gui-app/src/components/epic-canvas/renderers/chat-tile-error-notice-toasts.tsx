@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { toast } from "sonner";
+import { toast, type ExternalToast } from "sonner";
 import type { ChatErrorNotice } from "@traycer/protocol/host/agent/gui/subscribe";
 import { addWithFifoEviction } from "@/lib/bounded-set";
 import { useActivePaneEffect } from "@/components/epic-tabs/pane-visibility-context";
@@ -9,6 +9,7 @@ import {
   type DeliveredNoticeTracker,
 } from "@/stores/chats/chat-session-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
 import {
   reportableErrorToast,
   reportableWarningToast,
@@ -73,13 +74,22 @@ function rememberErrorNotice(
 
 function showErrorNoticeToast(notice: ChatErrorNotice): void {
   const message = notice.message.length > 0 ? notice.message : "Action failed.";
+  // A `SEND_NOT_RECORDED` notice INLINES the user's message body because the
+  // client was its last holder (see `unrecordedSendNotice`). Letting that
+  // expire on the default timer would put the only remaining copy of someone's
+  // text on a few-second fuse - so it stays until dismissed. The `Toaster`
+  // renders a close button by default, so this can always be dismissed.
+  const options: ExternalToast | undefined =
+    notice.code === SEND_NOT_RECORDED_NOTICE_CODE
+      ? { duration: Number.POSITIVE_INFINITY }
+      : undefined;
   if (notice.severity === "error") {
-    reportableErrorToast(message, undefined, CHAT_ACTION_REPORT_CONTEXT);
+    reportableErrorToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
     return;
   }
   if (notice.severity === "warning") {
-    reportableWarningToast(message, undefined, CHAT_ACTION_REPORT_CONTEXT);
+    reportableWarningToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
     return;
   }
-  toast(message);
+  toast(message, options);
 }

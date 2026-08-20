@@ -765,6 +765,21 @@ export const MAX_DELIVERED_CLIENT_ACTION_IDS = MAX_ERROR_NOTICE_RECORDS * 4;
 /** Bounds string-key retention while comfortably covering recent restores. */
 export const MAX_DELIVERED_RESTORE_COMPLETIONS = 32;
 
+/**
+ * Append a reconciler's notice DELTA onto the store's ring. Returns the ring
+ * unchanged (same reference) for an empty delta, so a pass with nothing to say
+ * never touches the slice.
+ */
+function appendErrorNoticeDelta(
+  notices: ReadonlyArray<ChatErrorNotice>,
+  delta: ReadonlyArray<ChatErrorNotice>,
+): ReadonlyArray<ChatErrorNotice> {
+  return delta.reduce(
+    (next, notice) => appendErrorNotice(next, notice),
+    notices,
+  );
+}
+
 function appendErrorNotice(
   notices: ReadonlyArray<ChatErrorNotice>,
   next: ChatErrorNotice,
@@ -1266,15 +1281,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
             pendingUserMessages: settled.pendingUserMessages,
             failedSendRestoration: settled.failedSendRestoration,
-            // Statements the reconcile owes the user - today, an unconfirmed
-            // send whose restoration lost the single-slot race. Appended
-            // through the same ring/cap as the rejection path's notice; an
-            // empty delta returns the identical array, so a snapshot with
-            // nothing to say does not touch the slice.
-            errorNotices: pending.errorNotices.reduce(
-              (notices, notice) => appendErrorNotice(notices, notice),
-              state.errorNotices,
-            ),
+            // Statements both reconcile passes owe the user: a send whose
+            // restoration lost the single-slot race on reconnect, and a
+            // stranded send the settled pass dropped without the slot.
+            // Appended through the same ring/cap as the rejection path's
+            // notice.
+            errorNotices: appendErrorNoticeDelta(state.errorNotices, [
+              ...pending.appendedErrorNotices,
+              ...settled.appendedErrorNotices,
+            ]),
             restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
             snapshotLoaded: true,
             // Stamped with the CONNECTION, not a per-snapshot counter: a
@@ -1548,6 +1563,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           );
           return {
             ...settledPatch,
+            // MUST follow the spread: `appendedErrorNotices` is a delta, and
+            // the state key it feeds is `errorNotices` - spreading the patch
+            // never writes that key, so the append has to be explicit here or
+            // a stranded send's statement is built and then thrown away.
+            errorNotices: appendErrorNoticeDelta(
+              state.errorNotices,
+              settledPatch.appendedErrorNotices,
+            ),
             messages: nextMessages,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,

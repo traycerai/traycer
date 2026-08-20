@@ -4,12 +4,22 @@ import type {
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type {
   AcceptedChatAction,
   FailedSendRestorationState,
   PendingChatAction,
   PendingUserMessage,
 } from "@/stores/chats/chat-session-store";
+
+/**
+ * Notice code for a send whose text the CLIENT is the last holder of - the
+ * message body is inlined in `ChatErrorNotice.message` because nothing else
+ * holds it any more. The toast layer reads this to keep such a notice on
+ * screen until dismissed; a notice carrying the only copy of someone's text
+ * must not expire on a timer.
+ */
+export const SEND_NOT_RECORDED_NOTICE_CODE = "SEND_NOT_RECORDED";
 
 /**
  * Input for queue reconciliation. Contains the immutable state slices needed
@@ -50,16 +60,19 @@ export type ReconcileSnapshotInput = {
  * Output patch for snapshot reconciliation. Contains updated state slices
  * to apply to the store, including the failedSendRestoration field.
  *
- * `errorNotices` is a DELTA - only the notices this pass produced, in order -
- * not the store's ring. The caller appends them onto its own `errorNotices`
- * (that is where the FIFO cap lives), so an empty delta writes nothing.
+ * `appendedErrorNotices` is a DELTA - only the notices this pass produced, in
+ * order - not the store's ring. The caller appends them onto its own
+ * `errorNotices` (that is where the FIFO cap lives), so an empty delta writes
+ * nothing. Named so it cannot collide with the `errorNotices` STATE key: the
+ * settled patch below is applied by spreading it into the state update, and a
+ * colliding name would silently replace the ring with the delta.
  */
 export type ReconcileSnapshotPatch = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
-  readonly errorNotices: ReadonlyArray<ChatErrorNotice>;
+  readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
 };
 
 /**
@@ -152,7 +165,7 @@ export function reconcileSnapshotChange(
     acceptedActions: {},
     pendingUserMessages: input.pendingUserMessages,
     failedSendRestoration: input.failedSendRestoration,
-    errorNotices: [],
+    appendedErrorNotices: [],
   };
   return Object.values(input.pendingActions).reduce(
     (next, pending): ReconcileSnapshotPatch => {
@@ -196,8 +209,8 @@ export function reconcileSnapshotChange(
       if (next.failedSendRestoration !== null) {
         return {
           ...next,
-          errorNotices: [
-            ...next.errorNotices,
+          appendedErrorNotices: [
+            ...next.appendedErrorNotices,
             displacedRestorationNotice(pending),
           ],
         };
@@ -237,7 +250,40 @@ export type ReconcileTurnSettledInput = {
 export type ReconcileTurnSettledPatch = {
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
+  /** Delta, appended by the caller - see {@link ReconcileSnapshotPatch}. */
+  readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
 };
+
+/**
+ * The notice for a stranded send that lost the single `failedSendRestoration`
+ * slot when the turn settled.
+ *
+ * Unlike the reconnect path, this one INLINES the message body. There, the
+ * displaced send keeps its optimistic row, so the notice can point at text
+ * still on screen. Here the row is dropped - deliberately, and it cannot be
+ * kept: an entry that survives keeps edit/delete gated off and renders a user
+ * message the host never recorded, which is the defect this pass exists to
+ * fix. So the client is the last holder of this text, and a statement that
+ * did not carry it would be a statement about something already gone.
+ *
+ * `extractPlainTextFromComposerJSONContent` is text-only: a send whose body
+ * was entirely an image attachment has no text to carry, and says so rather
+ * than rendering an empty quote.
+ */
+function unrecordedSendNotice(message: PendingUserMessage): ChatErrorNotice {
+  const text = extractPlainTextFromComposerJSONContent(message.content).trim();
+  const preamble =
+    "A message was not recorded before the turn stopped, and another unsent message is already waiting in the composer.";
+  return {
+    code: SEND_NOT_RECORDED_NOTICE_CODE,
+    message:
+      text.length === 0
+        ? `${preamble} It had no text to recover - any attachments on it are lost.`
+        : `${preamble} Copy it from here to resend: ${text}`,
+    severity: "warning",
+    clientActionId: message.clientActionId,
+  };
+}
 
 /**
  * Whether a `turnStateChanged` frame or `chat.subscribe` snapshot reports the
@@ -276,6 +322,13 @@ export function turnSettledFromStatus(
  * composer via the `failedSendRestoration` slot (single-slot; an occupied
  * slot is never overwritten).
  *
+ * Every OTHER truly-dead entry - the ones the single slot cannot take - is
+ * stated via {@link unrecordedSendNotice}, which inlines the message body.
+ * Dropping the row is correct here but it takes the last copy of that text
+ * with it, so the statement has to carry the text or the send is simply gone.
+ * An entry already in the transcript needs no notice: dropping it loses
+ * nothing.
+ *
  * Pure function - all state is passed explicitly. `settled` is
  * {@link turnSettledFromStatus}'s answer for the triggering frame/snapshot; a
  * non-settled report returns the input slices unchanged.
@@ -288,6 +341,7 @@ export function reconcileTurnSettled(
     return {
       pendingUserMessages: input.pendingUserMessages,
       failedSendRestoration: input.failedSendRestoration,
+      appendedErrorNotices: [],
     };
   }
   const confirmedMessageIds = confirmedMessageIdsForMessages(input.messages);
@@ -300,6 +354,7 @@ export function reconcileTurnSettled(
     return {
       pendingUserMessages: input.pendingUserMessages,
       failedSendRestoration: input.failedSendRestoration,
+      appendedErrorNotices: [],
     };
   }
   const restorable = stranded.find(
@@ -308,6 +363,14 @@ export function reconcileTurnSettled(
   const strandedActionIds = new Set(
     stranded.map((message) => message.clientActionId),
   );
+  // Who actually gets the composer back: `restorable` only claims the slot
+  // when it is free, because the slot is first-writer-wins. Everyone else
+  // whose message never reached the transcript is losing their only copy, so
+  // each of them is stated with their text inlined - not just the first.
+  const slotClaimantActionId =
+    input.failedSendRestoration === null && restorable !== undefined
+      ? restorable.clientActionId
+      : null;
   return {
     pendingUserMessages: input.pendingUserMessages.filter(
       (message) => !strandedActionIds.has(message.clientActionId),
@@ -320,6 +383,13 @@ export function reconcileTurnSettled(
             content: restorable.content,
             reason: "The message was not recorded before the turn stopped.",
           },
+    appendedErrorNotices: stranded
+      .filter(
+        (message) =>
+          !confirmedMessageIds.has(message.messageId) &&
+          message.clientActionId !== slotClaimantActionId,
+      )
+      .map((message) => unrecordedSendNotice(message)),
   };
 }
 

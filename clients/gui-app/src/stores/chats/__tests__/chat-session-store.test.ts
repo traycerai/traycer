@@ -87,6 +87,13 @@ const SECOND_CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "World" }] }],
 };
 
+const THIRD_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "Third draft" }] },
+  ],
+};
+
 const IMAGE_CONTENT: JsonContent = {
   type: "doc",
   content: [
@@ -339,6 +346,26 @@ function acceptLastAction(harness: Harness): string {
     action: frame.kind,
     status: "accepted",
     reason: null,
+    code: null,
+    backgroundStopTaskIds: [],
+  });
+  return frame.clientActionId;
+}
+
+function rejectLastAction(harness: Harness, reason: string): string {
+  const frame = harness.sent.at(-1);
+  if (frame === undefined || frame.kind === "ping") {
+    throw new Error("Expected owner action frame");
+  }
+  harness.callbacks().onActionAck({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    clientActionId: frame.clientActionId,
+    action: frame.kind,
+    status: "rejected",
+    reason,
     code: null,
     backgroundStopTaskIds: [],
   });
@@ -1543,6 +1570,150 @@ describe("createChatSessionStore", () => {
         (message) => message.clientActionId === second.clientActionId,
       )?.content,
     ).toEqual(SECOND_CONTENT);
+  });
+
+  // The settled-turn pass shares the single-slot rule - and unlike the
+  // snapshot path it DROPS the stranded rows, deliberately: an entry that
+  // survives keeps edit/delete gated off and renders a user message the host
+  // never recorded, which is the bug that pass exists to fix. So the row
+  // cannot hold the text here, and the statement has to carry it instead, or
+  // a stranded send that loses the slot is gone with nothing left to recover.
+  it("carries the text of every stranded send that loses the slot when the turn settles", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const send = (content: JsonContent): void => {
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          content,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        );
+    };
+
+    // Occupy the slot first, so BOTH stranded sends below lose it.
+    send(CONTENT);
+    const occupant = rejectLastAction(harness, "Host refused the send.");
+    // Two sends whose accepted ack landed - so they leave `pendingActions`
+    // and only the optimistic row remains - but whose message the host never
+    // appended. Nothing else holds this text.
+    send(SECOND_CONTENT);
+    const strandedA = acceptLastAction(harness);
+    send(THIRD_CONTENT);
+    const strandedB = acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    // First writer keeps the slot.
+    expect(state.failedSendRestoration?.clientActionId).toBe(occupant);
+    // The rows are still dropped - that is what the settled pass is for.
+    expect(state.pendingUserMessages).toEqual([]);
+    // EVERY stranded send that lost the slot is stated, and each statement
+    // carries its own text, since nothing else holds it any more.
+    const noticeFor = (clientActionId: string) =>
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === clientActionId,
+      );
+    expect(noticeFor(strandedA)).toHaveLength(1);
+    expect(noticeFor(strandedA)[0]).toMatchObject({
+      code: "SEND_NOT_RECORDED",
+      severity: "warning",
+      clientActionId: strandedA,
+    });
+    expect(noticeFor(strandedA)[0].message).toContain("World");
+    expect(noticeFor(strandedB)).toHaveLength(1);
+    expect(noticeFor(strandedB)[0]).toMatchObject({
+      code: "SEND_NOT_RECORDED",
+      severity: "warning",
+      clientActionId: strandedB,
+    });
+    expect(noticeFor(strandedB)[0].message).toContain("Third draft");
+  });
+
+  // The settled pass has TWO callers - the reconnect snapshot above and the
+  // live `turnStateChanged` frame here - and the live one applies the patch by
+  // SPREADING it. A delta field cannot reach the `errorNotices` state key that
+  // way, so that caller needs its own append and its own coverage.
+  it("carries the stranded send's text when a live turnStateChanged settles the turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const occupant = rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const stranded = acceptLastAction(harness);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration?.clientActionId).toBe(occupant);
+    expect(state.pendingUserMessages).toEqual([]);
+    const stated = state.errorNotices.filter(
+      (notice) => notice.clientActionId === stranded,
+    );
+    expect(stated).toHaveLength(1);
+    expect(stated[0].code).toBe("SEND_NOT_RECORDED");
+    expect(stated[0].message).toContain("World");
+    // The rejection notice for the slot occupant is still in the ring - the
+    // delta was APPENDED, not written over it.
+    expect(
+      state.errorNotices.some((notice) => notice.clientActionId === occupant),
+    ).toBe(true);
+  });
+
+  it("states nothing extra when the only stranded send wins the free slot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const stranded = acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    // It claimed the slot, so its text is in the composer - the notice would
+    // be noise, and the composer restoration is the statement.
+    expect(state.failedSendRestoration).toEqual({
+      clientActionId: stranded,
+      content: CONTENT,
+      reason: "The message was not recorded before the turn stopped.",
+    });
+    expect(state.errorNotices).toEqual([]);
   });
 
   it("clears a pending send when reconnect snapshot contains the accepted message", () => {
