@@ -943,6 +943,42 @@ describe("<ChatTileErrorNoticeToasts />", () => {
 
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
+
+  // The reconnect-while-away case is exactly when a send-recovery notice
+  // arrives: the pane is unfocused, so `useActivePaneEffect` has torn the
+  // subscription down and the notice lands unseen. The mount-time replay used
+  // to mark it delivered and then skip it for being a `warning`, which threw
+  // away the only remaining copy of the user's text.
+  it("replays a notice carrying the only copy of the user's text", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message:
+            "A message was not recorded before the turn stopped, and another unsent message is already waiting in the composer. Copy it from here to resend: the draft nobody has any more",
+          severity: "warning",
+          clientActionId: "send-1",
+        },
+      });
+    });
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+
+    expect(sonnerToastWarning.mock.lastCall?.[0]).toContain(
+      "the draft nobody has any more",
+    );
+    // ...and it must not expire on the default fuse while it is the only copy.
+    expect(sonnerToastWarning.mock.lastCall?.[1]).toMatchObject({
+      duration: Number.POSITIVE_INFINITY,
+    });
+  });
 });
 
 describe("<ChatTileRestoreResultToasts />", () => {

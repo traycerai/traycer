@@ -1504,13 +1504,13 @@ describe("createChatSessionStore", () => {
     });
   });
 
-  // The restoration slot is a single slot, first-writer-wins - the rejection
-  // path documents that rule and states the displacement with an errorNotice.
-  // Two unconfirmed sends crossing one reconnect are the reconciler's version
-  // of the same collision (reachable through the half-open-socket window,
-  // where the composer's disconnect gate is not yet closed), so the second
-  // send must be stated too rather than going quiet.
-  it("states the displaced restoration when two unconfirmed sends cross one reconnect", () => {
+  // The restoration slot is a single slot, first-writer-wins. A send that
+  // loses it is DEAD - its ack died with the connection and this snapshot is
+  // authoritative - so it is settled here and now rather than left pending.
+  // Leaving it eligible is what made the same statement re-fire on every later
+  // snapshot, and what let its stale text walk back into the composer after
+  // the user had already resent it.
+  it("settles and states a displaced send once, without re-presenting it", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
@@ -1540,36 +1540,128 @@ describe("createChatSessionStore", () => {
     callbacks.onConnectionStatus("reconnecting", null);
     emitSnapshot(callbacks, "owner");
 
-    const state = harness.handle.store.getState();
+    const noticesFor = (clientActionId: string) =>
+      harness.handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.clientActionId === clientActionId,
+        );
+
     // First writer keeps the slot: it has waited longest, so last-wins would
     // bury it instead.
-    expect(state.failedSendRestoration).toEqual({
+    expect(harness.handle.store.getState().failedSendRestoration).toEqual({
       clientActionId: first.clientActionId,
       content: CONTENT,
       reason: "Message was not confirmed after reconnect.",
     });
-    // The displaced send is stated rather than dropped in silence.
-    expect(
-      state.errorNotices.filter(
-        (notice) => notice.clientActionId === second.clientActionId,
-      ),
-    ).toEqual([
-      {
-        code: "SEND_NOT_RESTORED",
-        message:
-          "A message was not confirmed after reconnect. Another unsent message is already waiting in the composer, so this one was left in the conversation instead - copy it from there to resend.",
-        severity: "warning",
-        clientActionId: second.clientActionId,
+    // The displaced send is stated, and the statement carries its text - the
+    // row is gone, so nothing else holds it.
+    expect(noticesFor(second.clientActionId)).toHaveLength(1);
+    expect(noticesFor(second.clientActionId)[0]).toMatchObject({
+      code: "SEND_NOT_RECORDED",
+      severity: "warning",
+    });
+    expect(noticesFor(second.clientActionId)[0].message).toContain("World");
+    // Settled, not parked: no pending action, no row that will never confirm.
+    expect(harness.handle.store.getState().pendingActions).toEqual({});
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+
+    // THREAD 1: a second snapshot must not restate it. The action is gone, so
+    // there is nothing left to re-present - the ring keeps one statement
+    // rather than one per snapshot until it evicts unrelated notices.
+    emitSnapshot(callbacks, "owner");
+    emitSnapshot(callbacks, "owner");
+
+    expect(noticesFor(second.clientActionId)).toHaveLength(1);
+  });
+
+  // THREAD 3: the statement tells the user to resend. If the displaced action
+  // were still restoration-eligible, freeing the slot would push its stale
+  // text back into the composer AFTER the resend - the notice's own advice
+  // manufacturing a duplicate send.
+  it("does not push a stated send back into the composer once the slot frees", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const first = harness.sent[0];
+    if (first.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    // The composer consumes the winning restoration, freeing the slot - what
+    // the handoff driver does once the user has the text back.
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(first.clientActionId);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+
+    // The user resends the displaced text under a new message id, then a
+    // later snapshot lands.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const resent = harness.sent.at(-1);
+    if (resent === undefined || resent.kind !== "send") {
+      throw new Error("Expected the resend frame");
+    }
+    acceptLastAction(harness);
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: resent.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: SECOND_CONTENT },
+        timestamp: 3,
+        sessionAnchor: null,
       },
-    ]);
-    // ...and the statement is worthless if the text went with it: the
-    // displaced send keeps its optimistic transcript row, which is what the
-    // notice tells the user to copy from.
-    expect(
-      state.pendingUserMessages.find(
-        (message) => message.clientActionId === second.clientActionId,
-      )?.content,
-    ).toEqual(SECOND_CONTENT);
+    });
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "user",
+          messageId: resent.messageId,
+          sender: { type: "user", userId: OWNER_ID },
+          message: { kind: "user", content: SECOND_CONTENT },
+          timestamp: 3,
+          sessionAnchor: null,
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The slot stays empty: the displaced send was settled when it was
+    // stated, so there is nothing left to restore on top of the resend.
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
   });
 
   // The settled-turn pass shares the single-slot rule - and unlike the

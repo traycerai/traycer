@@ -3,6 +3,7 @@ import type {
   ChatQueueState,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type {
@@ -15,9 +16,14 @@ import type {
 /**
  * Notice code for a send whose text the CLIENT is the last holder of - the
  * message body is inlined in `ChatErrorNotice.message` because nothing else
- * holds it any more. The toast layer reads this to keep such a notice on
- * screen until dismissed; a notice carrying the only copy of someone's text
- * must not expire on a timer.
+ * holds it any more. The toast layer reads this twice: to REPLAY such a notice
+ * when a pane focuses (the reconnect-while-away case is exactly when one
+ * arrives, and an unreplayed one is a destroyed draft), and to keep it on
+ * screen until dismissed. A notice carrying the only copy of someone's text
+ * must neither be skipped nor expire on a timer.
+ *
+ * Both reconcile passes emit it, because both make the same promise: this
+ * send is settled, its row is gone, and the text is right here.
  */
 export const SEND_NOT_RECORDED_NOTICE_CODE = "SEND_NOT_RECORDED";
 
@@ -76,27 +82,43 @@ export type ReconcileSnapshotPatch = {
 };
 
 /**
- * The notice for an unconfirmed send whose restoration could not claim the
- * single `failedSendRestoration` slot. The slot is deliberately first-writer-
- * wins (the earlier send has waited longest; last-wins would bury it), so a
- * displacement is expected - what must not be silent is the DISPLACED send.
- * The rejection ack path already pairs the same rule with an `errorNotice`;
- * this is that statement for the reconnect path.
+ * The statement for a dead send that could not claim the single
+ * `failedSendRestoration` slot.
  *
- * The displaced send keeps its pending action and its optimistic transcript
- * row, so the text the notice points at is still on screen. Carrying the
- * `clientActionId` also means the toast layer's per-action dedupe collapses a
- * re-displacement on a later snapshot into the one statement already made.
+ * The slot is deliberately first-writer-wins - the earlier send has waited
+ * longest, and last-wins would bury it - so a displacement is expected. What
+ * must not happen is a displaced send going quiet: the rejection ack path
+ * already pairs the same rule with an `errorNotice`, and this is that
+ * statement for both reconcile passes.
+ *
+ * It INLINES the message body, because by the time this fires the client is
+ * the last holder of that text. Both passes settle the send outright - row
+ * dropped, action dropped - so there is no surviving row to point at. That is
+ * deliberate on both: a row that will never confirm keeps edit/delete gated
+ * off and renders a user message the host never recorded, and (on the
+ * reconnect path) an action left restoration-eligible re-states itself on
+ * every later snapshot and pushes stale text back into the composer after the
+ * user has already resent it.
+ *
+ * `extractPlainTextFromComposerJSONContent` is text-only: a send whose body
+ * was entirely an image attachment has no text to carry, and says so rather
+ * than rendering an empty quote.
  */
-function displacedRestorationNotice(
-  pending: PendingChatAction,
+function unrecoverableSendNotice(
+  clientActionId: string,
+  content: JsonContent,
+  circumstance: string,
 ): ChatErrorNotice {
+  const text = extractPlainTextFromComposerJSONContent(content).trim();
+  const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
   return {
-    code: "SEND_NOT_RESTORED",
+    code: SEND_NOT_RECORDED_NOTICE_CODE,
     message:
-      "A message was not confirmed after reconnect. Another unsent message is already waiting in the composer, so this one was left in the conversation instead - copy it from there to resend.",
+      text.length === 0
+        ? `${preamble} It had no text to recover - any attachments on it are lost.`
+        : `${preamble} Copy it from here to resend: ${text}`,
     severity: "warning",
-    clientActionId: pending.clientActionId,
+    clientActionId,
   };
 }
 
@@ -202,16 +224,31 @@ export function reconcileSnapshotChange(
       if (pending.restoreContent === null) {
         return next;
       }
-      // The slot is taken by a longer-waiting send. Keep first-writer-wins -
-      // but say so, or this send's restoration is dropped in silence. Its
-      // pending action and optimistic row deliberately stay put, so the text
-      // remains on screen for the notice to point at.
+      // The slot is taken by a longer-waiting send. Keep first-writer-wins,
+      // but SETTLE this one rather than leaving it parked: its ack died with
+      // the connection and this snapshot is authoritative, so it can never
+      // confirm. Leaving it eligible re-stated it on every later snapshot
+      // (polluting the notice ring until it evicted unrelated entries) and
+      // let the slot re-claim it once freed, pushing stale text into the
+      // composer after the user had followed the advice and resent it. The
+      // statement carries the text, since nothing holds it once the row goes.
       if (next.failedSendRestoration !== null) {
         return {
           ...next,
+          pendingActions: withoutPendingAction(
+            next.pendingActions,
+            pending.clientActionId,
+          ),
+          pendingUserMessages: next.pendingUserMessages.filter(
+            (message) => message.clientActionId !== pending.clientActionId,
+          ),
           appendedErrorNotices: [
             ...next.appendedErrorNotices,
-            displacedRestorationNotice(pending),
+            unrecoverableSendNotice(
+              pending.clientActionId,
+              pending.restoreContent,
+              "A message was not confirmed after reconnect",
+            ),
           ],
         };
       }
@@ -255,37 +292,6 @@ export type ReconcileTurnSettledPatch = {
 };
 
 /**
- * The notice for a stranded send that lost the single `failedSendRestoration`
- * slot when the turn settled.
- *
- * Unlike the reconnect path, this one INLINES the message body. There, the
- * displaced send keeps its optimistic row, so the notice can point at text
- * still on screen. Here the row is dropped - deliberately, and it cannot be
- * kept: an entry that survives keeps edit/delete gated off and renders a user
- * message the host never recorded, which is the defect this pass exists to
- * fix. So the client is the last holder of this text, and a statement that
- * did not carry it would be a statement about something already gone.
- *
- * `extractPlainTextFromComposerJSONContent` is text-only: a send whose body
- * was entirely an image attachment has no text to carry, and says so rather
- * than rendering an empty quote.
- */
-function unrecordedSendNotice(message: PendingUserMessage): ChatErrorNotice {
-  const text = extractPlainTextFromComposerJSONContent(message.content).trim();
-  const preamble =
-    "A message was not recorded before the turn stopped, and another unsent message is already waiting in the composer.";
-  return {
-    code: SEND_NOT_RECORDED_NOTICE_CODE,
-    message:
-      text.length === 0
-        ? `${preamble} It had no text to recover - any attachments on it are lost.`
-        : `${preamble} Copy it from here to resend: ${text}`,
-    severity: "warning",
-    clientActionId: message.clientActionId,
-  };
-}
-
-/**
  * Whether a `turnStateChanged` frame or `chat.subscribe` snapshot reports the
  * turn settled: the host's own `turnInProgress` when present, with the
  * `runStatus` idle read as the fallback for an older host that predates the
@@ -323,11 +329,16 @@ export function turnSettledFromStatus(
  * slot is never overwritten).
  *
  * Every OTHER truly-dead entry - the ones the single slot cannot take - is
- * stated via {@link unrecordedSendNotice}, which inlines the message body.
+ * stated via {@link unrecoverableSendNotice}, which inlines the message body.
  * Dropping the row is correct here but it takes the last copy of that text
  * with it, so the statement has to carry the text or the send is simply gone.
  * An entry already in the transcript needs no notice: dropping it loses
  * nothing.
+ *
+ * The invariant both passes now share: a dead send is either RESTORED to the
+ * composer (it won the slot) or STATED with its text inlined (it did not).
+ * Never both - which is what made the reconnect path manufacture duplicate
+ * sends - and never neither.
  *
  * Pure function - all state is passed explicitly. `settled` is
  * {@link turnSettledFromStatus}'s answer for the triggering frame/snapshot; a
@@ -389,7 +400,13 @@ export function reconcileTurnSettled(
           !confirmedMessageIds.has(message.messageId) &&
           message.clientActionId !== slotClaimantActionId,
       )
-      .map((message) => unrecordedSendNotice(message)),
+      .map((message) =>
+        unrecoverableSendNotice(
+          message.clientActionId,
+          message.content,
+          "A message was not recorded before the turn stopped",
+        ),
+      ),
   };
 }
 

@@ -32,12 +32,22 @@ export function ChatTileErrorNoticeToasts(
   const { handle } = props;
   const syncErrorNotices = useCallback(() => {
     const tracker = handle.deliveredNotices;
-    // Mount-time replay: only fire `error` toasts that arrived while the
-    // toaster was unmounted (tab swap). `info` / `warning` notices stay
-    // mounted-window-only to avoid replaying stale, non-actionable noise.
+    // Mount-time replay: `error` toasts that arrived while the toaster was
+    // unmounted (tab swap), plus any notice CARRYING the only copy of the
+    // user's text. `info` / `warning` otherwise stay mounted-window-only to
+    // avoid replaying stale, non-actionable noise.
+    //
+    // The carve-out is not a severity question, which is why it cannot be
+    // expressed as one: `useActivePaneEffect` tears this subscription down
+    // while the pane is unfocused, so a reconnect that happens while the user
+    // is elsewhere lands its notice unseen - and that is precisely when a
+    // send-recovery notice fires. Marking it delivered and then skipping it
+    // for being a `warning` would destroy the last copy of a draft. Any future
+    // notice that inlines unrecoverable content must join this category rather
+    // than rely on its severity.
     handle.store.getState().errorNotices.forEach((notice) => {
       if (!rememberErrorNotice(notice, tracker)) return;
-      if (notice.severity !== "error") return;
+      if (notice.severity !== "error" && !noticeCarriesOnlyCopy(notice)) return;
       showErrorNoticeToast(notice);
     });
 
@@ -72,17 +82,25 @@ function rememberErrorNotice(
   return true;
 }
 
+/**
+ * Whether this notice inlines content nothing else holds any more - the store
+ * settled the send and dropped its row, so the message body in the notice is
+ * the last copy. Such a notice is replayed on focus and never expires.
+ */
+function noticeCarriesOnlyCopy(notice: ChatErrorNotice): boolean {
+  return notice.code === SEND_NOT_RECORDED_NOTICE_CODE;
+}
+
 function showErrorNoticeToast(notice: ChatErrorNotice): void {
   const message = notice.message.length > 0 ? notice.message : "Action failed.";
   // A `SEND_NOT_RECORDED` notice INLINES the user's message body because the
-  // client was its last holder (see `unrecordedSendNotice`). Letting that
+  // client was its last holder (see `unrecoverableSendNotice`). Letting that
   // expire on the default timer would put the only remaining copy of someone's
   // text on a few-second fuse - so it stays until dismissed. The `Toaster`
   // renders a close button by default, so this can always be dismissed.
-  const options: ExternalToast | undefined =
-    notice.code === SEND_NOT_RECORDED_NOTICE_CODE
-      ? { duration: Number.POSITIVE_INFINITY }
-      : undefined;
+  const options: ExternalToast | undefined = noticeCarriesOnlyCopy(notice)
+    ? { duration: Number.POSITIVE_INFINITY }
+    : undefined;
   if (notice.severity === "error") {
     reportableErrorToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
     return;
