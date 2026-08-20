@@ -28,15 +28,29 @@ import type {
  *   2. **Live-session evidence** (R4-B5) — a client holding an open E2E session
  *      to the host has firsthand proof it is up. That outranks `connectivity`,
  *      which is a lease the cloud refreshes on a slower clock.
- *   3. **`connectivity`** — the cloud's answer, and the only one for a host
- *      this client has never dialled.
+ *   3. **`connectivity` combined with the account's plan** — the cloud's answer
+ *      about the machine, and the only one for a host this client has never
+ *      dialled.
  *
- * Two invariants the tests pin:
+ * That third step takes TWO inputs because the wire carries only one of them.
+ * `connectivity` is pure liveness (`connectable` / `offline` / `unknown`) — one
+ * fact about one host — while whether the account may reach a host remotely at
+ * all is an account fact (`planAllowsRemote`, the same answer
+ * `useRemoteHostsPlanRestricted` renders from). This row is projected from the
+ * RAW registry DTO rather than from a directory entry, so it combines them
+ * here; `hostUnavailability` does the identical combination for entries, and
+ * the two must agree cell for cell.
+ *
+ * Three invariants the tests pin:
  *
  *   - NO green dot without live evidence: `showLiveDot` is `true` only for a
- *     live session or a `connectable` lease.
+ *     live session or a `connectable` lease on an allowing plan.
  *   - NEVER a false "Offline" when the cloud is blind. `unknown` is its own
- *     rendering, and `local-only` is not an outage at all.
+ *     rendering, and "Local only" is not an outage at all.
+ *   - A plan-gated host the cloud reports `offline` reads **Offline**, not
+ *     "Local only": dead is dead, whoever is paying. The wire used to say
+ *     `local-only` for every host on an unpaid plan, which meant a free-tier
+ *     user's long-dead laptop was rendered as a billing state forever.
  */
 
 export type HostPresenceTone =
@@ -59,14 +73,26 @@ export interface DeriveHostPresenceOptions {
   readonly isViewerLocalHost: boolean;
   readonly hasLiveSession: boolean;
   readonly viewerCheck: ViewerReachabilityCheckLike | null;
+  /**
+   * Whether the ACCOUNT's plan includes remote hosts. The second axis
+   * `status.connectivity` deliberately no longer carries; unknown reads as
+   * `true` (allowed) at the source, never as a restriction.
+   */
+  readonly planAllowsRemote: boolean;
   readonly nowMs: number;
 }
 
 export function deriveHostPresence(
   options: DeriveHostPresenceOptions,
 ): HostPresenceView {
-  const { status, isViewerLocalHost, hasLiveSession, viewerCheck, nowMs } =
-    options;
+  const {
+    status,
+    isViewerLocalHost,
+    hasLiveSession,
+    viewerCheck,
+    planAllowsRemote,
+    nowMs,
+  } = options;
   // This client is offline: we cannot claim anything about the host's liveness.
   if (status.clientCloud === "down") {
     return {
@@ -79,6 +105,23 @@ export function deriveHostPresence(
   // session to this host renders Online regardless of everything below.
   if (hasLiveSession) {
     return { tone: "online", label: "Online", showLiveDot: true };
+  }
+  if (status.connectivity === "offline") {
+    // Liveness outranks the plan gate here, and only here: a host that is
+    // positively not attached is Offline whatever the account pays. Rendering
+    // it "Local only" would offer an upgrade as the remedy for a machine that
+    // is switched off — and it is what the old wire did for every host on an
+    // unpaid plan, which is how a free-tier user's dead host stayed invisible
+    // to every death-aware surface.
+    return { tone: "offline", label: "Offline", showLiveDot: false };
+  }
+  if (!planAllowsRemote) {
+    // `connectable` or `unknown`, the answer is the same: this host will not be
+    // reached from here, because the account's plan has no remote hosts. Not an
+    // outage — rendering it "Offline" would put a fault where there is none and
+    // imply a retry as the fix. Nothing about the machine is claimed either
+    // way, which is exactly what makes this safe under a blind liveness read.
+    return { tone: "local-only", label: "Local only", showLiveDot: false };
   }
   switch (status.connectivity) {
     case "connectable": {
@@ -101,16 +144,9 @@ export function deriveHostPresence(
       }
       return { tone: "online", label: "Online", showLiveDot: true };
     }
-    case "local-only":
-      // Not an outage: this host never attaches to a relay because the plan
-      // does not include remote hosts. Rendering it "Offline" would put a
-      // fault where there is none and imply a retry as the fix.
-      return { tone: "local-only", label: "Local only", showLiveDot: false };
     case "unknown":
       // The cloud could not read liveness. Blind is not the same as absent.
       return { tone: "unknown", label: "Status unknown", showLiveDot: false };
-    case "offline":
-      return { tone: "offline", label: "Offline", showLiveDot: false };
   }
 }
 
@@ -405,8 +441,9 @@ export function formatHostMeta(
   // hint than a stale version string. `unknown` qualifies for the same reason
   // `offline` does — arguably more so, since a blind liveness read leaves
   // `lastSeenAt` as the only thing on the row that is still known to be true.
-  // `local-only` does NOT: nothing there is stale or missing, so replacing the
-  // identity line with a last-seen would read as a fault.
+  // The `local-only` tone does NOT: nothing there is stale or missing — the
+  // plan, not the machine, is why there is no route — so replacing the identity
+  // line with a last-seen would read as a fault.
   if (presence.tone === "offline" || presence.tone === "unknown") {
     const lastSeen = formatLastSeen(item.status.lastSeenAt, nowMs);
     if (lastSeen !== null) {

@@ -169,6 +169,7 @@ const remoteEntry: RemoteHostDirectoryEntry = {
   },
   publicKey: "pubkey-b",
   relayFuseGrace: false,
+  planAllowsRemote: true,
 };
 
 const localEntry: HostDirectoryEntry = {

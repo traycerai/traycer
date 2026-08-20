@@ -63,23 +63,34 @@ export type HostRegistryKind = "personal" | "sandbox";
  *    relay egress is blocked (the ws-proxy population): the client cannot get
  *    to it, so saying anything warmer than Offline would be a promise we can't
  *    keep. Support reading: "Offline + host process up ⇒ relay egress blocked".
- *  - `local-only`  — the owner's plan has no remote hosts, so this host never
- *    attaches to a relay by design. Its absence is a fact about the plan, NOT
- *    evidence about the process, and rendering it as Offline reads as a fault
- *    with a retry as the remedy when the remedy is an upgrade.
  *  - `unknown`     — the liveness store could not be read. Never render this as
  *    Offline: blind is not the same as absent, and the durable `lastSeenAt` is
  *    the only honest thing left to show.
+ *
+ * This enum is PURE LIVENESS — one fact about one host — and deliberately says
+ * nothing about the account's plan. It used to carry a fourth value,
+ * `local-only`, which meant "the owner's plan has no remote hosts". That
+ * collapsed two independent facts (is this host alive? does this account's plan
+ * include remote hosts?) into one word, with the plan word outranking liveness:
+ * on a free plan every remote host read `local-only` whether it was alive,
+ * asleep, or gone for good, so the client could not tell those apart and the
+ * host-death gates could never fire. The plan is an ACCOUNT fact the client
+ * already owns from sign-in, and it combines the two axes at projection time
+ * (`hostListItemToDirectoryEntry` stamps `planAllowsRemote`;
+ * `hostUnavailability` returns `plan-restricted` for a plan-gated host that is
+ * alive or unreadable, and a plain `offline` for a plan-gated host that is
+ * genuinely dead).
+ *
+ * ⚠️ DEPLOY ORDER: a released client whose vocabulary lacks `local-only` must
+ * never receive it — the strict parse below fails closed, which blanks the
+ * hosts panel. The authn-v3 change that stops emitting it deploys BEFORE any
+ * desktop release carrying this enum.
  *
  * Detach latency is asymmetric and the UI copy should not over-promise: a clean
  * teardown is pushed in seconds, while a dirty death (lid close, cable pull)
  * waits out the lease TTL — on the order of 15 minutes.
  */
-export type HostConnectivity =
-  | "connectable"
-  | "offline"
-  | "local-only"
-  | "unknown";
+export type HostConnectivity = "connectable" | "offline" | "unknown";
 
 /** This client's own probe result at tab-open / on-demand (S2). */
 export type HostViewerReachability = "ok" | "failing" | "unknown";
@@ -169,7 +180,6 @@ export type HostListResponse = {
 export const hostConnectivitySchema = z.enum([
   "connectable",
   "offline",
-  "local-only",
   "unknown",
 ]);
 

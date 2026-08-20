@@ -283,6 +283,7 @@ describe("HostClient", () => {
       transportDialability,
       publicKey: "pubkey-a",
       relayFuseGrace: false,
+      planAllowsRemote: true,
       remoteStatus: {
         connectivity: "unknown",
         viewerReachability: "ok",
@@ -352,6 +353,7 @@ describe("HostClient", () => {
       transportDialability: "dialable",
       publicKey,
       relayFuseGrace: false,
+      planAllowsRemote: true,
       remoteStatus: {
         connectivity: "connectable",
         viewerReachability: "ok",

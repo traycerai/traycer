@@ -65,6 +65,13 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 
+/**
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
+ * stamps it onto every entry at projection time. These fixtures describe an
+ * entitled account unless a case says otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
 const hostBindingState = vi.hoisted(() => ({
@@ -449,6 +456,7 @@ function offlineRemoteOrigin(
       updatePolicy: "manual",
     },
     "wss://relay.example.test/attach",
+    PLAN_ALLOWS_REMOTE,
   );
 }
 

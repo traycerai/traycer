@@ -125,9 +125,30 @@ export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
    * by that dial's outcome (a ready live session), never by this flag.
    * Computed once at projection time from `remoteStatus.lastSeenAt`
    * (see {@link isWithinRelayFuseGrace}) so the render-time gates stay pure.
-   * Always `false` for any connectivity other than `offline`.
+   * Always `false` for any connectivity other than `offline`, and always
+   * `false` when the plan does not allow remote hosts (see
+   * {@link RemoteHostDirectoryEntry.planAllowsRemote}): the recovery dial the
+   * window buys would meet a `plan_restricted` 403 at the attach grant, so
+   * there is nothing worth keeping open.
    */
   readonly relayFuseGrace: boolean;
+  /**
+   * Whether the ACCOUNT's plan includes remote hosts, as of the fetch that
+   * produced this entry.
+   *
+   * The wire carries pure liveness (`connectable` / `offline` / `unknown`) —
+   * one fact about one host. Whether a route may be used is the AND of that
+   * fact and this one, and the two have different owners: the host's liveness
+   * comes from the relay lease, the plan from the signed-in account. Stamped
+   * here at projection time (fetch time, not render) exactly as
+   * {@link relayFuseGrace} is, so every render-time gate stays a pure function
+   * of the entry.
+   *
+   * Polarity note: a not-yet-known plan reads as ALLOWED. A wasted dial that
+   * meets the server's 403 is invisible; a false "upgrade" flash at a paying
+   * user is not.
+   */
+  readonly planAllowsRemote: boolean;
 };
 
 /**
@@ -160,10 +181,17 @@ export function isRemoteHostDirectoryEntry(
  *                        but the verdict stays `offline`: recency cannot
  *                        distinguish a lease lapse from a clean detach or a
  *                        crash, so it never upgrades the death semantic.)
- *  - `plan-restricted` — the account's plan has no remote hosts, so this host
- *                        never attaches by design. The remedy is an upgrade,
- *                        not a retry, and calling it "offline" sends a person
- *                        to restart a machine that is working fine.
+ *  - `plan-restricted` — the account's plan has no remote hosts, so the attach
+ *                        grant refuses this route (`plan_restricted`) no matter
+ *                        what the host is doing. The remedy is an upgrade, not
+ *                        a retry, and calling it "offline" sends a person to
+ *                        restart a machine that may well be running fine.
+ *                        NOT a claim that the host is alive: it is a claim that
+ *                        the refusal is deterministic. A plan-gated host the
+ *                        cloud reports as `offline` is reported as `offline`
+ *                        here instead — dead is dead, and the death gates below
+ *                        must fire for an unpaid account exactly as they do for
+ *                        a paid one.
  *  - `indeterminate`   — the cloud could not read liveness. We learned NOTHING.
  *                        Rendering it as dead is the false-Offline-when-blind
  *                        bug, one layer below where that rule is usually
@@ -255,12 +283,38 @@ export function isWithinRelayFuseGrace(
 /**
  * The reason an entry is not dialable, or `null` when it is.
  *
- * A `remote` entry carries the cloud's verdict on itself (`remoteStatus`), and
- * that is what this reads. Anything else — a local host, a mock, or the
- * non-dialable twin the directory substitutes for this machine while its
- * process is down — has no relay verdict to consult and reports `offline`,
- * which is correct for it: locality is decided by a direct read of the process,
- * never by this.
+ * A `remote` entry carries the cloud's verdict on itself (`remoteStatus`) plus
+ * the account fact stamped beside it (`planAllowsRemote`), and this combines
+ * the two. Anything else — a local host, a mock, or the non-dialable twin the
+ * directory substitutes for this machine while its process is down — has no
+ * relay verdict to consult and reports `offline`, which is correct for it:
+ * locality is decided by a direct read of the process, never by this.
+ *
+ * The two axes are independent, and the six-cell matrix is the whole contract:
+ *
+ * | plan | liveness      | verdict            |
+ * | ---- | ------------- | ------------------ |
+ * | yes  | `connectable` | `null` (dialable)  |
+ * | yes  | `offline`     | `offline`          |
+ * | yes  | `unknown`     | `indeterminate`    |
+ * | no   | `connectable` | `plan-restricted`  |
+ * | no   | `offline`     | `offline`          |
+ * | no   | `unknown`     | `plan-restricted`  |
+ *
+ * The two plan-gated rows that are NOT `plan-restricted`-shaped are the point
+ * of the split:
+ *
+ *  - gated + `offline` — **dead is dead**. The wire used to say `local-only`
+ *    for every host on an unpaid plan, which hid liveness entirely, so
+ *    {@link isConfirmedHostDeath} could never fire for those accounts: failover,
+ *    re-homing, the clone CTA and "permanently closed" were all silently
+ *    disabled by a billing state. Now liveness arrives intact and a dead host
+ *    reads dead whoever owns it.
+ *  - gated + `unknown` — `plan-restricted`, not `indeterminate`. The refusal is
+ *    deterministic here in a way it is not for a paid account: whatever the
+ *    liveness read would have said, the attach grant 403s. And unlike `offline`
+ *    this claims nothing about the process, so it never becomes a false death
+ *    claim built on a failed Redis read.
  */
 export function hostUnavailability(
   entry: HostDirectoryEntry,
@@ -271,27 +325,35 @@ export function hostUnavailability(
   if (!isRemoteHostDirectoryEntry(entry)) {
     return "offline";
   }
+  if (entry.remoteStatus.connectivity === "offline") {
+    // `offline` outranks the plan gate AND the fuse window (cold review P1,
+    // and decision 1 of the connectivity/plan split). An earlier F7 shape
+    // rewrote a fuse-window `offline` to `indeterminate` here, which let a
+    // recent `lastSeenAt` - equally consistent with a clean detach or a crash
+    // one minute ago - suppress failover, the dead surface, and
+    // notification-action refusal for up to four hours on a genuinely dead
+    // host. Recency buys exactly one thing, the recovery dial
+    // (`isConfirmedTransportRefusal`); death is only ever overridden by that
+    // dial actually succeeding (the live-session evidence every destructive
+    // gate already honours). The plan buys nothing at all: an unpaid account's
+    // host that is off is off, and hiding that behind an upgrade prompt is the
+    // bug this split exists to fix.
+    return "offline";
+  }
+  if (!entry.planAllowsRemote) {
+    // Live or unreadable, the answer is the same and it is deterministic: no
+    // route exists for this account, and the remedy is an upgrade.
+    return "plan-restricted";
+  }
   switch (entry.remoteStatus.connectivity) {
-    case "local-only":
-      return "plan-restricted";
     case "unknown":
       return "indeterminate";
-    case "offline":
-      // `offline` is authoritative, fuse window or not (cold review P1). An
-      // earlier F7 shape rewrote a fuse-window `offline` to `indeterminate`
-      // here, which let a recent `lastSeenAt` - equally consistent with a
-      // clean detach or a crash one minute ago - suppress failover, the dead
-      // surface, and notification-action refusal for up to four hours on a
-      // genuinely dead host. Recency buys exactly one thing, the recovery
-      // dial (`isConfirmedTransportRefusal`); death is only ever overridden
-      // by that dial actually succeeding (the live-session evidence every
-      // destructive gate already honours).
-      return "offline";
     case "connectable":
-      // Unreachable in practice (`connectable` is exactly what makes an entry
-      // `dialable` above). Reported as indeterminate rather than offline so a
-      // future mapper change that breaks that correspondence degrades into
-      // "we don't know" instead of into a false death claim.
+      // Unreachable in practice (`connectable` + an allowing plan is exactly
+      // what makes an entry `dialable` above). Reported as indeterminate
+      // rather than offline so a future mapper change that breaks that
+      // correspondence degrades into "we don't know" instead of into a false
+      // death claim.
       return "indeterminate";
   }
 }
@@ -302,8 +364,8 @@ export function hostUnavailability(
  *
  * Two refusals are real and permanent-until-something-changes: the host is
  * confirmed detached (`offline`), or the account's plan has no remote route to
- * it (`plan-restricted` — correct to refuse, since no relay attach exists to
- * dial; the UI's job is to say "Local only" rather than "offline", which is
+ * it (`plan-restricted` — correct to refuse, since the attach grant would 403
+ * the dial; the UI's job is to say "Local only" rather than "offline", which is
  * `useHostReachability`'s reason field, not this).
  *
  * `indeterminate` is not a refusal — it is the absence of an answer, and the
@@ -385,8 +447,15 @@ export function isRelayFuseRecoveryCandidate(
  *
  * Deliberately narrower than "not dialable". `indeterminate` fails this gate
  * because a failed liveness read is not evidence about the host, and
- * `plan-restricted` fails it because the host is not dead at all — it is
- * working exactly as the account's plan says it should.
+ * `plan-restricted` fails it because it is a claim about the ROUTE — the attach
+ * grant refuses — not about the process, which for all we know is running.
+ *
+ * That exclusion used to be much broader than it reads, and silently: while the
+ * wire collapsed the plan into `connectivity`, EVERY host on an unpaid plan was
+ * `plan-restricted`, so this gate could not fire for those accounts even when
+ * the host was long dead. It now sees pure liveness, and a plan-gated host the
+ * cloud reports `offline` reaches this gate exactly like a paid one
+ * ({@link hostUnavailability}, decision 1: dead is dead).
  *
  * `hasLiveSession` outranks everything: a client holding an open E2E session
  * has firsthand proof the host is up, which beats any verdict the cloud
@@ -421,14 +490,16 @@ export function isConfirmedHostDeath(
  *
  * `transportDialability` answers exactly one question — can this client dial
  * the host right now — so it is `dialable` if and only if the relay holds a
- * live attachment for it (`connectivity === "connectable"`). Every other
- * connectivity value is a DIFFERENT reason for the same dialing answer, and
- * the directory must not distinguish them: `local-only` (the plan gate refuses
- * the attach), `unknown` (we could not read liveness) and `offline` all mean
- * the dial would not arrive. The honest per-reason copy is the derivation
- * layer's job — {@link hostUnavailability} keeps the reason, and the
- * `local-only` upgrade prompt and the "status unknown" wording branch on it
- * where there is room to say why.
+ * live attachment for it (`connectivity === "connectable"`) AND the account's
+ * plan includes remote hosts. Both halves are required because a dial that
+ * cannot arrive and a dial the grant refuses are the same answer to this
+ * question: an unpaid account's `connectable` host is not dialable, because
+ * the attach grant 403s (`plan_restricted`) before any socket is opened.
+ * Every other combination is a DIFFERENT reason for the same dialing answer,
+ * and the directory must not distinguish them here: the honest per-reason copy
+ * is the derivation layer's job — {@link hostUnavailability} keeps the reason,
+ * and the upgrade prompt and the "status unknown" wording branch on it where
+ * there is room to say why.
  *
  * `unknown` is the one that would be tempting to admit, and must not be: a
  * blind liveness read is not evidence of reachability, and letting it through
@@ -436,10 +507,18 @@ export function isConfirmedHostDeath(
  * a failed Redis call. It is NOT the honest `viewerReachability` pill
  * (Architecture §7) either, which only a real connection attempt at tab-open
  * may set.
+ *
+ * `planAllowsRemote` is an explicit parameter rather than something read here,
+ * for the same reason `nowMs` is passed to {@link isWithinRelayFuseGrace}: this
+ * stays a pure function of its inputs, and the ONE caller that owns a real
+ * credential reads the plan from the same object that owns the bearer and the
+ * era the fetch was issued for, so the plan and the host list cannot skew
+ * across a sign-out/sign-in transition.
  */
 export function hostListItemToDirectoryEntry(
   item: HostListItem,
   relayBaseUrl: string,
+  planAllowsRemote: boolean,
 ): RemoteHostDirectoryEntry {
   return {
     hostId: item.hostId,
@@ -448,19 +527,29 @@ export function hostListItemToDirectoryEntry(
     websocketUrl: relayBaseUrl,
     version: item.status.appVersion,
     transportDialability:
-      item.status.connectivity === "connectable" ? "dialable" : "not-dialable",
+      item.status.connectivity === "connectable" && planAllowsRemote
+        ? "dialable"
+        : "not-dialable",
     remoteStatus: item.status,
     publicKey: item.publicKey,
-    // Reconciled once here (fetch time, not render) so the render-time
-    // dialability/death gates stay pure - see isWithinRelayFuseGrace.
-    relayFuseGrace: isWithinRelayFuseGrace(item.status, Date.now()),
+    // Both flags are reconciled once here (fetch time, not render) so the
+    // render-time dialability/death gates stay pure - see
+    // isWithinRelayFuseGrace and RemoteHostDirectoryEntry.planAllowsRemote.
+    //
+    // The plan gate closes the fuse window: the window exists to keep a
+    // RECOVERY DIAL available while the relay may still hold a leg the lease
+    // has already dropped, and for a plan-gated account that dial meets a 403
+    // at the attach grant however attached the leg is.
+    relayFuseGrace:
+      planAllowsRemote && isWithinRelayFuseGrace(item.status, Date.now()),
+    planAllowsRemote,
   };
 }
 
 /**
  * The stubbed fetcher the `HostDirectoryService` uses by default. Returns an
- * empty hosts result so the merged directory has a stable shape and stays
- * local-only in S1 (feeding unconnectable remote entries into the selectable
+ * empty hosts result so the merged directory has a stable shape and holds
+ * local hosts only in S1 (feeding unconnectable remote entries into the selectable
  * directory would be a premature connect affordance / auto-bind hazard).
  * Swapped for `createRemoteHostFetcher` when the relay lands (S2).
  *
@@ -505,6 +594,15 @@ export interface RemoteHostFetcherDeps {
   readonly listHosts: (bearerToken: string) => Promise<HostListFetchResult>;
   /** Reads the current user bearer, or `null` when signed out. */
   readonly getBearerToken: () => string | null;
+  /**
+   * Reads whether the ACCOUNT's plan includes remote hosts, at fetch time —
+   * the second axis every projected entry is stamped with (see
+   * {@link RemoteHostDirectoryEntry.planAllowsRemote}). Read per fetch rather
+   * than captured once, so a purchase or a downgrade is reflected by the next
+   * poll. A not-yet-known plan must read `true` (allowed): a wasted dial into
+   * the server's 403 is invisible, a false upgrade prompt is not.
+   */
+  readonly getPlanAllowsRemote: () => boolean;
   /** The relay's fixed WS attach endpoint (`IRunnerHost.relayBaseUrl`, S2/T14). */
   readonly relayBaseUrl: string;
 }
@@ -549,10 +647,14 @@ export function createRemoteHostFetcher(
     if (result.kind === "network-error") {
       return { kind: "failed" };
     }
+    // Read once per fetch, after the list is in hand, so every entry in one
+    // emission is stamped with the SAME plan answer - a mid-map flip would
+    // otherwise produce a directory whose rows disagree about the account.
+    const planAllowsRemote = deps.getPlanAllowsRemote();
     return {
       kind: "hosts",
       entries: result.response.hosts.map((item) =>
-        hostListItemToDirectoryEntry(item, deps.relayBaseUrl),
+        hostListItemToDirectoryEntry(item, deps.relayBaseUrl, planAllowsRemote),
       ),
     };
   };

@@ -39,10 +39,20 @@ function registryItem(connectivity: HostConnectivity): HostListItem {
   };
 }
 
+/**
+ * The account axis, supplied by the caller: `connectivity` is pure liveness on
+ * the wire, and whether the plan includes remote hosts is an account fact this
+ * surface combines with it. These cases describe an entitled account unless
+ * they say otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+const PLAN_GATED = false;
+
 const BASE = {
   item: registryItem("offline"),
   hasLiveSession: false,
   viewerCheck: null,
+  planAllowsRemote: PLAN_ALLOWS_REMOTE,
   nowMs: NOW_MS,
 };
 
@@ -147,10 +157,14 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     expect(health.live).toBe(true);
   });
 
-  it("maps local-only to its own state, labelled Local only, and never Offline", () => {
+  it("maps a plan-gated LIVE host to local-only, labelled Local only, and never Offline", () => {
+    // The state and its copy are unchanged; only what produces them moved.
+    // It used to be a wire word (`connectivity: "local-only"`), which is what
+    // hid liveness behind billing.
     const health = deriveHostHealth({
       ...BASE,
-      item: registryItem("local-only"),
+      item: registryItem("connectable"),
+      planAllowsRemote: PLAN_GATED,
       isLocalMachine: false,
       service: undefined,
     });
@@ -161,6 +175,36 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     expect(health.live).toBe(false);
     // Not a fault: idle tone, not warn.
     expect(health.tone).toBe("idle");
+  });
+
+  it("maps a plan-gated host with a BLIND liveness read to local-only too", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("unknown"),
+      planAllowsRemote: PLAN_GATED,
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("local-only");
+    expect(health.label).toBe("Local only");
+  });
+
+  it("maps a plan-gated OFFLINE host to Offline with its last-seen detail — dead is dead", () => {
+    // The upgrade remedy is wrong for a machine that is switched off, and the
+    // last-seen line is exactly what an offline row needs. Under the old wire
+    // this row read "Local only" forever for a free-tier account.
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("offline"),
+      planAllowsRemote: PLAN_GATED,
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("offline");
+    expect(health.label).toBe("Offline");
+    expect(health.detail).toContain("Last seen");
   });
 
   it("maps unknown to Status unknown, and never Offline", () => {
@@ -193,6 +237,20 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     const health = deriveHostHealth({
       ...BASE,
       item: registryItem("offline"),
+      isLocalMachine: false,
+      hasLiveSession: true,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("online");
+    expect(health.live).toBe(true);
+  });
+
+  it("lets live-session evidence outrank the plan gate too — the surviving session is firsthand proof", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("connectable"),
+      planAllowsRemote: PLAN_GATED,
       isLocalMachine: false,
       hasLiveSession: true,
       service: undefined,

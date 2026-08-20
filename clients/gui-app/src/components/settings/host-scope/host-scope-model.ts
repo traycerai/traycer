@@ -113,6 +113,11 @@ export function buildHostScopeOptions(
         hasLiveSession: input.hasLiveSession(hostId),
         viewerCheck: input.viewerCheck(hostId),
         service: isLocalMachine ? input.localService : undefined,
+        // The registry row carries pure liveness; the account's entitlement is
+        // this input, the same one the route gates below read. Passing it here
+        // is what keeps the health word and the route verdict from disagreeing
+        // about the same host.
+        planAllowsRemote: !input.remoteHostsPlanRestricted,
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
@@ -184,16 +189,28 @@ function isAdministrableRoute(
  *
  *   - the CLIENT's own plan gate (`remoteHostsPlanRestricted`) — the route is
  *     live and the server would refuse the attach;
- *   - the CLOUD's verdict (`connectivity: "local-only"` ⇒ `plan-restricted`) —
- *     the host never attaches to a relay at all, because the owner's plan does
- *     not include remote hosts.
+ *   - the ENTRY's own verdict (`hostUnavailability(entry) ===
+ *     "plan-restricted"`) — the plan flag stamped on the entry at projection
+ *     time says no route exists for this account, whether the host is live or
+ *     the liveness read failed.
+ *
+ * The two agree in steady state (both descend from the same subscription
+ * status), and asking both is deliberate belt-and-braces across the moment they
+ * could not: the entry carries the plan as of the FETCH, the hook as of this
+ * RENDER.
  *
  * The old body demanded a dialable entry, which the second case can never
- * satisfy: a `local-only` host is exactly the one the mapper marks
- * not-dialable. So a free-tier user's own host came back non-connectable AND
+ * satisfy: a plan-gated host is exactly the one the mapper marks not-dialable.
+ * So a free-tier user's own host came back non-connectable AND
  * non-plan-restricted, and every surface downstream fell through to its
  * generic connection-failure copy — the upgrade path invisible precisely to
  * the person who needed it.
+ *
+ * Note what is NOT plan-restricted any more: a plan-gated host the cloud
+ * reports `offline`. Its entry verdict is `offline` (dead is dead), and the
+ * client-side gate below cannot fire for it either because it is not dialable.
+ * That is correct — a switched-off machine is not a billing problem — and it is
+ * the case the old wire could not express at all.
  */
 function isPlanRestrictedRoute(
   entry: HostDirectoryEntry | null,

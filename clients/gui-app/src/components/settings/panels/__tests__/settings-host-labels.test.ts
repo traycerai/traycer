@@ -15,6 +15,14 @@ import type {
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
 
+/**
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
+ * stamps it onto every entry at projection time. These fixtures describe an
+ * entitled account unless a case says otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+const PLAN_GATED = false;
+
 const RELAY_BASE_URL = "wss://relay.example.test/attach";
 
 function listItem(connectivity: HostConnectivity): HostListItem {
@@ -42,6 +50,7 @@ describe("settingsHostOptionLabel — composed against real hostListItemToDirect
     const entry = hostListItemToDirectoryEntry(
       listItem("unknown"),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     // Sanity: this is exactly the collapsed shape the mapper produces —
     // the coarse bit the six consumers used to read directly, which is why it
@@ -50,19 +59,44 @@ describe("settingsHostOptionLabel — composed against real hostListItemToDirect
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox");
   });
 
-  it("labels a local-only (free-tier) host '(local only)', never '(offline)'", () => {
+  it("labels a plan-gated (free-tier) LIVE host '(local only)', never '(offline)'", () => {
+    // The plan is the client's own fact now, not a wire word: a `connectable`
+    // host on a plan without remote hosts.
     const entry = hostListItemToDirectoryEntry(
-      listItem("local-only"),
+      listItem("connectable"),
       RELAY_BASE_URL,
+      PLAN_GATED,
     );
     expect(entry.transportDialability).toBe("not-dialable");
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox (local only)");
+  });
+
+  it("labels a plan-gated host with a BLIND liveness read '(local only)' too — the refusal is deterministic", () => {
+    const entry = hostListItemToDirectoryEntry(
+      listItem("unknown"),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(settingsHostOptionLabel(entry)).toBe("prod-devbox (local only)");
+  });
+
+  it("labels a plan-gated host the cloud reports OFFLINE '(offline)' — dead is dead, whoever is paying", () => {
+    // The case the old wire could not express at all: on a free plan every
+    // host read `local-only`, so a switched-off machine was labelled as a
+    // billing state and no death-aware surface could see it.
+    const entry = hostListItemToDirectoryEntry(
+      listItem("offline"),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(settingsHostOptionLabel(entry)).toBe("prod-devbox (offline)");
   });
 
   it("labels a genuinely offline host '(offline)'", () => {
     const entry = hostListItemToDirectoryEntry(
       listItem("offline"),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(entry.transportDialability).toBe("not-dialable");
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox (offline)");
@@ -72,6 +106,7 @@ describe("settingsHostOptionLabel — composed against real hostListItemToDirect
     const entry = hostListItemToDirectoryEntry(
       listItem("connectable"),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(entry.transportDialability).toBe("dialable");
     expect(settingsHostOptionLabel(entry)).toBe("prod-devbox");

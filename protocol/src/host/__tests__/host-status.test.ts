@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  hostListItemSchema,
-  hostListResponseSchema,
-} from "../host-status";
+import { hostListItemSchema, hostListResponseSchema } from "../host-status";
 import { HOST_LIST_ITEM_GOLDEN_FIXTURE } from "../__fixtures__/host-status-golden-fixture";
 
 /**
@@ -60,8 +57,36 @@ describe("host-status.ts strict parsing", () => {
         connectivity: "reconnecting",
       },
     };
+    expect(hostListItemSchema.safeParse(withInvalidConnectivity).success).toBe(
+      false,
+    );
+  });
+
+  it("parses every liveness word the server may still emit", () => {
+    for (const connectivity of ["connectable", "offline", "unknown"]) {
+      expect(
+        hostListItemSchema.safeParse({
+          ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+          status: { ...HOST_LIST_ITEM_GOLDEN_FIXTURE.status, connectivity },
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects the removed plan word `local-only` — connectivity is pure liveness now", () => {
+    // The plan is an ACCOUNT fact the client combines at projection time (see
+    // `hostConnectivitySchema`'s doc). This rejection is also the deploy-order
+    // constraint made executable: a client that parses this file must not meet
+    // a server still emitting the word, so authn-v3 stops emitting it BEFORE a
+    // desktop release ships this enum.
     expect(
-      hostListItemSchema.safeParse(withInvalidConnectivity).success,
+      hostListItemSchema.safeParse({
+        ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+        status: {
+          ...HOST_LIST_ITEM_GOLDEN_FIXTURE.status,
+          connectivity: "local-only",
+        },
+      }).success,
     ).toBe(false);
   });
 
@@ -69,7 +94,8 @@ describe("host-status.ts strict parsing", () => {
     const legacyShapedStatus = {
       presenceLease: "fresh",
       hostRelayAttached: true,
-      viewerReachability: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.viewerReachability,
+      viewerReachability:
+        HOST_LIST_ITEM_GOLDEN_FIXTURE.status.viewerReachability,
       clientCloud: HOST_LIST_ITEM_GOLDEN_FIXTURE.status.clientCloud,
       busy: false,
       busySessionCount: 0,

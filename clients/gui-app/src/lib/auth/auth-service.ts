@@ -45,6 +45,10 @@ import {
 } from "@traycer-clients/shared/auth/token-refresh-scheduler";
 import { usernameFromAuthenticatedUser } from "@traycer/protocol/auth/request-context";
 import {
+  isPaidTier,
+  type SubscriptionStatus,
+} from "@traycer/protocol/auth/user";
+import {
   useAuthStore,
   type AuthContextMetadata,
   type AuthProfile,
@@ -340,6 +344,20 @@ export class AuthService {
     readonly request: Promise<HostListResponse | null>;
   } | null = null;
   private currentProfile: AuthProfile | null = null;
+  /**
+   * The signed-in account's subscription tier, as of the last session commit
+   * or revalidation — the SAME value projected into the auth store beside every
+   * write below, kept here so a caller can read it without React.
+   *
+   * It lives on this object rather than being read back out of the store
+   * because the host-directory projection needs the plan and the credential to
+   * be one coherent answer: `commitLiveCredential` runs BEFORE the transition
+   * is announced, and the store projection runs after, so a fetch kicked off by
+   * that announcement would read this account's hosts against the previous
+   * account's plan. `null` means "not signed in, or not yet known" and reads as
+   * ALLOWED (see {@link planAllowsRemoteHosts}).
+   */
+  private currentSubscription: SubscriptionStatus | null = null;
   private lastError: string | null = null;
   private callbackDisposable: Disposable | null = null;
   // §4 owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
@@ -1394,11 +1412,9 @@ export class AuthService {
           contextMetadata,
           projectShareableTeams(session.user),
         );
-      useAuthStore
-        .getState()
-        .setSubscriptionStatus(
-          session.user.userSubscription.subscriptionStatus,
-        );
+      this.commitSubscriptionStatus(
+        session.user.userSubscription.subscriptionStatus,
+      );
       this.emitSessionSnapshot();
       this.refreshScheduler.start();
       return;
@@ -1912,11 +1928,9 @@ export class AuthService {
       // Subscription entitlement can change without a bearer rotation (for
       // example after a purchase or restore). Project every successful
       // validation so entitlement-gated surfaces react without an app restart.
-      useAuthStore
-        .getState()
-        .setSubscriptionStatus(
-          outcome.user.userSubscription.subscriptionStatus,
-        );
+      this.commitSubscriptionStatus(
+        outcome.user.userSubscription.subscriptionStatus,
+      );
       if (outcome.user.user.id !== currentUserId) {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.
@@ -2831,9 +2845,7 @@ export class AuthService {
     useAuthStore
       .getState()
       .setSignedIn(profile, contextMetadata, projectShareableTeams(user));
-    useAuthStore
-      .getState()
-      .setSubscriptionStatus(user.userSubscription.subscriptionStatus);
+    this.commitSubscriptionStatus(user.userSubscription.subscriptionStatus);
     this.emitSessionSnapshot();
     this.refreshScheduler.start();
   }
@@ -2856,9 +2868,52 @@ export class AuthService {
     // accept it — would re-commit the signed-out user's hosts as the
     // signed-out directory.
     this.commitLiveCredential(null, null);
+    // The plan belongs to the account that just went away. Cleared alongside
+    // the credential (`setSignedOut()` nulls the store's copy too) so no host
+    // list can be projected against the departed account's entitlement.
+    this.currentSubscription = null;
     this.contextProvider.signOut();
     useAuthStore.getState().setSignedOut();
     this.emitSessionSnapshot();
+  }
+
+  /**
+   * THE single assignment site for the account's subscription tier: this
+   * object's copy and the store projection every entitlement-gated surface
+   * renders from, written together so the two can never disagree.
+   *
+   * Entitlement can change without a bearer rotation (a purchase, a restore, a
+   * downgrade), which is why every successful validation calls through here and
+   * not only sign-in.
+   */
+  private commitSubscriptionStatus(status: SubscriptionStatus): void {
+    this.currentSubscription = status;
+    useAuthStore.getState().setSubscriptionStatus(status);
+  }
+
+  /**
+   * The signed-in account's subscription tier, or `null` when signed out or
+   * not yet known. Synchronous, and readable without React — the host-directory
+   * projection reads it once per fetch.
+   */
+  currentSubscriptionStatus(): SubscriptionStatus | null {
+    return this.currentSubscription;
+  }
+
+  /**
+   * Whether the account's plan includes REMOTE hosts (a paid-tier feature —
+   * "Sync and above"). The client-side mirror of CS's attach-grant gate; the
+   * server enforces it authoritatively on both attach legs
+   * (`reason: "plan_restricted"`).
+   *
+   * An unknown plan reads as ALLOWED, matching `useRemoteHostsPlanRestricted`'s
+   * polarity: a dial made on a stale-optimistic read just meets the server's
+   * 403 and is invisible, while a false "upgrade" prompt shown to a paying user
+   * during the sign-in window is not.
+   */
+  planAllowsRemoteHosts(): boolean {
+    const status = this.currentSubscription;
+    return status === null || isPaidTier(status);
   }
 
   /**

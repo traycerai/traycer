@@ -20,6 +20,14 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
+/**
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
+ * stamps it onto every entry at projection time. These fixtures describe an
+ * entitled account unless a case says otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+const PLAN_GATED = false;
+
 const toastInfo = vi.hoisted(() => vi.fn());
 
 // Failover / re-adopt announce through sonner. The mock must not throw for any
@@ -1334,11 +1342,13 @@ describe("HostDirectoryService", () => {
     const inGrace = hostListItemToDirectoryEntry(
       item,
       "wss://relay.example.test/attach",
+      PLAN_ALLOWS_REMOTE,
     );
     nowSpy.mockReturnValue(lastSeenMs + RELAY_FUSE_MAX_ATTACH_MS + 1);
     const aged = hostListItemToDirectoryEntry(
       item,
       "wss://relay.example.test/attach",
+      PLAN_ALLOWS_REMOTE,
     );
     nowSpy.mockRestore();
     expect(inGrace.relayFuseGrace).toBe(true);
@@ -2592,7 +2602,7 @@ describe("HostDirectoryService", () => {
       function realRemoteEntry(
         hostId: string,
         displayName: string,
-        connectivity: "connectable" | "unknown" | "offline" | "local-only",
+        connectivity: "connectable" | "unknown" | "offline",
       ): HostDirectoryEntry {
         return hostListItemToDirectoryEntry(
           {
@@ -2613,6 +2623,40 @@ describe("HostDirectoryService", () => {
             updatePolicy: "manual",
           },
           "wss://relay.example.test/attach",
+          PLAN_ALLOWS_REMOTE,
+        );
+      }
+
+      /**
+       * The same projection for an account whose plan has no remote hosts: the
+       * wire word is pure liveness, and the plan is stamped beside it. A LIVE
+       * host on a gated plan is `plan-restricted` — refused, but not dead.
+       */
+      function planGatedRemoteEntry(
+        hostId: string,
+        displayName: string,
+        connectivity: "connectable" | "unknown" | "offline",
+      ): HostDirectoryEntry {
+        return hostListItemToDirectoryEntry(
+          {
+            hostId,
+            displayName,
+            platform: "Ubuntu",
+            kind: "personal",
+            publicKey: `pk-${hostId}`,
+            createdAt: "2026-07-01T12:00:00.000Z",
+            status: {
+              connectivity,
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.2",
+              lastSeenAt: "2026-07-03T11:59:50.000Z",
+            },
+            updatePolicy: "manual",
+          },
+          "wss://relay.example.test/attach",
+          PLAN_GATED,
         );
       }
 
@@ -2691,7 +2735,7 @@ describe("HostDirectoryService", () => {
         expect(directory.getSelected()?.hostId).toBe(second.hostId);
       });
 
-      it("does NOT fail over a 'local-only' (plan-restricted) selection either — it is not dead, it is billing", async () => {
+      it("does NOT fail over a plan-restricted selection either — it is not dead, it is billing", async () => {
         const remembered = realRemoteEntry(
           "remembered-real",
           "Remembered Real",
@@ -2715,12 +2759,65 @@ describe("HostDirectoryService", () => {
         directory.selectById(remembered.hostId);
 
         remotes = [
-          realRemoteEntry("remembered-real", "Remembered Real", "local-only"),
+          planGatedRemoteEntry(
+            "remembered-real",
+            "Remembered Real",
+            "connectable",
+          ),
           second,
         ];
         await directory.refresh();
         await directory.refresh();
         expect(directory.getSelected()?.hostId).toBe(remembered.hostId);
+      });
+
+      /**
+       * The plan flip, at the selection-refresh equality
+       * (`hostDirectoryEntriesEqual`).
+       *
+       * `planAllowsRemote` is deliberately NOT one of the compared fields:
+       * every flip a consumer could observe already moves the DERIVED verdict
+       * that comparison reads (`null` ↔ `plan-restricted` for a connectable
+       * row, `indeterminate` ↔ `plan-restricted` for a blind one), and an aged
+       * `offline` row genuinely does not change - it is dead either way. These
+       * pin that reasoning instead of trusting it.
+       */
+      it("re-emits the selected entry when the account is downgraded under it, and stops offering the route", async () => {
+        let remotes: readonly HostDirectoryEntry[] = [
+          realRemoteEntry("plan-flip", "Plan Flip", "connectable"),
+        ];
+        const directory = makeDirectory({
+          authContextId: null,
+          credentialGeneration: null,
+          runnerHost: makeHost(null),
+          localHostIdSeeder: null,
+          remoteFetcher: () =>
+            Promise.resolve({ kind: "hosts", entries: remotes }),
+        });
+        await directory.start();
+        directory.selectById("plan-flip");
+        expect(directory.getSelected()?.transportDialability).toBe("dialable");
+
+        const observed: Array<HostDirectoryEntry | null> = [];
+        directory.onSelectionChange((entry) => {
+          observed.push(entry);
+        });
+
+        // Nothing about the HOST changed - the registry row is byte-identical.
+        // Only the account's plan moved, which the projection stamps.
+        remotes = [
+          planGatedRemoteEntry("plan-flip", "Plan Flip", "connectable"),
+        ];
+        await directory.refresh();
+
+        expect(observed).toHaveLength(1);
+        expect(observed[0]?.hostId).toBe("plan-flip");
+        expect(observed[0]?.transportDialability).toBe("not-dialable");
+
+        // ...and a second poll with the same (still gated) answer is not a
+        // change: the verdict is identical, so the socket is not churned.
+        await directory.refresh();
+        expect(observed).toHaveLength(1);
       });
     });
 
@@ -3041,7 +3138,7 @@ describe("HostDirectoryService", () => {
       function realRemoteEntryWithLastSeen(
         hostId: string,
         displayName: string,
-        connectivity: "connectable" | "unknown" | "offline" | "local-only",
+        connectivity: "connectable" | "unknown" | "offline",
         lastSeenAt: string,
       ): HostDirectoryEntry {
         return hostListItemToDirectoryEntry(
@@ -3063,6 +3160,7 @@ describe("HostDirectoryService", () => {
             updatePolicy: "manual",
           },
           "wss://relay.example.test/attach",
+          PLAN_ALLOWS_REMOTE,
         );
       }
 
