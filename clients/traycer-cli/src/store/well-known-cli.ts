@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import type { CliInstallSource } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { cliInstallHomeDir } from "./paths";
 
@@ -26,6 +27,28 @@ export function wellKnownCliBinaryPath(environment: Environment): string {
   return join(cliInstallHomeDir(environment), "bin", binaryName);
 }
 
+// Whether an install source ships an INTERPRETER SCRIPT rather than an
+// executable, and therefore must never be copied into the well-known slot.
+//
+// npm is the only one today: `@traycerai/cli` publishes a Node bundle
+// behind `#!/usr/bin/env node`. Copying it into the slot would put
+// JavaScript behind `traycer.exe` on Windows, and on POSIX would leave the
+// host daemon spawning a shebang that resolves `node` off the SERVICE
+// manager's PATH - the exact failure `npmInterpreterInvocation` avoids for
+// the service unit, reintroduced on the host's side of the same install.
+//
+// This predicate is the single place that decision lives. Every writer of
+// the slot consults it, so the resolver and `cli mark-source` cannot drift
+// apart on which installs are slot-eligible. (`cli upgrade`'s swap paths
+// need no guard - it refuses package-manager-owned sources outright, npm
+// among them.)
+//
+// Retired once npm ships per-platform SEA binaries: npm becomes an ordinary
+// executable install and this returns false for every source.
+export function isInterpreterDistribution(source: CliInstallSource): boolean {
+  return source === "npm";
+}
+
 export type WellKnownCliStageOutcome =
   // The binary already IS the well-known slot; nothing to do. This guard is
   // what keeps a Desktop-staged slot binary intact when something anchors
@@ -34,6 +57,11 @@ export type WellKnownCliStageOutcome =
   | { readonly staged: "already-well-known"; readonly wellKnownPath: string }
   // The slot now holds a fresh COPY of the binary's bytes.
   | { readonly staged: "staged"; readonly wellKnownPath: string }
+  // This install ships a script, not an executable
+  // (`isInterpreterDistribution`), so the slot is deliberately left alone.
+  // Reported rather than silently dropped: the host stays unable to see
+  // this install, and callers surface that.
+  | { readonly staged: "not-applicable"; readonly wellKnownPath: string }
   // Best-effort failure: the caller's primary contract (manifest write,
   // service registration against the real binary) still holds; only the
   // host's view through this slot stays degraded. Callers surface this.

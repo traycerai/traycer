@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
+import type { CliInstallSource } from "../../manifest/cli-manifest";
 
 // `store/paths` binds its home root from `os.homedir()` at module load -
 // mirror the established pattern
@@ -89,6 +90,44 @@ describe("wellKnownCliBinaryPath", () => {
     expect(wellKnownCliBinaryPath(ENVIRONMENT)).toBe(
       join(cliInstallHomeDir(ENVIRONMENT), "bin", expectedBasename),
     );
+  });
+});
+
+describe("isInterpreterDistribution", () => {
+  // One row per CliInstallSource. `writeMarkSource`
+  // (commands/cli-mark-source.ts) and `resolveServiceCliInvocation`
+  // (service/cli-binary.ts) both gate slot-staging on this single
+  // predicate - the completeness check below fails the moment
+  // VALID_CLI_INSTALL_SOURCES gains a source without a matching row here,
+  // rather than letting a new source silently default to "not an
+  // interpreter" and stage a slot for it sight unseen.
+  const CASES: ReadonlyArray<{
+    readonly source: CliInstallSource;
+    readonly interpreter: boolean;
+  }> = [
+    { source: "npm", interpreter: true },
+    { source: "homebrew", interpreter: false },
+    { source: "desktop", interpreter: false },
+    { source: "manual", interpreter: false },
+    { source: "apt", interpreter: false },
+    { source: "rpm", interpreter: false },
+    { source: "winget", interpreter: false },
+    { source: "scoop", interpreter: false },
+  ];
+
+  it.each(CASES)(
+    "returns $interpreter for source=$source",
+    async ({ source, interpreter }) => {
+      const { isInterpreterDistribution } = await import("../well-known-cli");
+      expect(isInterpreterDistribution(source)).toBe(interpreter);
+    },
+  );
+
+  it("covers every source in VALID_CLI_INSTALL_SOURCES - a new source there needs a row above", async () => {
+    const { VALID_CLI_INSTALL_SOURCES } =
+      await import("../../manifest/cli-manifest");
+    const coveredSources = new Set(CASES.map((row) => row.source));
+    expect(coveredSources).toEqual(new Set(VALID_CLI_INSTALL_SOURCES));
   });
 });
 

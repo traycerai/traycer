@@ -3,6 +3,7 @@ import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { readCliManifest } from "../manifest/cli-manifest";
 import {
+  isInterpreterDistribution,
   stageWellKnownCliBinary,
   wellKnownCliBinaryPath,
 } from "../store/well-known-cli";
@@ -113,14 +114,14 @@ export async function resolveServiceCliInvocation(
         exitCode: 1,
       });
     }
-    // npm ships a script, not an executable: it must never be copied into
-    // the slot (the host would exec a `.exe` full of JavaScript on Windows,
-    // and a shebang that outlives its interpreter on POSIX). It keeps the
-    // direct-path registration, with the interpreter pinned when we can see
-    // it. Superseded once npm ships per-platform SEA binaries, at which
-    // point npm becomes an ordinary executable install and falls through to
-    // the staging below with everything else.
-    if (manifest.source === "npm") {
+    // An interpreter distribution (npm) ships a script, not an executable,
+    // so it must never be copied into the slot - see
+    // `isInterpreterDistribution`, the single place that rule lives. It
+    // keeps the direct-path registration, with the interpreter pinned when
+    // we can see it. Once npm ships per-platform SEA binaries the predicate
+    // goes false for every source and this falls through to the staging
+    // below with everything else.
+    if (isInterpreterDistribution(manifest.source)) {
       return (
         (await npmInterpreterInvocation(manifest)) ?? {
           command: manifest.binaryPath,

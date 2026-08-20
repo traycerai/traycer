@@ -11,7 +11,12 @@ import {
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { withCliLock } from "../store/cli-lock";
-import { stageWellKnownCliBinary } from "../store/well-known-cli";
+import {
+  isInterpreterDistribution,
+  stageWellKnownCliBinary,
+  wellKnownCliBinaryPath,
+  type WellKnownCliStageOutcome,
+} from "../store/well-known-cli";
 import { errorFromUnknown } from "../logger";
 
 // `traycer cli mark-source` - internal, hidden command. Package-manager
@@ -217,15 +222,30 @@ export async function writeMarkSource(opts: {
       // Anchor time is also when the well-known slot must start serving
       // this binary: the host daemon's own CLI discovery (doctor /
       // update / service status) reads ONLY `<cliInstallHomeDir>/bin/`,
-      // never this manifest, so an npm/brew/hand-placed install stays
+      // never this manifest, so a brew/hand-placed install stays
       // invisible to it - "has no Traycer CLI installed" in the GUI -
       // until the slot is staged. Best-effort by design: the manifest
       // above is this command's primary contract, so a staging failure
       // is reported, not thrown.
-      const wellKnown = await stageWellKnownCliBinary({
-        environment: opts.ctx.runtime.environment,
-        binaryPath: opts.binaryPath,
-      });
+      //
+      // An INTERPRETER distribution is the exception and must be skipped,
+      // not staged: copying npm's shebanged bundle here would leave the
+      // host spawning a script that resolves `node` off the service
+      // manager's PATH, and on Windows would put JavaScript behind
+      // `traycer.exe`. Staging it is worse than leaving the slot empty -
+      // the host would fail to execute a CLI it believes it has. The same
+      // predicate gates the resolver, so the two writers cannot drift.
+      const wellKnown: WellKnownCliStageOutcome = isInterpreterDistribution(
+        opts.source,
+      )
+        ? {
+            staged: "not-applicable",
+            wellKnownPath: wellKnownCliBinaryPath(opts.ctx.runtime.environment),
+          }
+        : await stageWellKnownCliBinary({
+            environment: opts.ctx.runtime.environment,
+            binaryPath: opts.binaryPath,
+          });
       if (wellKnown.staged === "failed") {
         opts.ctx.runtime.logger.warn(
           "CLI install source well-known staging failed",
@@ -257,7 +277,9 @@ export async function writeMarkSource(opts: {
           ? null
           : wellKnown.staged === "failed"
             ? `${anchoredLine}\nwarning: could not stage ${wellKnown.wellKnownPath} (${wellKnown.errorMessage}); the host daemon resolves the CLI only at that path, so host-driven doctor/update will not see this install until it is staged`
-            : anchoredLine,
+            : wellKnown.staged === "not-applicable"
+              ? `${anchoredLine}\nnote: this distribution ships a script rather than an executable, so ${wellKnown.wellKnownPath} is left alone; the service runs the CLI through its interpreter, but host-driven doctor/update will not see this install`
+              : anchoredLine,
         exitCode: 0,
       };
     },
