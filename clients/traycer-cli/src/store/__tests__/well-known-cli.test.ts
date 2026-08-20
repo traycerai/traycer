@@ -14,7 +14,7 @@ import {
 import type { PathLike } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
 import type { CliInstallSource } from "../../manifest/cli-manifest";
@@ -73,6 +73,24 @@ const RACE_REPLACEMENT_MTIME = vi.hoisted(
 const copyFileControl = vi.hoisted(() => ({
   raceSourcePath: null as string | null,
 }));
+// Lets the mtime-reproducibility probe test (`canReproduceMtime`) simulate a
+// filesystem that cannot mirror timestamps at all - `utimes` unsupported, or
+// coarser granularity than the source's - by making every `utimes` call a
+// pure no-op: it resolves without touching the target, so the probe file
+// keeps whatever mtime `writeFile` gave it and the round-trip comparison
+// fails exactly like it would on such a filesystem. A control flag cleared
+// in `beforeEach`, same as the controls above, so it can never leak into
+// another test's real `utimes` calls - including `stageWellKnownCliBinary`'s
+// own mtime-mirroring step, which every "stages successfully" test in this
+// file depends on.
+const utimesControl = vi.hoisted(() => ({ noop: false }));
+// Lets the manifest-binary-stat-fault test intercept `stat` for exactly one
+// path - the manifest's nominated binary - and throw a non-ENOENT error
+// (EACCES), passthrough for every other path. `null` (the `beforeEach`
+// default) means no interception at all.
+const statControl = vi.hoisted(() => ({
+  failEaccesForPath: null as string | null,
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -101,6 +119,26 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       );
       await actual.rename(replacement, racedPath);
     },
+    utimes: async (
+      path: PathLike,
+      atime: string | number | Date,
+      mtime: string | number | Date,
+    ): Promise<void> => {
+      if (utimesControl.noop) return;
+      await actual.utimes(path, atime, mtime);
+    },
+    stat: async (path: PathLike) => {
+      if (
+        statControl.failEaccesForPath !== null &&
+        path === statControl.failEaccesForPath
+      ) {
+        throw Object.assign(
+          new Error("simulated EACCES reading manifest binary"),
+          { code: "EACCES" },
+        );
+      }
+      return actual.stat(path);
+    },
   };
 });
 
@@ -118,6 +156,8 @@ beforeEach(() => {
   renameControl.callCount = 0;
   renameControl.failOnCallNumber = null;
   copyFileControl.raceSourcePath = null;
+  utimesControl.noop = false;
+  statControl.failEaccesForPath = null;
   vi.resetModules();
 });
 
@@ -725,6 +765,37 @@ describe("refreshWellKnownSlotIfStale", () => {
     expect(readFileSync(wellKnownPath, "utf8")).toBe("BBBBBBBBBB");
   });
 
+  // The mtime-reproducibility probe's negative direction: a same-size slot
+  // whose mtime differs from the source is ambiguous on its own - either the
+  // source was replaced, or this filesystem could not store the mtime
+  // staging asked it to mirror. Simulate the second case by making `utimes`
+  // a no-op, so `canReproduceMtime`'s round-trip can never see its own probe
+  // stamp survive, and confirm the slot is treated as mirrored (fresh)
+  // rather than re-copied. Without `canReproduceMtime`, this scenario would
+  // read as "replaced" and re-stage the ~100 MB binary on every command
+  // forever on such a machine.
+  it("packaged, same size but a different source mtime, and this filesystem cannot reproduce mtimes: returns null (no re-stage)", async () => {
+    seaState.current = true;
+    utimesControl.noop = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(wellKnownPath, "AAAAAAAAAA");
+    const running = join(workHome, "running-binary");
+    writeFileSync(running, "BBBBBBBBBB");
+    const base = Date.now();
+    utimesSync(wellKnownPath, new Date(base), new Date(base));
+    utimesSync(running, new Date(base - 120_000), new Date(base - 120_000));
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result).toBeNull();
+    expect(readFileSync(wellKnownPath, "utf8")).toBe("AAAAAAAAAA");
+  });
+
   it("packaged, the running binary IS the slot: returns null", async () => {
     seaState.current = true;
     const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
@@ -1023,6 +1094,88 @@ describe("refreshWellKnownSlotIfStale", () => {
 
     expect(result).toBeNull();
     expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
+  });
+
+  // Fix (this changeset): only a CONFIRMED absence (ENOENT) may demote the
+  // manifest's binary. `probePresence` reports anything else - EACCES, EIO -
+  // as "unknown", and `authoritativeSlotSource` must nominate NO source at
+  // all rather than guess "absent" and repoint the slot (and the registered
+  // service) onto whichever binary happened to be running. The slot here is
+  // deliberately stale relative to the running binary, so a null result is
+  // proof the stat fault stopped the refresh - not proof there was nothing
+  // to do.
+  it("packaged, manifest names a binary whose stat fails with a non-ENOENT error: returns null and leaves the slot untouched", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    const staleBytes =
+      "stale slot bytes a faulted manifest-binary stat must not repoint";
+    writeFileSync(wellKnownPath, staleBytes);
+    const running = join(workHome, "running-binary");
+    writeFileSync(
+      running,
+      "a currently running binary, a different length than the stale slot",
+    );
+    const manifestBinary = join(workHome, "manifest-binary-b");
+    writeFileSync(manifestBinary, "binary B bytes");
+    statControl.failEaccesForPath = resolve(manifestBinary);
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.2.3",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: manifestBinary,
+      source: "homebrew",
+      pendingUpgrade: null,
+    });
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result).toBeNull();
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
+  });
+
+  // Positive control for the case above: a manifest binary that is
+  // GENUINELY absent (a real ENOENT, not merely unreadable) must still fall
+  // back to the running binary exactly as before - `probePresence` only
+  // refuses to nominate a source for the "unknown" case, never for a
+  // confirmed "absent" one.
+  it("packaged, manifest names a binary that genuinely does not exist (ENOENT): falls back to the running binary and re-stages", async () => {
+    seaState.current = true;
+    const { refreshWellKnownSlotIfStale, wellKnownCliBinaryPath } =
+      await import("../well-known-cli");
+    const { writeCliManifest } = await import("../../manifest/cli-manifest");
+    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+    mkdirSync(dirname(wellKnownPath), { recursive: true });
+    writeFileSync(
+      wellKnownPath,
+      "stale bytes behind a dangling manifest anchor",
+    );
+    const running = join(workHome, "running-binary");
+    const runningBytes = "the currently running packaged binary";
+    writeFileSync(running, runningBytes);
+    // Never written to disk, so `probePresence` sees a genuine ENOENT.
+    const missingManifestBinary = join(
+      workHome,
+      "manifest-binary-never-created",
+    );
+    await writeCliManifest(ENVIRONMENT, {
+      version: "1.2.3",
+      installedAt: new Date(0).toISOString(),
+      binaryPath: missingManifestBinary,
+      source: "homebrew",
+      pendingUpgrade: null,
+    });
+
+    const result = await withExecPath(running, () =>
+      refreshWellKnownSlotIfStale(ENVIRONMENT),
+    );
+
+    expect(result?.staged).toBe("staged");
+    expect(readFileSync(wellKnownPath, "utf8")).toBe(runningBytes);
   });
 
   // Fix 2: staleness is now decided via `lstat`, not `stat`, specifically

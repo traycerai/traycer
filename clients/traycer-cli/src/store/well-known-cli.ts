@@ -251,7 +251,7 @@ async function authoritativeSlotSource(
       return manifestBinary;
     case "absent":
       return running;
-    default:
+    case "unknown":
       return null;
   }
 }
@@ -324,7 +324,13 @@ async function mirrors(
 // a probe file cannot be staged into either, so reporting the slot as fresh
 // at least avoids copying a binary into it on every command.
 async function canReproduceMtime(dir: string, mtime: Date): Promise<boolean> {
-  const probePath = join(dir, `.mtime-probe-${process.pid}-${randomUUID()}`);
+  // Stamped like the aside files, and for the same reason: this file's own
+  // mtime is deliberately set to an arbitrary value below, so `stat` can say
+  // nothing about how old it is. The sweep reads the name instead.
+  const probePath = join(
+    dir,
+    `${MTIME_PROBE_PREFIX}${Date.now()}-${process.pid}-${randomUUID()}`,
+  );
   try {
     await writeFile(probePath, "");
     await utimes(probePath, mtime, mtime);
@@ -584,13 +590,14 @@ async function renameSlotBinaryAside(
 // the rename actually happened.
 const STAGING_ORPHAN_MIN_AGE_MS = 60 * 60 * 1000;
 const ASIDE_INFLIGHT_WINDOW_MS = 5 * 60 * 1000;
+const MTIME_PROBE_PREFIX = ".mtime-probe-";
 
-// Milliseconds encoded in a `<binary>.old-<ts>-<pid>` name, or null when the
-// name does not carry one (a leftover from a CLI old enough to predate the
-// stamp). Null sweeps, since nothing that shape can belong to a writer
-// running this code.
-function asideStampedAt(entry: string, asidePrefix: string): number | null {
-  const suffix = entry.slice(asidePrefix.length);
+// Milliseconds encoded in a `<binary>.old-<ts>-<pid>` or
+// `.mtime-probe-<ts>-<pid>-<uuid>` name, or null when the name does not carry
+// one (a leftover from a CLI old enough to predate the stamp). Null sweeps,
+// since nothing that shape can belong to a writer running this code.
+function leftoverStampedAt(entry: string, prefix: string): number | null {
+  const suffix = entry.slice(prefix.length);
   const separator = suffix.indexOf("-");
   const stamp = separator === -1 ? suffix : suffix.slice(0, separator);
   if (stamp.length === 0 || !/^\d+$/.test(stamp)) return null;
@@ -618,12 +625,32 @@ async function sweepSlotLeftovers(
   for (const entry of entries) {
     const path = join(dir, entry);
     if (entry.startsWith(asidePrefix)) {
-      const stampedAt = asideStampedAt(entry, asidePrefix);
+      const stampedAt = leftoverStampedAt(entry, asidePrefix);
       // A negative age means the stamp is in the future - a clock that moved
       // backwards - and must not pin the file here forever, so only a
       // plausible, recent age defers the sweep.
       const age = stampedAt === null ? null : now - stampedAt;
       if (age !== null && age >= 0 && age < ASIDE_INFLIGHT_WINDOW_MS) continue;
+      await rm(path, { force: true }).catch(() => undefined);
+      continue;
+    }
+    if (entry.startsWith(MTIME_PROBE_PREFIX)) {
+      // An empty file, but one this module creates and nothing else would
+      // remove: `canReproduceMtime` deletes its own in a `finally`, which a
+      // SIGKILL between the write and that block skips. Same in-flight window
+      // as the asides, so a concurrent probe is never deleted out from under
+      // the process still measuring with it - stat-ing a probe file that
+      // vanished mid-measurement would report "cannot mirror" and wrongly
+      // hold a genuinely stale slot fresh.
+      const probedAt = leftoverStampedAt(entry, MTIME_PROBE_PREFIX);
+      const probeAge = probedAt === null ? null : now - probedAt;
+      if (
+        probeAge !== null &&
+        probeAge >= 0 &&
+        probeAge < ASIDE_INFLIGHT_WINDOW_MS
+      ) {
+        continue;
+      }
       await rm(path, { force: true }).catch(() => undefined);
       continue;
     }
