@@ -6,8 +6,17 @@ import {
   type InstallSourceArg,
 } from "../installer";
 import { assertHostNotBusy } from "../host/busy-check";
+import {
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+  runSignInPreflight,
+} from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import type { CommandFn, CommandResult } from "../runner/runner";
+import type {
+  CommandContext,
+  CommandFn,
+  CommandResult,
+} from "../runner/runner";
 import {
   createServiceController,
   formatServiceLifecycleWarning,
@@ -45,6 +54,25 @@ import { withCliLock } from "../store/cli-lock";
 // `--allow-self-invocation` flag is forwarded to
 // `resolveServiceCliInvocation` so dev / local-file installs that pre-
 // date the packaged CLI (NP-3) can still register a working service.
+//
+// Sign-in pre-flight (client/host token split): the started host reads its
+// owner from the shared credentials file, so installing while signed out
+// stands up a host that denies every connection ("unprovisioned"). Before
+// staging anything, a signed-out interactive run is offered the device-flow
+// sign-in inline; a run that cannot prompt (JSON mode - every Desktop/Doctor
+// shellout - CI, or a non-TTY stdout) warns and continues instead, and so
+// does a declined or failed sign-in. Install-now-login-later stays legal
+// throughout: the host picks up a later `traycer login` within one
+// connection, no reinstall needed, which is why the guard never hard-fails.
+// `--no-service-register` skips the pre-flight entirely - bytes-only,
+// nothing is started, and the actor that later starts the service owns the
+// sign-in question.
+//
+// Post-install credential provisioning: a signed-in install that started a
+// host follows up with a short-lived stream connection carrying the CLI mint
+// flow (`provisionInstalledHostCredential`), so the host comes up holding its
+// own `aud: "host"` credential instead of waiting for the first minting
+// client. Best-effort and deadline-bounded; failures warn.
 export interface HostInstallArgs {
   // Always a concrete version token - "latest" or a semver. A local
   // file is signalled by a non-null `fromPath` and supersedes
@@ -113,6 +141,12 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       noServiceRegister: args.noServiceRegister,
       ifIdle: args.ifIdle,
       force: args.force,
+    });
+    const authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
+    ctx.runtime.logger.info("Host install sign-in pre-flight resolved", {
+      environment: ctx.runtime.environment,
+      state: authPreflight.state,
+      reason: authPreflight.reason,
     });
     const source: InstallSourceArg =
       args.fromPath !== null
@@ -198,6 +232,27 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       postSwapAction: handle !== null ? handle.state.postSwapAction : "none",
       hasPostSwapError: handle !== null && handle.state.postSwapError !== null,
     });
+
+    // Post-install credential provisioning: leave the just-started host
+    // holding its own `aud: "host"` credential rather than waiting for the
+    // first minting client to happen to connect. Only where it can help:
+    //   - the service lifecycle actually started/restarted a host
+    //     (`postSwapAction`), cleanly - a host that failed its post-swap
+    //     start has nothing to dial;
+    //   - the pre-flight left us signed in (the mint spends the bearer).
+    // Deliberately NOT gated on output mode - `--json` is the automation
+    // surface that most needs a credentialed host, and a Desktop shellout
+    // racing the GUI's own mint resolves inside the probe (a superseded mint
+    // verifies the winner's credential rather than failing).
+    // Best-effort throughout: any failure is a warning, never a failed
+    // install - an unprovisioned host self-heals on the next minting client.
+    const credentialProvision = await maybeProvisionCredential(
+      ctx,
+      handle !== null && handle.state.postSwapError === null
+        ? handle.state.postSwapAction
+        : "none",
+      authPreflight,
+    );
     const lifecycleData =
       handle !== null
         ? {
@@ -207,6 +262,20 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             postSwapError: handle.state.postSwapError,
           }
         : null;
+    let human = `installed host ${result.record.version} (executable=${result.record.executablePath})`;
+    if (handle !== null && handle.state.postSwapError !== null) {
+      human = `${human}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`;
+    }
+    // Restate the unauthenticated warning on the terminal line - the
+    // pre-flight's copy printed before a potentially long download and
+    // may have scrolled away.
+    if (authPreflight.state === "unauthenticated") {
+      human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
+    }
+    const provisionNote = formatCredentialProvisionNote(credentialProvision);
+    if (provisionNote !== null) {
+      human = `${human}; ${provisionNote}`;
+    }
     return {
       data: {
         version: result.record.version,
@@ -220,11 +289,10 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         previousVersion: result.previous?.version ?? null,
         serviceLifecycle: lifecycleData,
         installGeneration: result.installGeneration,
+        authPreflight,
+        credentialProvision,
       },
-      human:
-        handle !== null && handle.state.postSwapError !== null
-          ? `installed host ${result.record.version} (executable=${result.record.executablePath}); ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`
-          : `installed host ${result.record.version} (executable=${result.record.executablePath})`,
+      human,
       exitCode: 0,
     };
   };

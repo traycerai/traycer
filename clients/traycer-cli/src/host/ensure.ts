@@ -44,6 +44,10 @@ export interface EnsureHostOptions {
   // desktop "Force restart"). Threaded into `provisionHost`.
   readonly force: boolean;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
+  // Forwarded to `provisionHost`: runs only once this call has committed to
+  // installing, registering or starting a host, never on the no-op fast
+  // path. `host ensure` hangs its sign-in pre-flight here.
+  readonly beforeMutate: (() => Promise<void>) | null;
 }
 
 export async function ensureHost(
@@ -111,6 +115,7 @@ export async function ensureHost(
     lockReason: "host-ensure",
     force: opts.force,
     onProgress: opts.onProgress,
+    beforeMutate: opts.beforeMutate,
   });
   opts.runtime.logger.info("Host ensure completed", {
     environment: opts.runtime.environment,

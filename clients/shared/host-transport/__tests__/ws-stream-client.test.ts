@@ -21,6 +21,7 @@ import type {
   HostCredentialMintFlow,
   HostCredentialMintOutcome,
 } from "../host-credential-mint-flow";
+import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
 import {
   hostNotificationsSubscribeServerFrameSchema,
   type HostNotificationEntry,
@@ -168,6 +169,7 @@ function makeClient(options: {
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: options.factory,
     dialTimeoutMs: 1000,
@@ -210,6 +212,7 @@ function makeRotatableClient(
     bearer: () => ctx.credentials,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 1000,
@@ -242,6 +245,7 @@ function makeClientWithEvidence(options: {
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: options.evidence,
     webSocketFactory: options.factory,
     dialTimeoutMs: 1000,
@@ -586,6 +590,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
@@ -1327,6 +1332,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1382,6 +1388,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1438,6 +1445,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1567,6 +1575,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1625,6 +1634,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1674,6 +1684,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1709,6 +1720,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1757,6 +1769,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1798,6 +1811,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1853,6 +1867,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1903,6 +1918,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1950,6 +1966,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2025,6 +2042,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2062,6 +2080,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2105,6 +2124,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2213,6 +2233,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -2248,6 +2269,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -2446,6 +2468,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       bearer: () => makeRequestContext("expired").credentials,
       auth,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -3020,6 +3043,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       bearer: () => ctx.credentials,
       auth,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -3249,6 +3273,40 @@ describe("WsStreamClient host credential provisioning", () => {
       bearer: () => ctx.credentials,
       auth: null,
       hostCredentialMint: options.mint,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: options.factory,
+      dialTimeoutMs: 1000,
+      openAckTimeoutMs: 1000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+  }
+
+  /**
+   * Same wiring as `makeProvisioningClient`, plus a caller-supplied
+   * `onHostCredentialState` observer - the tap the client fires on every ack
+   * that carries a state, ahead of (and independent from) the mint machinery
+   * above.
+   */
+  function makeProvisioningClientWithObserver(options: {
+    readonly factory: IStreamWebSocketFactory;
+    readonly mint: HostCredentialMintFlow | null;
+    readonly endpoint: () => HostDirectoryEntry | null;
+    readonly authToken: string | undefined;
+    readonly onState: (hostId: string, state: HostCredentialState) => void;
+  }): WsStreamClient<typeof hostStreamRpcRegistry> {
+    const token = options.authToken ?? "token-abc";
+    const ctx = makeRequestContext(token);
+    return new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: options.endpoint,
+      bearer: () => ctx.credentials,
+      auth: null,
+      hostCredentialMint: options.mint,
+      onHostCredentialState: options.onState,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: options.factory,
       dialTimeoutMs: 1000,
@@ -3766,5 +3824,171 @@ describe("WsStreamClient host credential provisioning", () => {
     expect(pendingMap(client).size).toBe(0);
     expect(allProvisionFrames(sockets)).toHaveLength(0);
     void session;
+  });
+
+  describe("onHostCredentialState observer", () => {
+    it("fires with the host's active state, ahead of the mint machinery, which ignores active", async () => {
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => {
+          observed.push({ hostId, state });
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, "active");
+      await flush();
+
+      expect(observed).toEqual([{ hostId: HOST_A.hostId, state: "active" }]);
+      expect(mint).not.toHaveBeenCalled();
+      session.close();
+    });
+
+    it("fires even when the subscribed method's version is INCOMPATIBLE", async () => {
+      // The credential state is a HANDSHAKE fact, not a per-method one. It
+      // used to be reported only after the compatibility gate, so a host that
+      // advertised the capability but disagreed with this build about one
+      // method's version looked indistinguishable from an unreachable host -
+      // and the CLI's install probe reported it as such and could not
+      // provision it.
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => {
+          observed.push({ hostId, state });
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+
+      const socket = sockets[0].socket;
+      socket.fireOpen();
+      const openParsed = JSON.parse(socket.textSent[0]) as {
+        readonly manifest: Record<string, { major: number; minor: number }>;
+      };
+      // Same ack, but the host claims a major this build cannot speak.
+      const theirManifest = {
+        ...openParsed.manifest,
+        "epic.subscribe": {
+          major: openParsed.manifest["epic.subscribe"].major + 1,
+          minor: 0,
+        },
+      };
+      socket.fireText({
+        ...streamOpenAck(theirManifest, [CAP_PROVISION]),
+        hostCredentialState: "missing",
+      });
+      await flush();
+
+      expect(observed).toEqual([{ hostId: HOST_A.hostId, state: "missing" }]);
+      session.close();
+    });
+
+    it("fires before the mint flow is invoked for a non-active state", async () => {
+      const order: string[] = [];
+      const mint = vi.fn(async () => {
+        order.push("mint-invoked");
+        return { kind: "unavailable" as const };
+      });
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: () => {
+          order.push("observer-fired");
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, "missing");
+      await flush();
+
+      expect(order).toEqual(["observer-fired", "mint-invoked"]);
+      expect(mint).toHaveBeenCalledTimes(1);
+      session.close();
+    });
+
+    it("does not stop the mint flow from running when the observer throws", async () => {
+      const outcome = provisioned({
+        token: "host-access-jws-throw",
+        refreshToken: "refresh-jwe-throw",
+      });
+      const mint = vi.fn(async () => outcome);
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: () => {
+          throw new Error("observer boom");
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, "missing");
+      await flush();
+
+      expect(mint).toHaveBeenCalledTimes(1);
+      const frames = provisionFrames(sockets[0].socket);
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toEqual({
+        kind: "hostCredentialProvision",
+        token: outcome.token,
+        refreshToken: outcome.refreshToken,
+        familyId: outcome.familyId,
+        provisionedAt: outcome.provisionedAt,
+      });
+      session.close();
+    });
+
+    it("is not called when the ack carries no hostCredentialState, or the capability is absent", async () => {
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => {
+          observed.push({ hostId, state });
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      // Older host: no `hostCredentialProvision` capability advertised at all.
+      completeProvisionHandshake(sockets[0].socket, "omit");
+      await flush();
+      expect(observed).toHaveLength(0);
+      expect(mint).not.toHaveBeenCalled();
+
+      // Capability advertised, but the host reports no state yet.
+      sockets[0].socket.fireClose(1000, "drop", false);
+      await wait(30);
+      const next = sockets[sockets.length - 1].socket;
+      completeProvisionHandshake(next, null);
+      await flush();
+
+      expect(observed).toHaveLength(0);
+      expect(mint).not.toHaveBeenCalled();
+      session.close();
+    });
   });
 });

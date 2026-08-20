@@ -90,6 +90,16 @@ import {
 // partial went with it (traycer#585/#589). Kept at 10 minutes as an idle
 // budget: comfortably longer than the CLI's own 30s transfer watchdog, so
 // only a child that has genuinely stopped reporting trips it.
+//
+// Deliberately shared by `host service install` too, not a tighter
+// per-command bound: that command's legitimately SILENT windows stack -
+// a 30s cli-lock wait, a 32s cooperative host stop (SHUTDOWN_FORCE_EXIT_MS
+// + margin), and on win32 an install/replace sequence whose schtasks/
+// taskkill subprocess timeouts alone sum past 100s with no NDJSON between
+// them - so any bound tight enough to feel responsive risks SIGKILLing a
+// slow-but-live registration mid-critical-section, the torn-record class
+// the A8 comment above exists to prevent. Slow detection of a rare wedge
+// beats a false kill of a real one.
 const CLI_STREAM_IDLE_TIMEOUT_MS = 10 * 60_000;
 // Fixup A9: the production desktop-held cli-lock wait/poll - matches the
 // CLI's own `waitMs: 30_000` at every `withCliLock` call site (fixup A8).
@@ -662,6 +672,12 @@ export class HostController {
 
   private mutationTail: Promise<void> = Promise.resolve();
   private mutationStatus: MutationLaneStatus | null = null;
+  // Bumped on every mutation start AND end. `streamBundled` captures it at
+  // spawn so a CLI child's progress events publish only while the mutation
+  // that spawned it is still the active one - `mutationStatus` itself is
+  // replaced on every progress merge, so object identity cannot serve as
+  // the ownership token.
+  private mutationEpoch = 0;
 
   // Fixup B15: `applyPendingLoginItemRevisionIfIdle`'s disruptive
   // SMAppService cycle is reachable both outside the FIFO mutation lane
@@ -801,6 +817,7 @@ export class HostController {
       return existing as Promise<MutationOutcome<T>>;
     }
     const job = this.mutationTail.then(async () => {
+      this.mutationEpoch += 1;
       this.mutationStatus = {
         kind,
         progress: null,
@@ -816,6 +833,7 @@ export class HostController {
           message: describeError(err),
         } as MutationOutcome<T>;
       } finally {
+        this.mutationEpoch += 1;
         this.mutationStatus = null;
         this.publishMutationStatus();
         this.inFlightMutations.delete(coalesceKey);
@@ -954,6 +972,16 @@ export class HostController {
   // ---- Shared CLI invocation helpers --------------------------------------
 
   private async streamBundled<T>(args: readonly string[]): Promise<T> {
+    // Progress ownership is captured at spawn. Not every caller is inside
+    // the mutation lane: `applyPendingLoginItemRevisionIfIdle` (driven by
+    // the pending-revision monitor, deliberately not enqueued) reaches the
+    // `host service install --takeover` call, and a mutation that starts
+    // while that child is still emitting must not inherit its progress -
+    // the renderer would show a foreign operation's stage/message under the
+    // active mutation's heading. The epoch also stops a lane call's late
+    // events once its own mutation has ended.
+    const spawnEpoch = this.mutationEpoch;
+    const spawnedInLane = this.mutationStatus !== null;
     const result = await streamBundledTraycerCliJson<T>({
       args,
       env: null,
@@ -963,7 +991,11 @@ export class HostController {
       // an `AbortController`).
       signal: null,
       onEvent: (event) => {
-        if (event.type === "progress") {
+        if (
+          event.type === "progress" &&
+          spawnedInLane &&
+          this.mutationEpoch === spawnEpoch
+        ) {
           this.setMutationProgress(progressFromNdjson(event));
         }
       },
@@ -1207,7 +1239,13 @@ export class HostController {
     );
     let raw: unknown;
     try {
-      raw = await this.runBundled<unknown>([
+      // Streaming, not the flat-45s JSON wrapper: `host service install` now
+      // runs the post-registration credential provisioning probe (up to 30s
+      // waiting for the host), which stacked on the CLI's 30s lock wait can
+      // exceed any flat bound - and a SIGKILL there reports a registration
+      // that already succeeded as failed. The idle timeout is re-armed by the
+      // command's own progress NDJSON (`register`, `host-credential`).
+      raw = await this.streamBundled<unknown>([
         "host",
         "service",
         "install",
@@ -2884,7 +2922,14 @@ export class HostController {
         }
         let raw: unknown;
         try {
-          raw = await this.runBundled<unknown>([
+          // Streaming, not the flat-45s JSON wrapper: `host service install`
+          // now runs the post-registration credential provisioning probe (up
+          // to 30s waiting for the host), which stacked on the CLI's 30s
+          // lock wait can exceed any flat bound - and a SIGKILL there
+          // reports a registration that already succeeded as failed. The
+          // idle timeout is re-armed by the command's own progress NDJSON
+          // (`register`, `host-credential`).
+          raw = await this.streamBundled<unknown>([
             "host",
             "service",
             "install",
