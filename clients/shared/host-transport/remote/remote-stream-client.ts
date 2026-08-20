@@ -3,7 +3,10 @@ import type {
   SchemaVersion,
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { IHostStreamClient } from "../host-stream-client";
+import type {
+  IHostStreamClient,
+  ReconnectAllOptions,
+} from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
 import type { IRemoteSession } from "./remote-session";
@@ -84,7 +87,7 @@ export class RemoteStreamClient<
    * moves on respawn, so there is nothing to nudge. The session's own
    * resume/backoff loop (Architecture §3) already owns reconnection.
    */
-  reconnectAll(_reason: string): void {}
+  reconnectAll(_reason: string, _options: ReconnectAllOptions): void {}
 
   /**
    * Bridges the session's ready-boundary transition (full attach + every

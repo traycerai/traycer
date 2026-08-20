@@ -180,6 +180,16 @@ interface FakeConnection {
   handshake: NoiseHandshakeState | null;
   readonly reassembler: ChunkReassembler;
   readonly seqByStream: Map<number, number>;
+  /**
+   * Host-side R-2 mirror (`r2-host-stream-tombstone`), enforced per
+   * connection exactly like `RemoteClientSession.terminalStreamIds`: once the
+   * fake sends a FATAL for a stream, every later CLIENT frame for that id -
+   * a SUBSCRIBE included - is dropped at ingest, and the harness refuses to
+   * send server frames for it. Without this the fake accepted a re-subscribe
+   * of a tombstoned id that the production host silently ignores, and a
+   * recovery test passed against a client that was in fact permanently dead.
+   */
+  readonly terminalStreamIds: Set<number>;
   /** Serializes async frame handling so mux ordering matches the wire. */
   queue: Promise<void>;
   closed: boolean;
@@ -242,6 +252,14 @@ class FakeRelayHost {
   skipUnaryAutoRespond = false;
   /** streamId of every CLOSE frame the CLIENT sent, in arrival order. */
   readonly closesSent: number[] = [];
+  /**
+   * Every client frame the R-2 ingest check dropped (streamId + mux frame
+   * type). The production host logs these; recording them here is what lets
+   * a test observe "the client DID send X, and the host deliberately ignored
+   * it" - e.g. the belt-and-braces CLOSE a client sends for a stream the
+   * host already condemned with a FATAL.
+   */
+  readonly droppedTombstonedFrames: { streamId: number; type: number }[] = [];
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -265,6 +283,7 @@ class FakeRelayHost {
         handshake: null,
         reassembler: new ChunkReassembler(undefined),
         seqByStream: new Map(),
+        terminalStreamIds: new Set(),
         queue: Promise.resolve(),
         closed: false,
       };
@@ -347,7 +366,16 @@ class FakeRelayHost {
     binary: Uint8Array | null,
     qos: QosClassValue,
   ): Promise<void> {
-    await this.sendMux(this.liveConnection(), {
+    const connection = this.liveConnection();
+    if (connection.terminalStreamIds.has(streamId)) {
+      // The real host tears its resolver down with the FATAL, so no server
+      // frame for a terminal id can exist. Loud rather than dropped: a test
+      // reaching here is asserting recovery on an id that never recovered.
+      throw new Error(
+        `test sent a server frame for tombstoned stream ${streamId}`,
+      );
+    }
+    await this.sendMux(connection, {
       type: MuxFrameType.STREAM_FRAME,
       streamId,
       qos,
@@ -366,11 +394,36 @@ class FakeRelayHost {
     streamId: number,
     details: FatalErrorDetails,
   ): Promise<void> {
-    await this.sendMux(this.liveConnection(), {
+    const connection = this.liveConnection();
+    // Mirrors `RemoteClientSession`: the host marks the stream terminal
+    // whenever it sends a FATAL - retryable or not - and its ingest drops
+    // every later client frame for the id, so a client re-open must arrive
+    // under a fresh id to be heard.
+    connection.terminalStreamIds.add(streamId);
+    await this.sendMux(connection, {
       type: MuxFrameType.FATAL,
       streamId,
       qos: QosClass.INTERACTIVE,
       json: { details: { ...details } },
+      binary: null,
+    });
+  }
+
+  /**
+   * Sends a stream-scoped CLOSE for `streamId` - the host ending a stream
+   * NORMALLY (resolver finished, entity gone benignly). Mirrors
+   * `RemoteClientSession.handleStreamClose`: a host-side CLOSE is a terminal
+   * path exactly like a FATAL, so the id is tombstoned here too and every
+   * later client frame for it is dropped at ingest.
+   */
+  async sendStreamClose(streamId: number, reason: string): Promise<void> {
+    const connection = this.liveConnection();
+    connection.terminalStreamIds.add(streamId);
+    await this.sendMux(connection, {
+      type: MuxFrameType.CLOSE,
+      streamId,
+      qos: QosClass.INTERACTIVE,
+      json: { reason },
       binary: null,
     });
   }
@@ -443,6 +496,16 @@ class FakeRelayHost {
     }
     const muxBytes = await connection.noise.decrypt(data, EMPTY_AD);
     const frame = decodeMuxFrame(muxBytes);
+    // R-2 ingest drop, same placement as the production host's `feedInbound`:
+    // BEFORE `accept()`, so a tombstoned id can neither seed a fresh
+    // reassembler accumulator nor smuggle a SUBSCRIBE through to the handler.
+    if (connection.terminalStreamIds.has(frame.streamId)) {
+      this.droppedTombstonedFrames.push({
+        streamId: frame.streamId,
+        type: frame.type,
+      });
+      return;
+    }
     const message = connection.reassembler.accept(frame);
     if (message === null) {
       return;
@@ -2591,9 +2654,18 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
 
         // The client tells the host it is done with the stream - the host
         // must not keep producing/pacing for an id this side already
-        // tombstoned.
+        // tombstoned. The host tombstoned the id itself when it sent the
+        // FATAL, so its R-2 ingest DROPS this CLOSE rather than processing
+        // it - the drop record is the evidence the client sent it at all.
         await vi.waitFor(
-          () => expect(relay.closesSent).toContain(streamId),
+          () =>
+            expect(
+              relay.droppedTombstonedFrames.some(
+                (frame) =>
+                  frame.streamId === streamId &&
+                  frame.type === MuxFrameType.CLOSE,
+              ),
+            ).toBe(true),
           WAIT,
         );
         // The FATAL was stream-scoped, not session-level - the session
@@ -3251,6 +3323,321 @@ describe("RemoteSession F7: a caller-requested reconnect is self-evidence, not h
         expect(
           recorder.callsNamed("reportDialIndeterminate").length,
         ).toBeGreaterThanOrEqual(3);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession per-stream retryable FATAL recovery", () => {
+  // `retryable` has to mean the same thing on both transports. On the local
+  // socket a retryable close is followed by the session's own reconnect, which
+  // re-subscribes the stream; here the stream used to be disposed and dropped
+  // from `subscriptions` with nothing left to revive it. Consumers read only
+  // the flag, so they silenced their error UI for a stream that was in fact
+  // permanently dead - strictly worse than the visible failure it replaced.
+  it(
+    "re-subscribes the stream instead of disposing it, and reports reconnecting rather than closed",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => {
+        statuses.push(status);
+      });
+      let framesDelivered = 0;
+      stream.onServerFrame(() => {
+        framesDelivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        await relay.sendStreamFatal(streamId, {
+          code: "EPIC_INIT_FAILED",
+          reason: "cloud unreachable while opening",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+
+        // The recovery is a real re-subscribe on the wire, not merely a status
+        // the client invented for itself. With the fake enforcing the host's
+        // R-2 ingest drop, a re-subscribe of the tombstoned id would never
+        // even be recorded here - so reaching length 2 already proves the
+        // re-open rode an id the host will answer.
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        expect(statuses).toContain("reconnecting");
+        expect(statuses).not.toContain("closed");
+        // The verdict killed the old id on both peers, so the re-open must
+        // ride a FRESH one - `config.ts`: stream ids are never reused within
+        // a session.
+        expect(relay.subscribeStreamIds[1]).not.toBe(streamId);
+
+        await relay.sendStreamFrame(
+          relay.subscribeStreamIds[relay.subscribeStreamIds.length - 1],
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(framesDelivered).toBe(1), WAIT);
+        // Delivering a frame transitions the stream back to open.
+        expect(statuses[statuses.length - 1]).toBe("open");
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // The other direction, so the recovery cannot swallow a real verdict: an
+  // adjudicated fatal must still end the stream terminally.
+  it(
+    "still disposes the stream terminally when the FATAL is not retryable",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => {
+        statuses.push(status);
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        await relay.sendStreamFatal(streamId, unauthorizedDetails());
+
+        await vi.waitFor(() => expect(statuses).toContain("closed"), WAIT);
+        // No re-subscribe was ever issued for it.
+        expect(relay.subscribeStreamIds).toHaveLength(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // The interleaving the per-stream timer alone cannot cover: the session
+  // drops DURING the reopen backoff. The re-dial clears every pending
+  // per-stream timer and the next openAck replays the subscription itself -
+  // and the replay must carry the FRESH id the fatal re-keyed the stream to,
+  // because the old id is tombstoned on the client (`handleRelayFrame` would
+  // discard every frame it earned) even though the new host session would
+  // happily answer it.
+  it(
+    "recovers a retryable-fatal stream when the session reconnects during the reopen backoff",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => {
+        statuses.push(status);
+      });
+      let framesDelivered = 0;
+      stream.onServerFrame(() => {
+        framesDelivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        await relay.sendStreamFatal(streamId, {
+          code: "EPIC_INIT_FAILED",
+          reason: "cloud unreachable while opening",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        // The fatal must be PROCESSED (tombstone set, reopen scheduled) before
+        // the drop, or the drop can outrun the frame and the test exercises a
+        // plain reconnect instead of the fatal-then-drop interleaving. The
+        // first `reconnecting` can only come from the fatal handler here - no
+        // drop has happened yet.
+        await vi.waitFor(
+          () => expect(statuses).toContain("reconnecting"),
+          WAIT,
+        );
+        // Kill the socket before the 1s reopen backoff can fire, so recovery
+        // has to ride the session-level handshake replay, not the timer.
+        relay.dropCurrentConnection();
+
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        // The replay rides the re-keyed id, not the tombstoned one.
+        expect(relay.subscribeStreamIds[1]).not.toBe(streamId);
+        await relay.sendStreamFrame(
+          relay.subscribeStreamIds[relay.subscribeStreamIds.length - 1],
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(() => expect(framesDelivered).toBe(1), WAIT);
+        expect(statuses[statuses.length - 1]).toBe("open");
+        expect(statuses).not.toContain("closed");
+        // The drop cleared the pending per-stream reopen, so the handshake
+        // replay is the ONLY re-subscribe - a surviving timer would have sent
+        // a duplicate SUBSCRIBE for a stream that already recovered.
+        expect(relay.subscribeStreamIds).toHaveLength(2);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // One broken resolver must not make the whole remote host look unavailable.
+  // The ready boundary waits for every subscribed id to earn a frame, and a
+  // stream in its private retryable-FATAL loop can never earn one - so before
+  // the exemption, `isReady()` stayed false forever, the session was never
+  // announced, availability recovery never fired, and the reconnect backoff
+  // never reset, while every other stream exchanged frames on a healthy mux.
+  it(
+    "reaches the ready boundary while one stream is stuck in its retryable-FATAL loop",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      let recoveredEvents = 0;
+      session.subscribeAvailabilityRecovered(() => {
+        recoveredEvents += 1;
+      });
+      const healthy = session.subscribe("cursor.subscribe", { cursor: null });
+      // The broken stream: subscribed like any other; the retryable verdict
+      // below is what parks it in its private reopen loop.
+      session.subscribe("cursor.subscribe", { cursor: null });
+      let healthyFrames = 0;
+      healthy.onServerFrame(() => {
+        healthyFrames += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [healthyId, brokenId] = relay.subscribeStreamIds;
+
+        // The healthy stream earns its frame; the broken one gets the
+        // retryable verdict that re-keys it and parks it on the reopen
+        // backoff - the loop this layer deliberately lets run forever.
+        await relay.sendStreamFrame(
+          healthyId,
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await relay.sendStreamFatal(brokenId, {
+          code: "EPIC_INIT_FAILED",
+          reason: "cloud unreachable while opening",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+
+        await vi.waitFor(() => expect(healthyFrames).toBe(1), WAIT);
+        // The boundary completes despite the retry-looping stream: the
+        // session is ready and the recovery edge (the only automatic signal
+        // that un-strands pre-dial query errors) has fired.
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // The retry-state ledger has to empty on EVERY terminal path. A delivered
+  // frame clears it, a non-retryable FATAL clears it, a caller close clears
+  // it - but a HOST close of a reopened stream that had not yet earned its
+  // first frame did not, and in this long-lived shared session those entries
+  // accumulated per short-lived stream forever.
+  it(
+    "clears the per-stream retry state when the host CLOSEs a reopened stream before its first frame",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => {
+        statuses.push(status);
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+
+        await relay.sendStreamFatal(streamId, {
+          code: "EPIC_INIT_FAILED",
+          reason: "cloud unreachable while opening",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        // The reopen rides a fresh id (the verdict tombstoned the old one).
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        const reopenedId =
+          relay.subscribeStreamIds[relay.subscribeStreamIds.length - 1];
+        expect(reopenedId).not.toBe(streamId);
+        // The retry loop is live: an attempt is on the books awaiting the
+        // first frame that would clear it.
+        expect(session.streamReopenStateForTests().attempts).toBe(1);
+
+        // The host ends the reopened stream normally BEFORE any frame - the
+        // one terminal path that leaked the entry.
+        await relay.sendStreamClose(reopenedId, "resolver finished");
+        await vi.waitFor(() => expect(statuses).toContain("closed"), WAIT);
+        expect(session.streamReopenStateForTests()).toEqual({
+          timers: 0,
+          attempts: 0,
+        });
       } finally {
         session.close();
       }

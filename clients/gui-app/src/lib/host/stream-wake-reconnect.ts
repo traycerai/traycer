@@ -56,7 +56,11 @@ export function subscribeStreamWakeReconnect(
   try {
     return subscribeWakeSignals(runnerHost, (reason) => {
       appLogger.debug("[stream] wake reconnect requested", { reason });
-      client.reconnectAll(reason);
+      // Probe before dropping. A lid-open on the same network leaves most
+      // sockets - certainly a localhost one to a local host - intact, and
+      // re-dialing them re-runs every stream's open while the machine's
+      // network is still coming back. Sessions that answer a ping are kept.
+      client.reconnectAll(reason, { probeFirst: true });
     });
   } catch (cause) {
     appLogger.error("[stream] wake reconnect subscription failed", {}, cause);
