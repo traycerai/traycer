@@ -140,9 +140,21 @@ const PUSH_DRAIN_MS = 750;
 // capability. It stays a timer (not an instant call) as a belt against the
 // ordering changing again.
 const SILENT_ACK_GRACE_MS = 100;
-// Sessions are deadline-bounded anyway; the cap is a backstop against a
-// pathological host that acks `missing` forever.
-const MAX_SESSIONS = 4;
+// Verification laps run until the DEADLINE, not to a lap count. A fixed cap
+// bounded the wrong axis: four laps of a fast-acking host is a few seconds,
+// so a host that needed longer than that to persist and advertise its
+// credential got `not-adopted` - "did not adopt it in time" - with most of
+// the 30s budget still unspent, and a supersede whose winner was still
+// handing off got `mint-unavailable` the same way. Both reports blame a host
+// for missing a deadline we never actually gave it.
+//
+// What the cap was really protecting is reconnect CHURN, which this paces
+// directly: each lap waits before re-dialing, doubling to a ceiling. That
+// bounds dial rate without capping how long we are willing to keep watching,
+// and the deadline (checked every lap, and passed to each ack wait) remains
+// the single stop condition.
+const VERIFY_BACKOFF_INITIAL_MS = 250;
+const VERIFY_BACKOFF_MAX_MS = 2_000;
 
 type ProbeRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
@@ -236,6 +248,20 @@ export async function provisionInstalledHostCredential(
   // client - so it is confirmed via a rotation below before the probe
   // decides between "a later client will heal this" and "sign in again".
   let mintUnauthorized = false;
+  // The mint-401 confirmation ROTATES a single-use refresh family, so it may
+  // run at most once per probe. `mintUnauthorized` never clears (the 401 is
+  // a fact about this run), so without this the confirm branch would re-fire
+  // on every later non-active lap, spending a fresh refresh family each time
+  // and racing whatever other signed-in client holds the same one. One
+  // rotation is all the branch ever needed: it asks a single question - is
+  // this sign-in dead? - and that answer does not change lap to lap.
+  let mintUnauthorizedConfirmed = false;
+  // The host demonstrably ANSWERED us, even though no ack ever carried a
+  // credential state: a reconnect revalidation only fires because the host
+  // rejected our bearer, which is itself proof it was listening. Tracked
+  // because the terminal fallback is `unreachable`, whose copy says the host
+  // never came up - false on its face once the host has spoken to us.
+  let hostAnswered = false;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
 
@@ -280,6 +306,11 @@ export async function provisionInstalledHostCredential(
     });
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () => {
+        // Reaching this callback at all means the host answered and rejected
+        // the bearer we presented - it was up and talking, whatever happens
+        // to the refresh below. Recorded before the early return so even a
+        // rotation the deadline cannot cover still counts as contact.
+        hostAnswered = true;
         // Never START a rotation the deadline cannot cover. The CLI sets
         // `process.exitCode` rather than calling `process.exit` (see
         // `runner/exit.ts`), so the process waits for the event loop to
@@ -388,9 +419,37 @@ export async function provisionInstalledHostCredential(
       if (mintWithheld || sawSilentOpen) {
         return { kind: "unsupported" };
       }
+      // The host spoke to us but never got as far as reporting a credential
+      // state - the shape of an expired stored bearer whose refresh could
+      // not complete (authn unreachable), where the host answers
+      // UNAUTHORIZED, the revalidation returns a transient failure, and the
+      // stream just reconnects until the budget runs out. `unreachable`
+      // would say "the host did not come up in time" about a host that
+      // answered every single dial; what actually failed is the handoff, and
+      // that is `mint-unavailable`'s line - self-heal included, since a
+      // later client with a live token mints for it normally.
+      if (hostAnswered) {
+        return { kind: "mint-unavailable" };
+      }
       return { kind: "unreachable" };
     };
-    for (let lap = 1; lap <= MAX_SESSIONS; lap++) {
+    // True when NOTHING observed this run accounts for how it ended - no
+    // dead sign-in, no mint history, no capability gap. Deliberately does
+    // not consult `hostAnswered`: this asks "is the outcome unexplained?",
+    // and contact alone explains nothing. It is exactly the condition under
+    // which `settledOutcome` would have reported `unreachable` before the
+    // `hostAnswered` fallback existed, which is what the fatal-close arm
+    // needs to decide whether the close code is the most informative thing
+    // this probe can report.
+    const nothingExplainsTheClose = (): boolean =>
+      !credentialRejected &&
+      !mintUnavailable &&
+      !mintProvisioned &&
+      !mintInvoked &&
+      !mintWithheld &&
+      !sawSilentOpen;
+    let verifyBackoffMs = VERIFY_BACKOFF_INITIAL_MS;
+    for (;;) {
       const remainingMs = remaining();
       if (remainingMs <= 0) {
         break;
@@ -471,7 +530,16 @@ export async function provisionInstalledHostCredential(
           // would 401 the same way - report `unauthorized`, because the
           // self-heal promise would be false - while a successful rotation
           // means a later client CAN mint, and `mint-unavailable` stands.
-          if (mintUnauthorized && !credentialRejected && remaining() > 0) {
+          if (
+            mintUnauthorized &&
+            !mintUnauthorizedConfirmed &&
+            !credentialRejected &&
+            remaining() > 0
+          ) {
+            // Latched BEFORE awaiting: the rotation is the side effect being
+            // guarded, so a second lap must not slip past this branch while
+            // the first is still settling.
+            mintUnauthorizedConfirmed = true;
             const confirm = revalidator.revalidateCurrentContext();
             inFlightRevalidation = confirm;
             const confirmBound = cancelableDelay(remaining());
@@ -527,14 +595,20 @@ export async function provisionInstalledHostCredential(
             // frame carried it. When nothing above explains the close (no
             // rejected sign-in, no mint history), "the host did not come up"
             // would be false on its face; report the close for what it is.
-            const settled = settledOutcome();
-            if (settled.kind === "unreachable") {
+            //
+            // Asked directly rather than by testing `settledOutcome()` for
+            // `unreachable`: the `hostAnswered` fallback also resolves an
+            // otherwise-unexplained probe, so keying off the returned kind
+            // would swallow this close code the moment a reconnect
+            // revalidation had fired. The close code is strictly the more
+            // diagnostic of the two, and both say "reached, not credentialed".
+            if (nothingExplainsTheClose()) {
               return {
                 kind: "error",
                 message: `the host closed the stream (${reason.details.code})`,
               };
             }
-            return settled;
+            return settledOutcome();
           }
           return settledOutcome();
         }
@@ -547,6 +621,14 @@ export async function provisionInstalledHostCredential(
       if (mintWithheld) {
         break;
       }
+      // Pace the re-dial. Without this the loop is bounded only by the
+      // deadline, so a host that opens silently (no state, ~100ms grace per
+      // lap) would be re-dialed hundreds of times across the budget. The
+      // wait is clamped to the remaining budget so pacing can never push the
+      // probe past its own deadline, and `sleep(0)` simply falls through to
+      // the `remainingMs <= 0` break at the top.
+      await sleep(Math.min(verifyBackoffMs, remaining()));
+      verifyBackoffMs = Math.min(verifyBackoffMs * 2, VERIFY_BACKOFF_MAX_MS);
     }
     return settledOutcome();
   } catch (err) {

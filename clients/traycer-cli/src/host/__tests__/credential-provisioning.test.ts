@@ -731,11 +731,18 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  // Each non-active lap drains for PUSH_DRAIN_MS (750ms), so four laps is
-  // genuinely a few seconds - well past the 5s default test timeout, hence
-  // the explicit one on this case.
-  it("reports not-adopted when the mint succeeds but adoption is never verified within MAX_SESSIONS laps", async () => {
+  // Each non-active lap drains for PUSH_DRAIN_MS (750ms) and then waits out
+  // the verify backoff, so these two cases are genuinely multi-second - well
+  // past the 5s default test timeout, hence the explicit ones.
+  it("reports not-adopted only after spending the whole deadline, not after a fixed lap count", async () => {
+    // Regression: verification used to stop after MAX_SESSIONS (4) laps,
+    // which on a fast-acking host is a couple of seconds. A host that needed
+    // longer to persist and advertise its credential was then told it "did
+    // not adopt it in time" with most of the budget unspent - blaming it for
+    // a deadline it was never actually given. The deadline is now the only
+    // stop condition, so the probe must still be watching near the end of it.
     const hostId = "host-1";
+    const deadlineMs = 8_000;
     mocks.mintFlowMock.mockResolvedValueOnce(provisionedOutcome());
     mocks.onSessionCreated = (_session, lapIndex): void => {
       setTimeout(() => {
@@ -748,19 +755,141 @@ describe("provisionInstalledHostCredential", () => {
       }, 0);
     };
 
+    const startedAt = Date.now();
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 10_000, progress: vi.fn() }),
+      makeOptions({ deadlineMs, progress: vi.fn() }),
     );
+    const elapsedMs = Date.now() - startedAt;
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "not-adopted",
     });
     expect(mocks.mintFlowMock).toHaveBeenCalledTimes(1);
-    // MAX_SESSIONS laps, every one closed.
-    expect(mocks.sessions).toHaveLength(4);
+    // The load-bearing assertion: under the old fixed cap this returned in
+    // roughly 3s regardless of the budget. Allow slack for the final lap's
+    // pacing, but stay far above what four laps could ever cost.
+    expect(elapsedMs).toBeGreaterThan(deadlineMs - 1_500);
+    // ...and it kept re-verifying rather than giving up at the old cap.
+    expect(mocks.sessions.length).toBeGreaterThan(4);
     for (const session of mocks.sessions) {
       expect(session.close).toHaveBeenCalledTimes(1);
     }
+    expectCleanTeardown();
+  }, 20_000);
+
+  it("reports active when adoption lands on a lap past the old four-lap cap", async () => {
+    // The payoff of the change above: a host slow to advertise its
+    // credential is now actually caught adopting it, instead of being
+    // reported `not-adopted` while it was still on its way there.
+    const hostId = "host-1";
+    const adoptOnLap = 5;
+    mocks.mintFlowMock.mockResolvedValueOnce(provisionedOutcome());
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        if (lapIndex === 1) {
+          void options.hostCredentialMint({ hostId, reason: "missing" });
+        }
+        options.onHostCredentialState(
+          hostId,
+          lapIndex >= adoptOnLap ? "active" : "missing",
+        );
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 20_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: true,
+    });
+    expect(mocks.sessions).toHaveLength(adoptOnLap);
+    expectCleanTeardown();
+  }, 25_000);
+
+  it("does not report unreachable when the host answered but the refresh never completed", async () => {
+    // Regression: an expired stored bearer against a temporarily unreachable
+    // authn is the shape where the host keeps answering UNAUTHORIZED, each
+    // revalidation comes back `network-error` (neither a rejection nor a
+    // success), and the stream just reconnects until the budget runs out.
+    // Nothing recorded that the host had answered, so the terminal fallback
+    // was `unreachable` - "the host did not come up in time" - about a host
+    // that replied to every dial. Reaching the reconnect revalidator at all
+    // proves contact, so the truthful report is the handoff failing.
+    mocks.revalidateCurrentContextMock.mockResolvedValue("network-error");
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      // Fire on the FIRST lap only, and bind `auth` here - synchronously,
+      // while `capturedOptions` is still this test's client. Re-reading it
+      // inside the timer would let a timer that outlives this probe drive
+      // the NEXT test's revalidator, which is precisely what the
+      // deadline-revalidation case below asserts never happens. One call is
+      // all this needs: the flag it sets does not clear.
+      if (lapIndex !== 1) {
+        return;
+      }
+      const auth = capturedClientOptions().auth;
+      if (auth === null) {
+        throw new Error("probe wired no reconnect revalidator");
+      }
+      setTimeout(() => {
+        // The host rejected our bearer: this is exactly the callback the
+        // transport invokes on an UNAUTHORIZED close. No ack ever follows.
+        void auth.revalidateForReconnect();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 1_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
+    expect(mocks.mintFlowMock).not.toHaveBeenCalled();
+    expectCleanTeardown();
+  }, 10_000);
+
+  it("confirms a mint 401 with exactly one rotation, however many laps follow", async () => {
+    // Regression: `mintUnauthorized` never clears (the 401 is a fact about
+    // this run), so the confirmation branch re-fired on every later
+    // non-active lap - spending a fresh single-use refresh family each time
+    // and racing whatever other signed-in client holds the same one. The
+    // branch asks one question ("is this sign-in dead?") whose answer cannot
+    // change lap to lap, so it may rotate at most once. Now that laps run to
+    // the deadline rather than stopping at four, an unlatched confirm would
+    // churn credentials far more than it used to.
+    const hostId = "host-1";
+    mocks.mintFlowMock.mockImplementation(async () => {
+      // Mirrors the real flow: authn's 401 fires the hook synchronously,
+      // before the mint promise settles as `unavailable`.
+      capturedMintFlowOptions().onUnauthorized?.();
+      return { kind: "unavailable" };
+    });
+    // A successful rotation - so `credentialRejected` stays false and the
+    // probe keeps looping, which is precisely when the old code re-rotated.
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rotated");
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        if (lapIndex === 1) {
+          void options.hostCredentialMint({ hostId, reason: "missing" });
+        }
+        options.onHostCredentialState(hostId, "missing");
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 6_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
+    // Several laps ran, so an unlatched branch had every chance to re-rotate.
+    expect(mocks.sessions.length).toBeGreaterThan(2);
+    expect(mocks.revalidateCurrentContextMock).toHaveBeenCalledTimes(1);
     expectCleanTeardown();
   }, 15_000);
 
@@ -787,6 +916,45 @@ describe("provisionInstalledHostCredential", () => {
       message: "the host closed the stream (UNAUTHORIZED)",
     });
     expect(mocks.mintFlowMock).not.toHaveBeenCalled();
+    expectCleanTeardown();
+  });
+
+  it("still reports the close code when a reconnect revalidation fired before the fatal close", async () => {
+    // Guards the seam between two fixes. The `hostAnswered` fallback exists
+    // so an unexplained probe stops claiming `unreachable`, but the
+    // fatal-close arm decides whether to surface the close code - and if it
+    // asked "did this settle as unreachable?", the fallback would answer
+    // "no, mint-unavailable" and swallow the code. The close code is the
+    // more diagnostic of the two, so contact via the revalidator must not
+    // displace it.
+    mocks.revalidateCurrentContextMock.mockResolvedValue("network-error");
+    mocks.onSessionCreated = (session, lapIndex): void => {
+      if (lapIndex !== 1) {
+        return;
+      }
+      // Bound synchronously - see the reachability case above for why a
+      // timer must not re-read the captured options.
+      const auth = capturedClientOptions().auth;
+      if (auth === null) {
+        throw new Error("probe wired no reconnect revalidator");
+      }
+      setTimeout(() => {
+        void auth.revalidateForReconnect();
+        session.emitStatus(
+          "closed",
+          fatalReason("simulated fatal close after a refresh", "INTERNAL"),
+        );
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "error",
+      message: "the host closed the stream (INTERNAL)",
+    });
     expectCleanTeardown();
   });
 
