@@ -4,6 +4,7 @@ import {
   bucketMetricValue,
   buildUsageChartColumns,
   buildUsageSeriesScaleForBuckets,
+  seriesKeysByTotalCost,
   totalTokensForBucket,
   type UsageBucket,
 } from "@/lib/usage-analytics/usage-chart-data";
@@ -82,8 +83,8 @@ describe("buildUsageChartColumns", () => {
     expect(claudeSegment?.value).toBe(3);
   });
 
-  it("routes a harness past the scale's 8-slot cap into the Other segment, and the value is still counted in the day total", () => {
-    const nineHarnessScale = buildUsageSeriesScale([
+  it("routes a harness past the scale's 16-slot cap into the Other segment, and the value is still counted in the day total", () => {
+    const seventeenHarnessScale = buildUsageSeriesScale([
       "a",
       "b",
       "c",
@@ -92,12 +93,20 @@ describe("buildUsageChartColumns", () => {
       "f",
       "g",
       "h",
+      "i",
+      "j",
+      "k",
+      "l",
+      "m",
+      "n",
+      "o",
+      "p",
       "overflow-harness",
     ]);
     const columns = buildUsageChartColumns({
       days: ["2026-08-01"],
       buckets: [bucket({ harnessId: "overflow-harness", knownCostUsd: 4 })],
-      scale: nineHarnessScale,
+      scale: seventeenHarnessScale,
       metric: "cost",
       groupBy: "harness",
     });
@@ -109,18 +118,106 @@ describe("buildUsageChartColumns", () => {
   });
 });
 
-describe("groupBy: model", () => {
-  it("buildUsageSeriesScaleForBuckets orders series by model first-appearance", () => {
-    const scale = buildUsageSeriesScaleForBuckets(
-      [
-        bucket({ day: "2026-08-02", harnessId: "claude", model: "b" }),
-        bucket({ day: "2026-08-01", harnessId: "codex", model: "a" }),
-      ],
-      "model",
-    );
-    expect(scale.order).toEqual(["a", "b"]);
+describe("seriesKeysByTotalCost / buildUsageSeriesScaleForBuckets (cost ranking)", () => {
+  it("ranks a higher total cost first, regardless of day order or input order, summing across multiple buckets of the same key", () => {
+    const buckets = [
+      bucket({
+        day: "2026-08-02",
+        harnessId: "codex",
+        model: "codex-model",
+        knownCostUsd: 1,
+      }),
+      bucket({
+        day: "2026-08-01",
+        harnessId: "claude",
+        model: "claude-model",
+        knownCostUsd: 10,
+      }),
+      bucket({
+        day: "2026-08-03",
+        harnessId: "codex",
+        model: "codex-model",
+        knownCostUsd: 6,
+      }),
+    ];
+    // codex totals 1 + 6 = 7, still less than claude's single 10 - and codex
+    // appears FIRST in the input/day order, so a first-appearance or
+    // input-order sort would wrongly rank it ahead of claude.
+    expect(seriesKeysByTotalCost(buckets, "harness")).toEqual([
+      "claude",
+      "codex",
+    ]);
   });
 
+  it("breaks a cost tie on total tokens, descending", () => {
+    const buckets = [
+      bucket({
+        harnessId: "low-tokens",
+        knownCostUsd: 5,
+        tokens: {
+          uncachedInputTokens: 10,
+          cacheReadInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 0,
+        },
+      }),
+      bucket({
+        harnessId: "high-tokens",
+        knownCostUsd: 5,
+        tokens: {
+          uncachedInputTokens: 100,
+          cacheReadInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 0,
+        },
+      }),
+    ];
+    expect(seriesKeysByTotalCost(buckets, "harness")).toEqual([
+      "high-tokens",
+      "low-tokens",
+    ]);
+  });
+
+  it("breaks a cost+token tie alphabetically by key", () => {
+    const buckets = [
+      bucket({ harnessId: "zeta", knownCostUsd: 2 }),
+      bucket({ harnessId: "alpha", knownCostUsd: 2 }),
+    ];
+    expect(seriesKeysByTotalCost(buckets, "harness")).toEqual([
+      "alpha",
+      "zeta",
+    ]);
+  });
+
+  it("ranks within the key space selected by groupBy - harness ids vs model ids", () => {
+    const buckets = [
+      bucket({ harnessId: "claude", model: "model-a", knownCostUsd: 5 }),
+      bucket({ harnessId: "codex", model: "model-b", knownCostUsd: 1 }),
+    ];
+    expect(seriesKeysByTotalCost(buckets, "harness")).toEqual([
+      "claude",
+      "codex",
+    ]);
+    expect(seriesKeysByTotalCost(buckets, "model")).toEqual([
+      "model-a",
+      "model-b",
+    ]);
+  });
+
+  it("with seventeen distinct models, the cheapest folds into Other", () => {
+    const models = Array.from({ length: 17 }, (_, index) => `model-${index}`);
+    const buckets = models.map((model, index) =>
+      bucket({ harnessId: "claude", model, knownCostUsd: 17 - index }),
+    );
+    const scale = buildUsageSeriesScaleForBuckets(buckets, "model");
+    expect(scale.order[scale.order.length - 1]).toBe(USAGE_SERIES_OTHER_KEY);
+    // model-16 was seeded with the lowest cost (17 - 16 = 1), so it is the
+    // one long-tail key that overflows into Other.
+    expect(scale.colorVar("model-16")).toBe("var(--usage-series-other)");
+  });
+});
+
+describe("groupBy: model", () => {
   it("folds same-day buckets from different models into separate segments", () => {
     const scale = buildUsageSeriesScaleForBuckets(
       [

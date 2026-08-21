@@ -1,7 +1,6 @@
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 import {
   buildUsageSeriesScale,
-  seriesKeysByFirstAppearance,
   USAGE_SERIES_OTHER_KEY,
   type UsageSeriesScale,
 } from "@/lib/usage-analytics/usage-series-scale";
@@ -64,7 +63,7 @@ export function bucketMetricValue(
 /**
  * Builds the stacked-bar chart's per-day columns, one segment per series
  * (harness or model per `groupBy`, or "Other" for anything past the
- * eight-slot cap), in the scale's fixed stacking order. `days` drives the
+ * slot cap), in the scale's fixed stacking order. `days` drives the
  * x-axis so a day with zero activity still gets a zero-height column instead
  * of compressing the axis. `groupBy` must match the one the `scale` was
  * built with, or every bucket folds into "Other".
@@ -137,14 +136,44 @@ export function applyUsageSeriesVisibility(
   });
 }
 
-/** Convenience: the fixed-order series scale for a response's buckets under the given grouping. */
+/**
+ * Series keys ranked by the window's total known cost, descending, so the
+ * slot order - and therefore the fold into "Other" past the slot cap - is a
+ * function of spend: "Other" is always the long tail, never whichever
+ * series happened to show up late in the window. Ties (most often a run of
+ * unpriced series at $0) break on total tokens, then on the key itself, so
+ * the order is a function of the DATA rather than of the order the host
+ * happened to return buckets in. Ranking on cost regardless of the chart's
+ * displayed metric keeps a series' color fixed across the cost/tokens
+ * toggle - "color follows the entity, never its rank" (dataviz skill).
+ */
+export function seriesKeysByTotalCost(
+  buckets: readonly UsageBucket[],
+  groupBy: UsageChartGroupBy,
+): readonly string[] {
+  const totals = new Map<string, { costUsd: number; tokens: number }>();
+  for (const bucket of buckets) {
+    const key = bucketSeriesKey(bucket, groupBy);
+    const existing = totals.get(key) ?? { costUsd: 0, tokens: 0 };
+    totals.set(key, {
+      costUsd: existing.costUsd + bucket.knownCostUsd,
+      tokens: existing.tokens + totalTokensForBucket(bucket),
+    });
+  }
+  return [...totals.entries()]
+    .sort(
+      ([keyA, a], [keyB, b]) =>
+        b.costUsd - a.costUsd ||
+        b.tokens - a.tokens ||
+        keyA.localeCompare(keyB),
+    )
+    .map(([key]) => key);
+}
+
+/** Convenience: the cost-ranked series scale for a response's buckets under the given grouping. */
 export function buildUsageSeriesScaleForBuckets(
   buckets: readonly UsageBucket[],
   groupBy: UsageChartGroupBy,
 ): UsageSeriesScale {
-  return buildUsageSeriesScale(
-    seriesKeysByFirstAppearance(buckets, (bucket) =>
-      bucketSeriesKey(bucket, groupBy),
-    ),
-  );
+  return buildUsageSeriesScale(seriesKeysByTotalCost(buckets, groupBy));
 }
