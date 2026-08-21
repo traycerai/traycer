@@ -172,6 +172,12 @@ export const authenticatedUserBaseSchema = z.object({
 // ---- Authenticated-user response records ------------------------------- //
 
 export const authenticatedUserSchema = authenticatedUserBaseSchema.extend({
+  /**
+   * Verified device identity for a host-audience bearer. User-audience and
+   * legacy bearers resolve to null/absence. Data-plane writers that require
+   * device ownership bind their request hostId to this claim.
+   */
+  hostId: z.string().nullable().optional(),
   teamSubscriptions: z.array(traycerTeamSubscriptionSchema),
 });
 
