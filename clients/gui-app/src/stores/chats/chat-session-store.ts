@@ -1561,15 +1561,25 @@ export function createChatSessionStoreWithNotificationDependencies(
           frame.status === "rejected"
             ? pendingActionForId(get().pendingActions, frame.clientActionId)
             : null;
+        const rejectionStagingKey: WorktreeStagingKey = {
+          surface: "owner",
+          hostId: options.hostId,
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
+        };
         if (rejectedPending !== null) {
-          restoreStagedWorktreeIntent(rejectedPending, {
-            surface: "owner",
-            hostId: options.hostId,
-            epicId: options.epicId,
-            ownerKind: "chat",
-            ownerId: options.chatId,
-          });
+          restoreStagedWorktreeIntent(rejectedPending, rejectionStagingKey);
         }
+        // Third surface, same rule. This path refuses the hand-back exactly as
+        // the reconnect paths do, but it states things through its own
+        // errorNotice rather than `failedSendRestoration.reason` - so without
+        // this the refusal was silent here while being spoken everywhere else.
+        // Still never said for a user's own newer pick: only a sweep.
+        const worktreeGoneForRejection =
+          rejectedPending !== null &&
+          rejectedPending.restoreWorktreeIntent !== null &&
+          stagedWorktreeIntentWasPurgedMidDispatch(rejectionStagingKey);
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,
@@ -1641,7 +1651,9 @@ export function createChatSessionStoreWithNotificationDependencies(
                 : state.failedSendRestoration,
             errorNotices: appendErrorNotice(state.errorNotices, {
               code: frame.code ?? "ACTION_REJECTED",
-              message: frame.reason ?? "Action rejected.",
+              message: worktreeGoneForRejection
+                ? `${frame.reason ?? "Action rejected."} Its staged worktree no longer exists, so it was not restored.`
+                : (frame.reason ?? "Action rejected."),
               severity: "warning",
               clientActionId: frame.clientActionId,
             }),

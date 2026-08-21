@@ -440,7 +440,57 @@ interface WorktreeIntentStagingStore {
  * unlike a user's own newer choice this one is worth SAYING: the prompt comes
  * back unbound through no decision of theirs.
  */
-export type DispatchConsumptionMark = "awaiting" | "purged";
+export interface DispatchConsumptionMark {
+  readonly state: "awaiting" | "purged";
+  /**
+   * The entries the dispatch took, kept so a later sweep can ask whether THIS
+   * pick references anything removed.
+   *
+   * The consume site is the one moment the store holds the intent in hand -
+   * afterwards it lives on the pending action, out of reach. Without them the
+   * purge had to mark every awaiting slot on the swept host, which lost the
+   * hand-back for sends whose worktree survived and - once the refusal became
+   * a STATEMENT - told those users their worktree was deleted when it was not.
+   * Over-purging stopped being merely conservative the moment it started
+   * speaking.
+   */
+  readonly entries: ReadonlyArray<WorktreeFolderIntent>;
+}
+
+/**
+ * Mark consumed slots whose own pick references something the sweep removed.
+ *
+ * Slots CONSUMED by an in-flight dispatch are invisible to the intent loop -
+ * they hold no intent to filter, because the dispatch took it - so the mark
+ * carries the entries instead. Only marks that actually intersect `removed`
+ * are purged: over-purging costs a hand-back for a send whose worktree
+ * survived, and now that the refusal is STATED it would tell that user their
+ * worktree was deleted when it is still there.
+ *
+ * Extracted so the purge updater stays under its complexity budget.
+ */
+function purgedDispatchMarks(
+  marks: Readonly<Record<string, DispatchConsumptionMark | undefined>>,
+  sweptSegment: string,
+  removed: RemovedWorktreeRefs,
+): Readonly<Record<string, DispatchConsumptionMark | undefined>> {
+  const next: Record<string, DispatchConsumptionMark | undefined> = {
+    ...marks,
+  };
+  let changed = false;
+  for (const [id, mark] of Object.entries(next)) {
+    if (mark?.state !== "awaiting") continue;
+    const slotSegment = serializedStagingKeyHostSegment(id);
+    if (slotSegment !== "" && slotSegment !== sweptSegment) continue;
+    const affected = mark.entries.some((entry) =>
+      worktreeFolderIntentReferencesRemoved(entry, removed),
+    );
+    if (!affected) continue;
+    next[id] = { ...mark, state: "purged" };
+    changed = true;
+  }
+  return changed ? next : marks;
+}
 
 function withoutDispatchMark(
   marks: Readonly<Record<string, DispatchConsumptionMark | undefined>>,
@@ -470,7 +520,7 @@ export function stagedWorktreeIntentAwaitsDispatchOutcome(
   const state = useWorktreeIntentStagingStore.getState();
   return (
     state.intentByKey[id] === undefined &&
-    state.consumedForDispatchByKey[id] === "awaiting"
+    state.consumedForDispatchByKey[id]?.state === "awaiting"
   );
 }
 
@@ -485,8 +535,8 @@ export function stagedWorktreeIntentWasPurgedMidDispatch(
 ): boolean {
   const id = worktreeStagingKeyString(key);
   return (
-    useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[id] ===
-    "purged"
+    useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[id]
+      ?.state === "purged"
   );
 }
 
@@ -751,7 +801,10 @@ export const useWorktreeIntentStagingStore =
               // NOT a user choice - the send took it, and may hand it back.
               consumedForDispatchByKey: {
                 ...state.consumedForDispatchByKey,
-                [id]: "awaiting",
+                [id]: {
+                  state: "awaiting",
+                  entries: state.intentByKey[id]?.entries ?? [],
+                },
               },
             };
           }),
@@ -835,15 +888,12 @@ export const useWorktreeIntentStagingStore =
             // those `purged` so the hand-back refuses rather than staging a
             // worktree that may be gone, and so the refusal can be STATED
             // instead of the prompt coming back silently unbound.
-            const consumedForDispatchByKey: Record<
-              string,
-              DispatchConsumptionMark | undefined
-            > = { ...state.consumedForDispatchByKey };
-            for (const [id, mark] of Object.entries(consumedForDispatchByKey)) {
-              if (mark !== "awaiting") continue;
-              const slotSegment = serializedStagingKeyHostSegment(id);
-              if (slotSegment !== "" && slotSegment !== sweptSegment) continue;
-              consumedForDispatchByKey[id] = "purged";
+            const consumedForDispatchByKey = purgedDispatchMarks(
+              state.consumedForDispatchByKey,
+              sweptSegment,
+              removed,
+            );
+            if (consumedForDispatchByKey !== state.consumedForDispatchByKey) {
               changed = true;
             }
             return changed

@@ -2018,6 +2018,47 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
+  // R12 `-BQcb`: the rejection path refuses the hand-back like the reconnect
+  // paths do, but states things through its own errorNotice rather than
+  // `failedSendRestoration.reason` - so the refusal was silent here while
+  // being spoken everywhere else.
+  it("says the worktree is gone on the rejection path too", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/doomed"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // The worktree the send is staged for is swept while it is in flight.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    const notice = noticeFor(harness, rejected);
+    expect(notice.message).toContain("Host refused the send.");
+    expect(notice.message).toContain("staged worktree no longer exists");
+  });
+
   // R12 `-A8bF`: billing context is stamped at dispatch and dies with the
   // action, so a resend bills whatever the picker holds now. Unlike a model
   // change it leaves no trace in the conversation.

@@ -460,6 +460,24 @@ describe("purge and an in-flight dispatch", () => {
     expect(stagedWorktreeIntentWasPurgedMidDispatch(key)).toBe(true);
   });
 
+  it("leaves a consumed slot whose own worktree survived the sweep", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [existingBranchIntent("traycer/kept")] });
+    useWorktreeIntentStagingStore.getState().consumeForDispatch(key);
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    // The sweep removed a DIFFERENT branch. Marking this one would cost the
+    // hand-back and - worse, now that the refusal speaks - would tell the user
+    // a worktree was deleted that is still there.
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
+    expect(stagedWorktreeIntentWasPurgedMidDispatch(key)).toBe(false);
+  });
+
   it("leaves another host's consumed slot alone", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const otherKey = { ...key, hostId: OTHER_HOST };
