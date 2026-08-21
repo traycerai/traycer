@@ -436,6 +436,62 @@ function acceptLastAction(harness: Harness): string {
   return frame.clientActionId;
 }
 
+function worktreeIntentFor(branchName: string): WorktreeIntent {
+  return {
+    entries: [
+      {
+        kind: "worktree",
+        scripts: null,
+        workspacePath: "/repo",
+        repoIdentifier: null,
+        isPrimary: true,
+        branch: {
+          type: "new",
+          name: branchName,
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Drive a send that loses the restoration race while carrying `intent`, and
+ * return the statement it earned.
+ */
+function statedNoticeWithIntent(intent: WorktreeIntent): ChatErrorNotice {
+  const harness = createHarness();
+  const callbacks = harness.callbacks();
+  emitSnapshot(callbacks, "owner");
+  harness.handle.store
+    .getState()
+    .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS, "auto");
+  useWorktreeIntentStagingStore.getState().setIntent(
+    {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    },
+    intent,
+  );
+  harness.handle.store
+    .getState()
+    .sendMessage(
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      SETTINGS,
+      "auto",
+    );
+  const second = harness.sent[1];
+  if (second.kind !== "send") throw new Error("Expected a send frame");
+  callbacks.onConnectionStatus("reconnecting", null);
+  emitSnapshot(callbacks, "owner");
+  return noticeFor(harness, second.clientActionId);
+}
+
 function sendTwo(
   harness: Harness,
   first: JsonContent,
@@ -1783,6 +1839,107 @@ describe("createChatSessionStore", () => {
         .getState()
         .errorNotices.filter((entry) => entry.clientActionId === "send-1"),
     ).toHaveLength(1);
+  });
+
+  // R7 `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
+  // to switch to a LOCAL checkout or to IMPORT an existing worktree settles
+  // with no statement at all today, so the resend runs against the previous
+  // binding - the same silent-wrong-worktree class, two entry kinds over.
+  it("names a local workspace a stated send was staged to switch to", () => {
+    const notice = statedNoticeWithIntent({
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo/service-a",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    expect(notice.message).toContain("/repo/service-a");
+  });
+
+  it("names an imported worktree a stated send was staged to adopt", () => {
+    const notice = statedNoticeWithIntent({
+      entries: [
+        {
+          kind: "import",
+          workspacePath: "/repo",
+          worktreePath: "/repo/../wt-hotfix",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    expect(notice.message).toContain("/repo/../wt-hotfix");
+  });
+
+  // R7 `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
+  // implemented as "a newer REVISION wins". A second send consuming its own
+  // staged pick advances the revision and then leaves the slot EMPTY - so
+  // nothing live is at risk, yet the winner's binding was suppressed.
+  it("re-stages the winner's intent when later picks were consumed too", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const first = worktreeIntentFor("feat/first");
+    const second = worktreeIntentFor("feat/second");
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, first);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    acceptLastAction(harness);
+    // A second staged pick, consumed by its own send. The slot ends EMPTY.
+    useWorktreeIntentStagingStore.getState().setIntent(key, second);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    acceptLastAction(harness);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    // The first send won the restoration slot, so its prompt came back - and
+    // its binding has to come with it. Nothing live was there to protect.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(first);
   });
 
   // R6 `-cbH`: a diagram-only send used to be told it had "no recoverable

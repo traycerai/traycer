@@ -2957,7 +2957,6 @@ describe("useRenderedMessages", () => {
           settings: SETTINGS,
           timestamp: 3000,
           restoreWorktreeIntent: null,
-          restoreWorktreeStagingRevision: null,
         },
       ],
       activeTurn,
@@ -3658,7 +3657,6 @@ describe("useRenderedMessages setup card integration", () => {
           settings: SETTINGS,
           timestamp: 1010,
           restoreWorktreeIntent: null,
-          restoreWorktreeStagingRevision: null,
         },
       ],
     });
@@ -3683,7 +3681,6 @@ describe("useRenderedMessages setup card integration", () => {
           settings: SETTINGS,
           timestamp: 3000,
           restoreWorktreeIntent: null,
-          restoreWorktreeStagingRevision: null,
         },
       ],
     });

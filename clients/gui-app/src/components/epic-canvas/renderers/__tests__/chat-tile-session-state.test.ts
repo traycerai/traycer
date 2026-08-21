@@ -734,7 +734,6 @@ describe("canModifyChatMessages", () => {
     settings: SETTINGS,
     timestamp: 0,
     restoreWorktreeIntent: null,
-    restoreWorktreeStagingRevision: null,
   };
 
   function gateState(

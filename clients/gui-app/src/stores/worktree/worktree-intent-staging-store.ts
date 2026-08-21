@@ -309,6 +309,22 @@ interface WorktreeIntentStagingStore {
    * flight in this renderer session.
    */
   readonly revisionByKey: Readonly<Record<string, number | undefined>>;
+  /**
+   * Whether this slot is empty *because a dispatch consumed it*, with nothing
+   * touching it since.
+   *
+   * A send takes the staged pick at dispatch and may need to hand it back
+   * (rejected ack, or a restored prompt after a reconnect). "Can I hand it
+   * back?" is not answerable from the revision counter: a SECOND send staging
+   * and consuming its own pick advances the counter twice and leaves the slot
+   * empty, which is indistinguishable from the user deliberately clearing it -
+   * yet the first case has nothing to protect and the second is a choice that
+   * must be respected. Every user mutation below clears this flag; only
+   * {@link WorktreeIntentStagingState.consumeForDispatch} sets it.
+   */
+  readonly consumedForDispatchByKey: Readonly<Record<string, true | undefined>>;
+  /** Take the staged intent for a dispatch, marking the slot as consumed. */
+  readonly consumeForDispatch: (key: WorktreeStagingKey) => void;
   /** Merge one folder's intent into the staged intent for `key`. */
   readonly stageEntry: (
     key: WorktreeStagingKey,
@@ -413,6 +429,31 @@ interface WorktreeIntentStagingStore {
   readonly resetForTests: () => void;
 }
 
+function withoutDispatchMark(
+  marks: Readonly<Record<string, true | undefined>>,
+  id: string,
+): Readonly<Record<string, true | undefined>> {
+  if (marks[id] === undefined) return marks;
+  const next = { ...marks };
+  delete next[id];
+  return next;
+}
+
+/**
+ * Whether the slot is empty because a dispatch took it and nothing has touched
+ * it since - the only state in which a send may hand its pick back.
+ */
+export function stagedWorktreeIntentAwaitsDispatchOutcome(
+  key: WorktreeStagingKey,
+): boolean {
+  const id = worktreeStagingKeyString(key);
+  const state = useWorktreeIntentStagingStore.getState();
+  return (
+    state.intentByKey[id] === undefined &&
+    state.consumedForDispatchByKey[id] === true
+  );
+}
+
 function incrementStagingRevision(
   revisionByKey: Readonly<Record<string, number | undefined>>,
   id: string,
@@ -430,6 +471,7 @@ export const useWorktreeIntentStagingStore =
         intentByKey: {},
         suspendedWorkspacePathsByKey: {},
         revisionByKey: {},
+        consumedForDispatchByKey: {},
         stageEntry: (key, entry) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -440,6 +482,10 @@ export const useWorktreeIntentStagingStore =
                 [id]: mergeWorktreeIntentEntry(existing, entry),
               },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
             };
           }),
         stageIntent: (key, intent) =>
@@ -453,6 +499,10 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: { ...state.intentByKey, [id]: merged },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
             };
           }),
         setIntent: (key, intent) =>
@@ -479,6 +529,10 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: next,
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
             };
           }),
         unstageEntry: (key, workspacePath) =>
@@ -518,6 +572,10 @@ export const useWorktreeIntentStagingStore =
               intentByKey,
               suspendedWorkspacePathsByKey,
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
             };
           }),
         migrateKeyForAllHosts: (fromKey, toKey) =>
@@ -573,6 +631,10 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: { ...state.intentByKey, [id]: next ?? undefined },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
             };
           }),
         stageBranchName: (key, workspacePath, name) =>
@@ -588,6 +650,10 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: { ...state.intentByKey, [id]: next ?? undefined },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
             };
           }),
         setSuspendedWorkspacePaths: (key, workspacePaths) =>
@@ -627,6 +693,30 @@ export const useWorktreeIntentStagingStore =
               // newer user choice. Record it so a rejected send cannot put the
               // old selection back.
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+            };
+          }),
+        consumeForDispatch: (key) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            const next = { ...state.intentByKey };
+            delete next[id];
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            delete suspendedWorkspacePathsByKey[id];
+            return {
+              intentByKey: next,
+              suspendedWorkspacePathsByKey,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              // NOT a user choice - the send took it, and may hand it back.
+              consumedForDispatchByKey: {
+                ...state.consumedForDispatchByKey,
+                [id]: true,
+              },
             };
           }),
         clearForAllHosts: (key) =>
@@ -710,6 +800,7 @@ export const useWorktreeIntentStagingStore =
             intentByKey: {},
             suspendedWorkspacePathsByKey: {},
             revisionByKey: {},
+            consumedForDispatchByKey: {},
           }),
       }),
       {

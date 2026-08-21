@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, type ReactNode } from "react";
 import { toast, type ExternalToast } from "sonner";
 import type { ChatErrorNotice } from "@traycer/protocol/host/agent/gui/subscribe";
 import { addWithFifoEviction } from "@/lib/bounded-set";
@@ -94,7 +94,17 @@ function rememberErrorNotice(
 }
 
 function showErrorNoticeToast(notice: ChatErrorNotice): void {
-  const message = notice.message.length > 0 ? notice.message : "Action failed.";
+  const text = notice.message.length > 0 ? notice.message : "Action failed.";
+  // A last-copy notice's newlines and indentation ARE the guarantee - the
+  // store went to some trouble to keep the bytes verbatim, and default HTML
+  // whitespace collapsing undoes all of it on screen and on copy. Rendering
+  // it pre-wrap is what makes the byte promise reach the user. Ordinary
+  // notices stay plain strings; nothing about them needs preserving.
+  const message: ReactNode = noticeCarriesOnlyCopy(notice) ? (
+    <span className="whitespace-pre-wrap break-words">{text}</span>
+  ) : (
+    text
+  );
   // A `SEND_NOT_RECORDED` notice INLINES the user's message body because the
   // client was its last holder (see `unrecoverableSendNotice`). Letting that
   // expire on the default timer would put the only remaining copy of someone's

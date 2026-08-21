@@ -35,7 +35,7 @@ import {
 } from "@/lib/notifications/live-chat-completion-acknowledgements";
 import {
   readStagedWorktreeIntent,
-  stagedWorktreeIntentRevision,
+  stagedWorktreeIntentAwaitsDispatchOutcome,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
@@ -149,7 +149,6 @@ export interface PendingUserMessage {
    * silent-local-run {@link restoreStagedWorktreeIntent} exists to prevent.
    */
   readonly restoreWorktreeIntent: WorktreeIntent | null;
-  readonly restoreWorktreeStagingRevision: number | null;
 }
 
 export interface PendingChatAction {
@@ -174,7 +173,6 @@ export interface PendingChatAction {
    * Staging revision immediately after the send consumes its selection. A
    * rejection restores only when the user has made no newer picker choice.
    */
-  readonly restoreWorktreeStagingRevision: number | null;
   readonly createdAt: number;
   /**
    * The connection epoch the action's frame was dispatched on (stamped by
@@ -860,26 +858,29 @@ function appendErrorNotice(
  */
 export interface StagedWorktreeIntentSource {
   readonly restoreWorktreeIntent: WorktreeIntent | null;
-  readonly restoreWorktreeStagingRevision: number | null;
 }
 
+/**
+ * Put a consumed worktree pick back, unless the user has since said otherwise.
+ *
+ * The discriminator is "is this slot still awaiting THIS dispatch's outcome" -
+ * empty, and untouched since a send took it. A revision comparison answered a
+ * different question, how far the counter moved, and the two diverge when a
+ * SECOND send stages and consumes its own pick: the counter advances twice and
+ * the slot ends empty, so the first send's binding was suppressed to protect a
+ * selection that no longer existed, and its restored prompt silently resent
+ * against the chat's previous worktree.
+ *
+ * Occupancy alone is not enough either: an explicit user clear also leaves the
+ * slot empty, and that IS a choice to send without one. The store's marker
+ * separates the two - only a dispatch sets it, every user mutation drops it.
+ */
 function restoreStagedWorktreeIntent(
   source: StagedWorktreeIntentSource | null,
   stagingKey: WorktreeStagingKey,
 ): void {
-  if (
-    source === null ||
-    source.restoreWorktreeIntent === null ||
-    source.restoreWorktreeStagingRevision === null
-  ) {
-    return;
-  }
-  if (
-    stagedWorktreeIntentRevision(stagingKey) !==
-    source.restoreWorktreeStagingRevision
-  ) {
-    return;
-  }
+  if (source === null || source.restoreWorktreeIntent === null) return;
+  if (!stagedWorktreeIntentAwaitsDispatchOutcome(stagingKey)) return;
   useWorktreeIntentStagingStore
     .getState()
     .setIntent(stagingKey, source.restoreWorktreeIntent);
@@ -2243,11 +2244,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         // revision it may later restore. A synchronous action rejection cannot
         // race ahead of this transition.
         const stagingStore = useWorktreeIntentStagingStore.getState();
-        let restoreWorktreeStagingRevision: number | null = null;
         if (worktreeIntent !== null) {
-          stagingStore.clear(stagedKey);
-          restoreWorktreeStagingRevision =
-            stagedWorktreeIntentRevision(stagedKey);
+          stagingStore.consumeForDispatch(stagedKey);
         }
         // Captured once, before dispatch, and reused for the optimistic echo
         // below - a queued send (this false) gets NO optimistic transcript
@@ -2270,7 +2268,6 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender,
             settings,
             restoreWorktreeIntent: worktreeIntent,
-            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           // Echo the user message optimistically so it paints INSTANTLY on send -
@@ -2292,7 +2289,6 @@ export function createChatSessionStoreWithNotificationDependencies(
                 settings,
                 timestamp: Date.now(),
                 restoreWorktreeIntent: worktreeIntent,
-                restoreWorktreeStagingRevision,
               }
             : null,
         });
@@ -2382,7 +2378,6 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
-            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: {
@@ -2395,7 +2390,6 @@ export function createChatSessionStoreWithNotificationDependencies(
             // The landing handoff's worktree rides `epic.create`, not this
             // send, so there is no staged slot for it to give back.
             restoreWorktreeIntent: null,
-            restoreWorktreeStagingRevision: null,
           },
         });
         if (sentClientActionId === null) return null;
@@ -2458,11 +2452,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         // next resend runs there - the silent-local-run the reject exists to
         // prevent.
         const stagingStore = useWorktreeIntentStagingStore.getState();
-        let restoreWorktreeStagingRevision: number | null = null;
         if (worktreeIntent !== null) {
-          stagingStore.clear(stagedKey);
-          restoreWorktreeStagingRevision =
-            stagedWorktreeIntentRevision(stagedKey);
+          stagingStore.consumeForDispatch(stagedKey);
         }
         const sentClientActionId = sendAction({
           set,
@@ -2477,7 +2468,6 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
-            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -2544,7 +2534,6 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
-            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -3160,7 +3149,6 @@ function basicPending(
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
-    restoreWorktreeStagingRevision: null,
     createdAt: Date.now(),
   };
 }

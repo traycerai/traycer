@@ -246,16 +246,38 @@ interface CountedLossClause {
  */
 function worktreeClause(intent: WorktreeIntent | null): string {
   if (intent === null) return "";
-  // Only a `worktree` entry names a branch; `local` runs in place and
-  // `import` adopts an existing checkout, so neither has one to re-pick.
-  const branches = intent.entries.flatMap((entry) =>
-    entry.kind === "worktree" && entry.branch.name.length > 0
-      ? [entry.branch.name]
-      : [],
-  );
-  if (branches.length === 0) return "";
-  const noun = branches.length === 1 ? "worktree" : "worktrees";
-  return ` It was staged to run in the ${noun} ${branches.join(", ")} - re-pick that before resending, or it runs against this chat's current worktree.`;
+  const labels = intent.entries.flatMap((entry) => {
+    const label = worktreeEntryLabel(entry);
+    return label === null ? [] : [label];
+  });
+  if (labels.length === 0) return "";
+  return ` It was staged to run in ${labels.join(", ")} - re-pick that before resending, or it runs against this chat's current worktree.`;
+}
+
+/**
+ * How to NAME a staged entry so the user can re-pick it deliberately.
+ *
+ * Every kind gets one. "No branch to re-pick" is not "nothing to state": a
+ * `local` entry is a decision to run against a particular workspace checkout
+ * and an `import` adopts a particular on-disk worktree, so a send staged to
+ * switch to either and then settled silently resends against the previous
+ * binding - the same silent-wrong-worktree hazard the branch case covers.
+ * Returns `null` only when the entry names nothing usable.
+ */
+function worktreeEntryLabel(
+  entry: WorktreeIntent["entries"][number],
+): string | null {
+  if (entry.kind === "worktree") {
+    return entry.branch.name.length > 0 ? `branch ${entry.branch.name}` : null;
+  }
+  if (entry.kind === "import") {
+    return entry.worktreePath.length > 0
+      ? `the existing worktree ${entry.worktreePath}`
+      : null;
+  }
+  return entry.workspacePath.length > 0
+    ? `the workspace checkout ${entry.workspacePath}`
+    : null;
 }
 
 function countedClause(clause: CountedLossClause): string {
@@ -706,7 +728,6 @@ function pendingUserMessageFromPendingAction(
     settings: action.settings,
     timestamp: action.createdAt,
     restoreWorktreeIntent: action.restoreWorktreeIntent,
-    restoreWorktreeStagingRevision: action.restoreWorktreeStagingRevision,
   };
 }
 

@@ -86,6 +86,17 @@ interface Harness {
   readonly callbacks: () => ChatStreamCallbacks;
 }
 
+/**
+ * A last-copy notice is rendered as an element so its whitespace survives, so
+ * assertions read through the node rather than assuming a bare string.
+ */
+function toastText(message: unknown): string {
+  if (typeof message === "string") return message;
+  const children = (message as { props?: { children?: unknown } } | null)?.props
+    ?.children;
+  return typeof children === "string" ? children : "";
+}
+
 function createHarness(): Harness {
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
@@ -944,6 +955,36 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
 
+  // R7 `-oRs`: round 6 made the recovery STRING verbatim, but Sonner renders
+  // it as ordinary HTML - so the newlines and indentation the byte guarantee
+  // exists to protect collapse on screen and on copy. The presentation layer
+  // has to preserve them or the guarantee stops at the store boundary.
+  it("renders a last-copy notice with its whitespace preserved", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message: "Copy it from here to resend:\n    if True:\n        pass",
+          severity: "warning",
+          clientActionId: "send-1",
+        },
+      });
+    });
+
+    const rendered = sonnerToastWarning.mock.lastCall?.[0];
+    // Not a bare string: a bare string is what collapses.
+    expect(typeof rendered).not.toBe("string");
+    expect(JSON.stringify(rendered)).toContain("whitespace-pre-wrap");
+  });
+
   // R4-3: a retained record's DELIVERY state has to be as durable as the
   // record. `clientActionIds` is FIFO-bounded at 128 while the ring exemption
   // made the records themselves unbounded, so ordinary chat traffic evicts a
@@ -987,8 +1028,8 @@ describe("<ChatTileErrorNoticeToasts />", () => {
       }
     });
 
-    const draftToasts = sonnerToastWarning.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("my draft"),
+    const draftToasts = sonnerToastWarning.mock.calls.filter((call) =>
+      toastText(call[0]).includes("my draft"),
     );
     expect(draftToasts).toHaveLength(1);
   });
@@ -1020,7 +1061,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
 
     render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
 
-    expect(sonnerToastWarning.mock.lastCall?.[0]).toContain(
+    expect(toastText(sonnerToastWarning.mock.lastCall?.[0])).toContain(
       "the draft nobody has any more",
     );
     // ...and it must not expire on the default fuse while it is the only copy.

@@ -257,6 +257,48 @@ describe("content recovery classification", () => {
   // The recovery text is quoted back verbatim for the user to copy. Trimming
   // it strips meaningful leading indentation - a Python block comes back
   // invalid, and they are told to resend something subtly not theirs.
+  // R7 `-oRi`: the round-5 hoist only reached TOP-LEVEL lists. A list nested
+  // in a blockquote reached the projection untouched and joined as `foobar`.
+  it("keeps list boundaries for a list nested in a blockquote", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "foo" }],
+                    },
+                  ],
+                },
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "bar" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(text).not.toContain("foobar");
+    expect(text).toContain("foo");
+    expect(text).toContain("bar");
+  });
+
   it("preserves a code block's leading indentation", () => {
     const text = recoveryTextFromContent({
       type: "doc",

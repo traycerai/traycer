@@ -175,8 +175,10 @@ export const CLASSIFIED_LABELS_FOR_TESTS: ReadonlySet<string> = new Set([
  * `plainTextFromNode` joins a container's children with `""`, so a two-item
  * list projects to `foobar` - a mangling, not merely an unstyled rendering,
  * and quoting it would hand the user something they never wrote. Hoisting
- * list items to top level routes them through `plainTextFromNodes`, which
- * joins with a newline.
+ * list items out of their container routes them through a newline-joining
+ * parent (`plainTextFromNodes` at the top, `blockquotePlainText` inside a
+ * quote), and the walk rebuilds every OTHER container around processed
+ * children so a nested list is reached wherever it sits.
  *
  * Done HERE rather than in the shared projection deliberately: that function
  * has seven other call sites (transcript rows, a length threshold, draft tab
@@ -218,13 +220,29 @@ function stripEmptyEdgeLines(text: string): string {
 function prepareForProjection(
   nodes: ReadonlyArray<JsonContent>,
 ): ReadonlyArray<JsonContent> {
-  return hoistListItems(nodes).map((node) => {
+  return nodes.flatMap((node) => {
+    // A list container contributes nothing itself; its items become siblings
+    // so the newline-joining entry point separates them.
+    if (LIST_CONTAINER_TYPES.has(node.type ?? "")) {
+      return prepareForProjection(node.content ?? []);
+    }
     const source = atomSource(node);
-    return source === null
-      ? node
-      : { type: "paragraph", content: [{ type: "text", text: source }] };
+    if (source !== null) {
+      return [{ type: "paragraph", content: [{ type: "text", text: source }] }];
+    }
+    // Rebuild ANY other container around processed children. Hoisting only at
+    // the top level left a list nested in a blockquote untouched, so it still
+    // joined as `foobar` - the round-5 fix reached one level and stopped.
+    if (node.content === undefined) return [node];
+    return [{ ...node, content: [...prepareForProjection(node.content)] }];
   });
 }
+
+const LIST_CONTAINER_TYPES: ReadonlySet<string> = new Set([
+  "bulletList",
+  "orderedList",
+  "listItem",
+]);
 
 /**
  * The text an ATOM node carries in its attrs. These blocks have no children,
@@ -243,18 +261,4 @@ function atomSource(node: JsonContent): string | null {
   if (attrName === undefined) return null;
   const attr = node.attrs?.[attrName];
   return typeof attr === "string" && attr.length > 0 ? attr : null;
-}
-
-function hoistListItems(
-  nodes: ReadonlyArray<JsonContent>,
-): ReadonlyArray<JsonContent> {
-  return nodes.flatMap((node) => {
-    if (node.type === "bulletList" || node.type === "orderedList") {
-      return hoistListItems(node.content ?? []);
-    }
-    if (node.type === "listItem") {
-      return hoistListItems(node.content ?? []);
-    }
-    return [node];
-  });
 }
