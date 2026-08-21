@@ -1883,6 +1883,86 @@ describe("createChatSessionStore", () => {
     const statement = noticeFor(harness, second.clientActionId);
     expect(statement.message).toContain("World");
     expect(statement.message).toContain("feat/b");
+    // And A does not come back silently unbound: the slot is empty because a
+    // LATER dispatch took it, which is the one refusal the user cannot see.
+    expect(state.failedSendRestoration?.reason).toContain(
+      "taken by a later message",
+    );
+  });
+
+  // The silence rule's premise is "the user can see why". It holds when their
+  // own pick stands in the slot, so a statement would narrate their own action
+  // back at them - and this is the case that must NOT start speaking.
+  it("says nothing about a worktree the user re-picked themselves", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/sent"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // The user picks again while the send is in flight, so their choice is
+    // standing in the slot when the rejection lands.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/repicked"));
+    rejectLastAction(harness, "Host refused the send.");
+
+    const reason =
+      harness.handle.store.getState().failedSendRestoration?.reason ?? "";
+    expect(reason).toContain("Host refused the send.");
+    expect(reason).not.toContain("taken by a later message");
+    expect(reason).not.toContain("no longer exists");
+  });
+
+  // The other silent arm: no mark at all. The user cleared the slot, so
+  // sending without a worktree was their decision.
+  it("says nothing about a worktree the user cleared", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/sent"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    useWorktreeIntentStagingStore.getState().clear(key);
+    rejectLastAction(harness, "Host refused the send.");
+
+    const reason =
+      harness.handle.store.getState().failedSendRestoration?.reason ?? "";
+    expect(reason).not.toContain("taken by a later message");
   });
 
   // The same pairing rule, reached through the OTHER door. The sweep's

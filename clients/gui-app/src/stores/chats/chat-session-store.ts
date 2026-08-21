@@ -6,10 +6,12 @@ import {
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
+  restoredSendQualifications,
   sweepStalePendingActions,
   turnSettledFromStatus,
   withoutPendingAction,
   WORKTREE_GONE_STATEMENT,
+  WORKTREE_SUPERSEDED_STATEMENT,
   type WorktreeSweptPredicate,
 } from "@/stores/chats/chat-queue-reconciler";
 import {
@@ -1803,6 +1805,25 @@ export function createChatSessionStoreWithNotificationDependencies(
             rejectionStagingKey,
             rejectedPending.restoreWorktreeIntent,
           );
+        // The third way a prompt comes back unbound, and the only one that was
+        // silent. `stagedWorktreeIntentAwaitsDispatchOutcome` splits the
+        // refusals exactly: it is FALSE when a pick stands in the slot (the
+        // user can see their own choice, so saying anything would narrate it
+        // back at them) and FALSE when no mark stands at all (they cleared it,
+        // or never had one). It is TRUE only when the slot is empty because a
+        // dispatch took it - and since this rejection does not own that mark,
+        // a LATER one did. That is the misleading shape: the pick is gone,
+        // nothing stands in its place, and nothing said so.
+        //
+        // The sweep wins when both are true. "Your worktree is gone" is the
+        // more specific fact and the more actionable one; adding "and it was
+        // also superseded" is noise on top of it.
+        const worktreeSupersededForRejection =
+          rejectedPending !== null &&
+          rejectedPending.restoreWorktreeIntent !== null &&
+          !rejectionOwnsSlot &&
+          !worktreeGoneForRejection &&
+          stagedWorktreeIntentAwaitsDispatchOutcome(rejectionStagingKey);
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,
@@ -1869,7 +1890,24 @@ export function createChatSessionStoreWithNotificationDependencies(
                 ? {
                     clientActionId: frame.clientActionId,
                     content: pending.restoreContent,
-                    reason: frame.reason ?? "Message was not accepted.",
+                    // Third winner path, same obligation: the send whose
+                    // prompt is going back to the composer is the one about to
+                    // be resent, so it is the one that has to hear what
+                    // changed underneath it.
+                    // Worktree first, then the run qualifications - the same
+                    // clause order the statement path uses.
+                    reason: `${frame.reason ?? "Message was not accepted."}${
+                      worktreeSupersededForRejection
+                        ? ` ${WORKTREE_SUPERSEDED_STATEMENT}`
+                        : ""
+                    }${restoredSendQualifications({
+                      sentSettings: pending.settings,
+                      currentSettings: state.currentComposerSettings,
+                      sentAccountContext: pending.accountContext,
+                      currentAccountContext:
+                        useAccountContextStore.getState().accountContext,
+                      sentDeliveryPolicy: pending.deliveryPolicy,
+                    })}`,
                   }
                 : state.failedSendRestoration,
             errorNotices: appendErrorNotice(

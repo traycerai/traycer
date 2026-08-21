@@ -197,6 +197,22 @@ export type ReconcileSnapshotPatch = {
 export const WORKTREE_GONE_STATEMENT =
   "Its staged worktree no longer exists, so it was not restored.";
 
+/**
+ * The OTHER reason a prompt can come back unbound, and a different fact from
+ * {@link WORKTREE_GONE_STATEMENT} - superseded, not swept - so deliberately
+ * not the same sentence.
+ *
+ * Silence is right when the user can SEE why: a pick they made themselves
+ * stands in the slot, and narrating their own action back at them is noise.
+ * That premise fails when a LATER dispatch took the slot instead. The pick is
+ * gone, nothing stands in its place, and every continuation of that later
+ * dispatch leaves the slot empty - it either ran with the binding, or was
+ * displaced and had its own hand-back refused. So the prompt returns with an
+ * empty slot and no account of it, which is the one shape that misleads.
+ */
+export const WORKTREE_SUPERSEDED_STATEMENT =
+  "Its staged worktree was taken by a later message and was not restored, so a resend runs against this chat's current worktree unless you pick one.";
+
 export interface UnrecoverableSend {
   readonly clientActionId: string;
   readonly content: JsonContent;
@@ -285,6 +301,43 @@ export function unrecoverableSendNotice(
     severity: "warning",
     clientActionId,
   };
+}
+
+/**
+ * What a RESTORED prompt owes its author, for `failedSendRestoration.reason`.
+ *
+ * The founding invariant says a dead send is either restored or stated - but
+ * drift is invisible under BOTH arms unless somebody speaks it. A displaced
+ * send gets these qualifications inside its statement; the send that WON the
+ * slot was handed its text back and told nothing, so the one whose prompt is
+ * sitting in the composer ready to resend was the one least warned that
+ * resending now means a different model, a different account, or a different
+ * moment in the turn.
+ *
+ * It reuses the statement path's own clause functions rather than describing
+ * the same facts a second way: a parallel implementation is how the two
+ * surfaces would come to disagree about what drifted.
+ *
+ * No worktree clause here. The restore path HANDS THE BINDING BACK, and the
+ * one case where it cannot - a sweep took it mid-flight - already has its own
+ * sentence appended by {@link WORKTREE_GONE_STATEMENT}'s writers.
+ */
+export function restoredSendQualifications(send: {
+  readonly sentSettings: ChatRunSettings | null;
+  readonly currentSettings: ChatRunSettings | null;
+  readonly sentAccountContext: AccountContext | null;
+  readonly currentAccountContext: AccountContext | null;
+  readonly sentDeliveryPolicy: ChatQueueDeliveryPolicy | null;
+}): string {
+  return [
+    deliveryClause(send.sentDeliveryPolicy),
+    settingsDriftClause(
+      send.sentSettings,
+      send.currentSettings,
+      send.sentAccountContext,
+      send.currentAccountContext,
+    ),
+  ].join("");
 }
 
 /**
@@ -773,7 +826,15 @@ export function reconcileSnapshotChange(
         failedSendRestoration: {
           clientActionId: pending.clientActionId,
           content: pending.restoreContent,
-          reason: "Message was not confirmed after reconnect.",
+          reason: `Message was not confirmed after reconnect.${restoredSendQualifications(
+            {
+              sentSettings: pending.settings,
+              currentSettings: input.currentSettings,
+              sentAccountContext: pending.accountContext,
+              currentAccountContext: input.currentAccountContext,
+              sentDeliveryPolicy: pending.deliveryPolicy,
+            },
+          )}`,
         },
         // The prompt goes back to the composer, so its worktree goes back to
         // the staging slot with it.
@@ -914,7 +975,15 @@ export function reconcileTurnSettled(
         : {
             clientActionId: restorable.clientActionId,
             content: restorable.content,
-            reason: "The message was not recorded before the turn stopped.",
+            reason: `The message was not recorded before the turn stopped.${restoredSendQualifications(
+              {
+                sentSettings: restorable.settings,
+                currentSettings: input.currentSettings,
+                sentAccountContext: restorable.accountContext,
+                currentAccountContext: input.currentAccountContext,
+                sentDeliveryPolicy: restorable.deliveryPolicy,
+              },
+            )}`,
           },
     // Only when THIS pass handed the prompt back - an already-occupied slot
     // restored nothing here, so there is no binding to re-stage with it.

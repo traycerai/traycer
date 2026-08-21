@@ -1181,6 +1181,62 @@ describe("chat-queue-reconciler", () => {
       }).message;
     }
 
+    // `-H2bA`: the send that WON the slot got its text back and was told
+    // nothing, while every DISPLACED send got explicit drift and delivery
+    // warnings. That is backwards - the winner's prompt is the one sitting in
+    // the composer ready to be resent, so it is the one that most needs to
+    // hear what changed underneath it. The founding invariant says restored
+    // or stated; drift is invisible under both arms unless spoken.
+    it("qualifies a snapshot-restored prompt with the drift it inherits", () => {
+      const pendingAction: PendingChatAction = {
+        ...createPendingAction("action-1", "msg-1", "send"),
+        connectionEpoch: 0,
+        accountContext: { type: "PERSONAL" },
+      };
+      const result = reconcileSnapshotChange({
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: { ...SETTINGS, model: "gpt-5.6" },
+        currentAccountContext: { type: "TEAM", teamId: "team-7" },
+        worktreeWasSwept: () => false,
+        connectionEpoch: 1,
+        nowMs: 5000,
+      });
+
+      const reason = result.failedSendRestoration?.reason ?? "";
+      expect(reason).toContain("Message was not confirmed after reconnect.");
+      expect(reason).toContain("model gpt-5-codex");
+      expect(reason).toContain("billing your personal account");
+    });
+
+    it("qualifies a turn-settled restored prompt with its delivery policy", () => {
+      const restorable: PendingUserMessage = {
+        ...createPendingUserMessage("action-1", "msg-1"),
+        deliveryPolicy: "after_safe_point",
+      };
+      const result = reconcileTurnSettled(true, {
+        pendingActions: {},
+        pendingUserMessages: [restorable],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" },
+        worktreeWasSwept: () => false,
+      });
+
+      const reason = result.failedSendRestoration?.reason ?? "";
+      expect(reason).toContain(
+        "The message was not recorded before the turn stopped.",
+      );
+      // Delivery dies with the action, so a resend takes whatever the submit
+      // gesture implies then - which can interrupt instead of waiting.
+      expect(reason).toContain("after the running turn reached a safe point");
+    });
+
     // `-G8sh`: a NEW chat's `chat.settings` stays null until the first turn,
     // and the drift guard short-circuited the WHOLE comparison on that null -
     // including billing, which was perfectly comparable. So an initial send
