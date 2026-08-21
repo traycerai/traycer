@@ -312,21 +312,25 @@ function listItemLines(
   return (list.content ?? []).flatMap((item, index) => {
     const marker = ordered ? `${start + index}. ` : "";
     const childIndent = `${indent}${" ".repeat(marker.length > 0 ? marker.length : 2)}`;
-    const blocks = item.content ?? [];
-    const own = extractPlainTextFromComposerJSONContent({
-      type: "doc",
-      content: [
-        ...prepareForProjection(blocks.filter((block) => !isListNode(block))),
-      ],
+    // Walked in DOCUMENT ORDER. Partitioning the blocks - prose first, nested
+    // lists appended after - reordered an item whose sub-list is followed by a
+    // continuation paragraph, so the trailing prose jumped above the steps it
+    // was written to follow. Child order is content, not layout.
+    const lines = (item.content ?? []).flatMap((block) => {
+      if (isListNode(block)) return listItemLines(block, childIndent);
+      const text = extractPlainTextFromComposerJSONContent({
+        type: "doc",
+        content: [...prepareForProjection([block])],
+      });
+      return text.length === 0
+        ? []
+        : text.split("\n").map((line) => `${childIndent}${line}`);
     });
-    const ownLines = own.length === 0 ? [""] : own.split("\n");
-    return [
-      `${indent}${marker}${ownLines[0]}`,
-      ...ownLines.slice(1).map((line) => `${childIndent}${line}`),
-      ...blocks
-        .filter((block) => isListNode(block))
-        .flatMap((child) => listItemLines(child, childIndent)),
-    ];
+    // The marker belongs on the item's first line, whatever kind of block
+    // that turned out to be.
+    if (lines.length === 0) return [`${indent}${marker}`.trimEnd()];
+    const [first, ...rest] = lines;
+    return [`${indent}${marker}${first.slice(childIndent.length)}`, ...rest];
   });
 }
 

@@ -878,26 +878,6 @@ export interface StagedWorktreeIntentSource {
 }
 
 /**
- * Put a consumed worktree pick back, unless the user has since said otherwise.
- *
- * The discriminator is "is this slot still awaiting THIS dispatch's outcome" -
- * empty, and untouched since a send took it. A revision comparison answered a
- * different question, how far the counter moved, and the two diverge when a
- * SECOND send stages and consumes its own pick: the counter advances twice and
- * the slot ends empty, so the first send's binding was suppressed to protect a
- * selection that no longer existed, and its restored prompt silently resent
- * against the chat's previous worktree.
- *
- * Occupancy alone is not enough either: an explicit user clear also leaves the
- * slot empty, and that IS a choice to send without one. The store's marker
- * separates the two - only a dispatch sets it, every user mutation drops it.
- *
- * The slot holds ONE pick, so when several dead actions each want theirs back
- * the caller decides precedence: the action whose PROMPT is handed to the
- * composer wins, because a prompt and the worktree it was written for have to
- * travel together. See the snapshot handler.
- */
-/**
  * Keep the background-stop slices in lockstep with the running-only list: a
  * task that has left it has settled, so its Stop is no longer in flight.
  * Extracted so the turn-state updater stays under the complexity budget.
@@ -960,6 +940,26 @@ function restoreOneWorktreeIntent(
   return false;
 }
 
+/**
+ * Put a consumed worktree pick back, unless the user has since said otherwise.
+ *
+ * The discriminator is "is this slot still awaiting THIS dispatch's outcome" -
+ * empty, and untouched since a send took it. A revision comparison answered a
+ * different question, how far the counter moved, and the two diverge when a
+ * SECOND send stages and consumes its own pick: the counter advances twice and
+ * the slot ends empty, so the first send's binding was suppressed to protect a
+ * selection that no longer existed, and its restored prompt silently resent
+ * against the chat's previous worktree.
+ *
+ * Occupancy alone is not enough either: an explicit user clear also leaves the
+ * slot empty, and that IS a choice to send without one. The store's marker
+ * separates the two - only a dispatch sets it, every user mutation drops it.
+ *
+ * The slot holds ONE pick, so when several dead actions each want theirs back
+ * the caller decides precedence: the action whose PROMPT is handed to the
+ * composer wins, because a prompt and the worktree it was written for have to
+ * travel together. See the snapshot handler.
+ */
 function restoreStagedWorktreeIntent(
   source: StagedWorktreeIntentSource | null,
   stagingKey: WorktreeStagingKey,

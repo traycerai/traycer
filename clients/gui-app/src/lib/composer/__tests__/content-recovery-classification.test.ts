@@ -454,6 +454,51 @@ describe("content recovery classification", () => {
     expect(text).toBe("1. parent\n   1. child");
   });
 
+  // R12 `-BQcf`: an item whose nested list is followed by a continuation
+  // paragraph used to emit the prose FIRST and the sub-list after, so the
+  // trailing note jumped above the steps it was written to follow.
+  it("keeps an item's children in document order", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "orderedList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "step" }],
+                },
+                {
+                  type: "bulletList",
+                  content: [
+                    {
+                      type: "listItem",
+                      content: [
+                        {
+                          type: "paragraph",
+                          content: [{ type: "text", text: "detail" }],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "after" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(text).toBe("1. step\n   detail\n   after");
+  });
+
   it("leaves bullet markers off, which the criterion allows", () => {
     const text = recoveryTextFromContent({
       type: "doc",
