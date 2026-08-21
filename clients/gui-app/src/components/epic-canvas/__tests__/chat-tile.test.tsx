@@ -279,7 +279,10 @@ import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -296,7 +299,10 @@ import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ChatEvent,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -539,6 +545,7 @@ function emitChatSnapshotWithMessages(input: {
   readonly queueItems: ReadonlyArray<ChatQueuedItem>;
   readonly settings: ChatRunSettings | null;
   readonly messages: ReadonlyArray<Message>;
+  readonly events?: ReadonlyArray<ChatEvent>;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
 }): void {
@@ -561,7 +568,7 @@ function emitChatSnapshotWithMessages(input: {
         activeSessionChain: null,
         claudePendingWakes: [],
         messages: [...input.messages],
-        events: [],
+        events: [...(input.events ?? [])],
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
@@ -2939,12 +2946,14 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     act(() => {
-      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
-        kind: "message",
-        // A2A rows anchor on the DELIVERED message, which reaches the receiving
-        // chat as a user row - and user rows are the ones keyed by `messageId`.
-        messageId: DELIVERED_A2A_MESSAGE_ID,
-      });
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          // A2A rows anchor on the DELIVERED message, which reaches the receiving
+          // chat as a user row - and user rows are the ones keyed by `messageId`.
+          messageId: DELIVERED_A2A_MESSAGE_ID,
+        });
     });
 
     // Warm tile, target absent: the request must SURVIVE, not be swallowed.
@@ -2952,7 +2961,9 @@ describe("<ChatTile />", () => {
       await Promise.resolve();
     });
     expect(
-      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+      ],
     ).not.toBeUndefined();
 
     act(() => {
@@ -2969,10 +2980,123 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[
-          CHAT_ARTIFACT.id
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
         ],
       ).toBeUndefined();
     });
+  });
+
+  it("consumes an end jump without waiting for a transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, { kind: "end" });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+  });
+
+  it("resolves a durable assistant message id to its projected transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          // Notification rows persist the protocol message id. Assistant
+          // transcript rows are keyed by turn (`assistant:<turnId>`), so the
+          // jump must resolve through ChatMessageModel.persistentMessageId.
+          messageId: "next-steps-msg",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
+  it("lands an event jump on the exact inline queued-preparation failure", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "event",
+          eventId: "queued-preparation-failure",
+        });
+    });
+
+    const failure = {
+      eventId: "queued-preparation-failure",
+      type: "send.failed",
+      timestamp: 2_000,
+      clientActionId: null,
+      actor: null,
+      message: "The queued prompt could not be prepared.",
+      turnId: null,
+      messageId: null,
+      queueItemId: "queue-item-1",
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: {
+        code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        notificationAnchor: true,
+      },
+    } satisfies ChatEvent;
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        events: [failure],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(
+      screen.getByText("The queued prompt could not be prepared."),
+    ).not.toBeNull();
   });
 
   it("expands the target card once a parked block jump resolves", async () => {
@@ -2981,10 +3105,12 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     act(() => {
-      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
-        kind: "block",
-        blockId: "next-steps-block",
-      });
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "block",
+          blockId: "next-steps-block",
+        });
     });
     await act(async () => {
       await Promise.resolve();
@@ -3020,7 +3146,9 @@ describe("<ChatTile />", () => {
       ).toBe(true);
     });
     expect(
-      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+      ],
     ).toBeUndefined();
   });
 
@@ -3033,17 +3161,19 @@ describe("<ChatTile />", () => {
       await waitForChatTileLoaded();
 
       act(() => {
-        useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
-          kind: "message",
-          messageId: "message-that-never-arrives",
-        });
+        useChatTranscriptJumpStore
+          .getState()
+          .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+            kind: "message",
+            messageId: "message-that-never-arrives",
+          });
       });
       await act(async () => {
         await Promise.resolve();
       });
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[
-          CHAT_ARTIFACT.id
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
         ],
       ).not.toBeUndefined();
 
@@ -3055,7 +3185,7 @@ describe("<ChatTile />", () => {
       // which is the degrade this feature already accepts for anchor-less rows.
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[
-          CHAT_ARTIFACT.id
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
         ],
       ).toBeUndefined();
     } finally {

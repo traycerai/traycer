@@ -6,7 +6,8 @@
  * has no such context - the target tile may not even be mounted yet when the
  * jump is issued. So the request is parked here by chat id and the chat tile
  * picks it up on its next render, whether that is the current one or the first
- * one after `openTileInEpic` mounts it.
+ * one after `openTileInEpic` mounts it. Host identity is part of the key:
+ * separate hosts may legitimately expose the same chat id.
  *
  * Session-only and deliberately not persisted: a jump is a navigation intent,
  * not reading position (that belongs to the global reading-position service). Requests are
@@ -17,10 +18,14 @@
 import { create } from "zustand";
 
 export type ChatTranscriptJumpTarget =
+  /** The current end of the transcript. */
+  | { readonly kind: "end" }
   /** A tool / sub-agent card inside the transcript. */
   | { readonly kind: "block"; readonly blockId: string }
   /** A delivered message row. */
   | { readonly kind: "message"; readonly messageId: string }
+  /** A durable event projected as an inline transcript row. */
+  | { readonly kind: "event"; readonly eventId: string }
   /**
    * The SENDER-side counterpart of an A2A exchange: the "Sent message" tool
    * card in this chat's own transcript. No captured anchor exists for it (the
@@ -56,10 +61,23 @@ interface ChatTranscriptJumpStore {
     Record<string, ChatTranscriptJumpRequest | undefined>
   >;
   readonly requestJump: (
+    hostId: string,
     chatId: string,
     target: ChatTranscriptJumpTarget,
   ) => void;
-  readonly consumeJump: (chatId: string, requestId: number) => void;
+  readonly consumeJump: (
+    hostId: string,
+    chatId: string,
+    requestId: number,
+  ) => void;
+}
+
+export function chatTranscriptJumpKey(hostId: string, chatId: string): string {
+  return JSON.stringify([hostId, chatId]);
+}
+
+export function chatTranscriptEventRowId(eventId: string): string {
+  return `chat-event:${eventId}`;
 }
 
 let nextRequestId = 0;
@@ -67,19 +85,21 @@ let nextRequestId = 0;
 export const useChatTranscriptJumpStore = create<ChatTranscriptJumpStore>(
   (set) => ({
     requestsByChatId: {},
-    requestJump: (chatId, target) => {
+    requestJump: (hostId, chatId, target) => {
       nextRequestId += 1;
       const request: ChatTranscriptJumpRequest = {
         target,
         requestId: nextRequestId,
       };
+      const key = chatTranscriptJumpKey(hostId, chatId);
       set((state) => ({
-        requestsByChatId: { ...state.requestsByChatId, [chatId]: request },
+        requestsByChatId: { ...state.requestsByChatId, [key]: request },
       }));
     },
-    consumeJump: (chatId, requestId) =>
+    consumeJump: (hostId, chatId, requestId) =>
       set((state) => {
-        const current = state.requestsByChatId[chatId];
+        const key = chatTranscriptJumpKey(hostId, chatId);
+        const current = state.requestsByChatId[key];
         // Only the exact request that was handled is cleared: a newer jump
         // issued while the tile was mounting must survive.
         if (current === undefined || current.requestId !== requestId) {
@@ -87,9 +107,7 @@ export const useChatTranscriptJumpStore = create<ChatTranscriptJumpStore>(
         }
         return {
           requestsByChatId: Object.fromEntries(
-            Object.entries(state.requestsByChatId).filter(
-              ([id]) => id !== chatId,
-            ),
+            Object.entries(state.requestsByChatId).filter(([id]) => id !== key),
           ),
         };
       }),

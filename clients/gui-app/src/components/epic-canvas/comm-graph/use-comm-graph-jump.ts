@@ -173,11 +173,14 @@ export function useCommGraphJump(
       if (agent === undefined) return;
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(agent));
       if (target.kind === "chat-block") {
-        requestJump(target.chatId, { kind: "block", blockId: target.blockId });
+        requestJump(event.hostId, target.chatId, {
+          kind: "block",
+          blockId: target.blockId,
+        });
         return;
       }
       if (target.kind === "chat-message") {
-        requestJump(target.chatId, {
+        requestJump(event.hostId, target.chatId, {
           kind: "message",
           messageId: target.messageId,
         });
@@ -213,7 +216,7 @@ export function useCommGraphJump(
       const sender = agentById.get(event.senderAgentId);
       if (sender === undefined || sender.kind !== "chat") return;
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(sender));
-      requestJump(event.senderAgentId, {
+      requestJump(event.hostId, event.senderAgentId, {
         kind: "sent-message",
         receiverAgentId: event.receiverAgentId,
         messageText: event.messageText,
@@ -242,7 +245,9 @@ export function useCommGraphJump(
       const created = agentById.get(event.receiverAgentId);
       if (created === undefined || created.kind !== "chat") return;
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(created));
-      requestJump(event.receiverAgentId, { kind: "first-message" });
+      requestJump(event.hostId, event.receiverAgentId, {
+        kind: "first-message",
+      });
     },
     [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
   );

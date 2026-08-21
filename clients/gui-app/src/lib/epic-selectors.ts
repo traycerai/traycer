@@ -1463,6 +1463,30 @@ export function useEpicNodeHostId(nodeId: string): string | null {
 }
 
 /**
+ * Batched counterpart to {@link useEpicNodeHostId} for surfaces that must
+ * group notification reads by each row's owning host. The shallow array keeps
+ * the caller stable through unrelated projection churn while preserving the
+ * input order for a direct `nodeIds[index]` pairing.
+ */
+export function useEpicNodeHostIds(
+  nodeIds: ReadonlyArray<string>,
+): ReadonlyArray<string | null> {
+  return useEpicStore(
+    useShallow((s) =>
+      nodeIds.map((nodeId) => {
+        if (Object.hasOwn(s.chats.byId, nodeId)) {
+          return s.chats.byId[nodeId].hostId;
+        }
+        if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+          return s.tuiAgents.byId[nodeId].hostId;
+        }
+        return null;
+      }),
+    ),
+  );
+}
+
+/**
  * The owning USER of a chat row, as a primitive for the same
  * churn-isolation reason as {@link useEpicNodeHostId}. Chat rows only:
  * the one consumer (the sidebar's unreachable-owner published-copy
