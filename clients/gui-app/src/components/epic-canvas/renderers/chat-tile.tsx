@@ -70,8 +70,10 @@ import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-co
 import {
   useChatById,
   useEpicLiveArtifactTitle,
+  useEpicPermissionRole,
   useOpenEpicId,
 } from "@/lib/epic-selectors";
+import { isEditableRole } from "@/lib/epic-permissions";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
@@ -101,6 +103,7 @@ import {
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -434,6 +437,9 @@ export function ChatTile(props: ChatTileProps) {
               ? "host-plan-restricted"
               : "host-offline"
           }
+          // This mount's body is a load state or a cached live session -
+          // never a published copy the banner could truthfully point at.
+          showsPublishedCopy={false}
           testId={`chat-dead-tile-${node.id}`}
         />
       );
@@ -507,6 +513,13 @@ interface ChatDeadTileBannerContainerProps {
   readonly reason: ChatDeadTileBannerReason;
   readonly testId: string;
   /**
+   * Whether the mounting surface renders a readable copy under this banner.
+   * The published tile and the canvas substitution do; this live tile does
+   * not (the body below it is a load state or a cached live session). See
+   * `ChatDeadTileBannerProps.showsPublishedCopy`.
+   */
+  readonly showsPublishedCopy: boolean;
+  /**
    * The source chat's owner, when the mounting surface already carries it
    * (the published tile's ref does). Bypasses the cloud-list lookup below,
    * which a host with swept registry facts (post-restart) can fail to
@@ -543,8 +556,22 @@ export function ChatDeadTileBannerContainer(
     client: bannerAppHostClient,
     epicId: props.epicId,
     chatId: providedOwnerUserId === null ? props.chatId : null,
+    sourceOwnerHostId: props.sourceHostId,
   });
   const sourceOwnerUserId = providedOwnerUserId ?? lookedUpOwnerUserId;
+  // The two facts the banner's copy and Clone offer vary on (shared-chat
+  // support). Ownership: only a POSITIVE mismatch against the signed-in user
+  // flips the foreign-owner copy - an unknown owner or identity stays on the
+  // own-chat sentences, which were this banner's whole vocabulary before
+  // collaborators existed. Role: `epic.createChat` is editor-gated host-side,
+  // so a known viewer gets the reason in the banner instead of a Clone button
+  // that dies on a bare "You don't have permission" toast; an unresolved role
+  // (`null`) keeps the offer - the host gate is the backstop, and withholding
+  // the way out of a dead tile needs evidence.
+  const permissionRole = useEpicPermissionRole();
+  const ownedByViewer = useOwnedByViewer(sourceOwnerUserId);
+  const cloneAllowed =
+    permissionRole === null || isEditableRole(permissionRole);
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
@@ -560,6 +587,9 @@ export function ChatDeadTileBannerContainer(
     <ChatDeadTileBanner
       hostLabel={props.hostLabel}
       reason={props.reason}
+      ownedByViewer={ownedByViewer}
+      cloneAllowed={cloneAllowed}
+      showsPublishedCopy={props.showsPublishedCopy}
       onClone={offer.clone}
       cloning={offer.cloning}
       className={undefined}

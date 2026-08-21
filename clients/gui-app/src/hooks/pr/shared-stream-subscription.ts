@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useReducer, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 /**
  * The ref-counted session-sharing machinery behind the `pr.*` subscription
@@ -46,14 +52,82 @@ export function resetSharedStreamSubscriptions<TFrame>(
   registry.clear();
 }
 
+/**
+ * Render-side change channel, keyed by registry and session key.
+ *
+ * The entry a consumer renders from is mutable module state: the subscribe
+ * effect creates it AFTER the first commit, and the session factories mutate
+ * `lastEvent` / `isTerminal` in place and fan out through `consumers`. The
+ * desktop renderer runs the React Compiler, which memoizes an imperative
+ * `registry.get(key)` (and a `entry.lastEvent` read) during render on the
+ * identity of its inputs - registry, key, entry - none of which change when
+ * the entry appears or its frame moves. A plain render-time read therefore
+ * froze at `undefined`: error frames never surfaced and `sendRefresh` was
+ * inert. `useSyncExternalStore` owns the value, so the compiler caching its
+ * callbacks is harmless.
+ *
+ * Keyed outside the entry so a consumer can subscribe before its entry exists
+ * and so a DISABLED instance (one reading a sibling's live session) is
+ * notified by the sibling's fan-out.
+ */
+const entryListenersByRegistry = new WeakMap<
+  object,
+  Map<string, Set<() => void>>
+>();
+
+function entryListenersFor<TFrame>(
+  registry: SharedStreamSubscriptionRegistry<TFrame>,
+): Map<string, Set<() => void>> {
+  // The channel never reads the registry's values - it only keys listeners by
+  // the registry object - so the frame type is irrelevant here.
+  let listeners = entryListenersByRegistry.get(registry);
+  if (listeners === undefined) {
+    listeners = new Map();
+    entryListenersByRegistry.set(registry, listeners);
+  }
+  return listeners;
+}
+
+function subscribeToEntry<TFrame>(
+  registry: SharedStreamSubscriptionRegistry<TFrame>,
+  key: string | null,
+): (listener: () => void) => () => void {
+  return (onStoreChange) => {
+    if (key === null) return () => undefined;
+    const byKey = entryListenersFor(registry);
+    let listeners = byKey.get(key);
+    if (listeners === undefined) {
+      listeners = new Set();
+      byKey.set(key, listeners);
+    }
+    listeners.add(onStoreChange);
+    return () => {
+      const current = byKey.get(key);
+      if (current === undefined) return;
+      current.delete(onStoreChange);
+      if (current.size === 0) byKey.delete(key);
+    };
+  };
+}
+
+function notifyEntryChanged<TFrame>(
+  registry: SharedStreamSubscriptionRegistry<TFrame>,
+  key: string,
+): void {
+  const listeners = entryListenersFor(registry).get(key);
+  if (listeners === undefined) return;
+  for (const listener of [...listeners]) listener();
+}
+
 export interface SharedStreamSubscriptionResult<TFrame> {
   /**
-   * The registry entry for this hook's key, or `undefined` when there is
-   * none. Present even while this hook instance is DISABLED: another consumer
-   * may hold a live session for the same key, and its last frame is still the
-   * truth about that stream.
+   * The last frame the session at this hook's key delivered, or `null` when
+   * there is no entry or no frame yet. Present even while this hook instance
+   * is DISABLED: another consumer may hold a live session for the same key,
+   * and its last frame is still the truth about that stream. Read through
+   * the store (see `entryListenersByRegistry`), never off the entry.
    */
-  readonly subscription: SharedStreamSubscription<TFrame> | undefined;
+  readonly lastEvent: TFrame | null;
   /**
    * Refreshes on this hook's own session. After a terminal error the session
    * is dead and its `sendRefresh` is a no-op, so a user "refresh"/"Try again"
@@ -89,13 +163,6 @@ export function useSharedStreamSubscription<TFrame>(args: {
 }): SharedStreamSubscriptionResult<TFrame> {
   const { registry, sessionKey, enabled, createSession, onConsumerJoined } =
     args;
-
-  // Re-render channel for subscription events that do NOT write the query
-  // cache (fatal/non-fatal error frames, terminal closes). Cache-writing
-  // frames re-render through each hook's own `useQuery`.
-  const [, forceRender] = useReducer((renderCount: number) => {
-    return renderCount + 1;
-  }, 0);
 
   const { consumerLabel } = args;
   const [consumerId] = useState(() => Symbol(consumerLabel));
@@ -138,8 +205,16 @@ export function useSharedStreamSubscription<TFrame>(args: {
     }
 
     shared.refCount += 1;
-    shared.consumers.set(consumerId, forceRender);
+    // The session factories fan every frame / terminal close out through
+    // `consumers`; this consumer forwards that onto the render-side channel
+    // for every hook instance at this key (including disabled readers).
+    shared.consumers.set(consumerId, () =>
+      notifyEntryChanged(registry, sessionKey),
+    );
     onConsumerJoined(shared);
+    // The render that scheduled this effect read the channel before the entry
+    // existed (or saw a terminal one about to be replaced); re-read it now.
+    notifyEntryChanged(registry, sessionKey);
 
     return () => {
       // Look up the CURRENT entry at this key rather than closing over the
@@ -158,6 +233,7 @@ export function useSharedStreamSubscription<TFrame>(args: {
       if (current.refCount === 0) {
         current.unsubscribeFromStream();
         if (registry.get(sessionKey) === current) registry.delete(sessionKey);
+        notifyEntryChanged(registry, sessionKey);
       }
     };
   }, [
@@ -170,21 +246,39 @@ export function useSharedStreamSubscription<TFrame>(args: {
     retryNonce,
   ]);
 
-  const subscription =
-    sessionKey === null ? undefined : registry.get(sessionKey);
+  // Memoized on its inputs because `useSyncExternalStore` compares the
+  // subscriber by reference: a fresh closure per render would tear the
+  // listener down and re-add it every time.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      subscribeToEntry(registry, sessionKey)(onStoreChange),
+    [registry, sessionKey],
+  );
+  const lastEvent = useSyncExternalStore(
+    subscribe,
+    () =>
+      sessionKey === null
+        ? null
+        : (registry.get(sessionKey)?.lastEvent ?? null),
+    () => null,
+  );
 
   const sendRefresh = useCallback(() => {
+    // Resolved at CALL time, never captured at render: the entry is mutable
+    // module state and a render-time capture is exactly what the compiler
+    // would freeze (see `entryListenersByRegistry`).
+    const current = sessionKey === null ? undefined : registry.get(sessionKey);
     // Branching on the last ERROR frame instead would swallow the refresh
     // entirely after a NONFATAL error: that leaves the session live and
     // `isTerminal` false, so `retry()` would only bump the nonce, the
     // subscribe effect would reuse the very same entry, and no frame would
     // ever be sent.
-    if (subscription?.isTerminal === true) {
+    if (current?.isTerminal === true) {
       retry();
       return;
     }
-    subscription?.sendRefresh();
-  }, [subscription, retry]);
+    current?.sendRefresh();
+  }, [registry, sessionKey, retry]);
 
-  return { subscription, sendRefresh };
+  return { lastEvent, sendRefresh };
 }
