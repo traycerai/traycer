@@ -38,7 +38,7 @@ import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentAwaitsDispatchFrom,
   stagedWorktreeIntentAwaitsDispatchOutcome,
-  stagedWorktreeIntentWasPurgedMidDispatch,
+  worktreeIntentWasSweptMidDispatch,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
@@ -930,7 +930,10 @@ function restoreOneWorktreeIntent(
     // would be a lie.
     return (
       restoredPrompt.restoreWorktreeIntent !== null &&
-      stagedWorktreeIntentWasPurgedMidDispatch(stagingKey)
+      worktreeIntentWasSweptMidDispatch(
+        stagingKey,
+        restoredPrompt.restoreWorktreeIntent,
+      )
     );
   }
   const owed = sweptClaimants.find(
@@ -967,6 +970,13 @@ function restoreStagedWorktreeIntent(
 ): void {
   if (source === null || source.restoreWorktreeIntent === null) return;
   if (!stagedWorktreeIntentAwaitsDispatchOutcome(stagingKey)) return;
+  // Tested against THIS intent, not the mark's entries - the mark describes
+  // whichever dispatch consumed last, which need not be this one.
+  if (
+    worktreeIntentWasSweptMidDispatch(stagingKey, source.restoreWorktreeIntent)
+  ) {
+    return;
+  }
   useWorktreeIntentStagingStore
     .getState()
     .setIntent(stagingKey, source.restoreWorktreeIntent);
@@ -1593,7 +1603,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         const worktreeGoneForRejection =
           rejectedPending !== null &&
           rejectedPending.restoreWorktreeIntent !== null &&
-          stagedWorktreeIntentWasPurgedMidDispatch(rejectionStagingKey);
+          worktreeIntentWasSweptMidDispatch(
+            rejectionStagingKey,
+            rejectedPending.restoreWorktreeIntent,
+          );
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,

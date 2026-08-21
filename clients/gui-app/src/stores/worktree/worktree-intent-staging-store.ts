@@ -325,6 +325,26 @@ interface WorktreeIntentStagingStore {
   readonly consumedForDispatchByKey: Readonly<
     Record<string, DispatchConsumptionMark | undefined>
   >;
+  /**
+   * Worktree refs swept while a consumption was outstanding, accumulated per
+   * slot.
+   *
+   * The sweep cannot test the right entries by itself: a hand-back stages the
+   * ACTION'S OWN pick, and several dispatches can have taken different picks
+   * from this slot over time, so the mark's entries describe only the latest.
+   * Testing those would clear a mark whose survivor is irrelevant, or spare
+   * one whose own worktree is gone. So the sweep records WHAT was removed and
+   * each hand-back tests its own intent against it - the restore is the moment
+   * the correct entries are in hand, the same move the mark itself uses one
+   * level down.
+   *
+   * LIFETIME: dropped exactly when the mark is, by every mutation that
+   * resolves the slot. No outstanding consumption means nothing left to refuse,
+   * so a key cannot accrete sweep history.
+   */
+  readonly sweptRefsByKey: Readonly<
+    Record<string, RemovedWorktreeRefs | undefined>
+  >;
   /** Take the staged intent for a dispatch, marking the slot as consumed. */
   readonly consumeForDispatch: (
     key: WorktreeStagingKey,
@@ -484,33 +504,58 @@ export interface DispatchConsumptionMark {
  *
  * Extracted so the purge updater stays under its complexity budget.
  */
-function purgedDispatchMarks(
+function accumulateSweptRefs(
+  swept: Readonly<Record<string, RemovedWorktreeRefs | undefined>>,
   marks: Readonly<Record<string, DispatchConsumptionMark | undefined>>,
   sweptSegment: string,
   removed: RemovedWorktreeRefs,
-): Readonly<Record<string, DispatchConsumptionMark | undefined>> {
-  const next: Record<string, DispatchConsumptionMark | undefined> = {
-    ...marks,
-  };
+): Readonly<Record<string, RemovedWorktreeRefs | undefined>> {
+  const next: Record<string, RemovedWorktreeRefs | undefined> = { ...swept };
   let changed = false;
-  for (const [id, mark] of Object.entries(next)) {
-    if (mark?.state !== "awaiting") continue;
+  for (const id of Object.keys(marks)) {
+    if (marks[id] === undefined) continue;
     const slotSegment = serializedStagingKeyHostSegment(id);
     if (slotSegment !== "" && slotSegment !== sweptSegment) continue;
-    const affected = mark.entries.some((entry) =>
-      worktreeFolderIntentReferencesRemoved(entry, removed),
-    );
-    if (!affected) continue;
-    next[id] = { ...mark, state: "purged" };
+    const prior = next[id];
+    next[id] = {
+      worktreePaths: new Set([
+        ...(prior?.worktreePaths ?? []),
+        ...removed.worktreePaths,
+      ]),
+      branches: [...(prior?.branches ?? []), ...removed.branches],
+    };
     changed = true;
   }
-  return changed ? next : marks;
+  return changed ? next : swept;
 }
 
-function withoutDispatchMark(
-  marks: Readonly<Record<string, DispatchConsumptionMark | undefined>>,
+/**
+ * Whether THIS intent names something swept while its dispatch was in flight.
+ *
+ * The hand-back's OWN entries, not the mark's: several dispatches can have
+ * taken different picks from one slot, so the mark describes only the latest.
+ * Testing that would spare a hand-back whose worktree is gone, or refuse one
+ * whose worktree survived.
+ */
+export function worktreeIntentWasSweptMidDispatch(
+  key: WorktreeStagingKey,
+  intent: WorktreeIntent,
+): boolean {
+  const swept =
+    useWorktreeIntentStagingStore.getState().sweptRefsByKey[
+      worktreeStagingKeyString(key)
+    ];
+  if (swept === undefined) return false;
+  return intent.entries.some((entry) =>
+    worktreeFolderIntentReferencesRemoved(entry, swept),
+  );
+}
+
+/** Shared by the mark and its swept-refs companion - one lifetime, one drop. */
+function withoutDispatchMark<T>(
+  marks: Readonly<Record<string, T | undefined>>,
   id: string,
-): Readonly<Record<string, DispatchConsumptionMark | undefined>> {
+): Readonly<Record<string, T | undefined>> {
   if (marks[id] === undefined) return marks;
   const next = { ...marks };
   delete next[id];
@@ -591,6 +636,7 @@ export const useWorktreeIntentStagingStore =
         suspendedWorkspacePathsByKey: {},
         revisionByKey: {},
         consumedForDispatchByKey: {},
+        sweptRefsByKey: {},
         stageEntry: (key, entry) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -605,6 +651,7 @@ export const useWorktreeIntentStagingStore =
                 state.consumedForDispatchByKey,
                 id,
               ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         stageIntent: (key, intent) =>
@@ -622,6 +669,7 @@ export const useWorktreeIntentStagingStore =
                 state.consumedForDispatchByKey,
                 id,
               ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         setIntent: (key, intent) =>
@@ -652,6 +700,7 @@ export const useWorktreeIntentStagingStore =
                 state.consumedForDispatchByKey,
                 id,
               ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         unstageEntry: (key, workspacePath) =>
@@ -695,6 +744,7 @@ export const useWorktreeIntentStagingStore =
                 state.consumedForDispatchByKey,
                 id,
               ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         migrateKeyForAllHosts: (fromKey, toKey) =>
@@ -754,6 +804,7 @@ export const useWorktreeIntentStagingStore =
                 state.consumedForDispatchByKey,
                 id,
               ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         stageBranchName: (key, workspacePath, name) =>
@@ -773,6 +824,7 @@ export const useWorktreeIntentStagingStore =
                 state.consumedForDispatchByKey,
                 id,
               ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         setSuspendedWorkspacePaths: (key, workspacePaths) =>
@@ -816,6 +868,7 @@ export const useWorktreeIntentStagingStore =
                 state.consumedForDispatchByKey,
                 id,
               ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         consumeForDispatch: (key, clientActionId) =>
@@ -922,20 +975,19 @@ export const useWorktreeIntentStagingStore =
             // those `purged` so the hand-back refuses rather than staging a
             // worktree that may be gone, and so the refusal can be STATED
             // instead of the prompt coming back silently unbound.
-            const consumedForDispatchByKey = purgedDispatchMarks(
+            const sweptRefsByKey = accumulateSweptRefs(
+              state.sweptRefsByKey,
               state.consumedForDispatchByKey,
               sweptSegment,
               removed,
             );
-            if (consumedForDispatchByKey !== state.consumedForDispatchByKey) {
-              changed = true;
-            }
+            if (sweptRefsByKey !== state.sweptRefsByKey) changed = true;
             return changed
               ? {
                   intentByKey,
                   suspendedWorkspacePathsByKey,
                   revisionByKey,
-                  consumedForDispatchByKey,
+                  sweptRefsByKey,
                 }
               : state;
           }),
@@ -945,6 +997,7 @@ export const useWorktreeIntentStagingStore =
             suspendedWorkspacePathsByKey: {},
             revisionByKey: {},
             consumedForDispatchByKey: {},
+            sweptRefsByKey: {},
           }),
       }),
       {

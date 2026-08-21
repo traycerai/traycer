@@ -11,7 +11,7 @@ import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import {
   stagedWorktreeIntentAwaitsDispatchOutcome,
-  stagedWorktreeIntentWasPurgedMidDispatch,
+  worktreeIntentWasSweptMidDispatch,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
@@ -455,11 +455,16 @@ describe("purge and an in-flight dispatch", () => {
       .getState()
       .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
 
-    // The hand-back refuses rather than staging a worktree that is gone...
-    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(false);
-    // ...and the refusal is distinguishable from the user's own newer pick,
-    // so the composer can say why instead of coming back silently unbound.
-    expect(stagedWorktreeIntentWasPurgedMidDispatch(key)).toBe(true);
+    // The slot is still awaiting an outcome - the mark says nothing about
+    // WHICH pick, because several dispatches can have taken different ones.
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
+    // The refusal is decided per intent: this one names the swept branch, so
+    // the hand-back refuses and the composer can say why.
+    expect(
+      worktreeIntentWasSweptMidDispatch(key, {
+        entries: [existingBranchIntent("traycer/gone-branch")],
+      }),
+    ).toBe(true);
   });
 
   it("leaves a consumed slot whose own worktree survived the sweep", () => {
@@ -475,11 +480,15 @@ describe("purge and an in-flight dispatch", () => {
       .getState()
       .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
 
-    // The sweep removed a DIFFERENT branch. Marking this one would cost the
-    // hand-back and - worse, now that the refusal speaks - would tell the user
-    // a worktree was deleted that is still there.
+    // The sweep removed a DIFFERENT branch. Refusing this one would cost the
+    // hand-back and - now that the refusal speaks - would tell the user a
+    // worktree was deleted that is still there.
     expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
-    expect(stagedWorktreeIntentWasPurgedMidDispatch(key)).toBe(false);
+    expect(
+      worktreeIntentWasSweptMidDispatch(key, {
+        entries: [existingBranchIntent("traycer/kept")],
+      }),
+    ).toBe(false);
   });
 
   it("leaves another host's consumed slot alone", () => {
@@ -498,6 +507,10 @@ describe("purge and an in-flight dispatch", () => {
 
     // A sweep is one machine's filesystem event.
     expect(stagedWorktreeIntentAwaitsDispatchOutcome(otherKey)).toBe(true);
-    expect(stagedWorktreeIntentWasPurgedMidDispatch(otherKey)).toBe(false);
+    expect(
+      worktreeIntentWasSweptMidDispatch(otherKey, {
+        entries: [existingBranchIntent("traycer/gone-branch")],
+      }),
+    ).toBe(false);
   });
 });

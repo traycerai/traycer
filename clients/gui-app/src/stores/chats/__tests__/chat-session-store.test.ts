@@ -2018,6 +2018,97 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
+  // R13 `-BmQF`: the sweep tested the LAST consumption's entries, but a
+  // restoration hands back its OWN action's intent. Send 1 took A; the user
+  // then staged B and send 2 took that, so the mark describes B. A sweep that
+  // removes A leaves the mark untouched - and send 1's prompt comes back with
+  // a worktree that no longer exists.
+  it("refuses a hand-back whose own worktree was swept, not the last one's", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: { type: "existing", name: "feat/gone" },
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // A newer pick, consumed by a second send: the mark now describes THIS
+    // one, and the RESTORATION path is deliberately ownerless - so it stages
+    // send 1's own intent while the mark's entries belong to send 2.
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          // A DIFFERENT source, so the sweep below cannot touch this one.
+          branch: {
+            type: "new",
+            name: "feat/kept",
+            source: "develop",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // The sweep removes the FIRST send's branch. The mark's own entries
+    // survive it, so nothing about the mark changes.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "feat/gone" }],
+      });
+
+    // Both die; send 1's prompt wins the restoration slot, so its binding is
+    // what the arbiter tries to stage - and that worktree is gone.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
   // R12 `-BZH4`: a third arrival order the claimant rules never saw. The edit
   // consumed E; the user then staged S and a send consumed THAT, so the slot's
   // mark now belongs to the send's dispatch. If the edit's rejection lands
