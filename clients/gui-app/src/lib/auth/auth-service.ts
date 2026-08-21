@@ -89,17 +89,23 @@ const LEGACY_REFRESH_TOKEN_KEY = "traycer.refresh-token";
  * covers expired, claimed-elsewhere, and never-existed codes
  * indistinguishably (the server does not say which); `denied` is the desktop
  * explicitly rejecting the claim; `timed-out` means the approval window
- * elapsed with no decision. A superseding transition is NOT a failure and
- * reports `superseded` instead - see that member.
+ * elapsed with no decision.
+ *
+ * Two members are NOT code verdicts and carry no copy of their own:
+ * `superseded` (the attempt stopped being ours - nothing was projected, say
+ * nothing) and `failed` (the code was approved and the finalization itself
+ * failed - `AuthService` has already projected the global sign-in error, so a
+ * caller adding the code-verdict copy would both duplicate the message and
+ * misdescribe it). `LinkLoginFailureKind` is the set a surface may render.
  */
 /**
- * The kinds a surface actually renders - every terminal outcome except the two
- * that speak for themselves (a completed sign-in) or must stay silent (a
- * superseded attempt).
+ * The kinds a surface actually renders: the CODE VERDICTS, and nothing else.
+ * A completed sign-in speaks for itself, and the two non-verdict outcomes
+ * (`superseded`, `failed`) are either silent or already presented globally.
  */
 export type LinkLoginFailureKind = Exclude<
   LinkLoginSignInResult["kind"],
-  "signed-in" | "superseded"
+  "signed-in" | "superseded" | "failed"
 >;
 
 export type LinkLoginSignInResult =
@@ -112,6 +118,12 @@ export type LinkLoginSignInResult =
    * successor's progress. Callers must render nothing for this kind.
    */
   | { readonly kind: "superseded" }
+  /**
+   * The claim was approved, and applying the resulting credentials failed on
+   * THIS attempt - an empty token, a rejected persist, or validation that was
+   * rejected or unreachable. A real failure, already surfaced globally.
+   */
+  | { readonly kind: "failed" }
   | { readonly kind: "invalid-code" }
   | { readonly kind: "denied" }
   | { readonly kind: "timed-out" }
@@ -354,6 +366,43 @@ type SameUserRotateResult =
   | { readonly status: "rotated"; readonly token: string }
   | { readonly status: "signed-out" }
   | { readonly status: "transient" };
+
+/**
+ * How a token finalization ended.
+ *
+ * The distinction that matters is `superseded` vs `failed`, and it is not a
+ * shade of the same thing: `superseded` means the attempt stopped being ours
+ * (an epoch/generation fence, or disposal) and NOTHING was projected, so a
+ * caller must stay silent; `failed` means this attempt was still current and a
+ * real failure was projected through `applyFailure`, so the global sign-in
+ * error is already showing and a caller must not add a second message.
+ * Collapsing them into a boolean is what let a genuine validation or
+ * persistence failure be reported to callers as somebody else's attempt.
+ */
+type TokenApplicationOutcome = "applied" | "superseded" | "failed";
+
+/**
+ * The link flow's terminal result for a token finalization.
+ *
+ * Three outcomes, three answers, and `failed` is the one worth naming: it is a
+ * REAL failure of this attempt - an empty token, a rejected persist, or
+ * validation that was rejected or unreachable - which `applyTokenInternal` has
+ * already projected as the global sign-in error. It comes back as its own kind
+ * rather than as a code verdict because "that code is invalid or expired" is
+ * the wrong sentence for a network blip after the desktop approved.
+ */
+function linkResultForTokenApplication(
+  outcome: TokenApplicationOutcome,
+): LinkLoginSignInResult {
+  switch (outcome) {
+    case "applied":
+      return { kind: "signed-in" };
+    case "failed":
+      return { kind: "failed" };
+    case "superseded":
+      return { kind: "superseded" };
+  }
+}
 
 /**
  * GUI-owned auth service. Drives the sign-in flow through the shell-owned
@@ -2553,9 +2602,9 @@ export class AuthService {
     token: string,
     refreshToken: string,
     expectedOAuthEpoch: number | null,
-  ): Promise<boolean> {
+  ): Promise<TokenApplicationOutcome> {
     if (this.disposed) {
-      return false;
+      return "superseded";
     }
     // Captured before the first await. The attempt epoch is consumed before
     // the save/provision awaits below, so this generation is the only fence
@@ -2570,24 +2619,24 @@ export class AuthService {
             expectedEpoch: expectedOAuthEpoch ?? "cold-start",
           },
         );
-        return false;
+        return "superseded";
       }
       appLogger.warn("[auth] OAuth callback delivered an empty token", {});
       this.clearPendingTimeout();
       this.clearActiveAttempt();
       this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-      return false;
+      return "failed";
     }
     if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
       appLogger.debug("[auth] ignored stale OAuth callback before validation", {
         expectedEpoch: expectedOAuthEpoch ?? "cold-start",
       });
-      return false;
+      return "superseded";
     }
     this.clearPendingTimeout();
     const outcome = await this.validateToken(token);
     if (this.isDisposed()) {
-      return false;
+      return "superseded";
     }
 
     // After the async validation, the state machine may have moved on: a
@@ -2597,7 +2646,7 @@ export class AuthService {
       appLogger.debug("[auth] ignored stale OAuth callback after validation", {
         expectedEpoch: expectedOAuthEpoch ?? "cold-start",
       });
-      return false;
+      return "superseded";
     }
     if (outcome.kind === "valid") {
       // Interactive sign-in: write the freshly-minted pair + validated identity to
@@ -2634,7 +2683,7 @@ export class AuthService {
           {},
         );
         await this.undoSupersededCredentialSave(token);
-        return false;
+        return "superseded";
       }
       // Consume the attempt now that the save is settled and still ours; a
       // replayed device result for this epoch is stale from here on.
@@ -2648,7 +2697,7 @@ export class AuthService {
           { error: describeLogError(signInError) },
         );
         this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-        return false;
+        return "failed";
       }
 
       this.setLastError(null);
@@ -2657,7 +2706,7 @@ export class AuthService {
       // only caller is `finalizeDeviceResult`). Passive token restores use a
       // different path and deliberately never count as sign-ins.
       Analytics.getInstance().track(AnalyticsEvent.SignInSucceeded, null);
-      return true;
+      return "applied";
     }
     // Validation `rejected` OR `network-error`: do not persist. Surface
     // `sign-in-failed` so the header sign-in surface renders a retry CTA.
@@ -2666,7 +2715,7 @@ export class AuthService {
     });
     this.clearActiveAttempt();
     this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-    return false;
+    return "failed";
   }
 
   /**
@@ -2908,9 +2957,7 @@ export class AuthService {
             polled.response.refreshToken,
             attempt.epoch,
           );
-          // `applied === false` means the finalization itself was
-          // superseded mid-persist - the same silence, for the same reason.
-          return applied ? { kind: "signed-in" } : { kind: "superseded" };
+          return linkResultForTokenApplication(applied);
         }
         case "authorization-pending":
           transportFailures = 0;

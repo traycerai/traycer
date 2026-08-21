@@ -1,11 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import type { LinkLoginDeepLinkDelivery } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  LinkLoginFailureKind,
+  LinkLoginSignInResult,
+} from "@/lib/auth/auth-service";
 import { decideDeepLinkRouting } from "@/lib/auth/link-login-deep-link-routing";
 import { useAuthService } from "@/lib/host";
 import { linkLoginAlreadySignedInToast } from "@/lib/toast/channels";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
+
+/**
+ * The stored verdict for a settled claim, or `null` when this outcome is not
+ * the code's verdict at all. Kept beside the bridge rather than inline so the
+ * three-way distinction is stated once and read as a rule.
+ */
+function codeVerdictOf(
+  result: LinkLoginSignInResult,
+): LinkLoginFailureKind | null {
+  if (
+    result.kind === "signed-in" ||
+    result.kind === "superseded" ||
+    result.kind === "failed"
+  ) {
+    return null;
+  }
+  return result.kind;
+}
 
 /**
  * The single subscriber to `IRunnerHost.linkLoginDeepLinks` — a link code the
@@ -91,12 +113,16 @@ export function LinkLoginDeepLinkBridge(): null {
     // sign-in surface can render the real reason whether or not it was even
     // mounted when the claim started.
     //
-    // `superseded` is the one outcome that stays silent: a discarded attempt's
-    // complaint would land under whatever replaced it, describing a request
-    // nobody is waiting on any more.
+    // Only CODE VERDICTS are stored, which is what `LinkLoginFailureKind`
+    // narrows to. The other two non-success outcomes each already have their
+    // presentation settled elsewhere: `superseded` says nothing at all (a
+    // discarded attempt's complaint would land under whatever replaced it),
+    // and `failed` — approved, then a broken finalization — is showing as the
+    // global sign-in error, where it belongs.
     void auth.signInWithLinkCode(delivery.code).then((result) => {
-      if (result.kind !== "signed-in" && result.kind !== "superseded") {
-        reportOutcome(result.kind);
+      const verdict = codeVerdictOf(result);
+      if (verdict !== null) {
+        reportOutcome(verdict);
       }
     });
   }, [auth, clearOutcome, delivery, reportOutcome, status]);

@@ -66,13 +66,24 @@ function useEntryNotice(local: EntryNotice): EntryNotice {
 }
 
 /**
- * What a settled claim should say, or `null` for the two kinds that say
- * nothing: a completed sign-in speaks for itself, and a SUPERSEDED attempt
- * belongs to whoever replaced it — its complaint would land under the
- * successor's progress and describe a request nobody is waiting on.
+ * What a settled claim should say inline, or `null` for the three kinds that
+ * say nothing here.
+ *
+ * A completed sign-in speaks for itself. A SUPERSEDED attempt belongs to
+ * whoever replaced it — its complaint would land under the successor's
+ * progress and describe a request nobody is waiting on. And a `failed`
+ * finalization — the desktop approved, then validation or persistence went
+ * wrong — is already showing as the global sign-in error; repeating it here
+ * would be a second message, in code-verdict words that misdescribe it
+ * ("that code is invalid or expired" is the wrong sentence for a network
+ * blip after approval).
  */
 function noticeForResult(result: LinkLoginSignInResult): EntryNotice {
-  if (result.kind === "signed-in" || result.kind === "superseded") {
+  if (
+    result.kind === "signed-in" ||
+    result.kind === "superseded" ||
+    result.kind === "failed"
+  ) {
     return null;
   }
   return result.kind;

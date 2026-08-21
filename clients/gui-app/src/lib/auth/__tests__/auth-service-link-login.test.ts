@@ -235,6 +235,72 @@ describe("link-login attempt fence", () => {
     }
   });
 
+  /**
+   * A finalization that fails on the CURRENT attempt is a real failure, and
+   * must not be reported as somebody else's attempt. `superseded` exists to
+   * mean "this stopped being ours and nothing was projected"; these two paths
+   * DID project - the global sign-in error is already showing - so the result
+   * has to say so, or a caller reading it stays silent about a login that
+   * genuinely broke.
+   */
+  it("a validation failure on the CURRENT attempt is failed, not superseded", async () => {
+    const { service } = makeService();
+    const { script, restore } = installLinkFetch();
+    try {
+      // The desktop approved and the token endpoint handed over credentials;
+      // authn is then briefly unreachable for the identity check.
+      script.tokenResponse = () =>
+        json(
+          { token: "good-token", refreshToken: "good-refresh", familyId: "f" },
+          200,
+        );
+      script.validationResponse = () => new Response(null, { status: 401 });
+      const resultPromise = service.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(1_100);
+      const result = await resultPromise;
+
+      expect(result.kind).not.toBe("superseded");
+      expect(result.kind).toBe("failed");
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      // The global sign-in error is the SOLE presentation for this one: no
+      // code verdict is stored, because "invalid or expired" would misdescribe
+      // a network blip after an approval that did land.
+      expect(service.getLastError()).not.toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("a credential-persist rejection on the CURRENT attempt is failed, not superseded", async () => {
+    const { service, host } = makeService();
+    const { script, restore } = installLinkFetch();
+    const realStore: ITokenStore = host.tokenStore;
+    Object.defineProperty(realStore, "signIn", {
+      configurable: true,
+      value: (): Promise<void> =>
+        Promise.reject(new Error("credentials file is read-only")),
+    });
+    try {
+      script.validationResponse = () => json(PROFILE_BODY, 200);
+      script.tokenResponse = () =>
+        json(
+          { token: "good-token", refreshToken: "good-refresh", familyId: "f" },
+          200,
+        );
+      const resultPromise = service.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(1_100);
+      const result = await resultPromise;
+
+      // Nothing superseded this attempt; the durable write simply refused.
+      expect(result.kind).not.toBe("superseded");
+      expect(result.kind).toBe("failed");
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getLastError()).not.toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
   /** Pauses the credential save at the durable-store boundary. */
   function pauseStoreSignIn(realStore: ITokenStore): {
     saveEnteredPromise: Promise<void>;
