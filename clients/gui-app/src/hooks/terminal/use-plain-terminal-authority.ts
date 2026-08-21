@@ -59,7 +59,11 @@ import {
   type PlainTerminalProjectionBarrier,
   type PlainTerminalRpcMethod,
 } from "@/lib/terminals/plain-terminal-authority";
-import { reconcileRetainedPlainTerminalTombstones } from "@/lib/terminals/plain-terminal-presentation-invalidation";
+import {
+  acknowledgedPlainTerminalPresentationIdsForScope,
+  commitPlainTerminalSnapshotOmission,
+  reconcileRetainedPlainTerminalTombstones,
+} from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import {
   useEpicCanvasStore,
   type EpicCanvasStore,
@@ -543,10 +547,23 @@ export function usePlainTerminalAuthority(args: {
             return;
           }
           pendingSettlement = null;
-          queryClient.setQueryData<PlainTerminalCollection>(
-            queryKey,
-            settlePlainTerminalSnapshot(current),
-          );
+          const acknowledgedTerminalIds =
+            acknowledgedPlainTerminalPresentationIdsForScope(
+              args.hostId,
+              stableScope,
+            );
+          const settled = settlePlainTerminalSnapshot(current);
+          queryClient.setQueryData<PlainTerminalCollection>(queryKey, settled);
+          for (const terminalId of acknowledgedTerminalIds) {
+            commitPlainTerminalSnapshotOmission({
+              queryClient,
+              queryKey,
+              hostId: args.hostId,
+              scope: stableScope,
+              terminalId,
+              snapshotEpoch: settled.snapshotEpoch,
+            });
+          }
         };
         return new PlainTerminalListStreamClient({
           wsStreamClient: streamClient,

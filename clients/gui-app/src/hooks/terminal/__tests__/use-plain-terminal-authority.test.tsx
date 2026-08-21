@@ -603,7 +603,7 @@ describe("usePlainTerminalAuthority integration", () => {
     useLandingTerminalStore.getState().resetForTests();
   });
 
-  it("settles production LogicalStream snapshot-before-open ordering on initial connect and reconnect", async () => {
+  it("settles each production LogicalStream replacement after its open transition", async () => {
     recordCapableManifest();
     seedPresentationRefs();
     const test = fixture([terminal(1, null)]);
@@ -634,7 +634,7 @@ describe("usePlainTerminalAuthority integration", () => {
       )?.streamStatus,
     ).toBe("open");
     expect(rendered.result.current.canMutate).toBe(false);
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
 
     act(() => {
       stream.session.deliverServerFrame(
@@ -647,7 +647,7 @@ describe("usePlainTerminalAuthority integration", () => {
       );
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
 
     act(() => {
       stream.session.notifyStatus("reconnecting", null);
@@ -659,7 +659,7 @@ describe("usePlainTerminalAuthority integration", () => {
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
     expect(rendered.result.current.terminals).toEqual([]);
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
   });
 
   it("carries an accepted deferred deletion through stream replacement and fans out once", async () => {
@@ -788,7 +788,7 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(deferredDeletionRefsRemain()).toBe(true);
   });
 
-  it("settles snapshot initialization after its buffered upsert before classifying omission", async () => {
+  it("commits an omission from each settled replacement before a later upsert", async () => {
     recordCapableManifest();
     seedPresentationRefs();
     const test = fixture([terminal(1, null)]);
@@ -812,7 +812,7 @@ describe("usePlainTerminalAuthority integration", () => {
       stream.session.emitStatus("open", null);
       stream.session.emitFrame(stateFrame([]));
     });
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
     expect(rendered.result.current.canMutate).toBe(false);
 
     act(() => {
@@ -829,7 +829,7 @@ describe("usePlainTerminalAuthority integration", () => {
         )?.record.manualTitle,
       ).toBe("buffered winner");
     });
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
   });
 
   it("sweeps only acknowledged epic pointers on initial omission settlement", async () => {
@@ -860,12 +860,7 @@ describe("usePlainTerminalAuthority integration", () => {
 
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
     expect(epicTerminalIds()).toEqual(
-      new Set([
-        "acknowledged-live",
-        "legacy-live",
-        "acknowledged-closed",
-        "legacy-closed",
-      ]),
+      new Set(["legacy-live", "legacy-closed"]),
     );
   });
 
@@ -932,7 +927,7 @@ describe("usePlainTerminalAuthority integration", () => {
     await waitFor(() =>
       expect(
         useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
-      ).toEqual(["landing-acknowledged", "landing-legacy", "landing-pending"]),
+      ).toEqual(["landing-legacy", "landing-pending"]),
     );
 
     const legacyWinner = scopedTerminal({
@@ -1011,7 +1006,7 @@ describe("usePlainTerminalAuthority integration", () => {
     });
     expect(
       useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
-    ).toEqual(["landing-legacy", "landing-pending"]);
+    ).toEqual([]);
   });
 
   it("accepts initialization only for the current open episode's pending snapshot", async () => {
@@ -1133,9 +1128,9 @@ describe("usePlainTerminalAuthority integration", () => {
       await waitFor(() =>
         expect(rendered.result.current.terminals).toHaveLength(0),
       );
-      expect(presentationRefsRemain()).toBe(true);
-      expect(epicRemove).not.toHaveBeenCalled();
-      expect(landingRemove).not.toHaveBeenCalled();
+      expect(presentationRefsRemain()).toBe(false);
+      expect(epicRemove).toHaveBeenCalledTimes(1);
+      expect(landingRemove).toHaveBeenCalledTimes(1);
     },
   );
 
