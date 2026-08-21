@@ -150,6 +150,7 @@ describe("nextHandoffTransition", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(handoff, ctx)).toEqual({
@@ -169,6 +170,7 @@ describe("nextHandoffTransition", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(handoff, ctx)).toEqual({
@@ -184,6 +186,7 @@ describe("nextHandoffTransition", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(null, ctx)).toEqual({

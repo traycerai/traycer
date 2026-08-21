@@ -576,6 +576,36 @@ describe("content recovery classification", () => {
     );
   });
 
+  // `-IfOW`: the native exemption was unconditional because the editor holds a
+  // native command at the leading position - but `isLegalSlashChip` asks
+  // `leadingTokenBefore`, which is DOCUMENT-WIDE, so a native command as the
+  // first token inside a leading blockquote is legal. The editor's "leading"
+  // and the raw converter's are different questions, and only the converter's
+  // decides whether a copy-back rebuilds the chip.
+  it("counts a native command inside a leading blockquote as a loss", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "slashCommand",
+                  attrs: { kind: "slash-command", name: "compact" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(report.get("command")).toBe(1);
+  });
+
   it("reports nothing for a native slash-command chip", () => {
     const report = classifyContentRecovery({
       type: "doc",

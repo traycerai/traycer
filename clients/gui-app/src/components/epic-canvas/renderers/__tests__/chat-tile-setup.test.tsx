@@ -46,13 +46,14 @@ const sonnerToastWarning = vi.hoisted(() =>
 const sonnerToastError = vi.hoisted(() => vi.fn());
 const sonnerToast = vi.hoisted(() => vi.fn());
 const sonnerToastSuccess = vi.hoisted(() => vi.fn());
+const sonnerToastDismiss = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({
   toast: Object.assign(sonnerToast, {
     warning: sonnerToastWarning,
     error: sonnerToastError,
     success: sonnerToastSuccess,
-    dismiss: vi.fn(),
+    dismiss: sonnerToastDismiss,
   }),
   __esModule: true,
 }));
@@ -76,6 +77,11 @@ import {
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
+import {
+  dismissRetainedDraftToasts,
+  resetRetainedDraftToastsForTests,
+  retainedDraftToastCountForTests,
+} from "@/lib/toast/retained-draft-toasts";
 
 const EPIC_ID = "epic-x";
 const CHAT_ID = "chat-x";
@@ -215,6 +221,8 @@ beforeEach(() => {
   sonnerToastWarning.mockReturnValue("warning-toast");
   sonnerToastError.mockReset();
   sonnerToastSuccess.mockReset();
+  sonnerToastDismiss.mockReset();
+  resetRetainedDraftToastsForTests();
   useComposerDraftStore.setState({ drafts: {} });
   useDesktopDialogStore.setState({
     activeDialog: null,
@@ -1074,6 +1082,71 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning.mock.lastCall?.[1]).toMatchObject({
       duration: Number.POSITIVE_INFINITY,
     });
+  });
+
+  // `-IfOj`: a toast with NO lifetime needs an owner. The app-level
+  // `<Toaster />` is mounted outside the auth-dependent tree, so an infinite
+  // last-copy toast survives sign-out and user-switch - and its body is the
+  // previous account's full draft, readable by whoever signs in next on a
+  // shared desktop.
+  it("hands a retained draft toast to the identity boundary", () => {
+    resetRetainedDraftToastsForTests();
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message: "A message was not recorded. the draft nobody has any more",
+          severity: "warning",
+          clientActionId: "send-retained-1",
+        },
+      });
+    });
+
+    expect(retainedDraftToastCountForTests()).toBe(1);
+
+    dismissRetainedDraftToasts();
+
+    expect(sonnerToastDismiss).toHaveBeenCalledWith("warning-toast");
+    expect(retainedDraftToastCountForTests()).toBe(0);
+  });
+
+  // ...and ONLY those. The dismissal runs beside app-update and
+  // worktree-delete toasts that own their own lifecycles, so tracking an
+  // ordinary notice here would let an identity change reach through and take
+  // down toasts this module never minted.
+  it("does not hand ordinary notices to the identity boundary", () => {
+    resetRetainedDraftToastsForTests();
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "INTERVIEW_NOT_PENDING",
+          message: "The interview request is no longer pending.",
+          severity: "warning",
+          clientActionId: "interview-9",
+        },
+      });
+    });
+
+    expect(sonnerToastWarning).toHaveBeenCalled();
+    expect(retainedDraftToastCountForTests()).toBe(0);
   });
 
   // `-CbBV`: the report affordance must not destroy what it reports about.

@@ -2434,12 +2434,19 @@ describe("<ChatTile />", () => {
         },
       ],
     });
-    expect(
-      Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
-    ).toMatchObject({
-      status: "failed",
-      failureReason: "Only the agent owner can perform this action.",
-    });
+    const failed = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(failed).toMatchObject({ status: "failed" });
+    // CONTAINS, not equals. `failureReason` carries the restoration's reason,
+    // which is a COMPOSED statement - the host's sentence plus whatever
+    // qualifications the send inherited (drift, delivery, worktree). Its exact
+    // text is owned by `chat-queue-reconciler` and asserted there; pinning the
+    // whole string here made this tile test fail for a qualification firing
+    // correctly one layer down.
+    expect(failed.failureReason).toContain(
+      "Only the agent owner can perform this action.",
+    );
   });
 
   it("does not send an initial handoff while the chat opens read-only", async () => {

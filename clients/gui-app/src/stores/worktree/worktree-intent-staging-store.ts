@@ -604,6 +604,51 @@ export function worktreeIntentWasSweptMidDispatch(
   );
 }
 
+/**
+ * Split a hand-back into what a mid-dispatch sweep took and what it left.
+ *
+ * `WorktreeIntent` permits one entry PER WORKSPACE FOLDER, so a multi-repo
+ * staging is several independent bindings that happen to travel together.
+ * Answering "was this swept" for the whole intent - which
+ * {@link worktreeIntentWasSweptMidDispatch} does, and must, for the yes/no
+ * question - made one removed worktree forfeit every surviving folder's
+ * binding, and then told the user "its staged worktree no longer exists" as
+ * though there had been one. The ordinary purge loop has always filtered
+ * per entry; this is the same granularity for the hand-back.
+ *
+ * Both halves are returned because the founding invariant is now per ENTRY:
+ * each binding is either restored or stated, and a partial sweep produces one
+ * of each from a single intent. `null` on either side means that half is
+ * empty - a `WorktreeIntent` with no entries is not a thing the rest of the
+ * system expects.
+ */
+export interface SweptIntentPartition {
+  readonly survivors: WorktreeIntent | null;
+  readonly swept: WorktreeIntent | null;
+}
+
+export function partitionSweptIntent(
+  key: WorktreeStagingKey,
+  intent: WorktreeIntent,
+): SweptIntentPartition {
+  const swept =
+    useWorktreeIntentStagingStore.getState().sweptRefsByKey[
+      worktreeStagingKeyString(key)
+    ];
+  if (swept === undefined) return { survivors: intent, swept: null };
+  const gone = intent.entries.filter((entry) =>
+    worktreeFolderIntentReferencesRemoved(entry, swept),
+  );
+  if (gone.length === 0) return { survivors: intent, swept: null };
+  const kept = intent.entries.filter(
+    (entry) => !worktreeFolderIntentReferencesRemoved(entry, swept),
+  );
+  return {
+    survivors: kept.length === 0 ? null : { entries: kept },
+    swept: { entries: gone },
+  };
+}
+
 /** Shared by the mark and its swept-refs companion - one lifetime, one drop. */
 function withoutDispatchMark<T>(
   marks: Readonly<Record<string, T | undefined>>,

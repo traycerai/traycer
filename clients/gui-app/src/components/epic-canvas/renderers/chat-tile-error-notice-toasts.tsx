@@ -9,7 +9,14 @@ import {
   type DeliveredNoticeTracker,
 } from "@/stores/chats/chat-session-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { noticeCarriesOnlyCopy } from "@/stores/chats/chat-queue-reconciler";
+import {
+  forgetRetainedDraftToast,
+  rememberRetainedDraftToast,
+} from "@/lib/toast/retained-draft-toasts";
+import {
+  noticeCarriesOnlyCopy,
+  noticeMustSurviveUnfocus,
+} from "@/stores/chats/chat-queue-reconciler";
 import {
   createRetainingReportAction,
   reportableErrorToast,
@@ -48,7 +55,9 @@ export function ChatTileErrorNoticeToasts(
     // than rely on its severity.
     handle.store.getState().errorNotices.forEach((notice) => {
       if (!rememberErrorNotice(notice, tracker)) return;
-      if (notice.severity !== "error" && !noticeCarriesOnlyCopy(notice)) return;
+      if (notice.severity !== "error" && !noticeMustSurviveUnfocus(notice)) {
+        return;
+      }
       showErrorNoticeToast(notice);
     });
 
@@ -118,20 +127,36 @@ function showErrorNoticeToast(notice: ChatErrorNotice): void {
   // reporting about: the report draft does not carry the notice body, and
   // `rememberErrorNotice` has already retained this id so nothing replays it.
   // See `createRetainingReportAction`.
-  const options: ExternalToast | undefined = noticeCarriesOnlyCopy(notice)
+  //
+  // A toast with no lifetime needs an owner: the app-level `<Toaster />` sits
+  // outside the auth-dependent tree, so without one this outlives sign-out and
+  // shows the previous account's draft to the next person on the machine. The
+  // id is registered so the identity boundary can take it down, and dropped
+  // again when the toast goes on its own.
+  const retained = noticeCarriesOnlyCopy(notice);
+  const options: ExternalToast | undefined = retained
     ? {
         duration: Number.POSITIVE_INFINITY,
         cancel: null,
         action: createRetainingReportAction(CHAT_ACTION_REPORT_CONTEXT),
+        onDismiss: (shown) => forgetRetainedDraftToast(shown.id),
+        onAutoClose: (shown) => forgetRetainedDraftToast(shown.id),
       }
     : undefined;
-  if (notice.severity === "error") {
-    reportableErrorToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
-    return;
+  const shownId = showToastForSeverity(notice.severity, message, options);
+  if (retained) rememberRetainedDraftToast(shownId);
+}
+
+function showToastForSeverity(
+  severity: ChatErrorNotice["severity"],
+  message: ReactNode,
+  options: ExternalToast | undefined,
+): string | number {
+  if (severity === "error") {
+    return reportableErrorToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
   }
-  if (notice.severity === "warning") {
-    reportableWarningToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
-    return;
+  if (severity === "warning") {
+    return reportableWarningToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
   }
-  toast(message, options);
+  return toast(message, options);
 }

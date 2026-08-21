@@ -8,9 +8,11 @@ import {
   reconcileTurnSettled,
   restoredSendQualifications,
   sweepStalePendingActions,
+  SEND_RESTORED_NOTICE_CODE,
   turnSettledFromStatus,
   withoutPendingAction,
-  WORKTREE_GONE_STATEMENT,
+  worktreeSweptStatement,
+  type SweptRestoreOutcome,
   WORKTREE_SUPERSEDED_STATEMENT,
   type WorktreeSweptPredicate,
 } from "@/stores/chats/chat-queue-reconciler";
@@ -45,6 +47,7 @@ import {
   stagedWorktreeIntentAwaitsDispatchFrom,
   stagedWorktreeIntentAwaitsDispatchOutcome,
   worktreeIntentWasSweptMidDispatch,
+  partitionSweptIntent,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
@@ -225,6 +228,20 @@ export interface FailedSendRestorationState {
   readonly clientActionId: string;
   readonly content: JsonContent;
   readonly reason: string;
+  /**
+   * Whether the path that created this slot ALREADY said the reason on a
+   * surface the user can see.
+   *
+   * Each restored prompt's account is spoken exactly once. The rejection path
+   * owns an `errorNotice` and states things there - that is deliberate, and
+   * why it is `true` for that path. The two reconcile passes have no such
+   * surface, so `ackFailedSendRestoration` speaks for them when the draft
+   * lands in the composer.
+   *
+   * Without this the rejection path would say the same sentence twice, once
+   * bare from its own notice and once qualified from the ack.
+   */
+  readonly stated: boolean;
 }
 
 export interface LiveAssistantMessage {
@@ -967,7 +984,11 @@ function rejectionNotice(input: {
   readonly pending: PendingChatAction | null;
   readonly displaced: boolean;
   readonly worktreeGone: boolean;
+  /** Which sentence the sweep owes - see {@link worktreeSweptStatement}. */
+  readonly sweptOutcome: SweptRestoreOutcome;
   readonly currentSettings: ChatRunSettings | null;
+  /** See the call site: the winner's drift, said on this path's own surface. */
+  readonly restoredQualifications: string;
 }): ChatErrorNotice {
   const reason = input.frame.reason ?? "Action rejected.";
   const pending = input.pending;
@@ -996,12 +1017,64 @@ function rejectionNotice(input: {
   }
   return {
     code: input.frame.code ?? "ACTION_REJECTED",
-    message: input.worktreeGone
-      ? `${reason} ${WORKTREE_GONE_STATEMENT}`
-      : reason,
+    message: `${
+      input.worktreeGone
+        ? `${reason} ${worktreeSweptStatement(input.sweptOutcome)}`
+        : reason
+    }${input.restoredQualifications}`,
     severity: "warning",
     clientActionId: input.frame.clientActionId,
   };
+}
+
+/**
+ * The winner's drift, computed once so the restoration reason and this path's
+ * own notice cannot come to disagree about what changed.
+ */
+/**
+ * The slot a rejected SEND claims, or `null` when this rejection claims none.
+ *
+ * Third winner path, same obligation: the send whose prompt is going back to
+ * the composer is the one about to be resent, so it is the one that has to
+ * hear what changed underneath it. Worktree first, then the run
+ * qualifications - the same clause order the statement path uses.
+ */
+function rejectionRestoration(input: {
+  readonly state: ChatSessionState;
+  readonly pending: PendingChatAction | null;
+  readonly frame: {
+    readonly clientActionId: string;
+    readonly reason: string | null;
+  };
+  readonly superseded: boolean;
+}): FailedSendRestorationState | null {
+  const { state, pending, frame } = input;
+  if (state.failedSendRestoration !== null) return null;
+  if (pending?.action !== "send" || pending.restoreContent === null) {
+    return null;
+  }
+  return {
+    clientActionId: frame.clientActionId,
+    content: pending.restoreContent,
+    reason: `${frame.reason ?? "Message was not accepted."}${
+      input.superseded ? ` ${WORKTREE_SUPERSEDED_STATEMENT}` : ""
+    }${rejectionQualifications(state, pending)}`,
+    // This path owns a notice and says it there, so the ack stays quiet.
+    stated: true,
+  };
+}
+
+function rejectionQualifications(
+  state: ChatSessionState,
+  pending: PendingChatAction,
+): string {
+  return restoredSendQualifications({
+    sentSettings: pending.settings,
+    currentSettings: state.currentComposerSettings,
+    sentAccountContext: pending.accountContext,
+    currentAccountContext: useAccountContextStore.getState().accountContext,
+    sentDeliveryPolicy: pending.deliveryPolicy,
+  });
 }
 
 /**
@@ -1021,16 +1094,17 @@ function appendWorktreeGoneToRestoration(
   set: (
     updater: (state: ChatSessionState) => Partial<ChatSessionState>,
   ) => void,
-  worktreeGone: boolean,
+  outcome: SweptRestoreOutcome,
 ): void {
-  if (!worktreeGone) return;
+  const statement = worktreeSweptStatement(outcome);
+  if (statement.length === 0) return;
   set((state) =>
     state.failedSendRestoration === null
       ? {}
       : {
           failedSendRestoration: {
             ...state.failedSendRestoration,
-            reason: `${state.failedSendRestoration.reason} ${WORKTREE_GONE_STATEMENT}`,
+            reason: `${state.failedSendRestoration.reason} ${statement}`,
           },
         },
   );
@@ -1072,21 +1146,16 @@ function restoreOneWorktreeIntent(
    * ask - see {@link restorationSlotHeldByOther}.
    */
   restoration: FailedSendRestorationState | null,
-): boolean {
+): SweptRestoreOutcome {
   if (restoredPrompt !== null) {
+    const outcome = sweptRestoreOutcome(restoredPrompt, stagingKey);
     restoreStagedWorktreeIntent(restoredPrompt, stagingKey);
     // A prompt that HAD a binding and did not get it back because a sweep ran
     // mid-flight comes back unbound through no decision of the user's - the
     // one refusal worth saying out loud. A refusal caused by their own newer
     // pick is not: they chose it, and claiming their worktree was deleted
     // would be a lie.
-    return (
-      restoredPrompt.restoreWorktreeIntent !== null &&
-      worktreeIntentWasSweptMidDispatch(
-        stagingKey,
-        restoredPrompt.restoreWorktreeIntent,
-      )
-    );
+    return outcome;
   }
   // OWNERSHIP, not merely "a consumption is outstanding". The mark names
   // whichever dispatch consumed last, and that dispatch may have gone on to be
@@ -1112,7 +1181,23 @@ function restoreOneWorktreeIntent(
       ),
   );
   restoreStagedWorktreeIntent(owed ?? null, stagingKey);
-  return false;
+  return "none";
+}
+
+/**
+ * How much of THIS prompt's staged worktree a mid-dispatch sweep took. `all`
+ * only when nothing survived - that is the one case where "it was not
+ * restored" is a true sentence.
+ */
+function sweptRestoreOutcome(
+  source: StagedWorktreeIntentSource,
+  stagingKey: WorktreeStagingKey,
+): SweptRestoreOutcome {
+  const intent = source.restoreWorktreeIntent;
+  if (intent === null) return "none";
+  const { survivors, swept } = partitionSweptIntent(stagingKey, intent);
+  if (swept === null) return "none";
+  return survivors === null ? "all" : "partial";
 }
 
 /**
@@ -1143,14 +1228,18 @@ function restoreStagedWorktreeIntent(
   if (!stagedWorktreeIntentAwaitsDispatchOutcome(stagingKey)) return;
   // Tested against THIS intent, not the mark's entries - the mark describes
   // whichever dispatch consumed last, which need not be this one.
-  if (
-    worktreeIntentWasSweptMidDispatch(stagingKey, source.restoreWorktreeIntent)
-  ) {
-    return;
-  }
-  useWorktreeIntentStagingStore
-    .getState()
-    .setIntent(stagingKey, source.restoreWorktreeIntent);
+  //
+  // PER ENTRY, because a `WorktreeIntent` is one binding per workspace folder
+  // and those are independent. Refusing the whole intent because one folder's
+  // worktree was swept threw away every surviving folder's binding too, and
+  // the survivors then resent against whatever the chat is bound to now -
+  // silently, since the statement spoke of a single missing worktree.
+  const { survivors } = partitionSweptIntent(
+    stagingKey,
+    source.restoreWorktreeIntent,
+  );
+  if (survivors === null) return;
+  useWorktreeIntentStagingStore.getState().setIntent(stagingKey, survivors);
 }
 
 export function createChatSessionStore(
@@ -1768,6 +1857,16 @@ export function createChatSessionStoreWithNotificationDependencies(
             rejectionStagingKey,
             rejectedPending.clientActionId,
           );
+        // Asked BEFORE the hand-back below, because a successful restore
+        // stages the survivors through `setIntent`, and every user-mutation
+        // path - `setIntent` included - drops the mark AND the swept-refs
+        // record alongside it. Reading afterwards finds an empty record and
+        // reports "none", which is how the partial sentence went missing.
+        const rejectionSweptOutcome: SweptRestoreOutcome =
+          rejectedPending === null
+            ? "none"
+            : sweptRestoreOutcome(rejectedPending, rejectionStagingKey);
+        const worktreeGoneForRejection = rejectionSweptOutcome !== "none";
         // Only the dispatch that TOOK the slot may put its pick back. An
         // earlier action's rejection arriving after a later dispatch consumed
         // its own pick would otherwise steal a slot that dispatch still needs,
@@ -1798,13 +1897,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         // errorNotice rather than `failedSendRestoration.reason` - so without
         // this the refusal was silent here while being spoken everywhere else.
         // Still never said for a user's own newer pick: only a sweep.
-        const worktreeGoneForRejection =
-          rejectedPending !== null &&
-          rejectedPending.restoreWorktreeIntent !== null &&
-          worktreeIntentWasSweptMidDispatch(
-            rejectionStagingKey,
-            rejectedPending.restoreWorktreeIntent,
-          );
         // The third way a prompt comes back unbound, and the only one that was
         // silent. `stagedWorktreeIntentAwaitsDispatchOutcome` splits the
         // refusals exactly: it is FALSE when a pick stands in the slot (the
@@ -1884,32 +1976,12 @@ export function createChatSessionStoreWithNotificationDependencies(
             // the composer consumes the first would otherwise leave the
             // earlier (longer-waiting) content unreachable.
             failedSendRestoration:
-              state.failedSendRestoration === null &&
-              pending?.action === "send" &&
-              pending.restoreContent !== null
-                ? {
-                    clientActionId: frame.clientActionId,
-                    content: pending.restoreContent,
-                    // Third winner path, same obligation: the send whose
-                    // prompt is going back to the composer is the one about to
-                    // be resent, so it is the one that has to hear what
-                    // changed underneath it.
-                    // Worktree first, then the run qualifications - the same
-                    // clause order the statement path uses.
-                    reason: `${frame.reason ?? "Message was not accepted."}${
-                      worktreeSupersededForRejection
-                        ? ` ${WORKTREE_SUPERSEDED_STATEMENT}`
-                        : ""
-                    }${restoredSendQualifications({
-                      sentSettings: pending.settings,
-                      currentSettings: state.currentComposerSettings,
-                      sentAccountContext: pending.accountContext,
-                      currentAccountContext:
-                        useAccountContextStore.getState().accountContext,
-                      sentDeliveryPolicy: pending.deliveryPolicy,
-                    })}`,
-                  }
-                : state.failedSendRestoration,
+              rejectionRestoration({
+                state,
+                pending,
+                frame,
+                superseded: worktreeSupersededForRejection,
+              }) ?? state.failedSendRestoration,
             errorNotices: appendErrorNotice(
               state.errorNotices,
               rejectionNotice({
@@ -1919,7 +1991,20 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // landed, so first-writer-wins gave this prompt nothing.
                 displaced: state.failedSendRestoration !== null,
                 worktreeGone: worktreeGoneForRejection,
+                sweptOutcome: rejectionSweptOutcome,
                 currentSettings: state.currentComposerSettings,
+                // The SAME qualifications the restoration reason carries, on
+                // the surface this path speaks through. A rejected send that
+                // WINS the slot is restored, so it never reaches
+                // `unrecoverableSendNotice` (which builds its own) - without
+                // this, the one send whose prompt is about to be resent is the
+                // one told least.
+                restoredQualifications:
+                  state.failedSendRestoration === null &&
+                  pending?.action === "send" &&
+                  pending.restoreContent !== null
+                    ? rejectionQualifications(state, pending)
+                    : "",
               }),
             ),
           };
@@ -3436,11 +3521,28 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
       },
       ackFailedSendRestoration: (clientActionId) => {
-        set((state) =>
-          state.failedSendRestoration?.clientActionId === clientActionId
-            ? { failedSendRestoration: null }
-            : {},
-        );
+        set((state) => {
+          const restoration = state.failedSendRestoration;
+          if (restoration?.clientActionId !== clientActionId) return {};
+          // Spoken exactly once. The rejection path already said it on its own
+          // notice, so this would be the second telling of one sentence.
+          if (restoration.stated) return { failedSendRestoration: null };
+          // The draft has just landed in the composer, so this is the moment
+          // its account is worth reading - and the only moment both handoff
+          // branches share. `markFailedByAction` does not ack, but it flips
+          // the handoff to `failed`, which sends the very next transition
+          // down `restoreAndAckFailed`; so every restored prompt passes
+          // through here exactly once.
+          return {
+            failedSendRestoration: null,
+            errorNotices: appendErrorNotice(state.errorNotices, {
+              code: SEND_RESTORED_NOTICE_CODE,
+              message: restoration.reason,
+              severity: "warning",
+              clientActionId,
+            }),
+          };
+        });
       },
       takeSetupFailedRestoration: (messageId) => {
         const state = get();

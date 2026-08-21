@@ -1890,6 +1890,170 @@ describe("createChatSessionStore", () => {
     );
   });
 
+  // `-IfOZ`, at the seam that matters. A `WorktreeIntent` is one binding PER
+  // WORKSPACE FOLDER, and those are independent - so a sweep that takes one
+  // folder's worktree must not forfeit the others. The all-or-nothing refusal
+  // handed the prompt back with NO binding at all and said "its staged
+  // worktree no longer exists", and the surviving folders then resent against
+  // whatever the chat is bound to now.
+  it("restores the folders a partial sweep left alone", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const doomed: WorktreeIntent["entries"][number] = {
+      kind: "worktree",
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+      scripts: null,
+      branch: {
+        type: "new",
+        name: "feat/doomed",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+    };
+    const survivor: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/other-repo",
+      repoIdentifier: null,
+      isPrimary: false,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [doomed, survivor] });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // Only the first folder's worktree is swept while the send is in flight.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+
+    rejectLastAction(harness, "Host refused the send.");
+
+    // The survivor comes back; the swept folder does not.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [survivor] });
+    // And the sentence matches what actually happened. "It was not restored"
+    // would now be false in front of a folder that WAS - which is exactly the
+    // kind of confidently-wrong statement this family exists to avoid.
+    const sent = harness.sent[0];
+    if (sent.kind !== "send") throw new Error("Expected a send frame");
+    const notice = noticeFor(harness, sent.clientActionId);
+    expect(notice.message).toContain("Some of its staged worktrees");
+    expect(notice.message).not.toContain("so it was not restored");
+  });
+
+  // `-IfOo`: the qualifications were written to `failedSendRestoration.reason`
+  // and read by NOBODY. `nextHandoffTransition` is that field's only consumer
+  // and both branches are dead ends - `markFailedByAction` routes it to
+  // `InitialChatHandoff.failureReason`, which no component renders, and
+  // `restoreAndAckFailed` drops it. The ack is where the draft lands in the
+  // composer, and the one moment both branches share, so it speaks there.
+  it("states why a restored prompt came back when the composer takes it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+
+    // The chat's model moves while the send is in flight, so the restored
+    // prompt would resend under something else.
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const reason =
+      harness.handle.store.getState().failedSendRestoration?.reason ?? "";
+    expect(reason).toContain("model");
+
+    // Nothing has been said yet - the draft is still in the slot.
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter((notice) => notice.code === "SEND_RESTORED"),
+    ).toEqual([]);
+
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.filter((notice) => notice.code === "SEND_RESTORED");
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toBe(reason);
+    expect(stated[0].severity).toBe("warning");
+  });
+
+  // Spoken exactly ONCE. The rejection path owns an `errorNotice` and states
+  // things there, so the ack must not repeat the same sentence.
+  it("does not repeat a rejection's account when the composer takes the draft", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    // The rejection said it on its own surface, qualifications included.
+    const spoken = noticeFor(harness, rejected);
+    expect(spoken.message).toContain("Host refused the send.");
+    expect(spoken.message).toContain("model");
+
+    harness.handle.store.getState().ackFailedSendRestoration(rejected);
+
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.filter((notice) => notice.code === "SEND_RESTORED"),
+    ).toEqual([]);
+  });
+
   // The silence rule's premise is "the user can see why". It holds when their
   // own pick stands in the slot, so a statement would narrate their own action
   // back at them - and this is the case that must NOT start speaking.
@@ -2233,6 +2397,7 @@ describe("createChatSessionStore", () => {
       clientActionId: frame.clientActionId,
       content: CONTENT,
       reason: "Message was not confirmed after reconnect.",
+      stated: false,
     });
   });
 
@@ -2285,6 +2450,7 @@ describe("createChatSessionStore", () => {
       clientActionId: first.clientActionId,
       content: CONTENT,
       reason: "Message was not confirmed after reconnect.",
+      stated: false,
     });
     // The displaced send is stated, and the statement carries its text - the
     // row is gone, so nothing else holds it.
@@ -4233,6 +4399,7 @@ describe("createChatSessionStore", () => {
       clientActionId: stranded,
       content: CONTENT,
       reason: "The message was not recorded before the turn stopped.",
+      stated: false,
     });
     expect(state.errorNotices).toEqual([]);
   });
@@ -9522,6 +9689,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       clientActionId: frame.clientActionId,
       content: CONTENT,
       reason: "The message was not recorded before the turn stopped.",
+      stated: false,
     });
   });
 
@@ -9626,6 +9794,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       clientActionId: frame.clientActionId,
       content: CONTENT,
       reason: "The message was not recorded before the turn stopped.",
+      stated: false,
     });
   });
 

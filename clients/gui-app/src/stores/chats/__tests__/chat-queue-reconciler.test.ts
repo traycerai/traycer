@@ -439,6 +439,7 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-0",
         content: CONTENT,
         reason: "Prior failure",
+        stated: false,
       };
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileSnapshotInput = {
@@ -997,6 +998,7 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "The message was not recorded before the turn stopped.",
+        stated: false,
       });
     });
 
@@ -1077,6 +1079,7 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-2",
         content: CONTENT_2,
         reason: "The message was not recorded before the turn stopped.",
+        stated: false,
       });
     });
 
@@ -1094,6 +1097,7 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-0",
         content: CONTENT_2,
         reason: "Message was not accepted.",
+        stated: false,
       };
       const result = reconcileTurnSettled(
         true,
@@ -1130,6 +1134,7 @@ describe("chat-queue-reconciler", () => {
             clientActionId: "action-0",
             content: CONTENT_2,
             reason: "Message was not accepted.",
+            stated: false,
           },
         }),
       );

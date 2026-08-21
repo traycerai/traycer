@@ -214,12 +214,20 @@ function lostSlashChip(
 ): boolean {
   if (node.type !== "slashCommand") return false;
   const kind = node.attrs?.kind;
-  // A native command cannot BE anywhere but leading - the editor's guard holds
-  // it there - so its `/name` always round-trips.
-  if (kind === "slash-command") return false;
-  // A skill is legal anywhere (`isLegalSlashChip` exempts it), and only a
-  // LEADING one is rebuilt by `parseLeadingSlashCommand`.
-  if (kind === "skill") return node !== leadingNode;
+  // ONE rule for both kinds, because the thing that decides is the same for
+  // both: can the raw converter rebuild the chip from where the recovery text
+  // puts it.
+  //
+  // The native exemption used to be unconditional on the grounds that the
+  // editor holds a native command at the leading position anyway. It does -
+  // but `isLegalSlashChip` asks `leadingTokenBefore`, which is DOCUMENT-WIDE,
+  // so a native command as the first token inside a leading blockquote or
+  // ordered item is perfectly legal. The editor's "leading" and the
+  // converter's are different questions, and only the converter's decides
+  // whether the chip survives a copy-back.
+  if (kind === "slash-command" || kind === "skill") {
+    return node !== leadingNode;
+  }
   // FAIL CLOSED. An unrecognised or missing kind gets no assumption of
   // round-tripping: the same rule the node and mark classifications follow,
   // and the one that would have caught `"command"` - a kind this module once

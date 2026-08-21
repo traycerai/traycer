@@ -12,6 +12,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import {
   stagedWorktreeIntentAwaitsDispatchOutcome,
   worktreeIntentWasSweptMidDispatch,
+  partitionSweptIntent,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
@@ -512,6 +513,62 @@ describe("purge and an in-flight dispatch", () => {
         entries: [existingBranchIntent("traycer/gone-branch")],
       }),
     ).toBe(false);
+  });
+
+  // `-IfOZ`: a `WorktreeIntent` is one binding PER WORKSPACE FOLDER, and those
+  // are independent. The any-match predicate answers the yes/no question
+  // correctly, but using it to decide the hand-back made one removed worktree
+  // forfeit every surviving folder's binding - and then said "its staged
+  // worktree no longer exists", as though there had been one. The ordinary
+  // purge loop has always filtered per entry.
+  it("keeps the surviving folders when a sweep takes only one of them", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const doomed = existingBranchIntent("traycer/gone-branch");
+    const survivor: WorktreeFolderIntent = {
+      kind: "local",
+      workspacePath: "/other-repo",
+      repoIdentifier: null,
+      isPrimary: false,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [doomed, survivor] });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    const partition = partitionSweptIntent(key, {
+      entries: [doomed, survivor],
+    });
+    expect(partition.swept?.entries).toEqual([doomed]);
+    expect(partition.survivors?.entries).toEqual([survivor]);
+    // The whole-intent question still answers yes - it is the right answer to
+    // a different question, and the statement paths still need it.
+    expect(
+      worktreeIntentWasSweptMidDispatch(key, { entries: [doomed, survivor] }),
+    ).toBe(true);
+  });
+
+  it("reports no survivors when the sweep takes every folder", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const doomed = existingBranchIntent("traycer/gone-branch");
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [doomed],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    const partition = partitionSweptIntent(key, { entries: [doomed] });
+    expect(partition.survivors).toBeNull();
+    expect(partition.swept?.entries).toEqual([doomed]);
   });
 
   // The `slotSegment !== ""` half of the host guard, which nothing exercised:

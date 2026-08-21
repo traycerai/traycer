@@ -36,6 +36,40 @@ import type {
 export const SEND_NOT_RECORDED_NOTICE_CODE = "SEND_NOT_RECORDED";
 
 /**
+ * Notice code for the send that WON the restoration slot: its text is safely
+ * back in the composer, and this carries the account of why it came back and
+ * what changed underneath it.
+ *
+ * The qualifications were being written to `failedSendRestoration.reason` and
+ * read by nobody. `nextHandoffTransition` is that field's only consumer, and
+ * both of its branches are dead ends for it - `markFailedByAction` routes it
+ * to `InitialChatHandoff.failureReason`, which no component renders, and
+ * `restoreAndAckFailed` drops it. So the composer surface those statements
+ * were written for did not exist; this is it.
+ *
+ * NOT a last-copy notice. {@link noticeCarriesOnlyCopy} means "the message
+ * body IS the draft", which buys never-evict and never-expire; here the draft
+ * is in the composer where the user can see it, and claiming otherwise would
+ * pin a permanent toast over text that is not at risk.
+ */
+export const SEND_RESTORED_NOTICE_CODE = "SEND_RESTORED";
+
+/**
+ * Whether a notice must survive the pane being unfocused when it arrived.
+ *
+ * `ChatTileErrorNoticeToasts` replays `error` severity on mount and skips
+ * `warning` as stale noise. Both of these are warnings that are NOT noise: one
+ * carries the only copy of a draft, the other says what a resend sitting in
+ * the composer will now do differently. A reconnect - the moment both fire -
+ * is exactly when the user is likely to be looking somewhere else.
+ */
+export function noticeMustSurviveUnfocus(notice: ChatErrorNotice): boolean {
+  return (
+    noticeCarriesOnlyCopy(notice) || notice.code === SEND_RESTORED_NOTICE_CODE
+  );
+}
+
+/**
  * Whether this notice inlines content nothing else holds any more. Both passes
  * settle the send and drop its row, so the message body in the notice IS the
  * draft - not a pointer to one.
@@ -196,6 +230,37 @@ export type ReconcileSnapshotPatch = {
  */
 export const WORKTREE_GONE_STATEMENT =
   "Its staged worktree no longer exists, so it was not restored.";
+
+/**
+ * The PARTIAL form of the sentence above, and the reason the flag driving them
+ * is three-valued rather than a boolean.
+ *
+ * A `WorktreeIntent` holds one binding per workspace folder, so a sweep can
+ * take some and leave others. Once the survivors are restored, "it was not
+ * restored" is simply false - the user is looking at folders that came back,
+ * under a sentence saying nothing did. Saying the accurate thing costs one
+ * more constant; saying the inaccurate one costs the credibility of every
+ * other statement in this family.
+ */
+export const WORKTREE_PARTLY_GONE_STATEMENT =
+  "Some of its staged worktrees no longer exist; the remaining folders were restored, so check the binding before resending.";
+
+/**
+ * How much of a restored prompt's staged worktree survived the trip.
+ *
+ * Not a boolean, because "was anything swept" and "is the prompt now unbound"
+ * stopped being the same question when the hand-back began filtering per
+ * entry.
+ */
+export type SweptRestoreOutcome = "none" | "partial" | "all";
+
+/** The sentence an outcome owes, or `""` when nothing was lost. */
+export function worktreeSweptStatement(outcome: SweptRestoreOutcome): string {
+  if (outcome === "none") return "";
+  return outcome === "all"
+    ? WORKTREE_GONE_STATEMENT
+    : WORKTREE_PARTLY_GONE_STATEMENT;
+}
 
 /**
  * The OTHER reason a prompt can come back unbound, and a different fact from
@@ -846,6 +911,8 @@ export function reconcileSnapshotChange(
               sentDeliveryPolicy: pending.deliveryPolicy,
             },
           )}`,
+          // This pass has no surface of its own; the ack speaks for it.
+          stated: false,
         },
         // The prompt goes back to the composer, so its worktree goes back to
         // the staging slot with it.
@@ -995,6 +1062,7 @@ export function reconcileTurnSettled(
                 sentDeliveryPolicy: restorable.deliveryPolicy,
               },
             )}`,
+            stated: false,
           },
     // Only when THIS pass handed the prompt back - an already-occupied slot
     // restored nothing here, so there is no binding to re-stage with it.
