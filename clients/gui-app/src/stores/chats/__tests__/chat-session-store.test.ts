@@ -2631,6 +2631,129 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("staged worktree no longer exists");
   });
 
+  // `-CbBM`: the FOURTH surface. The send is accepted, its worktree is swept,
+  // and a LIVE `turnStateChanged` settles the turn before `messageAccepted`.
+  // The re-stage refuses correctly, but this path reached the refusal through
+  // `restoreStagedWorktreeIntent` directly - never computing the flag - so the
+  // prompt came back unbound with a reason that said only that it was not
+  // recorded. Same rule, fourth surface.
+  it("says the worktree is gone when a live turn settles the send", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/doomed"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // Accepted, so the action leaves `pendingActions` while its optimistic row
+    // waits for a `messageAccepted` that never arrives.
+    acceptLastAction(harness);
+    // The worktree it was staged for is swept while it waits.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    // The prompt came back...
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    // ...and the slot stayed empty, because the re-stage refused.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+    // So the reason has to say why.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.reason,
+    ).toContain("staged worktree no longer exists");
+  });
+
+  // `-HVoV`: the displaced-rejection branch. Another rejected send already
+  // holds the restoration slot, so this one is STATED rather than restored -
+  // and the early return into the shared statement builder bypassed the only
+  // branch that reported `worktreeGone`. The statement then told the user to
+  // re-pick a worktree that had been deleted underneath them.
+  it("does not tell a displaced rejection to re-pick a deleted worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // The first send is rejected and claims the restoration slot.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the first send.");
+
+    // The second carries a staged worktree that is swept while it is in
+    // flight, and is rejected into an occupied slot - so it is displaced.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/doomed"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents("host-a", {
+        worktreePaths: new Set<string>(),
+        branches: [{ repoIdentifier: null, branch: "main" }],
+      });
+    const displaced = rejectLastAction(harness, "Host refused the second.");
+
+    const notice = noticeFor(harness, displaced);
+    // It still carries the only copy of the text.
+    expect(notice.message).toContain("World");
+    // But it must not send the user after a worktree that is gone.
+    expect(notice.message).toContain("no longer exists");
+    expect(notice.message).not.toContain("re-pick that before resending");
+  });
+
   // R13 `-B5UX`: the founding invariant's last uncovered surface. Two sends
   // rejected together - the first claims the restoration slot, the second's
   // optimistic row is dropped, and the rejection path appended only the host's

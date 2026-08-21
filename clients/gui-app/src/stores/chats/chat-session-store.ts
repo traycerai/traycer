@@ -9,6 +9,8 @@ import {
   sweepStalePendingActions,
   turnSettledFromStatus,
   withoutPendingAction,
+  WORKTREE_GONE_STATEMENT,
+  type WorktreeSweptPredicate,
 } from "@/stores/chats/chat-queue-reconciler";
 import {
   appendOptimisticQueuedItem,
@@ -978,6 +980,11 @@ function rejectionNotice(input: {
       content: pending.restoreContent,
       circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
       worktreeIntent: pending.restoreWorktreeIntent,
+      // The fourth surface, and the one this early return used to skip: a
+      // displaced send is STATED, and the statement names the branch it was
+      // staged for. Naming a swept one as re-pickable sends the user after a
+      // worktree that is gone.
+      worktreeGone: input.worktreeGone,
       sentSettings: pending.settings,
       currentSettings: input.currentSettings,
       sentAccountContext: pending.accountContext,
@@ -988,11 +995,43 @@ function rejectionNotice(input: {
   return {
     code: input.frame.code ?? "ACTION_REJECTED",
     message: input.worktreeGone
-      ? `${reason} Its staged worktree no longer exists, so it was not restored.`
+      ? `${reason} ${WORKTREE_GONE_STATEMENT}`
       : reason,
     severity: "warning",
     clientActionId: input.frame.clientActionId,
   };
+}
+
+/**
+ * Say, on the composer's own surface, that a restored prompt came back without
+ * the worktree it was staged for.
+ *
+ * The two passes that hand a prompt to the composer - the snapshot pass and
+ * the settled-turn pass - both owe this, and only the first had it. The
+ * settled-turn pass reached its refusal through `restoreStagedWorktreeIntent`
+ * directly, so it never had the flag to report; routing it through
+ * {@link restoreOneWorktreeIntent} is what gives it one.
+ *
+ * A no-op when nothing was refused, and when this pass restored nothing - the
+ * reason belongs to whichever prompt actually came back.
+ */
+function appendWorktreeGoneToRestoration(
+  set: (
+    updater: (state: ChatSessionState) => Partial<ChatSessionState>,
+  ) => void,
+  worktreeGone: boolean,
+): void {
+  if (!worktreeGone) return;
+  set((state) =>
+    state.failedSendRestoration === null
+      ? {}
+      : {
+          failedSendRestoration: {
+            ...state.failedSendRestoration,
+            reason: `${state.failedSendRestoration.reason} ${WORKTREE_GONE_STATEMENT}`,
+          },
+        },
+  );
 }
 
 function restoreOneWorktreeIntent(
@@ -1124,6 +1163,20 @@ export function createChatSessionStoreWithNotificationDependencies(
       Array.from(surfaceVisibility.values()).some((value) => value);
     flushLease.setVisible(visible);
   };
+
+  // This chat's staging slot, and the question both reconcile passes have to
+  // be able to ask about it. Bound once here because the passes are pure: they
+  // STATE displaced sends, and a statement that names a swept worktree as
+  // re-pickable is the same defect the restore paths already guard against.
+  const ownerStagingKey: WorktreeStagingKey = {
+    surface: "owner",
+    hostId: options.hostId,
+    epicId: options.epicId,
+    ownerKind: "chat",
+    ownerId: options.chatId,
+  };
+  const worktreeWasSwept: WorktreeSweptPredicate = (intent) =>
+    worktreeIntentWasSweptMidDispatch(ownerStagingKey, intent);
 
   const canSendAction = (get: () => ChatSessionState): boolean => {
     if (disposed) return false;
@@ -1441,6 +1494,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             currentSettings: nextComposerSettings,
             currentAccountContext:
               useAccountContextStore.getState().accountContext,
+            worktreeWasSwept,
             nowMs: now,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their
@@ -1464,6 +1518,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               currentSettings: nextComposerSettings,
               currentAccountContext:
                 useAccountContextStore.getState().accountContext,
+              worktreeWasSwept,
             },
           );
           restoredWorktreeIntentForSnapshot =
@@ -1603,18 +1658,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // reason is an existing surface the composer already shows, so this
         // needs no new affordance - only honesty about WHY the worktree the
         // send was staged for is not coming back with it.
-        if (worktreeGoneForSnapshot) {
-          set((state) =>
-            state.failedSendRestoration === null
-              ? {}
-              : {
-                  failedSendRestoration: {
-                    ...state.failedSendRestoration,
-                    reason: `${state.failedSendRestoration.reason} Its staged worktree no longer exists, so it was not restored.`,
-                  },
-                },
-          );
-        }
+        appendWorktreeGoneToRestoration(set, worktreeGoneForSnapshot);
         maybeDispatchPendingBackgroundSessionStop(set, get);
         // This snapshot is authoritative for which interviews are still
         // pending, so any stored draft whose block has left the set is an
@@ -1902,6 +1946,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               currentSettings: state.currentComposerSettings,
               currentAccountContext:
                 useAccountContextStore.getState().accountContext,
+              worktreeWasSwept,
             },
           );
           restoredWorktreeIntentForTurnState =
@@ -1937,13 +1982,21 @@ export function createChatSessionStoreWithNotificationDependencies(
             ...(turnIdChanged ? { liveTurnUsage: null } : {}),
           };
         });
-        restoreStagedWorktreeIntent(restoredWorktreeIntentForTurnState, {
-          surface: "owner",
-          hostId: options.hostId,
-          epicId: options.epicId,
-          ownerKind: "chat",
-          ownerId: options.chatId,
-        });
+        // Routed through the shared decider rather than calling
+        // `restoreStagedWorktreeIntent` directly. With no swept claimants to
+        // consider this restores exactly what the direct call restored - but
+        // it also RETURNS whether the re-stage was refused by a sweep, which
+        // is the fact this path was settling without.
+        appendWorktreeGoneToRestoration(
+          set,
+          restoreOneWorktreeIntent(restoredWorktreeIntentForTurnState, [], {
+            surface: "owner",
+            hostId: options.hostId,
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          }),
+        );
         maybeDispatchPendingBackgroundSessionStop(set, get);
       },
       onBlockDelta: (frame) => {

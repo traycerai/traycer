@@ -321,6 +321,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -345,6 +346,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -366,6 +368,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -392,6 +395,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -420,6 +424,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -445,6 +450,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -477,6 +483,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -500,6 +507,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -532,6 +540,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -553,6 +562,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -611,6 +621,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -649,6 +660,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -682,6 +694,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -714,6 +727,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -779,6 +793,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
+        worktreeWasSwept: () => false,
         nowMs: 5000,
       };
 
@@ -969,6 +984,7 @@ describe("chat-queue-reconciler", () => {
         failedSendRestoration: null,
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
+        worktreeWasSwept: () => false,
         ...overrides,
       };
     }
@@ -1156,6 +1172,7 @@ describe("chat-queue-reconciler", () => {
         content,
         circumstance: "A message was not recorded",
         worktreeIntent: null,
+        worktreeGone: false,
         sentSettings: SETTINGS,
         currentSettings,
         sentAccountContext: null,

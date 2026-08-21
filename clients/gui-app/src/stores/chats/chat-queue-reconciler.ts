@@ -93,8 +93,29 @@ export type ReconcileSnapshotInput = {
   readonly currentSettings: ChatRunSettings | null;
   /** The account a resend would bill - see {@link accountDriftClause}. */
   readonly currentAccountContext: AccountContext | null;
+  /** See {@link WorktreeSweptPredicate}. */
+  readonly worktreeWasSwept: WorktreeSweptPredicate;
   readonly nowMs: number;
 };
+
+/**
+ * Whether a sweep removed this intent's worktree while its dispatch was in
+ * flight.
+ *
+ * Injected rather than read, because the answer lives in the staging store and
+ * both reconcile passes are pure. The passes STATE displaced sends, and a
+ * statement naming a deleted worktree as re-pickable is the same defect the
+ * restore paths already guard - so they have to be able to ask.
+ */
+export type WorktreeSweptPredicate = (intent: WorktreeIntent) => boolean;
+
+/** A send with no staged worktree has none to have lost. */
+function worktreeGoneFor(
+  intent: WorktreeIntent | null,
+  wasSwept: WorktreeSweptPredicate,
+): boolean {
+  return intent !== null && wasSwept(intent);
+}
 
 /**
  * Output patch for snapshot reconciliation. Contains updated state slices
@@ -154,12 +175,41 @@ export type ReconcileSnapshotPatch = {
  * sourced quotes - because each was fixed as itself; driving the clauses off
  * one classification is what makes a fourth a test failure instead.
  */
+/**
+ * The one sentence that says a prompt came back WITHOUT the worktree it was
+ * staged for, because a sweep removed that worktree while the dispatch was in
+ * flight.
+ *
+ * Four surfaces owe it - the snapshot pass, the settled-turn pass, a
+ * rejection's own notice, and a rejection DISPLACED into the statement
+ * builder - and they reach it three different ways: two append it to
+ * `failedSendRestoration.reason` (the composer says it), one appends it to
+ * the rejection's `errorNotice` (its own surface already speaks there), and
+ * the fourth needs {@link UnrecoverableSend.worktreeGone} instead, because a
+ * statement names the branch and must not name it as re-pickable.
+ *
+ * It is a CONSTANT rather than three literals because it was three literals:
+ * the fourth surface was missed twice running, and each miss was found only
+ * after shipping. Nothing here can enforce that a new surface asks the
+ * question, but nothing should be able to ask it and then phrase the answer
+ * differently.
+ */
+export const WORKTREE_GONE_STATEMENT =
+  "Its staged worktree no longer exists, so it was not restored.";
+
 export interface UnrecoverableSend {
   readonly clientActionId: string;
   readonly content: JsonContent;
   /** How this send died, phrased to open the statement. */
   readonly circumstance: string;
   readonly worktreeIntent: WorktreeIntent | null;
+  /**
+   * Whether a sweep removed {@link worktreeIntent}'s worktree while this
+   * dispatch was in flight. REQUIRED, and deliberately not defaulted: the
+   * clause below names a branch to go re-pick, and naming a deleted one sends
+   * someone after a worktree that is not there. A new caller has to answer it.
+   */
+  readonly worktreeGone: boolean;
   readonly sentSettings: ChatRunSettings | null;
   readonly currentSettings: ChatRunSettings | null;
   readonly sentAccountContext: AccountContext | null;
@@ -210,7 +260,7 @@ export function unrecoverableSendNotice(
         (losses.get("unknown") ?? 0) > 0
           ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
           : "",
-        worktreeClause(worktreeIntent),
+        worktreeClause(worktreeIntent, send.worktreeGone),
         deliveryClause(send.sentDeliveryPolicy),
         settingsDriftClause(
           send.sentSettings,
@@ -313,7 +363,10 @@ function deliveryClause(policy: ChatQueueDeliveryPolicy | null): string {
   return ` It was queued to be delivered ${described}; a resend goes by whatever you choose then.`;
 }
 
-function worktreeClause(intent: WorktreeIntent | null): string {
+function worktreeClause(
+  intent: WorktreeIntent | null,
+  worktreeGone: boolean,
+): string {
   if (intent === null) return "";
   // `WorktreeIntent` permits one entry per workspace folder, so a multi-repo
   // staging read as "branch a, branch b" with no way to tell which repo each
@@ -329,6 +382,13 @@ function worktreeClause(intent: WorktreeIntent | null): string {
       : [label];
   });
   if (labels.length === 0) return "";
+  // A swept worktree is not re-pickable, so the clause must not ask for it.
+  // Naming it is still right - it is what the send was going to run in, and
+  // silence would leave the resend looking identical to the original - but the
+  // ask changes from "re-pick that" to "pick something else".
+  if (worktreeGone) {
+    return ` It was staged to run in ${labels.join(", ")}, which no longer exists - a resend runs against this chat's current worktree unless you pick another.`;
+  }
   return ` It was staged to run in ${labels.join(", ")} - re-pick that before resending, or it runs against this chat's current worktree.`;
 }
 
@@ -632,6 +692,10 @@ export function reconcileSnapshotChange(
               content: pending.restoreContent,
               circumstance: "A message was not confirmed after reconnect",
               worktreeIntent: pending.restoreWorktreeIntent,
+              worktreeGone: worktreeGoneFor(
+                pending.restoreWorktreeIntent,
+                input.worktreeWasSwept,
+              ),
               sentSettings: pending.settings,
               currentSettings: input.currentSettings,
               sentAccountContext: pending.accountContext,
@@ -678,6 +742,8 @@ export type ReconcileTurnSettledInput = {
   readonly currentSettings: ChatRunSettings | null;
   /** See {@link ReconcileSnapshotInput.currentAccountContext}. */
   readonly currentAccountContext: AccountContext | null;
+  /** See {@link WorktreeSweptPredicate}. */
+  readonly worktreeWasSwept: WorktreeSweptPredicate;
 };
 
 export type ReconcileTurnSettledPatch = {
@@ -812,6 +878,10 @@ export function reconcileTurnSettled(
           content: message.content,
           circumstance: "A message was not recorded before the turn stopped",
           worktreeIntent: message.restoreWorktreeIntent,
+          worktreeGone: worktreeGoneFor(
+            message.restoreWorktreeIntent,
+            input.worktreeWasSwept,
+          ),
           sentSettings: message.settings,
           currentSettings: input.currentSettings,
           sentAccountContext: message.accountContext,
