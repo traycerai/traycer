@@ -113,6 +113,8 @@ describe("useHostDirectoryEntry", () => {
       transportDialability: "dialable",
       publicKey: "pubkey-a",
       relayFuseGrace: false,
+      recentHostCheckIn: false,
+      planAllowsRemote: true,
       remoteStatus: {
         connectivity: "connectable",
         viewerReachability: "ok",
@@ -159,6 +161,8 @@ describe("useHostDirectoryEntry", () => {
       transportDialability: "not-dialable",
       publicKey: "pubkey-fuse",
       relayFuseGrace: true,
+      recentHostCheckIn: false,
+      planAllowsRemote: true,
       remoteStatus: {
         connectivity: "offline",
         viewerReachability: "unknown",
@@ -183,5 +187,88 @@ describe("useHostDirectoryEntry", () => {
         ? result.current.relayFuseGrace
         : null,
     ).toBe(false);
+  });
+
+  /**
+   * The plan flip. `planAllowsRemote` is stamped at projection time and is NOT
+   * compared field-by-field here — deliberately. Every plan flip that a
+   * consumer could observe changes the DERIVED verdict this cache already
+   * compares, so adding the raw field would be redundant; this pins that
+   * reasoning rather than trusting it.
+   */
+  describe("a downgrade/upgrade between polls", () => {
+    function remote(
+      connectivity: "connectable" | "offline" | "unknown",
+      overrides: Partial<RemoteHostDirectoryEntry>,
+    ): RemoteHostDirectoryEntry {
+      return {
+        hostId: "remote-host-plan",
+        label: "Remote Host Plan",
+        kind: "remote",
+        websocketUrl: "wss://relay.test/attach",
+        version: "1.2.3",
+        transportDialability:
+          connectivity === "connectable" ? "dialable" : "not-dialable",
+        publicKey: "pubkey-plan",
+        relayFuseGrace: false,
+        recentHostCheckIn: false,
+        planAllowsRemote: true,
+        remoteStatus: {
+          connectivity,
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: null,
+          // Well past the fuse cap, so `offline` rows below are aged rather
+          // than in-grace: the ONLY thing varying is the plan.
+          lastSeenAt: "2020-01-01T00:00:00.000Z",
+        },
+        ...overrides,
+      };
+    }
+
+    it("re-emits for a CONNECTABLE row: the verdict moves null -> plan-restricted and the row stops being dialable", () => {
+      const directory = new ChurningDirectory(remote("connectable", {}));
+      directoryRef.value = directory;
+      const { result } = renderHook(() =>
+        useHostDirectoryEntry("remote-host-plan"),
+      );
+      const first = result.current;
+
+      act(() =>
+        directory.update({
+          planAllowsRemote: false,
+          transportDialability: "not-dialable",
+        }),
+      );
+      expect(result.current).not.toBe(first);
+      expect(result.current?.transportDialability).toBe("not-dialable");
+    });
+
+    it("re-emits for an UNKNOWN row: indeterminate -> plan-restricted, both not-dialable", () => {
+      const directory = new ChurningDirectory(remote("unknown", {}));
+      directoryRef.value = directory;
+      const { result } = renderHook(() =>
+        useHostDirectoryEntry("remote-host-plan"),
+      );
+      const first = result.current;
+
+      // The coarse bit does NOT move here - only the derived verdict does,
+      // which is exactly the case a field-identical comparison would swallow.
+      act(() => directory.update({ planAllowsRemote: false }));
+      expect(result.current).not.toBe(first);
+    });
+
+    it("does NOT thrash an aged OFFLINE row: the stale check-in keeps the verdict unchanged", () => {
+      const directory = new ChurningDirectory(remote("offline", {}));
+      directoryRef.value = directory;
+      const { result } = renderHook(() =>
+        useHostDirectoryEntry("remote-host-plan"),
+      );
+      const first = result.current;
+
+      act(() => directory.update({ planAllowsRemote: false }));
+      expect(result.current).toBe(first);
+    });
   });
 });

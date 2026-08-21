@@ -15,8 +15,8 @@ import { NotificationEmissionController } from "@/components/layout/bridges/noti
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
-import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
+import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
@@ -69,7 +69,18 @@ export function RootComponent() {
       <NotificationEmissionController />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
-          is hydration-gated inside the controller. */}
+          is hydration-gated inside the controller.
+
+          It does NOT exist during the first boot surface (`HostRuntimeProvider`
+          renders its fallback above `RouterProvider`), so it cannot observe a
+          navigation made there - the boot card's `Open settings` escape hatch
+          is exactly that. That navigation survives anyway because it DECLARES
+          itself in history state and this bridge reads the marker off the
+          CURRENT location at hydration; see `startup-navigation-intent.ts`.
+          Mounting this earlier is not the fix and was measured to cost more
+          than it buys: from up there it also sees the transient `/` that a cold
+          launch redirects ITSELF to (`requireSignedIn` fires while stored
+          tokens are still validating), which is not user intent. */}
       {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
       {/* The window narrator (D10). It MUST be outside HostReadyGate: the gate
           replaces its children during cold start, so a modal mounted inside it

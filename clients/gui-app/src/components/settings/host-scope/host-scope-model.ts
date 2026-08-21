@@ -154,6 +154,11 @@ export function buildHostScopeOptions(
         service: isLocalMachine ? input.localService : undefined,
         lease: leases.get(hostId) ?? null,
         authorityAttached: input.authorityAttached,
+        // The registry row carries pure liveness; the account's entitlement is
+        // this input, the same one the route gates below read. Passing it here
+        // is what keeps the health word and the route verdict from disagreeing
+        // about the same host.
+        planAllowsRemote: !input.remoteHostsPlanRestricted,
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
@@ -225,9 +230,8 @@ function isAdministrableRoute(
  *
  *   - the CLIENT's own plan gate (`remoteHostsPlanRestricted`) — the route is
  *     live and the server would refuse the attach;
- *   - the CLOUD's verdict (`connectivity: "local-only"` ⇒ `plan-restricted`) —
- *     the host never attaches to a relay at all, because the owner's plan does
- *     not include remote hosts.
+ *   - the ENTRY's stamped plan (`planAllowsRemote: false` ⇒ `plan-restricted`)
+ *     — the host is alive or unreadable, but this account has no remote route.
  *
  * The old body demanded a dialable entry, which the second case can never
  * satisfy: a `local-only` host is exactly the one the mapper marks

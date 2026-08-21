@@ -18,6 +18,12 @@ import type { StreamMethodSupport } from "./ws-stream-client";
  * against this interface instead of the concrete `WsStreamClient` is what lets
  * it select between the two by `HostDirectoryEntry.kind` (T14).
  */
+/** See {@link IHostStreamClient.reconnectAll}. */
+export type ReconnectAllOptions = {
+  /** Keep sessions whose socket answers a liveness ping. */
+  readonly probeFirst: boolean;
+};
+
 export interface IHostStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > extends IStreamClient<Registry> {
@@ -49,8 +55,17 @@ export interface IHostStreamClient<
    * transition (the relay attach endpoint is fixed, per-fleet, not per-host),
    * so `RemoteStreamClient` implements this as a no-op; its own resume/backoff
    * machinery already owns reconnection.
+   *
+   * `options.probeFirst` distinguishes the two callers, and getting it wrong is
+   * a real regression in either direction:
+   *
+   *  - `false` - the address CHANGED (host respawn). The current socket, alive
+   *    or not, points at the wrong place; it must be dropped.
+   *  - `true` - an OS wake. Most sockets survive a lid-open, and dropping a
+   *    live one re-runs every stream's open against a machine whose network has
+   *    not finished coming back. Probe each session and re-dial only the dead.
    */
-  reconnectAll(reason: string): void;
+  reconnectAll(reason: string, options: ReconnectAllOptions): void;
   /**
    * Learned per-method compatibility with the connected host, keyed by
    * stream method name. `"unknown"` until a subscribe attempt resolves.

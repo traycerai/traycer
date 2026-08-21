@@ -128,7 +128,7 @@ export function useCommGraphSnapshot(
   // plane verdict.
   // Relay dialability depends on the pull-only session cache, so the
   // directory query alone cannot see a session dying or appearing under an
-  // `offline`/`local-only` entry. This subscription re-renders on a readiness
+  // `offline`/plan-restricted entry. This subscription re-renders on a readiness
   // flip, which recomputes the two memos below and pushes the new relay set /
   // readiness keys into the cloud manager through their effects.
   const directoryHostIdsForReadiness = useMemo(

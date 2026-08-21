@@ -54,6 +54,7 @@ const BASE = {
   isLocalMachine: false,
   hasLiveSession: false,
   service: undefined,
+  planAllowsRemote: true,
   nowMs: NOW_MS,
 };
 

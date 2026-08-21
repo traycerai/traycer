@@ -15,6 +15,14 @@ import {
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 
 /**
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
+ * stamps it onto every entry at projection time. These fixtures describe an
+ * entitled account unless a case says otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+const PLAN_GATED = false;
+
+/**
  * `connectable` is the model's answer to "can this row be administered", and
  * every downstream decision leans on it: the scope's status machine, whether a
  * transient client is built, and whether the Add-host dialog announces a
@@ -208,17 +216,17 @@ describe("buildHostScopeOptions planRestricted", () => {
   });
 });
 
-describe("buildHostScopeOptions planRestricted — composed against a real local-only mapped entry", () => {
+describe("buildHostScopeOptions planRestricted — composed against a real plan-gated mapped entry", () => {
   // `entry()` above and `buildOne`'s hard-coded `hasLiveSession: () => false`
   // are exactly what hid the original bug: a synthetic literal has no
   // `remoteStatus`, so `hostUnavailability` falls straight to its
   // non-remote-entry branch (`"offline"`) no matter what `status` says, and
-  // the CLOUD half of `isPlanRestrictedRoute` — `connectivity: "local-only"`
-  // ⇒ `"plan-restricted"` — never gets exercised at all. This composes the
-  // REAL mapper output instead, and varies `hasLiveSession` (irrelevant to
+  // the ENTRY half of `isPlanRestrictedRoute` — a `planAllowsRemote: false`
+  // stamp ⇒ `"plan-restricted"` — never gets exercised at all. This composes
+  // the REAL mapper output instead, and varies `hasLiveSession` (irrelevant to
   // this particular derivation, but varying it is what the review asked for
   // and it costs nothing to prove it stays irrelevant here).
-  function realLocalOnlyEntry(): HostDirectoryEntry {
+  function realPlanGatedEntry(): HostDirectoryEntry {
     return hostListItemToDirectoryEntry(
       {
         hostId: "host-a",
@@ -229,7 +237,9 @@ describe("buildHostScopeOptions planRestricted — composed against a real local
         createdAt: "2026-01-01T00:00:00Z",
         updatePolicy: "manual",
         status: {
-          connectivity: "local-only",
+          // ALIVE on the wire — the plan, not the machine, is the reason there
+          // is no route.
+          connectivity: "connectable",
           viewerReachability: "unknown",
           clientCloud: "ok",
           updateState: "current",
@@ -238,21 +248,22 @@ describe("buildHostScopeOptions planRestricted — composed against a real local
         },
       },
       "wss://relay.example.test/attach",
+      PLAN_GATED,
     );
   }
 
-  it("is planRestricted even with the account's OWN plan gate off — the cloud's local-only verdict is sufficient on its own", () => {
+  it("is planRestricted even with the account's OWN render-time plan gate off — the entry's stamped plan is sufficient on its own", () => {
     // This is the case `isAdministrableRoute`/`isPlanRestrictedRoute`'s old
     // body could never reach: `remoteHostsPlanRestricted: false` but the row
-    // is STILL not connectable, because the mapper marks a `local-only`
-    // connectivity `status: "unavailable"` regardless of the client's own
-    // plan flag. Requiring `status === "available"` (the old body) can never
-    // be true for this entry, so a free-tier user's own host used to fall
-    // through to generic "unreachable" with no upgrade path.
+    // is STILL not connectable, because the mapper marked the entry
+    // not-dialable from the plan stamped at FETCH time regardless of the
+    // render-time flag. Requiring `status === "available"` (the old body) can
+    // never be true for this entry, so a free-tier user's own host used to
+    // fall through to generic "unreachable" with no upgrade path.
     const [option] = buildHostScopeOptions({
       leases: [],
       authorityAttached: false,
-      directory: [realLocalOnlyEntry()],
+      directory: [realPlanGatedEntry()],
       registry: [],
       localHostId: null,
       activeHostId: null,
@@ -270,7 +281,7 @@ describe("buildHostScopeOptions planRestricted — composed against a real local
     const [option] = buildHostScopeOptions({
       leases: [],
       authorityAttached: false,
-      directory: [realLocalOnlyEntry()],
+      directory: [realPlanGatedEntry()],
       registry: [],
       localHostId: null,
       activeHostId: null,
@@ -281,6 +292,49 @@ describe("buildHostScopeOptions planRestricted — composed against a real local
       nowMs: 0,
     });
     expect(option.planRestricted).toBe(true);
+  });
+
+  it("is NOT planRestricted for a plan-gated host the cloud reports OFFLINE — that row is unreachable, not unpaid", () => {
+    // Dead is dead. The remedy for a switched-off machine is not an upgrade,
+    // so the row must not carry the billing word — and under the old wire it
+    // always did, because every host on an unpaid plan arrived as
+    // `local-only` whatever it was doing.
+    const offlineOnAGatedPlan = hostListItemToDirectoryEntry(
+      {
+        hostId: "host-a",
+        displayName: "Free Tier Laptop",
+        platform: "darwin-arm64",
+        kind: "personal",
+        publicKey: "pk-a",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatePolicy: "manual",
+        status: {
+          connectivity: "offline",
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: "1.4.2",
+          lastSeenAt: "2026-01-01T00:00:00Z",
+        },
+      },
+      "wss://relay.example.test/attach",
+      PLAN_GATED,
+    );
+    const [option] = buildHostScopeOptions({
+      leases: [],
+      authorityAttached: false,
+      directory: [offlineOnAGatedPlan],
+      registry: [],
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      hasLiveSession: () => false,
+      remoteHostsPlanRestricted: true,
+      localHostSettingUp: false,
+      nowMs: 0,
+    });
+    expect(option.connectable).toBe(false);
+    expect(option.planRestricted).toBe(false);
   });
 
   function realConnectableEntry(): HostDirectoryEntry {
@@ -303,6 +357,7 @@ describe("buildHostScopeOptions planRestricted — composed against a real local
         },
       },
       "wss://relay.example.test/attach",
+      PLAN_ALLOWS_REMOTE,
     );
   }
 
