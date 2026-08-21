@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { useLinkCodeSignInMutation } from "@/hooks/auth/use-link-code-sign-in-mutation";
 import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { LinkCodeWaitStatus } from "./link-code-wait-status";
 
 type EntryNotice =
   | "not-a-code"
@@ -150,6 +151,10 @@ export function LinkCodeSignIn(props: {
     </form>
   );
 
+  // The claimed code's approval wait, shown by both presentations while the
+  // redeem is in flight.
+  const waitStatus = redeem.isPending ? <LinkCodeWaitStatus /> : null;
+
   const noticeLine =
     notice !== null ? (
       <p
@@ -185,14 +190,7 @@ export function LinkCodeSignIn(props: {
             />
           ) : null}
         </Button>
-        {redeem.isPending ? (
-          <p
-            className="text-center text-ui-sm opacity-80"
-            data-testid="link-code-signin-waiting"
-          >
-            Waiting for approval on your computer…
-          </p>
-        ) : null}
+        {waitStatus}
         {open ? (
           <div
             className="flex w-full flex-col gap-3"
@@ -271,6 +269,7 @@ export function LinkCodeSignIn(props: {
         </Button>
       ) : null}
       {codeEntryForm}
+      {waitStatus}
       {noticeLine}
     </div>
   );

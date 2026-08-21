@@ -299,6 +299,32 @@ export type DeviceFlowProgressListener = (
   progress: DeviceFlowProgress | null,
 ) => void;
 
+/**
+ * Projected link-login poll progress for the phone's QR sign-in surface, so
+ * the approval wait is a visibly ticking loop rather than an indefinite
+ * spinner. `null` whenever no link attempt is polling.
+ *
+ * `nextPollAtMs` is ABSOLUTE, not a remaining duration: the surface subtracts
+ * its own clock and therefore holds no copy of the poll interval. A server
+ * directive that stretches the wait (a `slow_down` 429 carrying `Retry-After`)
+ * moves this timestamp, so the countdown cannot advertise a cadence the loop
+ * is no longer running at.
+ */
+export interface LinkLoginProgress {
+  readonly nextPollAtMs: number;
+  /**
+   * `waiting` between polls; `checking` while a `/link/token` request is
+   * outstanding; `finalizing` once a poll returned `authorized` and the token
+   * is being validated/persisted — the surface must stop counting down the
+   * moment the approval has actually landed.
+   */
+  readonly phase: "waiting" | "checking" | "finalizing";
+}
+
+export type LinkLoginProgressListener = (
+  progress: LinkLoginProgress | null,
+) => void;
+
 type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
@@ -443,6 +469,10 @@ export class AuthService {
   private deviceProgress: DeviceFlowProgress | null = null;
   private readonly deviceProgressListeners =
     new Set<DeviceFlowProgressListener>();
+  // Projected link-login poll progress (null unless a link poll is running).
+  private linkLoginProgress: LinkLoginProgress | null = null;
+  private readonly linkLoginProgressListeners =
+    new Set<LinkLoginProgressListener>();
 
   private static readonly scheduleTimeout: (
     handler: () => void,
@@ -2818,6 +2848,7 @@ export class AuthService {
       result: LinkLoginSignInResult,
     ): LinkLoginSignInResult => {
       this.clearActiveAttempt();
+      this.setLinkLoginProgress(null);
       this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
       return result;
     };
@@ -2825,6 +2856,11 @@ export class AuthService {
     let intervalMs = Math.max(1_000, pollIntervalSeconds * 1_000);
     let transportFailures = 0;
     while (Date.now() < deadline) {
+      // Published BEFORE the sleep, off the same `intervalMs` the loop is
+      // about to wait out — so a directive-stretched wait is counted down at
+      // its real length, never at the interval the claim first advertised.
+      const nextPollAtMs = Date.now() + intervalMs;
+      this.setLinkLoginProgress({ nextPollAtMs, phase: "waiting" });
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
       if (
         this.isDisposed() ||
@@ -2833,12 +2869,14 @@ export class AuthService {
       ) {
         return { kind: "failed" };
       }
+      this.setLinkLoginProgress({ nextPollAtMs, phase: "checking" });
       const polled = await linkLoginTokenViaHttp(authnBaseUrl, secret);
       if (this.isDisposed() || this.activeAttempt !== attempt) {
         return { kind: "failed" };
       }
       switch (polled.kind) {
         case "authorized": {
+          this.setLinkLoginProgress({ nextPollAtMs, phase: "finalizing" });
           // The shared tail re-checks the epoch, consumes the attempt on
           // success, and drops a finalization superseded mid-persist.
           const applied = await this.applyTokenInternal(
@@ -2931,6 +2969,7 @@ export class AuthService {
       attempt.deviceSession.cancel();
     }
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     this.activeAttempt = null;
   }
 
@@ -3034,6 +3073,7 @@ export class AuthService {
     this.errorListeners.clear();
     this.sessionSnapshotListeners.clear();
     this.deviceProgressListeners.clear();
+    this.linkLoginProgressListeners.clear();
   }
 
   /**
@@ -3085,6 +3125,7 @@ export class AuthService {
     this.clearActiveAttempt();
     attempt.deviceSession?.cancel();
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     if (this.starting) {
       this.authResolvedDuringStart = true;
     }
@@ -3156,6 +3197,7 @@ export class AuthService {
     // pass through the interactive entry's clear.
     this.setLastError(null);
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     const liveUserId = this.contextProvider.current()?.identity.userId;
     const profile = profileOverride ?? this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
@@ -3223,6 +3265,7 @@ export class AuthService {
       return;
     }
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     this.refreshScheduler.stop();
     // COMMIT BEFORE EMIT (see `applySignedIn`). `signOut()` announces the
     // null context synchronously and the runtime refreshes the directory
@@ -3381,6 +3424,26 @@ export class AuthService {
   }
 
   /**
+   * Subscribes to link-login poll progress (when the next `/link/token` poll
+   * fires, and whether one is outstanding). Fires synchronously on subscribe
+   * with the current value, then on every change. `null` whenever no link
+   * poll is running.
+   */
+  onLinkLoginProgressChange(handler: LinkLoginProgressListener): Disposable {
+    this.linkLoginProgressListeners.add(handler);
+    handler(this.linkLoginProgress);
+    return {
+      dispose: () => {
+        this.linkLoginProgressListeners.delete(handler);
+      },
+    };
+  }
+
+  getLinkLoginProgress(): LinkLoginProgress | null {
+    return this.linkLoginProgress;
+  }
+
+  /**
    * Re-opens the pre-filled approval page (`verification_uri_complete`, with the
    * user code embedded) for the in-flight device attempt. Backs the sign-in
    * surface's one-click "open approval page" affordance so the user never has to
@@ -3403,6 +3466,23 @@ export class AuthService {
     }
     this.deviceProgress = next;
     for (const handler of this.deviceProgressListeners) {
+      handler(next);
+    }
+  }
+
+  private setLinkLoginProgress(next: LinkLoginProgress | null): void {
+    const current = this.linkLoginProgress;
+    if (
+      current === next ||
+      (current !== null &&
+        next !== null &&
+        current.nextPollAtMs === next.nextPollAtMs &&
+        current.phase === next.phase)
+    ) {
+      return;
+    }
+    this.linkLoginProgress = next;
+    for (const handler of this.linkLoginProgressListeners) {
       handler(next);
     }
   }
