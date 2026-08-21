@@ -1961,8 +1961,80 @@ describe("createChatSessionStore", () => {
     const sent = harness.sent[0];
     if (sent.kind !== "send") throw new Error("Expected a send frame");
     const notice = noticeFor(harness, sent.clientActionId);
-    expect(notice.message).toContain("Some of its staged worktrees");
+    // The partial sentence NAMES the folder that went and says the rest came
+    // back. An unnamed "its staged worktree no longer exists" could not tell
+    // the user which of two bindings they still have - which is the whole of
+    // `-Jy8x`.
+    expect(notice.message).toContain("feat/doomed");
+    expect(notice.message).toContain("the rest of its staging came back");
     expect(notice.message).not.toContain("so it was not restored");
+  });
+
+  // `-Jy83`: a `SEND_RESTORED` notice is replayable ON PURPOSE - it can arrive
+  // while the pane is unfocused, and the ring is its ONLY replay source. The
+  // ordinary 32-record cap deleted it before the pane ever came back, so the
+  // qualifications vanished while the restored prompt sat in the composer
+  // ready to resend. It is NOT last-copy (the draft is safe, so no permanent
+  // pin); the axis is different - survive EVICTION until DELIVERED.
+  it("keeps a restored-send notice through the cap until the pane sees it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    const restoredNotice = () =>
+      harness.handle.store
+        .getState()
+        .errorNotices.find((notice) => notice.code === "SEND_RESTORED");
+    expect(restoredNotice()).toBeDefined();
+
+    const flood = (from: number) => {
+      for (let index = from; index < from + MAX_ERROR_NOTICE_RECORDS * 2;) {
+        callbacks.onErrorNotice({
+          kind: "errorNotice",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          notice: {
+            code: "APPROVAL_NOT_PENDING",
+            message: `No longer pending (${index}).`,
+            severity: "warning",
+            clientActionId: `approval-${index}`,
+          },
+        });
+        index += 1;
+      }
+    };
+
+    // Undelivered: it outlives far more than the cap's worth of history.
+    flood(0);
+    expect(restoredNotice()).toBeDefined();
+
+    // Once the pane has actually shown it, it is ordinary history again and
+    // ages out like anything else - the exemption is a delivery guarantee,
+    // not a permanent pin.
+    harness.handle.store.getState().markNoticeDelivered(frame.clientActionId);
+    flood(1000);
+    expect(restoredNotice()).toBeUndefined();
   });
 
   // `-IfOo`: the qualifications were written to `failedSendRestoration.reason`
@@ -3027,7 +3099,9 @@ describe("createChatSessionStore", () => {
 
     const notice = noticeFor(harness, rejected);
     expect(notice.message).toContain("Host refused the send.");
-    expect(notice.message).toContain("staged worktree no longer exists");
+    expect(notice.message).toContain(
+      "staged worktree a new branch feat/doomed from main no longer exists",
+    );
   });
 
   // `-CbBM`: the FOURTH surface. The send is accepted, its worktree is swept,
@@ -3092,7 +3166,9 @@ describe("createChatSessionStore", () => {
     // So the reason has to say why.
     expect(
       harness.handle.store.getState().failedSendRestoration?.reason,
-    ).toContain("staged worktree no longer exists");
+    ).toContain(
+      "staged worktree a new branch feat/doomed from main no longer exists",
+    );
   });
 
   // `-HVoV`: the displaced-rejection branch. Another rejected send already
@@ -3765,7 +3841,9 @@ describe("createChatSessionStore", () => {
 
     const notice = noticeFor(harness, second.clientActionId);
     expect(notice.message).not.toContain("foobar");
-    expect(notice.message).toContain("foo\nbar");
+    // `-Jy8u`: with markers, the boundary is the marker rather than the bare
+    // newline - and this IS what the serializer sent, so the copy matches it.
+    expect(notice.message).toContain("- foo\n- bar");
   });
 
   // R5 `-KNQ`: the settled patch is spread into the state object, so its

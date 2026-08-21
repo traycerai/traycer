@@ -127,28 +127,34 @@ export type ReconcileSnapshotInput = {
   readonly currentSettings: ChatRunSettings | null;
   /** The account a resend would bill - see {@link accountDriftClause}. */
   readonly currentAccountContext: AccountContext | null;
-  /** See {@link WorktreeSweptPredicate}. */
-  readonly worktreeWasSwept: WorktreeSweptPredicate;
+  /** See {@link WorktreePartitionFn}. */
+  readonly worktreePartition: WorktreePartitionFn;
   readonly nowMs: number;
 };
 
 /**
- * Whether a sweep removed this intent's worktree while its dispatch was in
- * flight.
+ * Which of this intent's folders a sweep removed while its dispatch was in
+ * flight, and which survived.
  *
  * Injected rather than read, because the answer lives in the staging store and
- * both reconcile passes are pure. The passes STATE displaced sends, and a
- * statement naming a deleted worktree as re-pickable is the same defect the
- * restore paths already guard - so they have to be able to ask.
+ * both reconcile passes are pure. It returns a PARTITION rather than a
+ * yes/no: the passes NAME the folders they describe, so an any-match boolean
+ * made them call surviving bindings deleted.
  */
-export type WorktreeSweptPredicate = (intent: WorktreeIntent) => boolean;
+export type WorktreePartitionFn = (intent: WorktreeIntent) => {
+  readonly survivors: WorktreeIntent | null;
+  readonly swept: WorktreeIntent | null;
+};
 
 /** A send with no staged worktree has none to have lost. */
-function worktreeGoneFor(
+export function worktreeSweepFor(
   intent: WorktreeIntent | null,
-  wasSwept: WorktreeSweptPredicate,
-): boolean {
-  return intent !== null && wasSwept(intent);
+  partition: WorktreePartitionFn,
+  superseded: boolean,
+): WorktreeSweepAccount {
+  if (intent === null) return { ...NO_WORKTREE_SWEEP, superseded };
+  const { survivors, swept } = partition(intent);
+  return { survivors, swept, superseded };
 }
 
 /**
@@ -228,44 +234,10 @@ export type ReconcileSnapshotPatch = {
  * question, but nothing should be able to ask it and then phrase the answer
  * differently.
  */
-export const WORKTREE_GONE_STATEMENT =
-  "Its staged worktree no longer exists, so it was not restored.";
-
-/**
- * The PARTIAL form of the sentence above, and the reason the flag driving them
- * is three-valued rather than a boolean.
- *
- * A `WorktreeIntent` holds one binding per workspace folder, so a sweep can
- * take some and leave others. Once the survivors are restored, "it was not
- * restored" is simply false - the user is looking at folders that came back,
- * under a sentence saying nothing did. Saying the accurate thing costs one
- * more constant; saying the inaccurate one costs the credibility of every
- * other statement in this family.
- */
-export const WORKTREE_PARTLY_GONE_STATEMENT =
-  "Some of its staged worktrees no longer exist; the remaining folders were restored, so check the binding before resending.";
-
-/**
- * How much of a restored prompt's staged worktree survived the trip.
- *
- * Not a boolean, because "was anything swept" and "is the prompt now unbound"
- * stopped being the same question when the hand-back began filtering per
- * entry.
- */
-export type SweptRestoreOutcome = "none" | "partial" | "all";
-
-/** The sentence an outcome owes, or `""` when nothing was lost. */
-export function worktreeSweptStatement(outcome: SweptRestoreOutcome): string {
-  if (outcome === "none") return "";
-  return outcome === "all"
-    ? WORKTREE_GONE_STATEMENT
-    : WORKTREE_PARTLY_GONE_STATEMENT;
-}
-
 /**
  * The OTHER reason a prompt can come back unbound, and a different fact from
- * {@link WORKTREE_GONE_STATEMENT} - superseded, not swept - so deliberately
- * not the same sentence.
+ * the sweep clause {@link worktreeAccountClause} builds - superseded, not
+ * swept - so deliberately not the same sentence.
  *
  * Silence is right when the user can SEE why: a pick they made themselves
  * stands in the slot, and narrating their own action back at them is noise.
@@ -283,25 +255,18 @@ export interface UnrecoverableSend {
   readonly content: JsonContent;
   /** How this send died, phrased to open the statement. */
   readonly circumstance: string;
-  readonly worktreeIntent: WorktreeIntent | null;
   /**
-   * Whether a sweep removed {@link worktreeIntent}'s worktree while this
-   * dispatch was in flight. REQUIRED, and deliberately not defaulted: the
-   * clause below names a branch to go re-pick, and naming a deleted one sends
-   * someone after a worktree that is not there. A new caller has to answer it.
+   * Everything said after the content losses. REQUIRED and not defaulted: the
+   * clauses it renders name folders to go re-pick and settings that moved, and
+   * a caller that cannot answer it is a caller that would have said nothing.
    */
-  readonly worktreeGone: boolean;
-  readonly sentSettings: ChatRunSettings | null;
-  readonly currentSettings: ChatRunSettings | null;
-  readonly sentAccountContext: AccountContext | null;
-  readonly sentDeliveryPolicy: ChatQueueDeliveryPolicy | null;
-  readonly currentAccountContext: AccountContext | null;
+  readonly account: DeadSendAccount;
 }
 
 export function unrecoverableSendNotice(
   send: UnrecoverableSend,
 ): ChatErrorNotice {
-  const { clientActionId, content, circumstance, worktreeIntent } = send;
+  const { clientActionId, content, circumstance } = send;
   // The quote is VERBATIM; only the branch decision is trimmed. A message of
   // pure whitespace has nothing to hand back, but a code block whose first
   // line is indented very much does - and trimming the quote itself is what
@@ -363,57 +328,16 @@ export function unrecoverableSendNotice(
         (losses.get("unknown") ?? 0) > 0
           ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
           : "",
-        worktreeClause(worktreeIntent, send.worktreeGone),
-        deliveryClause(send.sentDeliveryPolicy),
-        settingsDriftClause(
-          send.sentSettings,
-          send.currentSettings,
-          send.sentAccountContext,
-          send.currentAccountContext,
-        ),
+        // Everything after the losses is the shared account, rendered in the
+        // one canonical order. `false`: a STATED send's binding did not come
+        // back, so its surviving folders still have to be re-picked.
+        deadSendAccountClauses(send.account, false),
       ].join(""),
       hasText ? text : null,
     ),
     severity: "warning",
     clientActionId,
   };
-}
-
-/**
- * What a RESTORED prompt owes its author, for `failedSendRestoration.reason`.
- *
- * The founding invariant says a dead send is either restored or stated - but
- * drift is invisible under BOTH arms unless somebody speaks it. A displaced
- * send gets these qualifications inside its statement; the send that WON the
- * slot was handed its text back and told nothing, so the one whose prompt is
- * sitting in the composer ready to resend was the one least warned that
- * resending now means a different model, a different account, or a different
- * moment in the turn.
- *
- * It reuses the statement path's own clause functions rather than describing
- * the same facts a second way: a parallel implementation is how the two
- * surfaces would come to disagree about what drifted.
- *
- * No worktree clause here. The restore path HANDS THE BINDING BACK, and the
- * one case where it cannot - a sweep took it mid-flight - already has its own
- * sentence appended by {@link WORKTREE_GONE_STATEMENT}'s writers.
- */
-export function restoredSendQualifications(send: {
-  readonly sentSettings: ChatRunSettings | null;
-  readonly currentSettings: ChatRunSettings | null;
-  readonly sentAccountContext: AccountContext | null;
-  readonly currentAccountContext: AccountContext | null;
-  readonly sentDeliveryPolicy: ChatQueueDeliveryPolicy | null;
-}): string {
-  return [
-    deliveryClause(send.sentDeliveryPolicy),
-    settingsDriftClause(
-      send.sentSettings,
-      send.currentSettings,
-      send.sentAccountContext,
-      send.currentAccountContext,
-    ),
-  ].join("");
 }
 
 /**
@@ -503,33 +427,148 @@ function deliveryClause(policy: ChatQueueDeliveryPolicy | null): string {
   return ` It was queued to be delivered ${described}; a resend goes by whatever you choose then.`;
 }
 
-function worktreeClause(
-  intent: WorktreeIntent | null,
-  worktreeGone: boolean,
+/**
+ * What a mid-dispatch sweep did to a send's staged binding, per ENTRY.
+ *
+ * A `WorktreeIntent` holds one binding per workspace folder and those are
+ * independent, so a sweep routinely takes some and leaves others. Every
+ * boolean this replaced answered "was anything swept", which is the wrong
+ * granularity for a sentence that NAMES folders: survivors got described as
+ * deleted, and the user was told to pick something else for bindings that were
+ * still there.
+ */
+export interface WorktreeSweepAccount {
+  readonly survivors: WorktreeIntent | null;
+  readonly swept: WorktreeIntent | null;
+  /**
+   * The slot was refused because the USER made a newer pick, not because
+   * anything was deleted. Worth its own statement and never conflated with a
+   * sweep - telling someone their worktree was deleted when they re-picked
+   * would be a lie.
+   */
+  readonly superseded: boolean;
+}
+
+/** A send with nothing to say: no staging, no drift. */
+export const EMPTY_DEAD_SEND_ACCOUNT: DeadSendAccount = {
+  worktree: { survivors: null, swept: null, superseded: false },
+  sentSettings: null,
+  currentSettings: null,
+  sentAccountContext: null,
+  currentAccountContext: null,
+  sentDeliveryPolicy: null,
+};
+
+export const NO_WORKTREE_SWEEP: WorktreeSweepAccount = {
+  survivors: null,
+  swept: null,
+  superseded: false,
+};
+
+/**
+ * Every fact a dead send's account is composed from.
+ *
+ * ONE record, because the alternative was what this replaced: four speakers
+ * (the rejection notice, the displaced statement, the ack's `SEND_RESTORED`,
+ * and each reconcile pass's restoration reason) each assembling the same
+ * clauses from the same facts behind their own gating conditions. They drifted
+ * in granularity and in clause ORDER, and every reviewer round found another
+ * cell of that cross-product. There is nowhere left for them to disagree.
+ */
+export interface DeadSendAccount {
+  readonly worktree: WorktreeSweepAccount;
+  readonly sentSettings: ChatRunSettings | null;
+  readonly currentSettings: ChatRunSettings | null;
+  readonly sentAccountContext: AccountContext | null;
+  readonly currentAccountContext: AccountContext | null;
+  readonly sentDeliveryPolicy: ChatQueueDeliveryPolicy | null;
+}
+
+/**
+ * THE account, in the canonical clause order: what it was going to RUN IN,
+ * then what changed underneath it. The commit history already declared that
+ * order (the rejection path's); this is the only place that knows it.
+ *
+ * `handedBack` is the single axis on which the speakers differ, and it is a
+ * fact about the send rather than about the surface: a restored prompt's
+ * surviving binding travelled back with it and needs no re-picking, a stated
+ * one's did not. Everything else - which folders, what drifted, in what order
+ * - is identical, which is exactly why it lives here once.
+ */
+export function deadSendAccountClauses(
+  account: DeadSendAccount,
+  handedBack: boolean,
 ): string {
-  if (intent === null) return "";
-  // `WorktreeIntent` permits one entry per workspace folder, so a multi-repo
-  // staging read as "branch a, branch b" with no way to tell which repo each
-  // belonged to - unre-pickable. Qualified only when there is more than one:
-  // with a single workspace the association is unambiguous and naming it would
-  // be noise in the common case.
-  const qualify = intent.entries.length > 1;
-  const labels = intent.entries.flatMap((entry) => {
+  return [
+    worktreeAccountClause(account.worktree, handedBack),
+    account.worktree.superseded ? ` ${WORKTREE_SUPERSEDED_STATEMENT}` : "",
+    deliveryClause(account.sentDeliveryPolicy),
+    settingsDriftClause(
+      account.sentSettings,
+      account.currentSettings,
+      account.sentAccountContext,
+      account.currentAccountContext,
+    ),
+  ].join("");
+}
+
+/**
+ * Removed and surviving folders, named SEPARATELY.
+ *
+ * A swept folder is not re-pickable, so the clause must not ask for it; a
+ * surviving one is, so it must not be described as gone. Saying both in one
+ * sentence about "its staged worktree" is what made the only recovery notice
+ * unable to tell the user which folders they could actually pick again.
+ */
+function worktreeAccountClause(
+  sweep: WorktreeSweepAccount,
+  handedBack: boolean,
+): string {
+  // Qualified against the WHOLE staging, not each half: whether a folder needs
+  // naming by workspace is a fact about how many were staged, and splitting
+  // the list must not change how its members read.
+  const total =
+    (sweep.survivors?.entries.length ?? 0) + (sweep.swept?.entries.length ?? 0);
+  const survivors = intentLabels(sweep.survivors, total > 1);
+  const swept = intentLabels(sweep.swept, total > 1);
+  if (survivors.length === 0 && swept.length === 0) return "";
+  if (handedBack) {
+    // The survivors came back staged with the prompt, so there is nothing to
+    // ask of the user about them - only the loss needs saying.
+    if (swept.length === 0) return "";
+    if (survivors.length === 0) {
+      return ` Its staged worktree ${swept.join(", ")} no longer exists, so it was not restored.`;
+    }
+    return ` Its staged worktree ${swept.join(", ")} no longer exists; the rest of its staging came back, so check the binding before resending.`;
+  }
+  if (swept.length === 0) {
+    return ` It was staged to run in ${survivors.join(", ")} - re-pick that before resending, or it runs against this chat's current worktree.`;
+  }
+  if (survivors.length === 0) {
+    return ` It was staged to run in ${swept.join(", ")}, which no longer exists - a resend runs against this chat's current worktree unless you pick another.`;
+  }
+  return ` It was staged to run in ${survivors.join(", ")} - re-pick that before resending. It was also staged to run in ${swept.join(", ")}, which no longer exists.`;
+}
+
+/**
+ * `WorktreeIntent` permits one entry per workspace folder, so a multi-repo
+ * staging read as "branch a, branch b" with no way to tell which repo each
+ * belonged to - unre-pickable. Qualified only when more than one folder was
+ * staged: with a single workspace the association is unambiguous and naming it
+ * would be noise in the common case.
+ */
+function intentLabels(
+  intent: WorktreeIntent | null,
+  qualify: boolean,
+): ReadonlyArray<string> {
+  if (intent === null) return [];
+  return intent.entries.flatMap((entry) => {
     const label = worktreeEntryLabel(entry);
     if (label === null) return [];
     return qualify && entry.workspacePath.length > 0
       ? [`${label} in ${entry.workspacePath}`]
       : [label];
   });
-  if (labels.length === 0) return "";
-  // A swept worktree is not re-pickable, so the clause must not ask for it.
-  // Naming it is still right - it is what the send was going to run in, and
-  // silence would leave the resend looking identical to the original - but the
-  // ask changes from "re-pick that" to "pick something else".
-  if (worktreeGone) {
-    return ` It was staged to run in ${labels.join(", ")}, which no longer exists - a resend runs against this chat's current worktree unless you pick another.`;
-  }
-  return ` It was staged to run in ${labels.join(", ")} - re-pick that before resending, or it runs against this chat's current worktree.`;
 }
 
 /**
@@ -876,16 +915,18 @@ export function reconcileSnapshotChange(
               clientActionId: pending.clientActionId,
               content: pending.restoreContent,
               circumstance: "A message was not confirmed after reconnect",
-              worktreeIntent: pending.restoreWorktreeIntent,
-              worktreeGone: worktreeGoneFor(
-                pending.restoreWorktreeIntent,
-                input.worktreeWasSwept,
-              ),
-              sentSettings: pending.settings,
-              currentSettings: input.currentSettings,
-              sentAccountContext: pending.accountContext,
-              sentDeliveryPolicy: pending.deliveryPolicy,
-              currentAccountContext: input.currentAccountContext,
+              account: {
+                worktree: worktreeSweepFor(
+                  pending.restoreWorktreeIntent,
+                  input.worktreePartition,
+                  false,
+                ),
+                sentSettings: pending.settings,
+                currentSettings: input.currentSettings,
+                sentAccountContext: pending.accountContext,
+                sentDeliveryPolicy: pending.deliveryPolicy,
+                currentAccountContext: input.currentAccountContext,
+              },
             }),
           ],
         };
@@ -902,14 +943,20 @@ export function reconcileSnapshotChange(
         failedSendRestoration: {
           clientActionId: pending.clientActionId,
           content: pending.restoreContent,
-          reason: `Message was not confirmed after reconnect.${restoredSendQualifications(
+          reason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
             {
+              worktree: worktreeSweepFor(
+                pending.restoreWorktreeIntent,
+                input.worktreePartition,
+                false,
+              ),
               sentSettings: pending.settings,
               currentSettings: input.currentSettings,
               sentAccountContext: pending.accountContext,
               currentAccountContext: input.currentAccountContext,
               sentDeliveryPolicy: pending.deliveryPolicy,
             },
+            true,
           )}`,
           // This pass has no surface of its own; the ack speaks for it.
           stated: false,
@@ -937,8 +984,8 @@ export type ReconcileTurnSettledInput = {
   readonly currentSettings: ChatRunSettings | null;
   /** See {@link ReconcileSnapshotInput.currentAccountContext}. */
   readonly currentAccountContext: AccountContext | null;
-  /** See {@link WorktreeSweptPredicate}. */
-  readonly worktreeWasSwept: WorktreeSweptPredicate;
+  /** See {@link WorktreePartitionFn}. */
+  readonly worktreePartition: WorktreePartitionFn;
 };
 
 export type ReconcileTurnSettledPatch = {
@@ -1053,14 +1100,20 @@ export function reconcileTurnSettled(
         : {
             clientActionId: restorable.clientActionId,
             content: restorable.content,
-            reason: `The message was not recorded before the turn stopped.${restoredSendQualifications(
+            reason: `The message was not recorded before the turn stopped.${deadSendAccountClauses(
               {
+                worktree: worktreeSweepFor(
+                  restorable.restoreWorktreeIntent,
+                  input.worktreePartition,
+                  false,
+                ),
                 sentSettings: restorable.settings,
                 currentSettings: input.currentSettings,
                 sentAccountContext: restorable.accountContext,
                 currentAccountContext: input.currentAccountContext,
                 sentDeliveryPolicy: restorable.deliveryPolicy,
               },
+              true,
             )}`,
             stated: false,
           },
@@ -1081,16 +1134,18 @@ export function reconcileTurnSettled(
           clientActionId: message.clientActionId,
           content: message.content,
           circumstance: "A message was not recorded before the turn stopped",
-          worktreeIntent: message.restoreWorktreeIntent,
-          worktreeGone: worktreeGoneFor(
-            message.restoreWorktreeIntent,
-            input.worktreeWasSwept,
-          ),
-          sentSettings: message.settings,
-          currentSettings: input.currentSettings,
-          sentAccountContext: message.accountContext,
-          sentDeliveryPolicy: message.deliveryPolicy,
-          currentAccountContext: input.currentAccountContext,
+          account: {
+            worktree: worktreeSweepFor(
+              message.restoreWorktreeIntent,
+              input.worktreePartition,
+              false,
+            ),
+            sentSettings: message.settings,
+            currentSettings: input.currentSettings,
+            sentAccountContext: message.accountContext,
+            sentDeliveryPolicy: message.deliveryPolicy,
+            currentAccountContext: input.currentAccountContext,
+          },
         }),
       ),
   };

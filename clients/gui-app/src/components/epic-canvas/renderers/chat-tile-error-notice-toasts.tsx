@@ -59,6 +59,7 @@ export function ChatTileErrorNoticeToasts(
         return;
       }
       showErrorNoticeToast(notice);
+      markDelivered(handle, notice);
     });
 
     return handle.store.subscribe((state, previousState) => {
@@ -66,12 +67,27 @@ export function ChatTileErrorNoticeToasts(
       state.errorNotices.forEach((notice) => {
         if (!rememberErrorNotice(notice, tracker)) return;
         showErrorNoticeToast(notice);
+        markDelivered(handle, notice);
       });
     });
   }, [handle]);
   useActivePaneEffect(syncErrorNotices);
 
   return null;
+}
+
+/**
+ * Tell the store this notice reached the screen, so its eviction protection
+ * can lapse. Only `SEND_RESTORED` is held for delivery, but recording every id
+ * keeps the rule in one place rather than teaching this layer which codes are
+ * special.
+ */
+function markDelivered(
+  handle: ChatSessionStoreHandle,
+  notice: ChatErrorNotice,
+): void {
+  if (notice.clientActionId === null) return;
+  handle.store.getState().markNoticeDelivered(notice.clientActionId);
 }
 
 function rememberErrorNotice(

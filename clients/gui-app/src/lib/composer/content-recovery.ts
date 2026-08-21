@@ -246,10 +246,23 @@ function lostSlashChip(
  * emits no bullet marker, so a chip in the first bullet item still lands at
  * column zero and still round-trips.
  */
+/**
+ * The serializer's list shape, mirrored so the recovery copy IS the markdown
+ * the agent received: `serializeListItem` uses `options.bulletMarker ?? "-"`
+ * and `options.listIndent ?? 2`, and this seam is only ever driven with the
+ * defaults.
+ */
+const BULLET_MARKER = "-";
+const LIST_INDENT = 2;
+
 const LINE_PREFIXING_NODE_TYPES: ReadonlySet<string> = new Set([
   "blockquote",
   "sourcedQuote",
   "orderedList",
+  // Joined the set when bullets started emitting `- ` for parity: a chip in
+  // the first bullet item no longer lands at column zero, so it no longer
+  // round-trips. The membership and the marker are one decision.
+  "bulletList",
 ]);
 
 /**
@@ -424,49 +437,71 @@ function prepareForProjection(
  * exactly what this module counts as a loss.
  */
 function numberedListItems(list: JsonContent): ReadonlyArray<JsonContent> {
-  return listItemLines(list, "").map((line) => ({
+  return listItemLines(list, 1).map((line) => ({
     type: "paragraph",
     content: [{ type: "text", text: line }],
   }));
 }
 
 /**
- * One line per item, with children INDENTED under their parent's marker.
+ * One line per item, mirroring `serializeListItem` exactly - marker, indent
+ * and continuation indent.
  *
  * A nested list or a continuation paragraph used to contribute only its
  * parent's first line, so `1. parent` / `1. child` came back with the depth
  * and the association gone - two steps reading as siblings. Numbering is
  * computed per level, so a nested list restarts from its own `start`.
+ *
+ * Bullets used to emit an EMPTY marker, on the reasoning that the structure is
+ * visible in the indentation. Parity says otherwise: the serializer sends
+ * `- item`, so a recovery copy without the dash is not the markdown the agent
+ * received, and a nested bullet followed by a continuation paragraph came back
+ * as two identically-indented lines with no way to tell which was which.
+ *
+ * The two indents are DIFFERENT and both come from the serializer. A
+ * continuation paragraph is indented past its own marker
+ * (`baseIndent + marker + 1`), but a NESTED LIST is indented by DEPTH alone -
+ * `serializeListItem` pushes a nested list's lines unchanged, and the nested
+ * level computes its own `baseIndent` from `listDepth`. Accumulating marker
+ * widths instead put a sub-list under `1. ` at three columns where the
+ * serializer puts it at two.
  */
 function listItemLines(
   list: JsonContent,
-  indent: string,
+  depth: number,
 ): ReadonlyArray<string> {
   const rawStart = list.attrs?.start;
   const ordered = list.type === "orderedList";
   const start = typeof rawStart === "number" ? rawStart : 1;
+  const baseIndent = " ".repeat((depth - 1) * LIST_INDENT);
   return (list.content ?? []).flatMap((item, index) => {
-    const marker = ordered ? `${start + index}. ` : "";
-    const childIndent = `${indent}${" ".repeat(marker.length > 0 ? marker.length : 2)}`;
+    const marker = ordered ? `${start + index}.` : BULLET_MARKER;
+    const continuationIndent = " ".repeat(
+      baseIndent.length + marker.length + 1,
+    );
     // Walked in DOCUMENT ORDER. Partitioning the blocks - prose first, nested
     // lists appended after - reordered an item whose sub-list is followed by a
     // continuation paragraph, so the trailing prose jumped above the steps it
     // was written to follow. Child order is content, not layout.
     const lines = (item.content ?? []).flatMap((block) => {
-      if (isListNode(block)) return listItemLines(block, childIndent);
+      if (isListNode(block)) return listItemLines(block, depth + 1);
       const text = extractPlainTextFromComposerJSONContent({
         type: "doc",
         content: [...prepareForProjection([block])],
       });
       return text.length === 0
         ? []
-        : text.split("\n").map((line) => `${childIndent}${line}`);
+        : text.split("\n").map((line) => `${continuationIndent}${line}`);
     });
-    // The marker belongs on the item's first line, whatever kind of block
-    // that turned out to be.
-    if (lines.length === 0) return [`${indent}${marker}`.trimEnd()];
+    // The marker belongs on the item's first line, whatever kind of block that
+    // turned out to be - including a nested list, which carries its own deeper
+    // indent and so must not be re-indented here.
+    if (lines.length === 0) return [`${baseIndent}${marker}`];
     const [first, ...rest] = lines;
-    return [`${indent}${marker}${first.slice(childIndent.length)}`, ...rest];
+    const firstText = first.startsWith(continuationIndent)
+      ? first.slice(continuationIndent.length)
+      : first.trimStart();
+    return [`${baseIndent}${marker} ${firstText}`, ...rest];
   });
 }
 

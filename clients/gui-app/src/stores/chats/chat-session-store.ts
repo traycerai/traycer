@@ -6,15 +6,16 @@ import {
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
-  restoredSendQualifications,
   sweepStalePendingActions,
   SEND_RESTORED_NOTICE_CODE,
   turnSettledFromStatus,
   withoutPendingAction,
-  worktreeSweptStatement,
-  type SweptRestoreOutcome,
-  WORKTREE_SUPERSEDED_STATEMENT,
-  type WorktreeSweptPredicate,
+  deadSendAccountClauses,
+  EMPTY_DEAD_SEND_ACCOUNT,
+  worktreeSweepFor,
+  type DeadSendAccount,
+  type WorktreeSweepAccount,
+  type WorktreePartitionFn,
 } from "@/stores/chats/chat-queue-reconciler";
 import {
   appendOptimisticQueuedItem,
@@ -46,7 +47,6 @@ import {
   stagedDispatchDisplacement,
   stagedWorktreeIntentAwaitsDispatchFrom,
   stagedWorktreeIntentAwaitsDispatchOutcome,
-  worktreeIntentWasSweptMidDispatch,
   partitionSweptIntent,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
@@ -62,6 +62,7 @@ import type {
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { addWithFifoEviction } from "@/lib/bounded-set";
 import type {
   RuntimeApprovalDecision,
   RuntimeEvent,
@@ -509,6 +510,17 @@ export interface ChatSessionState {
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly errorNotices: ReadonlyArray<ChatErrorNotice>;
+  /**
+   * Notices the toast layer has actually SHOWN, by `clientActionId`.
+   *
+   * Only the eviction rule reads it, and only for `SEND_RESTORED`: that notice
+   * is replayable on focus, and the ring is its only replay source, so
+   * evicting it before the pane came back deleted the qualifications outright.
+   * Once shown it ages like ordinary history. Bounded by the same FIFO cap as
+   * the toast layer's own tracker, since an unbounded set keyed by action id
+   * grows for the life of a chat.
+   */
+  readonly deliveredNoticeActionIds: ReadonlySet<string>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly currentComposerSettings: ChatRunSettings | null;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
@@ -664,6 +676,11 @@ export interface ChatSessionState {
   interviewError: (blockId: string, reason: string) => string | null;
   ackAcceptedAction: (clientActionId: string) => void;
   ackFailedSendRestoration: (clientActionId: string) => void;
+  /**
+   * Record that a notice reached the screen. Called by the toast layer, which
+   * is the only thing that knows - see {@link ChatSessionState.deliveredNoticeActionIds}.
+   */
+  markNoticeDelivered: (clientActionId: string) => void;
   /**
    * Returns the locally-cached structured prompt content keyed by
    * `messageId` (the persistent id the host attaches to `setup.failed`)
@@ -837,9 +854,10 @@ export const MAX_DELIVERED_RESTORE_COMPLETIONS = 32;
 function appendErrorNoticeDelta(
   notices: ReadonlyArray<ChatErrorNotice>,
   delta: ReadonlyArray<ChatErrorNotice>,
+  delivered: ReadonlySet<string>,
 ): ReadonlyArray<ChatErrorNotice> {
   return delta.reduce(
-    (next, notice) => appendErrorNotice(next, notice),
+    (next, notice) => appendErrorNotice(next, notice, delivered),
     notices,
   );
 }
@@ -847,6 +865,8 @@ function appendErrorNoticeDelta(
 function appendErrorNotice(
   notices: ReadonlyArray<ChatErrorNotice>,
   next: ChatErrorNotice,
+  /** Ids the toast layer has already shown - see the `SEND_RESTORED` rule. */
+  delivered: ReadonlySet<string>,
 ): ReadonlyArray<ChatErrorNotice> {
   // A last-copy notice is the user's draft, not notice history: the reconcile
   // that emitted it dropped the send's row, so evicting the record destroys
@@ -869,20 +889,36 @@ function appendErrorNotice(
     // Never capped, and never counted against ordinary history below.
     return alreadyStated ? notices : [...notices, next];
   }
+  // A `SEND_RESTORED` notice is replayable ON PURPOSE - it may arrive while
+  // the pane is unfocused, and the qualifications it carries are the only
+  // warning that the restored prompt will resend under something else. But
+  // the ring is the ONLY replay source, so 32 ordinary notices arriving first
+  // silently deleted it before the pane ever came back. It is not a last-copy
+  // notice (the draft is safe in the composer, so no permanent pin) - the
+  // axis is different: survive EVICTION until DELIVERED, then age normally
+  // like any other warning.
+  if (
+    next.code === SEND_RESTORED_NOTICE_CODE &&
+    next.clientActionId !== null &&
+    !delivered.has(next.clientActionId)
+  ) {
+    return [...notices, next];
+  }
   // The cap applies to ORDINARY history only. Counting total length made the
   // exemption's cost fall on ordinary notices: with the ring full of retained
   // drafts there was one usable slot left, so the next ordinary error evicted
   // the previous one before an inactive pane could ever show it. The exemption
   // protects drafts; it must not quietly shrink everything else.
-  const ordinaryCount = notices.filter(
-    (notice) => !noticeCarriesOnlyCopy(notice),
-  ).length;
+  const isProtected = (notice: ChatErrorNotice): boolean =>
+    noticeCarriesOnlyCopy(notice) ||
+    (notice.code === SEND_RESTORED_NOTICE_CODE &&
+      notice.clientActionId !== null &&
+      !delivered.has(notice.clientActionId));
+  const ordinaryCount = notices.filter((notice) => !isProtected(notice)).length;
   if (ordinaryCount < MAX_ERROR_NOTICE_RECORDS) {
     return [...notices, next];
   }
-  const evictable = notices.findIndex(
-    (notice) => !noticeCarriesOnlyCopy(notice),
-  );
+  const evictable = notices.findIndex((notice) => !isProtected(notice));
   if (evictable === -1) return [...notices, next];
   return [
     ...notices.slice(0, evictable),
@@ -908,6 +944,14 @@ function appendErrorNotice(
  */
 export interface StagedWorktreeIntentSource {
   readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /**
+   * Whose hand-back this is. NOT an ownership CLAIM on the pick - a restored
+   * prompt takes the slot whoever consumed it last, which is the whole point
+   * of {@link stagedWorktreeIntentAwaitsDispatchOutcome} being ownership-blind.
+   * It is here so the staging store can tell its OWN bookkeeping apart from a
+   * different, still-pending dispatch's: see `restoreIntentForDispatch`.
+   */
+  readonly clientActionId: string;
 }
 
 /**
@@ -983,12 +1027,12 @@ function rejectionNotice(input: {
   };
   readonly pending: PendingChatAction | null;
   readonly displaced: boolean;
-  readonly worktreeGone: boolean;
-  /** Which sentence the sweep owes - see {@link worktreeSweptStatement}. */
-  readonly sweptOutcome: SweptRestoreOutcome;
-  readonly currentSettings: ChatRunSettings | null;
-  /** See the call site: the winner's drift, said on this path's own surface. */
-  readonly restoredQualifications: string;
+  /**
+   * This send's account, gathered BEFORE the restore ran - `null` when the
+   * rejection is not a restorable send. Prepared rather than derived here so
+   * the sweep evidence is read while it still exists.
+   */
+  readonly account: DeadSendAccount | null;
 }): ChatErrorNotice {
   const reason = input.frame.reason ?? "Action rejected.";
   const pending = input.pending;
@@ -1002,35 +1046,50 @@ function rejectionNotice(input: {
       clientActionId: input.frame.clientActionId,
       content: pending.restoreContent,
       circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
-      worktreeIntent: pending.restoreWorktreeIntent,
-      // The fourth surface, and the one this early return used to skip: a
-      // displaced send is STATED, and the statement names the branch it was
-      // staged for. Naming a swept one as re-pickable sends the user after a
-      // worktree that is gone.
-      worktreeGone: input.worktreeGone,
-      sentSettings: pending.settings,
-      currentSettings: input.currentSettings,
-      sentAccountContext: pending.accountContext,
-      currentAccountContext: useAccountContextStore.getState().accountContext,
-      sentDeliveryPolicy: pending.deliveryPolicy,
+      account: input.account ?? EMPTY_DEAD_SEND_ACCOUNT,
     });
   }
+  // A rejected send that WINS the slot is restored, so it never reaches
+  // `unrecoverableSendNotice` - this is the surface that speaks for it, and
+  // `handedBack` is true because its surviving binding went back with it.
   return {
     code: input.frame.code ?? "ACTION_REJECTED",
-    message: `${
-      input.worktreeGone
-        ? `${reason} ${worktreeSweptStatement(input.sweptOutcome)}`
-        : reason
-    }${input.restoredQualifications}`,
+    message: `${reason}${
+      input.account === null || input.displaced
+        ? ""
+        : deadSendAccountClauses(input.account, true)
+    }`,
     severity: "warning",
     clientActionId: input.frame.clientActionId,
   };
 }
 
 /**
- * The winner's drift, computed once so the restoration reason and this path's
- * own notice cannot come to disagree about what changed.
+ * This rejection's account, or `null` when the frame is not a restorable send
+ * and so has nothing to say.
+ *
+ * Takes the sweep as an ARGUMENT rather than reading it: the caller gathers it
+ * before the restore runs, because the restore's own staging write clears the
+ * record this describes.
  */
+function rejectionEvidence(
+  pending: PendingChatAction | null,
+  worktree: WorktreeSweepAccount,
+  superseded: boolean,
+  currentSettings: ChatRunSettings | null,
+): DeadSendAccount | null {
+  if (pending === null || pending.action !== "send") return null;
+  if (pending.restoreContent === null) return null;
+  return {
+    worktree: { ...worktree, superseded },
+    sentSettings: pending.settings,
+    currentSettings,
+    sentAccountContext: pending.accountContext,
+    currentAccountContext: useAccountContextStore.getState().accountContext,
+    sentDeliveryPolicy: pending.deliveryPolicy,
+  };
+}
+
 /**
  * The slot a rejected SEND claims, or `null` when this rejection claims none.
  *
@@ -1046,7 +1105,7 @@ function rejectionRestoration(input: {
     readonly clientActionId: string;
     readonly reason: string | null;
   };
-  readonly superseded: boolean;
+  readonly account: DeadSendAccount | null;
 }): FailedSendRestorationState | null {
   const { state, pending, frame } = input;
   if (state.failedSendRestoration !== null) return null;
@@ -1057,57 +1116,11 @@ function rejectionRestoration(input: {
     clientActionId: frame.clientActionId,
     content: pending.restoreContent,
     reason: `${frame.reason ?? "Message was not accepted."}${
-      input.superseded ? ` ${WORKTREE_SUPERSEDED_STATEMENT}` : ""
-    }${rejectionQualifications(state, pending)}`,
+      input.account === null ? "" : deadSendAccountClauses(input.account, true)
+    }`,
     // This path owns a notice and says it there, so the ack stays quiet.
     stated: true,
   };
-}
-
-function rejectionQualifications(
-  state: ChatSessionState,
-  pending: PendingChatAction,
-): string {
-  return restoredSendQualifications({
-    sentSettings: pending.settings,
-    currentSettings: state.currentComposerSettings,
-    sentAccountContext: pending.accountContext,
-    currentAccountContext: useAccountContextStore.getState().accountContext,
-    sentDeliveryPolicy: pending.deliveryPolicy,
-  });
-}
-
-/**
- * Say, on the composer's own surface, that a restored prompt came back without
- * the worktree it was staged for.
- *
- * The two passes that hand a prompt to the composer - the snapshot pass and
- * the settled-turn pass - both owe this, and only the first had it. The
- * settled-turn pass reached its refusal through `restoreStagedWorktreeIntent`
- * directly, so it never had the flag to report; routing it through
- * {@link restoreOneWorktreeIntent} is what gives it one.
- *
- * A no-op when nothing was refused, and when this pass restored nothing - the
- * reason belongs to whichever prompt actually came back.
- */
-function appendWorktreeGoneToRestoration(
-  set: (
-    updater: (state: ChatSessionState) => Partial<ChatSessionState>,
-  ) => void,
-  outcome: SweptRestoreOutcome,
-): void {
-  const statement = worktreeSweptStatement(outcome);
-  if (statement.length === 0) return;
-  set((state) =>
-    state.failedSendRestoration === null
-      ? {}
-      : {
-          failedSendRestoration: {
-            ...state.failedSendRestoration,
-            reason: `${state.failedSendRestoration.reason} ${statement}`,
-          },
-        },
-  );
 }
 
 /**
@@ -1146,16 +1159,15 @@ function restoreOneWorktreeIntent(
    * ask - see {@link restorationSlotHeldByOther}.
    */
   restoration: FailedSendRestorationState | null,
-): SweptRestoreOutcome {
+): void {
   if (restoredPrompt !== null) {
-    const outcome = sweptRestoreOutcome(restoredPrompt, stagingKey);
     restoreStagedWorktreeIntent(restoredPrompt, stagingKey);
     // A prompt that HAD a binding and did not get it back because a sweep ran
     // mid-flight comes back unbound through no decision of the user's - the
     // one refusal worth saying out loud. A refusal caused by their own newer
     // pick is not: they chose it, and claiming their worktree was deleted
     // would be a lie.
-    return outcome;
+    return;
   }
   // OWNERSHIP, not merely "a consumption is outstanding". The mark names
   // whichever dispatch consumed last, and that dispatch may have gone on to be
@@ -1181,23 +1193,7 @@ function restoreOneWorktreeIntent(
       ),
   );
   restoreStagedWorktreeIntent(owed ?? null, stagingKey);
-  return "none";
-}
-
-/**
- * How much of THIS prompt's staged worktree a mid-dispatch sweep took. `all`
- * only when nothing survived - that is the one case where "it was not
- * restored" is a true sentence.
- */
-function sweptRestoreOutcome(
-  source: StagedWorktreeIntentSource,
-  stagingKey: WorktreeStagingKey,
-): SweptRestoreOutcome {
-  const intent = source.restoreWorktreeIntent;
-  if (intent === null) return "none";
-  const { survivors, swept } = partitionSweptIntent(stagingKey, intent);
-  if (swept === null) return "none";
-  return survivors === null ? "all" : "partial";
+  return;
 }
 
 /**
@@ -1239,7 +1235,13 @@ function restoreStagedWorktreeIntent(
     source.restoreWorktreeIntent,
   );
   if (survivors === null) return;
-  useWorktreeIntentStagingStore.getState().setIntent(stagingKey, survivors);
+  // A hand-back, NOT a user pick - so it may only clear its own dispatch's
+  // records. The gate above is ownership-blind, so the mark standing here
+  // often belongs to a newer, still-pending send whose sweep evidence its
+  // rejection has not read yet.
+  useWorktreeIntentStagingStore
+    .getState()
+    .restoreIntentForDispatch(stagingKey, survivors, source.clientActionId);
 }
 
 export function createChatSessionStore(
@@ -1305,8 +1307,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     ownerKind: "chat",
     ownerId: options.chatId,
   };
-  const worktreeWasSwept: WorktreeSweptPredicate = (intent) =>
-    worktreeIntentWasSweptMidDispatch(ownerStagingKey, intent);
+  const worktreePartition: WorktreePartitionFn = (intent) =>
+    partitionSweptIntent(ownerStagingKey, intent);
 
   const canSendAction = (get: () => ChatSessionState): boolean => {
     if (disposed) return false;
@@ -1624,7 +1626,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             currentSettings: nextComposerSettings,
             currentAccountContext:
               useAccountContextStore.getState().accountContext,
-            worktreeWasSwept,
+            worktreePartition,
             nowMs: now,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their
@@ -1648,7 +1650,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               currentSettings: nextComposerSettings,
               currentAccountContext:
                 useAccountContextStore.getState().accountContext,
-              worktreeWasSwept,
+              worktreePartition,
             },
           );
           restoredWorktreeIntentForSnapshot =
@@ -1728,10 +1730,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             // stranded send the settled pass dropped without the slot.
             // Appended through the same ring/cap as the rejection path's
             // notice.
-            errorNotices: appendErrorNoticeDelta(state.errorNotices, [
-              ...pending.appendedErrorNotices,
-              ...settled.appendedErrorNotices,
-            ]),
+            errorNotices: appendErrorNoticeDelta(
+              state.errorNotices,
+              [
+                ...pending.appendedErrorNotices,
+                ...settled.appendedErrorNotices,
+              ],
+              state.deliveredNoticeActionIds,
+            ),
             restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
             snapshotLoaded: true,
             // Stamped with the CONNECTION, not a per-snapshot counter: a
@@ -1769,7 +1775,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // prompt is being handed back, which is the case the sweep's own
         // reasoning was written for (an edit dropped before its ack never runs
         // the rejection path, so nothing else would restore it).
-        const worktreeGoneForSnapshot = restoreOneWorktreeIntent(
+        restoreOneWorktreeIntent(
           restoredWorktreeIntentForSnapshot,
           sweptWorktreeIntents,
           {
@@ -1788,11 +1794,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         // accepted before the connection dropped) may never see another
         // turn-state frame - the turn could have settled while offline - so
         // advance it against the snapshot state directly.
-        // Say it, rather than letting the prompt return silently unbound. The
-        // reason is an existing surface the composer already shows, so this
-        // needs no new affordance - only honesty about WHY the worktree the
-        // send was staged for is not coming back with it.
-        appendWorktreeGoneToRestoration(set, worktreeGoneForSnapshot);
         maybeDispatchPendingBackgroundSessionStop(set, get);
         // This snapshot is authoritative for which interviews are still
         // pending, so any stored draft whose block has left the set is an
@@ -1859,14 +1860,18 @@ export function createChatSessionStoreWithNotificationDependencies(
           );
         // Asked BEFORE the hand-back below, because a successful restore
         // stages the survivors through `setIntent`, and every user-mutation
-        // path - `setIntent` included - drops the mark AND the swept-refs
-        // record alongside it. Reading afterwards finds an empty record and
-        // reports "none", which is how the partial sentence went missing.
-        const rejectionSweptOutcome: SweptRestoreOutcome =
-          rejectedPending === null
-            ? "none"
-            : sweptRestoreOutcome(rejectedPending, rejectionStagingKey);
-        const worktreeGoneForRejection = rejectionSweptOutcome !== "none";
+        // Read BEFORE anything below stages or clears, because the evidence
+        // is destroyed by the very operation it describes: the restore stages
+        // survivors through the staging store, and that write drops the
+        // dispatch mark and the swept-refs record with it. Reading afterwards
+        // finds an empty record and says nothing was swept - which is how the
+        // partial sentence went missing once already.
+        const rejectionSweep = worktreeSweepFor(
+          rejectedPending?.restoreWorktreeIntent ?? null,
+          worktreePartition,
+          false,
+        );
+        const worktreeGoneForRejection = rejectionSweep.swept !== null;
         // Only the dispatch that TOOK the slot may put its pick back. An
         // earlier action's rejection arriving after a later dispatch consumed
         // its own pick would otherwise steal a slot that dispatch still needs,
@@ -1916,6 +1921,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           !rejectionOwnsSlot &&
           !worktreeGoneForRejection &&
           stagedWorktreeIntentAwaitsDispatchOutcome(rejectionStagingKey);
+        // One account, both surfaces. Built from evidence already in hand so
+        // nothing below can read a record the restore has since cleared.
+        const rejectionAccountForFrame = rejectionEvidence(
+          rejectedPending,
+          rejectionSweep,
+          worktreeSupersededForRejection,
+          get().currentComposerSettings,
+        );
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,
@@ -1980,7 +1993,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 state,
                 pending,
                 frame,
-                superseded: worktreeSupersededForRejection,
+                account: rejectionAccountForFrame,
               }) ?? state.failedSendRestoration,
             errorNotices: appendErrorNotice(
               state.errorNotices,
@@ -1990,22 +2003,9 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // Displaced: the slot was already taken when this rejection
                 // landed, so first-writer-wins gave this prompt nothing.
                 displaced: state.failedSendRestoration !== null,
-                worktreeGone: worktreeGoneForRejection,
-                sweptOutcome: rejectionSweptOutcome,
-                currentSettings: state.currentComposerSettings,
-                // The SAME qualifications the restoration reason carries, on
-                // the surface this path speaks through. A rejected send that
-                // WINS the slot is restored, so it never reaches
-                // `unrecoverableSendNotice` (which builds its own) - without
-                // this, the one send whose prompt is about to be resent is the
-                // one told least.
-                restoredQualifications:
-                  state.failedSendRestoration === null &&
-                  pending?.action === "send" &&
-                  pending.restoreContent !== null
-                    ? rejectionQualifications(state, pending)
-                    : "",
+                account: rejectionAccountForFrame,
               }),
+              state.deliveredNoticeActionIds,
             ),
           };
         });
@@ -2127,7 +2127,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               currentSettings: state.currentComposerSettings,
               currentAccountContext:
                 useAccountContextStore.getState().accountContext,
-              worktreeWasSwept,
+              worktreePartition,
             },
           );
           restoredWorktreeIntentForTurnState =
@@ -2144,6 +2144,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             errorNotices: appendErrorNoticeDelta(
               state.errorNotices,
               settledPatch.appendedErrorNotices,
+              state.deliveredNoticeActionIds,
             ),
             messages: nextMessages,
             runStatus: frame.runStatus,
@@ -2164,24 +2165,19 @@ export function createChatSessionStoreWithNotificationDependencies(
           };
         });
         // Routed through the shared decider rather than calling
-        // `restoreStagedWorktreeIntent` directly. With no swept claimants to
-        // consider this restores exactly what the direct call restored - but
-        // it also RETURNS whether the re-stage was refused by a sweep, which
-        // is the fact this path was settling without.
-        appendWorktreeGoneToRestoration(
-          set,
-          restoreOneWorktreeIntent(
-            restoredWorktreeIntentForTurnState,
-            [],
-            {
-              surface: "owner",
-              hostId: options.hostId,
-              epicId: options.epicId,
-              ownerKind: "chat",
-              ownerId: options.chatId,
-            },
-            get().failedSendRestoration,
-          ),
+        // `restoreStagedWorktreeIntent` directly, so the swept-claimant rule
+        // is applied here too.
+        void restoreOneWorktreeIntent(
+          restoredWorktreeIntentForTurnState,
+          [],
+          {
+            surface: "owner",
+            hostId: options.hostId,
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          },
+          get().failedSendRestoration,
         );
         maybeDispatchPendingBackgroundSessionStop(set, get);
       },
@@ -2437,7 +2433,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         set((state) => ({
-          errorNotices: appendErrorNotice(state.errorNotices, frame.notice),
+          errorNotices: appendErrorNotice(
+            state.errorNotices,
+            frame.notice,
+            state.deliveredNoticeActionIds,
+          ),
         }));
       },
       onConnectionStatus: (status, reason) => {
@@ -2662,6 +2662,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       acceptedActions: {},
       pendingUserMessages: [],
       errorNotices: [],
+      deliveredNoticeActionIds: new Set<string>(),
       failedSendRestoration: null,
       currentComposerSettings: null,
       liveAssistantMessage: null,
@@ -3520,6 +3521,18 @@ export function createChatSessionStoreWithNotificationDependencies(
           return { acceptedActions: next };
         });
       },
+      markNoticeDelivered: (clientActionId) => {
+        set((state) => {
+          if (state.deliveredNoticeActionIds.has(clientActionId)) return {};
+          const next = new Set(state.deliveredNoticeActionIds);
+          addWithFifoEviction(
+            next,
+            clientActionId,
+            MAX_DELIVERED_CLIENT_ACTION_IDS,
+          );
+          return { deliveredNoticeActionIds: next };
+        });
+      },
       ackFailedSendRestoration: (clientActionId) => {
         set((state) => {
           const restoration = state.failedSendRestoration;
@@ -3535,12 +3548,16 @@ export function createChatSessionStoreWithNotificationDependencies(
           // through here exactly once.
           return {
             failedSendRestoration: null,
-            errorNotices: appendErrorNotice(state.errorNotices, {
-              code: SEND_RESTORED_NOTICE_CODE,
-              message: restoration.reason,
-              severity: "warning",
-              clientActionId,
-            }),
+            errorNotices: appendErrorNotice(
+              state.errorNotices,
+              {
+                code: SEND_RESTORED_NOTICE_CODE,
+                message: restoration.reason,
+                severity: "warning",
+                clientActionId,
+              },
+              state.deliveredNoticeActionIds,
+            ),
           };
         });
       },

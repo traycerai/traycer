@@ -13,6 +13,7 @@ import {
   sweepStalePendingActions,
   turnSettledFromStatus,
   unrecoverableSendNotice,
+  NO_WORKTREE_SWEEP,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
   type ReconcileTurnSettledInput,
@@ -321,7 +322,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -346,7 +347,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -368,7 +369,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -395,7 +396,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -424,7 +425,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -451,7 +452,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -484,7 +485,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -508,7 +509,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -541,7 +542,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -563,7 +564,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -622,7 +623,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -661,7 +662,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -695,7 +696,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -728,7 +729,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -794,7 +795,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         nowMs: 5000,
       };
 
@@ -985,7 +986,7 @@ describe("chat-queue-reconciler", () => {
         failedSendRestoration: null,
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         ...overrides,
       };
     }
@@ -1176,13 +1177,14 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-1",
         content,
         circumstance: "A message was not recorded",
-        worktreeIntent: null,
-        worktreeGone: false,
-        sentSettings: SETTINGS,
-        currentSettings,
-        sentAccountContext: null,
-        currentAccountContext: null,
-        sentDeliveryPolicy: null,
+        account: {
+          worktree: NO_WORKTREE_SWEEP,
+          sentSettings: SETTINGS,
+          currentSettings,
+          sentAccountContext: null,
+          currentAccountContext: null,
+          sentDeliveryPolicy: null,
+        },
       }).message;
     }
 
@@ -1206,7 +1208,7 @@ describe("chat-queue-reconciler", () => {
         failedSendRestoration: null,
         currentSettings: { ...SETTINGS, model: "gpt-5.6" },
         currentAccountContext: { type: "TEAM", teamId: "team-7" },
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
         connectionEpoch: 1,
         nowMs: 5000,
       });
@@ -1230,7 +1232,7 @@ describe("chat-queue-reconciler", () => {
         failedSendRestoration: null,
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" },
-        worktreeWasSwept: () => false,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
       });
 
       const reason = result.failedSendRestoration?.reason ?? "";
@@ -1256,14 +1258,15 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-1",
         content: CONTENT,
         circumstance: "A message was not recorded",
-        worktreeIntent: null,
-        worktreeGone: false,
-        sentSettings: SETTINGS,
-        // The new-chat case: nothing has run yet, so there is no current tuple.
-        currentSettings: null,
-        sentAccountContext: { type: "PERSONAL" },
-        currentAccountContext: { type: "TEAM", teamId: "team-7" },
-        sentDeliveryPolicy: null,
+        account: {
+          worktree: NO_WORKTREE_SWEEP,
+          sentSettings: SETTINGS,
+          // The new-chat case: nothing has run yet, so there is no current tuple.
+          currentSettings: null,
+          sentAccountContext: { type: "PERSONAL" },
+          currentAccountContext: { type: "TEAM", teamId: "team-7" },
+          sentDeliveryPolicy: null,
+        },
       }).message;
 
       expect(message).toContain("billing your personal account");
@@ -1276,13 +1279,14 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-1",
         content: CONTENT,
         circumstance: "A message was not recorded",
-        worktreeIntent: null,
-        worktreeGone: false,
-        sentSettings: SETTINGS,
-        currentSettings: null,
-        sentAccountContext: { type: "PERSONAL" },
-        currentAccountContext: { type: "PERSONAL" },
-        sentDeliveryPolicy: null,
+        account: {
+          worktree: NO_WORKTREE_SWEEP,
+          sentSettings: SETTINGS,
+          currentSettings: null,
+          sentAccountContext: { type: "PERSONAL" },
+          currentAccountContext: { type: "PERSONAL" },
+          sentDeliveryPolicy: null,
+        },
       }).message;
 
       expect(message).not.toContain("was going to run with");

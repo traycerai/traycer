@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { jsonContentToMarkdown } from "@traycer/protocol/common/json-content-serializer";
 import {
   CLASSIFIED_LABELS_FOR_TESTS,
   classifyContentRecovery,
@@ -10,6 +11,99 @@ import {
 } from "@/lib/composer/content-recovery";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The options this seam mirrors. `bulletMarker` / `listIndent` are left unset
+ * so the serializer takes the very defaults `content-recovery` hard-codes -
+ * that is the claim under test.
+ */
+const SERIALIZER_DEFAULTS = {
+  mentionFormat: "llm" as const,
+  platform: "POSIX" as const,
+};
+
+function listDoc(
+  type: "bulletList" | "orderedList",
+  items: ReadonlyArray<string>,
+): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type,
+        content: items.map((text) => ({
+          type: "listItem",
+          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+        })),
+      },
+    ],
+  };
+}
+
+/** A sub-list indents by DEPTH, never by the parent marker's width. */
+const NESTED_ORDERED_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "parent" }] },
+            {
+              type: "orderedList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "child" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** ...while a continuation paragraph indents by exactly that width. */
+const NESTED_MIXED_WITH_CONTINUATION_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "step" }] },
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "detail" }],
+                    },
+                  ],
+                },
+              ],
+            },
+            { type: "paragraph", content: [{ type: "text", text: "after" }] },
+          ],
+        },
+      ],
+    },
+  ],
+};
 
 /**
  * `json-content-serializer` is the authoritative enumeration of the node kinds
@@ -510,11 +604,13 @@ describe("content recovery classification", () => {
     expect(report.get("command")).toBe(1);
   });
 
-  // The criterion is CONVERTIBILITY, not "unwrapped". A bullet item carries no
-  // marker in the recovery text - `leaves bullet markers off, which the
-  // criterion allows` - so a chip in the first one still lands at offset 0 and
-  // the converter still rebuilds it. Warning here would be a false loss.
-  it("reports nothing for a leading skill chip in a bullet item", () => {
+  // `-Jy8u` flipped this with the marker. The criterion is unchanged -
+  // CONVERTIBILITY - but the fact it reads changed: a bullet item now carries
+  // `- ` for parity with the serializer, so a chip in the first one recovers
+  // as `- /review` and the converter will not rebuild it. The membership of
+  // `bulletList` in `LINE_PREFIXING_NODE_TYPES` and the marker are ONE
+  // decision, and this is the test that holds them together.
+  it("counts a leading skill chip in a bullet item as a loss", () => {
     const report = classifyContentRecovery({
       type: "doc",
       content: [
@@ -540,7 +636,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(report.size).toBe(0);
+    expect(report.get("command")).toBe(1);
   });
 
   // `-G8sl`: a blockquote is not text-complete, because BOTH paste paths
@@ -851,7 +947,7 @@ describe("content recovery classification", () => {
 
     // Exact, so a wrong separator or ordering cannot pass: the blockquote
     // prefix is applied per line by `quotePrefixLines`.
-    expect(text).toBe("> foo\n> bar");
+    expect(text).toBe("> - foo\n> - bar");
   });
 
   it("preserves a code block's leading indentation", () => {
@@ -944,7 +1040,7 @@ describe("content recovery classification", () => {
     });
 
     // Numbering restarts per level, and the child sits under its parent.
-    expect(text).toBe("1. parent\n   1. child");
+    expect(text).toBe("1. parent\n  1. child");
   });
 
   // R12 `-BQcf`: an item whose nested list is followed by a continuation
@@ -989,10 +1085,33 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toBe("1. step\n   detail\n   after");
+    expect(text).toBe("1. step\n  - detail\n   after");
   });
 
-  it("leaves bullet markers off, which the criterion allows", () => {
+  // The parity claim, checked against the REAL serializer rather than against
+  // a string someone believed it produced. Every list shape this seam mirrors
+  // by hand - bullet marker, ordered marker, nested-list indent (by DEPTH),
+  // continuation indent (by marker width) - is one transcription error away
+  // from silent divergence, and the four expectations above were written from
+  // a reading of `serializeListItem`. This one asks it.
+  it("matches jsonContentToMarkdown byte for byte on list shapes", () => {
+    const shapes: ReadonlyArray<JsonContent> = [
+      listDoc("bulletList", ["one", "two"]),
+      listDoc("orderedList", ["one", "two"]),
+      NESTED_ORDERED_DOC,
+      NESTED_MIXED_WITH_CONTINUATION_DOC,
+    ];
+    for (const doc of shapes) {
+      expect(recoveryTextFromContent(doc)).toBe(
+        jsonContentToMarkdown(doc, SERIALIZER_DEFAULTS),
+      );
+    }
+  });
+
+  // `-Jy8u`: the serializer sends `- item`, so a recovery copy without the
+  // dash is not the markdown the agent received - and a nested bullet followed
+  // by a continuation paragraph came back as two identically-indented lines.
+  it("emits bullet markers, matching the serializer", () => {
     const text = recoveryTextFromContent({
       type: "doc",
       content: [
@@ -1017,7 +1136,7 @@ describe("content recovery classification", () => {
     });
 
     // A `- ` is visible in its absence and retypeable; a number is not.
-    expect(text).toBe("one\ntwo");
+    expect(text).toBe("- one\n- two");
   });
 
   // R10 `-AdAI`: content ending in a newline plus the join's own newline made

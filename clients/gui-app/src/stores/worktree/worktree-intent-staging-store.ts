@@ -407,6 +407,28 @@ interface WorktreeIntentStagingStore {
     key: WorktreeStagingKey,
     intent: WorktreeIntent | null,
   ) => void;
+  /**
+   * Stage a pick handed back by a DEAD dispatch, rather than chosen by the
+   * user.
+   *
+   * The difference is what it may clear. {@link setIntent} drops the dispatch
+   * mark and the swept-refs record with the write, because a fresh user pick
+   * supersedes whatever a dispatch left behind - "one lifetime, one drop".
+   * A hand-back supersedes nothing: the gate it passes
+   * ({@link stagedWorktreeIntentAwaitsDispatchOutcome}) is deliberately
+   * ownership-blind, so the mark it would clear routinely belongs to a
+   * DIFFERENT, still-pending dispatch. Clearing that dispatch's swept-refs
+   * destroys the evidence its own rejection needs, and the rejection then
+   * names a deleted worktree as re-pickable or drops the warning entirely.
+   *
+   * So this clears the mark and swept refs only when they are `clientActionId`'s
+   * own, and otherwise leaves the other dispatch's records standing.
+   */
+  readonly restoreIntentForDispatch: (
+    key: WorktreeStagingKey,
+    intent: WorktreeIntent,
+    clientActionId: string,
+  ) => void;
   /** Drop a single workspace's staged entry; clears the key once empty. */
   readonly unstageEntry: (
     key: WorktreeStagingKey,
@@ -542,7 +564,7 @@ export interface DispatchConsumptionMark {
  * over time, so the mark describes only the latest. What it can record is that
  * a sweep happened while a dispatch was out. So every host-matching consumed
  * slot accumulates the removed refs, and each hand-back tests its OWN intent
- * against them later ({@link worktreeIntentWasSweptMidDispatch}) - the moment
+ * against them later ({@link partitionSweptIntent}) - the moment
  * the correct entries are actually in hand.
  *
  * No filtering here, and no "purged" state on the mark: an earlier design
@@ -583,37 +605,16 @@ function accumulateSweptRefs(
 }
 
 /**
- * Whether THIS intent names something swept while its dispatch was in flight.
- *
- * The hand-back's OWN entries, not the mark's: several dispatches can have
- * taken different picks from one slot, so the mark describes only the latest.
- * Testing that would spare a hand-back whose worktree is gone, or refuse one
- * whose worktree survived.
- */
-export function worktreeIntentWasSweptMidDispatch(
-  key: WorktreeStagingKey,
-  intent: WorktreeIntent,
-): boolean {
-  const swept =
-    useWorktreeIntentStagingStore.getState().sweptRefsByKey[
-      worktreeStagingKeyString(key)
-    ];
-  if (swept === undefined) return false;
-  return intent.entries.some((entry) =>
-    worktreeFolderIntentReferencesRemoved(entry, swept),
-  );
-}
-
-/**
  * Split a hand-back into what a mid-dispatch sweep took and what it left.
  *
  * `WorktreeIntent` permits one entry PER WORKSPACE FOLDER, so a multi-repo
  * staging is several independent bindings that happen to travel together.
- * Answering "was this swept" for the whole intent - which
- * {@link worktreeIntentWasSweptMidDispatch} does, and must, for the yes/no
- * question - made one removed worktree forfeit every surviving folder's
+ * Answering "was this swept" for the whole intent - an any-match boolean, as
+ * this once was - made one removed worktree forfeit every surviving folder's
  * binding, and then told the user "its staged worktree no longer exists" as
- * though there had been one. The ordinary purge loop has always filtered
+ * though there had been one. Every caller NAMES folders, so no caller can use
+ * the coarser answer; the boolean is gone rather than left as a second way to
+ * ask. The ordinary purge loop has always filtered
  * per entry; this is the same granularity for the hand-back.
  *
  * Both halves are returned because the founding invariant is now per ENTRY:
@@ -788,6 +789,26 @@ export const useWorktreeIntentStagingStore =
                 id,
               ),
               sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
+            };
+          }),
+        restoreIntentForDispatch: (key, intent, clientActionId) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            // Only this dispatch's own records go with the write. Another
+            // dispatch's mark - and, critically, its accumulated swept refs -
+            // outlive a hand-back that was never about it.
+            const ownsMark =
+              state.consumedForDispatchByKey[id]?.clientActionId ===
+              clientActionId;
+            return {
+              intentByKey: { ...state.intentByKey, [id]: intent },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: ownsMark
+                ? withoutDispatchMark(state.consumedForDispatchByKey, id)
+                : state.consumedForDispatchByKey,
+              sweptRefsByKey: ownsMark
+                ? withoutDispatchMark(state.sweptRefsByKey, id)
+                : state.sweptRefsByKey,
             };
           }),
         setIntent: (key, intent) =>
