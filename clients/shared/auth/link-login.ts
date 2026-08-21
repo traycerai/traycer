@@ -22,17 +22,34 @@ import { parseRetryAfterSeconds } from "./device-auth";
 const LINK_LOGIN_FETCH_TIMEOUT_MS = 10_000;
 
 /**
- * QR payload format, version 1.
+ * QR payload format.
  *
- * The QR encodes `traycer://link-login?code=<XXXXX-XXXXX>` — URL-shaped so
- * the `traycer` custom scheme the mobile app already registers can adopt it
- * as a real deep link later (OS camera → app), while the in-app scanner
- * simply parses the `code` query parameter. The bare code is also accepted
- * on the manual-entry path, with the device flow's normalization (case,
- * dashes, the I/L→1 and O→0 visual folds).
+ * The QR encodes `https://<platform-base>/link?code=<XXXXX-XXXXX>`: an
+ * ordinary https URL, which is what makes an arbitrary OS camera app offer to
+ * open it. On a phone with the app installed the associated-domains
+ * entitlement turns that into a universal link and the app is handed the URL
+ * directly; everywhere else — a desktop browser, a phone without the app, a
+ * camera that only offers "open in browser" — the same URL lands on the
+ * platform's `/link` page, which is the whole reason the payload is a real
+ * web address rather than a private scheme.
+ *
+ * The platform base is CALLER-SUPPLIED, never baked: the surfaces that mint a
+ * code (the desktop panel, the CLI, the web portal) each already know which
+ * deploy they are talking to, and a constant here would silently point a dev
+ * build's QR at production.
+ *
+ * The superseded `traycer://link-login?code=` form is still PARSED. Codes
+ * live about a minute, so no old QR outlives a deploy by much — but the
+ * in-app scanner, cached screenshots and any payload already in flight must
+ * not break, and keeping the branch costs one comparison. The bare code is
+ * accepted too, on the manual-entry path, with the device flow's
+ * normalization (case, dashes, the I/L→1 and O→0 visual folds).
  */
 const LINK_LOGIN_QR_SCHEME = "traycer:";
 const LINK_LOGIN_QR_HOST = "link-login";
+const LINK_LOGIN_HTTPS_SCHEME = "https:";
+/** The platform's landing route, and the QR's path in the https form. */
+const LINK_LOGIN_LINK_PATH = "/link";
 // The public code's canonical shape: 10 Crockford base32 chars (no I/L/O/U),
 // matched AFTER normalization.
 const NORMALIZED_CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{10}$/;
@@ -99,15 +116,64 @@ export function normalizeLinkLoginCodeInput(raw: string): string {
     .replace(/O/g, "0");
 }
 
-export function buildLinkLoginQrPayload(code: string): string {
-  return `${LINK_LOGIN_QR_SCHEME}//${LINK_LOGIN_QR_HOST}?code=${encodeURIComponent(code)}`;
+export function buildLinkLoginQrPayload(
+  platformBaseUrl: string,
+  code: string,
+): string {
+  // Root-absolute against the base's origin: `/link` is a top-level route, so
+  // a base carrying a path or a trailing slash resolves to the same URL.
+  const url = new URL(LINK_LOGIN_LINK_PATH, platformBaseUrl);
+  url.searchParams.set("code", code);
+  return url.toString();
 }
 
 /**
- * Extracts a public link code from scanned or pasted text: the v1 QR payload
- * URL, or the typed code itself (any dash/case variation the normalization
- * accepts). Returns the NORMALIZED code, or `null` when the text carries no
- * plausible code — never a guess.
+ * Whether this URL is a link-login payload, in either encoding.
+ *
+ * The https form's HOST IS NOT CONSTRAINED, and deliberately so: every deploy
+ * has its own platform host and dev builds point at yet another, so a host
+ * allowlist here would be a second copy of the deploy table that goes stale
+ * silently. It costs nothing, because this function only EXTRACTS a code —
+ * the claim is always POSTed to the shell's own `authnBaseUrl`, so a host
+ * chosen by whoever printed the QR cannot redirect where the code is sent.
+ * What is left is that a valid code can be lifted out of a URL Traycer did not
+ * print, which is exactly what the typed-code path has always allowed and what
+ * the server's uniform rejection of unknown codes answers.
+ */
+function linkLoginPayloadCode(url: URL): string | null {
+  if (url.protocol === LINK_LOGIN_QR_SCHEME) {
+    // Custom-scheme URLs parse host-vs-path differently across engines; accept
+    // the payload wherever `link-login` landed.
+    if (
+      url.host !== LINK_LOGIN_QR_HOST &&
+      url.pathname.replace(/^\/+/, "") !== LINK_LOGIN_QR_HOST
+    ) {
+      return null;
+    }
+    return url.searchParams.get("code");
+  }
+  // `https:` only — an `http:` payload would be a downgrade no camera needs to
+  // be offered, and the universal link the entitlement claims is https by
+  // definition.
+  if (url.protocol !== LINK_LOGIN_HTTPS_SCHEME) {
+    return null;
+  }
+  if (url.pathname.replace(/\/+$/, "") !== LINK_LOGIN_LINK_PATH) {
+    return null;
+  }
+  return url.searchParams.get("code");
+}
+
+/**
+ * Extracts a public link code from scanned, deep-linked or pasted text: the
+ * https QR payload, the superseded `traycer://` payload, or the typed code
+ * itself (any dash/case variation the normalization accepts). Returns the
+ * NORMALIZED code, or `null` when the text carries no plausible code — never
+ * a guess.
+ *
+ * `null` is an ordinary answer here, not a failure: every URL the OS hands the
+ * app arrives through this function, including the payload-free
+ * `traycer://auth/callback` return link, and those must fall out silently.
  */
 export function parseLinkLoginInput(text: string): string | null {
   const trimmed = text.trim();
@@ -124,18 +190,7 @@ export function parseLinkLoginInput(text: string): string | null {
   } catch {
     return null;
   }
-  if (url.protocol !== LINK_LOGIN_QR_SCHEME) {
-    return null;
-  }
-  // Custom-scheme URLs parse host-vs-path differently across engines; accept
-  // the payload wherever `link-login` landed.
-  if (
-    url.host !== LINK_LOGIN_QR_HOST &&
-    url.pathname.replace(/^\/+/, "") !== LINK_LOGIN_QR_HOST
-  ) {
-    return null;
-  }
-  const code = url.searchParams.get("code");
+  const code = linkLoginPayloadCode(url);
   if (code === null) {
     return null;
   }

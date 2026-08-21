@@ -645,7 +645,7 @@ describe("MobileNavDrawer", () => {
       );
 
       expect(opened.length).toBe(1);
-      // `resolveManageSubscriptionUrl` swaps the `authn.*` label for its
+      // `resolvePlatformBaseUrl` swaps the `authn.*` label for its
       // `platform.*` sibling.
       expect(opened[0]).toContain("platform.test");
       expect(useMobileNavStore.getState().open).toBe(false);

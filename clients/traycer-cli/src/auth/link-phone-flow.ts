@@ -57,13 +57,19 @@ export interface LinkPhoneResult {
  */
 async function renderQr(code: string): Promise<string | null> {
   try {
-    return await QRCode.toString(buildLinkLoginQrPayload(code), {
-      type: "terminal",
-      // Half-block glyphs: a v2 matrix fits an 80-column terminal, where the
-      // full-size rendering is twice as wide and wraps into noise.
-      small: true,
-      errorCorrectionLevel: "M",
-    });
+    // `cloudUiBaseUrl` IS the platform origin the QR's universal link
+    // addresses, and it already carries this CLI's dev-gated override - so a
+    // terminal pointed at a dev deploy prints a QR for that deploy.
+    return await QRCode.toString(
+      buildLinkLoginQrPayload(config.cloudUiBaseUrl, code),
+      {
+        type: "terminal",
+        // Half-block glyphs: a v2 matrix fits an 80-column terminal, where the
+        // full-size rendering is twice as wide and wraps into noise.
+        small: true,
+        errorCorrectionLevel: "M",
+      },
+    );
   } catch {
     return null;
   }

@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import {
@@ -24,6 +25,7 @@ import "./index.css";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { MobileDeviceDescriber } from "../device-describer";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
+import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import {
   MobilePushRegistration,
   pushRegistrationTarget,
@@ -164,6 +166,15 @@ function bootstrap(): void {
     config.authnBaseUrl,
     config.environment !== "production",
   );
+  // Started FIRST, before anything else in bootstrap: a QR scanned by the
+  // system camera launches this app, and that launch URL is readable exactly
+  // once. Native-only for the same reason as the scheme registration below -
+  // a browser tab is never opened by the OS with a `traycer://` or
+  // universal-link URL, and has no plugin to read one from.
+  const linkLoginDeepLinks = Capacitor.isNativePlatform()
+    ? new MobileLinkLoginDeepLinks(App)
+    : null;
+  linkLoginDeepLinks?.start();
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
@@ -200,6 +211,7 @@ function bootstrap(): void {
     deviceDescriber: Capacitor.isNativePlatform()
       ? new MobileDeviceDescriber()
       : null,
+    linkLoginDeepLinks,
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

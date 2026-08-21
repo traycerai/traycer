@@ -16,12 +16,35 @@ import {
 // Display form as the desktop mints it; Crockford, no I/L/O/U.
 const CODE = "ABCDE-FGHJK";
 const NORMALIZED = "ABCDEFGHJK";
+const PLATFORM = "https://platform.example.test";
 
 describe("QR payload build/parse", () => {
-  it("round-trips the v1 payload into the normalized code", () => {
-    const payload = buildLinkLoginQrPayload(CODE);
-    expect(payload).toBe(`traycer://link-login?code=${CODE}`);
+  it("round-trips the https payload into the normalized code", () => {
+    const payload = buildLinkLoginQrPayload(PLATFORM, CODE);
+    expect(payload).toBe(`${PLATFORM}/link?code=${CODE}`);
     expect(parseLinkLoginInput(payload)).toBe(NORMALIZED);
+  });
+
+  it("builds against the caller's base, whatever shape it arrives in", () => {
+    // A trailing slash and a base path both resolve to the same root-absolute
+    // `/link`, so no caller has to normalize its config first.
+    expect(buildLinkLoginQrPayload(`${PLATFORM}/`, CODE)).toBe(
+      `${PLATFORM}/link?code=${CODE}`,
+    );
+    expect(buildLinkLoginQrPayload(`${PLATFORM}/settings`, CODE)).toBe(
+      `${PLATFORM}/link?code=${CODE}`,
+    );
+    expect(
+      buildLinkLoginQrPayload("https://platform.dev.traycer.ai", CODE),
+    ).toBe(`https://platform.dev.traycer.ai/link?code=${CODE}`);
+  });
+
+  it("still parses the superseded traycer:// payload", () => {
+    // Live codes expire in about a minute, but the in-app scanner and any
+    // cached payload must not break across the cutover.
+    expect(parseLinkLoginInput(`traycer://link-login?code=${CODE}`)).toBe(
+      NORMALIZED,
+    );
   });
 
   it("accepts typed codes in any dash/case variation the normalization covers", () => {
@@ -45,12 +68,42 @@ describe("QR payload build/parse", () => {
     expect(parseLinkLoginInput("ABCDE-FGHU!")).toBeNull(); // outside alphabet
   });
 
-  it("rejects foreign URLs and near-miss payloads", () => {
+  it("rejects near-miss payloads", () => {
     expect(parseLinkLoginInput(`https://evil.test/?code=${CODE}`)).toBeNull();
+    expect(
+      parseLinkLoginInput(`https://evil.test/links?code=${CODE}`),
+    ).toBeNull();
     expect(parseLinkLoginInput(`other://link-login?code=${CODE}`)).toBeNull();
     expect(parseLinkLoginInput(`traycer://elsewhere?code=${CODE}`)).toBeNull();
     expect(parseLinkLoginInput("traycer://link-login")).toBeNull();
     expect(parseLinkLoginInput("traycer://link-login?code=nope")).toBeNull();
+    expect(parseLinkLoginInput(`${PLATFORM}/link`)).toBeNull();
+    expect(parseLinkLoginInput(`${PLATFORM}/link?code=nope`)).toBeNull();
+    // Not a downgrade path: only https carries the payload.
+    expect(
+      parseLinkLoginInput(`http://platform.example.test/link?code=${CODE}`),
+    ).toBeNull();
+  });
+
+  /**
+   * The https form matches on PATH, not on host, so a `/link?code=` URL from
+   * anywhere parses. That is the designed behavior, not a gap: extraction is
+   * all this does, and the claim goes to the shell's own `authnBaseUrl`
+   * regardless of what host printed the QR. Asserted so the property is
+   * deliberate rather than incidental.
+   */
+  it("extracts from any host's /link, because the claim's target is not taken from the URL", () => {
+    expect(parseLinkLoginInput(`https://evil.test/link?code=${CODE}`)).toBe(
+      NORMALIZED,
+    );
+    expect(parseLinkLoginInput(`${PLATFORM}/link/?code=${CODE}`)).toBe(
+      NORMALIZED,
+    );
+  });
+
+  it("drops the payload-free return deep link the approval page fires", () => {
+    // Every OS-delivered URL reaches this parser, including this one.
+    expect(parseLinkLoginInput("traycer://auth/callback")).toBeNull();
   });
 });
 

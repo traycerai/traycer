@@ -49,6 +49,7 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     returnScheme,
     linkCodeScanner: null,
     deviceDescriber: null,
+    linkLoginDeepLinks: null,
   });
 }
 
@@ -115,6 +116,7 @@ function phoneRunner(input: {
     returnScheme: "traycer",
     linkCodeScanner: null,
     deviceDescriber: null,
+    linkLoginDeepLinks: null,
   });
 }
 

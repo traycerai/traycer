@@ -66,6 +66,7 @@ import type {
   IDeviceFlowHost,
   IDeviceDescriber,
   ILinkCodeScanner,
+  ILinkLoginDeepLinkSource,
   INotificationHost,
   IPushPermissionHost,
   IRunnerHost,
@@ -157,6 +158,13 @@ export interface MobileRunnerHostOptions {
    * reason as the scanner.
    */
   readonly deviceDescriber: IDeviceDescriber | null;
+  /**
+   * OS-delivered link-login codes (a QR scanned by the system camera), or
+   * `null` on the web entry, which no OS opens URLs into. Constructed and
+   * STARTED by the entry point: the capture has to be listening before this
+   * host is even built, since a cold launch delivers the URL once.
+   */
+  readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -210,6 +218,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly hostTray = null;
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
+  readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
   readonly deviceFlow: IDeviceFlowHost;
   /**
    * The phone's own notification switch. `null` wherever this shell cannot
@@ -249,6 +258,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.fleetHostIds = options.fleetHostIds;
     this.linkCodeScanner = options.linkCodeScanner;
     this.deviceDescriber = options.deviceDescriber;
+    this.linkLoginDeepLinks = options.linkLoginDeepLinks;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -582,10 +592,12 @@ export class MobileRunnerHost implements IRunnerHost {
     // approval page fires exists only to make the OS switch back to this app -
     // it carries no payload (see `IRunnerHost.onAuthCallback`), and once the
     // WebView resumes, its `visibilitychange` edge is the same "the browser
-    // returned" fact. Subscribing to the resume source instead of a native
-    // App-plugin `appUrlOpen` listener keeps the shell on its deliberate
-    // five-plugin footprint, and also nudges the poll when the user returns
-    // MANUALLY (no deep link at all - e.g. after using the manual-code page).
+    // returned" fact. Resume, and not the App plugin's `appUrlOpen`, because
+    // resume ALSO covers the manual return - the user switching back by hand
+    // after the manual-code page, where no deep link is fired at all. (The
+    // App plugin does exist in this shell now, for the link-login deep link
+    // that carries a real payload; see `link-login-deep-links.ts`. It has
+    // nothing to add here, where the URL is payload-free by design.)
     // A resume with no in-flight attempt is a no-op in the consumer
     // (`AuthService.handleReturnSignal` only collapses an active poll wait).
     return this.systemResume.subscribe(handler);
@@ -1158,10 +1170,21 @@ class MobilePushPermissionHost implements IPushPermissionHost {
  * cross-platform `window 'online'` event, which does NOT fire on an app switch:
  * the network never went anywhere, only this runtime did.
  *
- * `visibilitychange` and not a Capacitor App-state plugin: WKWebView and the
- * Android WebView both raise it, so this costs no ADDITIONAL native dependency
- * in a shell that deliberately carries only core, keyboard, push,
- * app-launcher, secure-storage and native-settings.
+ * `visibilitychange` and not the App plugin's `appStateChange`: WKWebView and
+ * the Android WebView both raise it, so the resume edge costs nothing on top
+ * of whatever plugins the shell already carries, and it also fires for
+ * in-WebView backgrounding the native app-state event does not describe.
+ *
+ * The shell's plugin set is kept SMALL rather than fixed at a number, and each
+ * member earns its place by being the only way to reach an OS capability: core,
+ * keyboard, push-notifications, app-launcher, secure-storage, native-settings,
+ * device, barcode-scanner, and app. The last one is the newest and the least
+ * obvious - `@capacitor/app` is there because a URL the OS opens (a QR scanned
+ * by the system camera) has no other route into JS: Capacitor's iOS bridge
+ * posts the launch/open URL to that plugin and nothing else listens, so
+ * without it the app launches and the code is silently dropped. See
+ * `link-login-deep-links.ts`. Its resume/state events are deliberately NOT
+ * used - this class stays the resume source.
  *
  * Fires ONLY on the hidden -> visible edge. That edge filter is also the whole
  * dedupe, deliberately with no debounce timer: the event is edge-driven (a

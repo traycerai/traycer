@@ -325,6 +325,7 @@ function createBaseRunnerHost(): IRunnerHost {
     respondLinkLogin: () => Promise.resolve({ kind: "network-error" as const }),
     linkCodeScanner: null,
     deviceDescriber: null,
+    linkLoginDeepLinks: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
     deregisterHostFromAccount: () =>

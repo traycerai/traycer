@@ -61,13 +61,16 @@ interface QrSymbol {
 }
 
 /**
- * Encodes the panel's public code as the v1 deep-link payload. Returns null
+ * Encodes the panel's public code as the universal-link payload. Returns null
  * when the encoder refuses the input — the caller shows the loading tile
  * rather than a broken symbol.
  */
-function encodeQrSymbol(code: string): QrSymbol | null {
+function encodeQrSymbol(
+  platformBaseUrl: string,
+  code: string,
+): QrSymbol | null {
   try {
-    const qr = QRCode.create(buildLinkLoginQrPayload(code), {
+    const qr = QRCode.create(buildLinkLoginQrPayload(platformBaseUrl, code), {
       // Level H because the centred brand mark covers live modules.
       errorCorrectionLevel: "H",
     });
@@ -233,12 +236,21 @@ function TileFootprint(props: {
 export function LinkPhoneQrTile(props: {
   /** Null while a code is being minted — the footprint is held either way. */
   readonly code: string | null;
+  /**
+   * Origin the encoded universal link points at, from the panel's active
+   * deploy. Passed in rather than derived here so the tile stays a pure
+   * renderer and a dev build's QR can never address production.
+   */
+  readonly platformBaseUrl: string;
   /** Share of the displayed code's life still left, 0..1. */
   readonly remainingFraction: number;
 }) {
   const symbol = useMemo(
-    () => (props.code === null ? null : encodeQrSymbol(props.code)),
-    [props.code],
+    () =>
+      props.code === null
+        ? null
+        : encodeQrSymbol(props.platformBaseUrl, props.code),
+    [props.code, props.platformBaseUrl],
   );
   if (symbol === null) {
     return (

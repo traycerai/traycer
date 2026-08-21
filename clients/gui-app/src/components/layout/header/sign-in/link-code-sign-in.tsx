@@ -4,9 +4,12 @@ import { parseLinkLoginInput } from "@traycer-clients/shared/auth/link-login";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useAuthLinkLoginProgress } from "@/hooks/auth/use-auth-link-login-progress";
 import { useLinkCodeSignInMutation } from "@/hooks/auth/use-link-code-sign-in-mutation";
+import { useAuthService } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
 import { LinkCodeWaitStatus } from "./link-code-wait-status";
 
 type EntryNotice =
@@ -45,6 +48,34 @@ function noticeCopy(notice: Exclude<EntryNotice, null>): string {
 }
 
 /**
+ * The notice this surface shows: its own, or — when it has none — the outcome
+ * of a claim `LinkLoginDeepLinkBridge` ran for a QR the SYSTEM camera scanned.
+ * Those kinds are the SAME kinds a scan here produces, so they get the same
+ * copy; a stale QR has to read as "expired", never as "try again".
+ *
+ * A local notice wins because it describes something the user just did, and
+ * their own attempt is the more recent answer.
+ */
+function useEntryNotice(local: EntryNotice): EntryNotice {
+  const fromDeepLink = useLinkLoginDeepLinkOutcomeStore(
+    (state) => state.notice,
+  );
+  return local ?? fromDeepLink;
+}
+
+/**
+ * Whether a link-login claim is running at all — this surface's own redeem, or
+ * one `LinkLoginDeepLinkBridge` started for a QR the SYSTEM camera scanned,
+ * possibly before this surface was mounted. The user waiting on an approval is
+ * the same user either way, so the wait block's condition is "a claim is
+ * running", not "I started one".
+ */
+function useLinkLoginClaimInFlight(isRedeeming: boolean): boolean {
+  const progress = useAuthLinkLoginProgress(useAuthService());
+  return isRedeeming || progress !== null;
+}
+
+/**
  * QR link-code sign-in: redeems a one-time code minted by the desktop's
  * Settings → Link a phone panel. The camera is a capability
  * (`runnerHost.linkCodeScanner`), not an assumption — where it is absent
@@ -66,6 +97,11 @@ export function LinkCodeSignIn(props: {
   const [entry, setEntry] = useState("");
   const [notice, setNotice] = useState<EntryNotice>(null);
   const scanner = runnerHost === null ? null : runnerHost.linkCodeScanner;
+  const claimInFlight = useLinkLoginClaimInFlight(redeem.isPending);
+  const shownNotice = useEntryNotice(notice);
+  const clearDeepLinkNotice = useLinkLoginDeepLinkOutcomeStore(
+    (state) => state.clear,
+  );
 
   const submit = (raw: string) => {
     const code = parseLinkLoginInput(raw);
@@ -74,6 +110,7 @@ export function LinkCodeSignIn(props: {
       return;
     }
     setNotice(null);
+    clearDeepLinkNotice();
     redeem.mutate(code, {
       onSuccess: (result) => {
         if (result.kind !== "signed-in") {
@@ -124,6 +161,7 @@ export function LinkCodeSignIn(props: {
         onChange={(event) => {
           setEntry(event.target.value);
           setNotice(null);
+          clearDeepLinkNotice();
         }}
         placeholder="XXXXX-XXXXX"
         autoCapitalize="none"
@@ -136,11 +174,11 @@ export function LinkCodeSignIn(props: {
         type="submit"
         size={props.isHero ? "default" : "sm"}
         variant="outline"
-        disabled={redeem.isPending || entry.trim().length === 0}
+        disabled={claimInFlight || entry.trim().length === 0}
         data-testid="link-code-signin-submit"
       >
         Sign in
-        {redeem.isPending ? (
+        {claimInFlight ? (
           <AgentSpinningDots
             variant="dots"
             className="ml-1.5"
@@ -151,17 +189,16 @@ export function LinkCodeSignIn(props: {
     </form>
   );
 
-  // The claimed code's approval wait, shown by both presentations while the
-  // redeem is in flight.
-  const waitStatus = redeem.isPending ? <LinkCodeWaitStatus /> : null;
+  // The claimed code's approval wait, shown by both presentations.
+  const waitStatus = claimInFlight ? <LinkCodeWaitStatus /> : null;
 
   const noticeLine =
-    notice !== null ? (
+    shownNotice !== null ? (
       <p
         className="text-center text-ui-sm text-destructive"
         data-testid="link-code-signin-notice"
       >
-        {noticeCopy(notice)}
+        {noticeCopy(shownNotice)}
       </p>
     ) : null;
 
@@ -175,14 +212,14 @@ export function LinkCodeSignIn(props: {
           type="button"
           size="lg"
           variant="default"
-          disabled={redeem.isPending}
+          disabled={claimInFlight}
           data-testid="link-code-signin-open"
           onClick={scan}
           className="w-full cursor-pointer"
         >
           <QrCode aria-hidden="true" />
           Scan QR code
-          {redeem.isPending ? (
+          {claimInFlight ? (
             <AgentSpinningDots
               variant="dots"
               className="ml-1.5"
@@ -261,7 +298,7 @@ export function LinkCodeSignIn(props: {
           type="button"
           size={props.isHero ? "lg" : "sm"}
           variant={props.isHero ? "default" : "outline"}
-          disabled={redeem.isPending}
+          disabled={claimInFlight}
           data-testid="link-code-signin-scan"
           onClick={scan}
         >

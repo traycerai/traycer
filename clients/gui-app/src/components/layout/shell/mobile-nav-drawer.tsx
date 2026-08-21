@@ -12,7 +12,7 @@ import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-dra
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isMobileApp } from "@/lib/mobile-app";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
@@ -82,7 +82,7 @@ export function MobileNavDrawer(): ReactNode {
   const handleManageSubscription = () => {
     close();
     void runnerHost
-      .openExternalLink(resolveManageSubscriptionUrl(runnerHost.authnBaseUrl))
+      .openExternalLink(resolvePlatformBaseUrl(runnerHost.authnBaseUrl))
       .then(() => {
         Analytics.getInstance().track(
           AnalyticsEvent.SubscriptionManagementOpened,

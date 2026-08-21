@@ -225,6 +225,19 @@ export interface IRunnerHost {
   readonly deviceDescriber: IDeviceDescriber | null;
 
   /**
+   * Link-login codes the OS handed this shell as a launch/open URL — a QR
+   * scanned by the system camera rather than by the in-app scanner. `null`
+   * wherever the OS never delivers one (desktop, plain browser, tests).
+   *
+   * A capability alongside `linkCodeScanner`, not a replacement for it: this
+   * one is not initiated by the user inside the app, so it can arrive before
+   * any surface is mounted and it can arrive while already signed in. Both are
+   * the consumer's problem, and the port's contract is what makes them
+   * solvable — see `ILinkLoginDeepLinkSource`.
+   */
+  readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
+
+  /**
    * Verifies a step-up OTP and retains the short-TTL bearer credential inside
    * the runner-host boundary. Returns only expiry metadata for renderer batch
    * window logic.
@@ -860,6 +873,32 @@ export interface IDeviceDescriber {
  */
 export interface ILinkCodeScanner {
   scan(): Promise<LinkCodeScanResult>;
+}
+
+/**
+ * Link codes delivered by the OS as an app launch or open URL
+ * (`IRunnerHost.linkLoginDeepLinks`).
+ *
+ * Two properties the in-app scanner does not need, both forced by the fact
+ * that the SYSTEM camera — not the app — starts this flow:
+ *
+ * 1. RETENTION. A cold start delivers the URL before the GUI exists at all;
+ *    the shell captures it at bootstrap and this subscription REPLAYS it. So
+ *    a late subscriber still receives the code, and "the app was launched by
+ *    the scan" is not a race the consumer has to win.
+ * 2. ONE SUBSCRIBER. A retained code is delivered once and then consumed, so
+ *    a second subscriber would either steal it or double-claim it. The GUI
+ *    subscribes in exactly one place and routes from there.
+ *
+ * The code is already NORMALIZED and shape-checked (`parseLinkLoginInput`) —
+ * unlike `LinkCodeScanResult`, which carries raw scanned text. Nothing else
+ * the OS opens reaches the handler: the shell drops every URL that is not a
+ * link-login payload, including the payload-free `traycer://auth/callback`
+ * return link, because there is no surface to show "that wasn't a code" to
+ * when the user never asked for a scan.
+ */
+export interface ILinkLoginDeepLinkSource {
+  onLinkLoginCode(handler: (code: string) => void): Disposable;
 }
 
 /**

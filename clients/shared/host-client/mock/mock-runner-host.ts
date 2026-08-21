@@ -510,6 +510,7 @@ export class MockRunnerHost implements IRunnerHost {
 
   readonly linkCodeScanner = null;
   readonly deviceDescriber = null;
+  readonly linkLoginDeepLinks = null;
 
   async verifyStepUpChallenge(
     bearerToken: string,

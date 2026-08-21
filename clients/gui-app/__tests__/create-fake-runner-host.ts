@@ -85,6 +85,7 @@ export function createFakeRunnerHost(
     linkLoginStatus: () => Promise.resolve({ kind: "network-error" as const }),
     respondLinkLogin: () => Promise.resolve({ kind: "network-error" as const }),
     linkCodeScanner: null,
+    linkLoginDeepLinks: null,
     deviceDescriber: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),

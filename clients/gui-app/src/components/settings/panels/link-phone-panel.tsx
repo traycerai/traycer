@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LINK_LOGIN_REMINT_MS } from "@/hooks/auth/use-link-login-code-query";
 import { LinkLoginMintError } from "@/lib/auth/link-login-mint-error";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { cn } from "@/lib/utils";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   useLinkLoginWatch,
   type LinkLoginDeadKind,
@@ -294,7 +296,17 @@ function CodeSurface(props: {
   );
 }
 
+/**
+ * The origin the QR's universal link addresses, from the SAME deploy this
+ * panel is minting against — so a dev build prints a dev link and a phone
+ * that follows it reaches the deploy that issued the code.
+ */
+function usePlatformBaseUrl(): string {
+  return resolvePlatformBaseUrl(useRunnerHost().authnBaseUrl);
+}
+
 function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {
+  const platformBaseUrl = usePlatformBaseUrl();
   const countdown = useRotationCountdown({
     expiresAtEpochSeconds: props.minted.expires_at,
     expiresInSeconds: props.minted.expires_in,
@@ -304,6 +316,7 @@ function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {
       tile={
         <LinkPhoneQrTile
           code={props.minted.code}
+          platformBaseUrl={platformBaseUrl}
           remainingFraction={countdown.remainingFraction}
         />
       }
@@ -326,9 +339,16 @@ function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {
  * panel never resizes; only the tile and the code line themselves go quiet.
  */
 function PendingCodeCard() {
+  const platformBaseUrl = usePlatformBaseUrl();
   return (
     <CodeSurface
-      tile={<LinkPhoneQrTile code={null} remainingFraction={0} />}
+      tile={
+        <LinkPhoneQrTile
+          code={null}
+          platformBaseUrl={platformBaseUrl}
+          remainingFraction={0}
+        />
+      }
       codeSlot={
         <code className={cn(CODE_BOX_CLASS, "relative")}>
           {/* One invisible line of the code's own type: the box keeps its

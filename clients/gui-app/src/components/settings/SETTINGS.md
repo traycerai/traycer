@@ -778,7 +778,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `totalTokens`/`remainingTokens` come from the inference `GetRateLimitUsage`
     gRPC, which the gui-app/daemon stack doesn't expose. Also a "Manage
     subscription" link (opens the platform URL via
-    `resolveManageSubscriptionUrl(runnerHost.authnBaseUrl)`, reused from
+    `resolvePlatformBaseUrl(runnerHost.authnBaseUrl)`, reused from
     `user-menu.tsx`), and a refresh icon. A global account-context selector
     (Personal / each Team, shown only when the user has `teamSubscriptions`)
     chooses which subscription is displayed - the selection persists in the

@@ -235,6 +235,7 @@ function createBaseRunnerHost(): IRunnerHost {
     respondLinkLogin: () => Promise.resolve({ kind: "network-error" as const }),
     linkCodeScanner: null,
     deviceDescriber: null,
+    linkLoginDeepLinks: null,
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),

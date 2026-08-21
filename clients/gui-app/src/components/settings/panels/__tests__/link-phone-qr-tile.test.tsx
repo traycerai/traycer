@@ -13,6 +13,7 @@ import { buildLinkLoginQrPayload } from "@traycer-clients/shared/auth/link-login
 import { LinkPhoneQrTile } from "../link-phone-qr-tile";
 
 const CODE = "ABCDE-FGHJK";
+const PLATFORM = "https://platform.example.test";
 const QUIET_ZONE = 5;
 const FINDER = 7;
 /** The frame's stroke straddles this inset, in percent of the tile's side. */
@@ -20,7 +21,7 @@ const FRAME_CENTRE_INSET_PERCENT = 1.4;
 const FRAME_RADIUS_PERCENT = 4;
 
 function expectedSymbol(code: string) {
-  const qr = QRCode.create(buildLinkLoginQrPayload(code), {
+  const qr = QRCode.create(buildLinkLoginQrPayload(PLATFORM, code), {
     errorCorrectionLevel: "H",
   });
   const size = qr.modules.size;
@@ -62,7 +63,13 @@ afterEach(() => {
 describe("LinkPhoneQrTile", () => {
   it("draws exactly the encoder's matrix for the code's deep-link payload", () => {
     const expected = expectedSymbol(CODE);
-    render(<LinkPhoneQrTile code={CODE} remainingFraction={1} />);
+    render(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={1}
+      />,
+    );
     expect(renderedModules()).toEqual(expected.dark);
     // A different code encodes a different symbol, so the comparison above is
     // load-bearing rather than a shape check.
@@ -72,7 +79,13 @@ describe("LinkPhoneQrTile", () => {
 
   it("encodes at level H inside a full quiet zone, with the three eyes drawn", () => {
     const expected = expectedSymbol(CODE);
-    render(<LinkPhoneQrTile code={CODE} remainingFraction={1} />);
+    render(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={1}
+      />,
+    );
     const svg = screen.getByTestId("link-phone-qr");
     expect(svg.getAttribute("data-qr-error-correction")).toBe("H");
     expect(svg.getAttribute("data-qr-quiet-zone")).toBe(String(QUIET_ZONE));
@@ -87,31 +100,65 @@ describe("LinkPhoneQrTile", () => {
   });
 
   it("drains the expiry frame with the remaining share of the code's life", () => {
-    const view = render(<LinkPhoneQrTile code={CODE} remainingFraction={1} />);
+    const view = render(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={1}
+      />,
+    );
     const offset = () =>
       screen
         .getByTestId("link-phone-expiry-frame")
         .getAttribute("stroke-dashoffset");
     expect(offset()).toBe("0");
-    view.rerender(<LinkPhoneQrTile code={CODE} remainingFraction={0.5} />);
+    view.rerender(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={0.5}
+      />,
+    );
     expect(offset()).toBe("0.5");
-    view.rerender(<LinkPhoneQrTile code={CODE} remainingFraction={0} />);
+    view.rerender(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={0}
+      />,
+    );
     expect(offset()).toBe("1");
   });
 
   it("clamps a fraction the clock overshot instead of drawing past the frame", () => {
     const view = render(
-      <LinkPhoneQrTile code={CODE} remainingFraction={1.4} />,
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={1.4}
+      />,
     );
     const frame = () => screen.getByTestId("link-phone-expiry-frame");
     expect(frame().getAttribute("data-remaining-fraction")).toBe("1.00");
-    view.rerender(<LinkPhoneQrTile code={CODE} remainingFraction={-0.2} />);
+    view.rerender(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={-0.2}
+      />,
+    );
     expect(frame().getAttribute("data-remaining-fraction")).toBe("0.00");
   });
 
   it("ends the paper on the frame's centre line, sharing its corner curve", () => {
     const expected = expectedSymbol(CODE);
-    render(<LinkPhoneQrTile code={CODE} remainingFraction={1} />);
+    render(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={1}
+      />,
+    );
     const svg = screen.getByTestId("link-phone-qr");
     const extent = expected.size + QUIET_ZONE * 2;
     // The paper is the first rect in the symbol — everything else is a module
@@ -134,7 +181,13 @@ describe("LinkPhoneQrTile", () => {
   });
 
   it("draws the drain flush against its track, with no protruding caps", () => {
-    render(<LinkPhoneQrTile code={CODE} remainingFraction={0.5} />);
+    render(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={0.5}
+      />,
+    );
     const drain = screen.getByTestId("link-phone-expiry-frame");
     expect(drain.getAttribute("stroke-linecap")).toBe("butt");
     // Track and drain are the same path, so the band cannot step or gap.
@@ -147,11 +200,23 @@ describe("LinkPhoneQrTile", () => {
   });
 
   it("holds the same footprint while a code is being minted", () => {
-    const view = render(<LinkPhoneQrTile code={CODE} remainingFraction={1} />);
+    const view = render(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={1}
+      />,
+    );
     const withCode = screen.getByTestId("link-phone-qr-tile");
     expect(withCode.getAttribute("data-tile-state")).toBe("code");
 
-    view.rerender(<LinkPhoneQrTile code={null} remainingFraction={0} />);
+    view.rerender(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={null}
+        remainingFraction={0}
+      />,
+    );
     const pending = screen.getByTestId("link-phone-qr-tile");
     // jsdom does no layout, so the invariant is pinned on the box that
     // decides the height: same element, same sizing classes, both states.
@@ -168,10 +233,22 @@ describe("LinkPhoneQrTile", () => {
   });
 
   it("fades a rotated code in on a fresh surface", () => {
-    const view = render(<LinkPhoneQrTile code={CODE} remainingFraction={1} />);
+    const view = render(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code={CODE}
+        remainingFraction={1}
+      />,
+    );
     const first = screen.getByTestId("link-phone-qr-surface");
     expect(first.className).toContain("fade-in-0");
-    view.rerender(<LinkPhoneQrTile code="22222-33333" remainingFraction={1} />);
+    view.rerender(
+      <LinkPhoneQrTile
+        platformBaseUrl={PLATFORM}
+        code="22222-33333"
+        remainingFraction={1}
+      />,
+    );
     // Keyed on the code: the rotation mounts a new surface rather than
     // mutating the old one, which is what replays the fade.
     expect(screen.getByTestId("link-phone-qr-surface")).not.toBe(first);

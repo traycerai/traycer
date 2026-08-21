@@ -930,6 +930,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   // No camera on the desktop shell; sign-in by link code is a phone surface.
   readonly linkCodeScanner = null;
   readonly deviceDescriber = null;
+  readonly linkLoginDeepLinks = null;
 
   mintLinkLoginCode(
     bearerToken: string,

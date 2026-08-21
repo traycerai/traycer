@@ -31,8 +31,10 @@ import {
 import type { AuthService } from "@/lib/auth/auth-service";
 import { setMobileApp } from "@/lib/mobile-app";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
+import { decideDeepLinkRouting } from "@/lib/auth/link-login-deep-link-routing";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 function buildHost(): MockRunnerHost {
@@ -248,6 +250,29 @@ function CaptureAuthService(props: {
   return null;
 }
 
+/**
+ * A link code can be handed to the app by the OS at any moment — including
+ * ones where this surface does not exist. What happens then is a decision, not
+ * a rendering concern, so it is asserted as one.
+ */
+describe("routing a link code the OS delivered", () => {
+  it("redeems only when signed out", () => {
+    expect(decideDeepLinkRouting("signed-out")).toBe("redeem");
+  });
+
+  it("refuses to claim while already signed in", () => {
+    // Claiming would swap the signed-in user underneath whatever they were
+    // doing, from a QR that may have been scanned by accident.
+    expect(decideDeepLinkRouting("signed-in")).toBe("already-signed-in");
+  });
+
+  it("holds the code while a sign-in is already in flight", () => {
+    // Not dropped: attempts supersede each other, so redeeming now would kill
+    // the attempt in progress. The decision is retaken when it settles.
+    expect(decideDeepLinkRouting("signing-in")).toBe("hold");
+  });
+});
+
 describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   // The immutable Capacitor product flag, never the viewport: a narrow
   // desktop window is still a desktop, and a desktop offering to scan a QR
@@ -266,7 +291,23 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     cleanup();
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
+    useLinkLoginDeepLinkOutcomeStore.getState().clear();
     restoreFetch();
+  });
+
+  it("speaks the real reason a camera-scanned code failed", async () => {
+    // The deep-link path is where a DEAD code is most likely: one live code
+    // per account means a re-mint kills the QR still on the desktop screen.
+    // "Try again" would be advice that cannot work, so the surface renders the
+    // same precise copy an in-app scan gets.
+    setMobileApp(true);
+    useLinkLoginDeepLinkOutcomeStore.getState().report("invalid-code");
+    const mobile = mountSignInButton(buildHost(), "hero");
+    await mobile.waitForAuthService();
+    expect(screen.getByTestId("link-code-signin-notice").textContent).toContain(
+      "invalid, expired, or already used",
+    );
+    mobile.cleanupClient();
   });
 
   it("mobile hero leads with a primary Scan CTA above a secondary Sign in", async () => {

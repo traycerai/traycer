@@ -12,6 +12,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.4.2"),
+        .package(name: "CapacitorApp", path: "../../../../../node_modules/.bun/@capacitor+app@8.1.1+f68449e264960a74/node_modules/@capacitor/app"),
         .package(name: "CapacitorAppLauncher", path: "../../../../../node_modules/.bun/@capacitor+app-launcher@8.0.1+f68449e264960a74/node_modules/@capacitor/app-launcher"),
         .package(name: "CapacitorBarcodeScanner", path: "../../../../../node_modules/.bun/@capacitor+barcode-scanner@3.1.0+f68449e264960a74/node_modules/@capacitor/barcode-scanner"),
         .package(name: "CapacitorDevice", path: "../../../../../node_modules/.bun/@capacitor+device@8.0.0+f68449e264960a74/node_modules/@capacitor/device"),
@@ -26,6 +27,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm"),
+                .product(name: "CapacitorApp", package: "CapacitorApp"),
                 .product(name: "CapacitorAppLauncher", package: "CapacitorAppLauncher"),
                 .product(name: "CapacitorBarcodeScanner", package: "CapacitorBarcodeScanner"),
                 .product(name: "CapacitorDevice", package: "CapacitorDevice"),
