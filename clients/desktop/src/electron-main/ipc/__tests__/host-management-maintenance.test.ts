@@ -819,6 +819,126 @@ describe("maintenanceInstallVersion IPC", () => {
     expect(installVersion).not.toHaveBeenCalled();
   });
 
+  it("classifies every version-moving lane as update work, and only those", async () => {
+    // This bit never admits anything - the install is already refused - it
+    // only chooses between `already-updating` (which ARMS the caller's
+    // accepted-update latch) and a retryable refusal. On a pre-1.2.0 host
+    // nothing releases that latch before the full 60s timer (these hosts
+    // never publish `host.status.updateProgress`), so `true` is reserved
+    // for lanes whose work can OUTLAST the latch: the minutes-long
+    // version movers. `activate` is deliberately `false` - the lane kind
+    // cannot separate the genuine update tail from the legacy
+    // `activationUnknown` stamp-repair, and both are seconds-long either
+    // way.
+    //
+    // Compile-time exhaustive: `satisfies Record<MutationKind, boolean>`
+    // makes a NEW MutationKind a type error here until it gets an explicit
+    // decision, and the sorted-census equality below pins the runtime loop
+    // to the same set - `readonly MutationKind[]` alone would permit a
+    // subset, letting a new kind compile without ever entering the loop.
+    const updateWorkByKind = {
+      install: true,
+      apply: true,
+      activate: false,
+      // At `progress: null`. The numeric-evidence gate that can flip an
+      // ensure to `true` has its own tests below.
+      ensure: false,
+      register: false,
+      deregister: false,
+      respawn: false,
+      recoverIfDown: false,
+      freePortAndRestart: false,
+      uninstallHost: false,
+      removeTraycer: false,
+    } satisfies Record<MutationKind, boolean>;
+    expect([...ALL_MUTATION_KINDS].sort()).toEqual(
+      Object.keys(updateWorkByKind).sort(),
+    );
+    const bridge = makeBridge();
+    const handler = await registerInstallHandler(bridge);
+    for (const kind of ALL_MUTATION_KINDS) {
+      bridge.options.hostController.lifecycleAdmissionBlock = {
+        kind: "mutation",
+        lane: { kind, progress: null, startedAt: "2026-08-12T00:00:00Z" },
+      };
+      await expect(
+        handler(null, { version: "1.2.0", force: false }),
+      ).resolves.toEqual({
+        kind: "lane-busy",
+        updateInFlight: updateWorkByKind[kind],
+        message: laneBusyRestartMessage(kind),
+      });
+    }
+  });
+
+  it("counts an ensure lane as update work only on numeric progress evidence", async () => {
+    // The evidence must be a NUMBER, not mere progress presence: `host
+    // ensure`'s service branches (register, start, the repair retry)
+    // narrate through the same null-metric `host-provision` events without
+    // touching the version, so presence alone would lock the caller's
+    // update controls for a minute over a service repair. Only the
+    // version-moving path reports numerics - the staging download's
+    // `bytes`/`totalBytes`/`percent`, the extract's `workUnits`.
+    const bridge = makeBridge();
+    const handler = await registerInstallHandler(bridge);
+    const cases = [
+      {
+        // The Codex round-3 case: a service-only ensure on an
+        // already-current host - same stage string, no numerics.
+        progress: {
+          stage: "host-provision",
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          message: "registering OS service for installed host",
+          workUnits: null,
+        },
+        updateInFlight: false,
+      },
+      {
+        // Staging download: bytes are moving toward a version change.
+        progress: {
+          stage: "download",
+          percent: 42,
+          bytes: 42_000_000,
+          totalBytes: 100_000_000,
+          message: "downloading host 1.2.0",
+          workUnits: null,
+        },
+        updateInFlight: true,
+      },
+      {
+        // Extract: entry-driven work units, the other numeric producer.
+        progress: {
+          stage: "extract",
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          message: "extracting host 1.2.0",
+          workUnits: 120,
+        },
+        updateInFlight: true,
+      },
+    ];
+    for (const testCase of cases) {
+      bridge.options.hostController.lifecycleAdmissionBlock = {
+        kind: "mutation",
+        lane: {
+          kind: "ensure",
+          progress: testCase.progress,
+          startedAt: "2026-08-12T00:00:00Z",
+        },
+      };
+      await expect(
+        handler(null, { version: "1.2.0", force: false }),
+      ).resolves.toEqual({
+        kind: "lane-busy",
+        updateInFlight: testCase.updateInFlight,
+        message: laneBusyRestartMessage("ensure"),
+      });
+    }
+  });
+
   it("dispatches installVersion when nothing blocks admission", async () => {
     const installVersion = vi.fn((version: string, force: boolean) =>
       Promise.resolve({

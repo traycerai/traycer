@@ -338,11 +338,9 @@ function UserMessageDisplayView({
       />
     );
 
-  const tombstonedProfileLabel = useTombstonedProfileLabel(
-    message.sessionAnchor,
-  );
-  // Present whenever `tombstonedProfileLabel` is (the resolver only returns a
-  // label for an anchor with a non-null `profileId`) - re-derived separately
+  const profileProvenance = useTombstonedProfileLabel(message.sessionAnchor);
+  // Present whenever `profileProvenance` is (the resolver only returns a
+  // verdict for an anchor with a non-null `profileId`) - re-derived separately
   // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
   const tombstoneIdentity = tombstoneFooterIdentity(message.sessionAnchor);
   const confirmingDelete = actions?.confirmingDelete ?? false;
@@ -410,12 +408,13 @@ function UserMessageDisplayView({
           structuredContent={message.structuredContent}
         />
       </div>
-      {tombstonedProfileLabel !== null && tombstoneIdentity !== null ? (
+      {profileProvenance !== null && tombstoneIdentity !== null ? (
         <UserMessageTombstonedProfileFooter
           profileId={tombstoneIdentity.profileId}
           harnessId={tombstoneIdentity.harnessId}
           accentColor={tombstoneIdentity.accentColor}
-          label={tombstonedProfileLabel}
+          label={profileProvenance.label}
+          removed={profileProvenance.removedOnThisHost}
         />
       ) : null}
     </div>
@@ -473,16 +472,25 @@ function tombstoneFooterIdentity(
   };
 }
 
+/**
+ * `removed` is the ONLY thing separating a genuine local deletion from a turn
+ * that simply ran on another machine: profile ids are host-local, so an anchor
+ * carried here by a fork/clone can never match this host's list and claiming
+ * "(removed)" for it would be a false accusation about a profile that is alive
+ * and well elsewhere. The provenance itself is kept either way.
+ */
 function UserMessageTombstonedProfileFooter({
   profileId,
   harnessId,
   accentColor,
   label,
+  removed,
 }: {
   readonly profileId: string;
   readonly harnessId: ProviderId;
   readonly accentColor: string | null;
   readonly label: string;
+  readonly removed: boolean;
 }): ReactNode {
   return (
     <span className="mt-1 flex items-center gap-1.5 text-ui-xs text-muted-foreground">
@@ -495,7 +503,7 @@ function UserMessageTombstonedProfileFooter({
         size="default"
         className={undefined}
       />
-      Ran on {label} (removed)
+      {removed ? `Ran on ${label} (removed)` : `Ran on ${label}`}
     </span>
   );
 }

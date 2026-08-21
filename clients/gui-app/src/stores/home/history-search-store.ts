@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   DEFAULT_HISTORY_SEARCH,
+  normalizePersistedHistorySearch,
   patchHistorySearch,
   type HistorySearchPatch,
   type HistorySearchState,
@@ -47,6 +48,20 @@ export const useHistorySearchStore = create<HistorySearchStoreState>()(
       storage: createJSONStorage(() => localStorage),
       // Persist only the data; the actions come from the initializer on rehydrate.
       partialize: (state) => ({ search: state.search }),
+      // The default shallow merge takes the persisted `search` verbatim, so a
+      // value written before a `HistorySearchState` field existed rehydrates
+      // without it and every `.length` read on the new field crashes the
+      // renderer (chatHosts, #1303). Normalize against defaults instead.
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        search: normalizePersistedHistorySearch(
+          isRecord(persistedState) ? persistedState.search : undefined,
+        ),
+      }),
     },
   ),
 );
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

@@ -82,6 +82,7 @@ export function useManagedCommandOutputSession(args: {
         );
         return {
           loadOlder: (frame) => owned.client.stream.loadOlder(frame),
+          resnapshot: () => owned.client.stream.resnapshot(),
           close: owned.close,
           streamMethodSupport: owned.client.streamMethodSupport,
         };

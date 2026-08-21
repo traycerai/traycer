@@ -48,12 +48,15 @@ import {
   listEpicCollaboratorsResponseSchema,
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
+  getTaskContextsResponseSchemaPre12,
   getTaskContextsResponseSchemaV10,
   isFoundTaskContext,
   listTasksRequestSchema,
   listTasksRequestSchemaV11,
+  listTasksRequestSchemaPre13,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
+  listTasksResponseSchemaPre13,
   prepareArtifactImageRequestSchema,
   prepareArtifactImageResponseSchema,
   removeEpicRepoRequestSchema,
@@ -161,7 +164,7 @@ export const epicListTasksV11 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: listTasksRequestSchemaV11,
-  responseSchema: listTasksResponseSchema,
+  responseSchema: listTasksResponseSchemaPre13,
 });
 
 export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
@@ -182,8 +185,8 @@ export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
 export const epicListTasksV12 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 2 } as const,
-  requestSchema: listTasksRequestSchema,
-  responseSchema: listTasksResponseSchema,
+  requestSchema: listTasksRequestSchemaPre13,
+  responseSchema: listTasksResponseSchemaPre13,
 });
 
 export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
@@ -193,6 +196,32 @@ export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
   from: epicListTasksV11.schemaVersion,
   to: epicListTasksV12.schemaVersion,
   upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// `epic.listTasks@1.3` adds the chat-host dimension: a `chatHostIds` filter on
+// the request and a matching `chatHosts` facet group on the response. Both are
+// optional, so a v1.2 request is already a valid latest request - but the
+// version gate is what stops a NEW client from believing an OLD host applied a
+// host filter it silently dropped, which would render an unfiltered list as a
+// filtered one.
+export const epicListTasksV13 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicListTasksV12,
+  typeof epicListTasksV13
+>({
+  from: epicListTasksV12.schemaVersion,
+  to: epicListTasksV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  // A v1.2 host never counted chat hosts. `chatHosts` stays absent rather
+  // than becoming `[]`: an empty array reads as "no host has any task", and
+  // the popover would render an empty section instead of falling back.
   upgradeResponse: (response) => response,
 });
 
@@ -232,7 +261,7 @@ export const epicGetTaskContextsV11 = defineRpcContract({
   method: "epic.getTaskContexts",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: getTaskContextsRequestSchema,
-  responseSchema: getTaskContextsResponseSchema,
+  responseSchema: getTaskContextsResponseSchemaPre12,
 });
 
 export const epicGetTaskContextsUpgradeV10ToV11 = defineUpgradePath<
@@ -252,6 +281,32 @@ export const epicGetTaskContextsUpgradeV10ToV11 = defineUpgradePath<
       ]),
     ),
   }),
+});
+
+// `epic.getTaskContexts@1.2` carries `chatHostIds` on the found row, matching
+// `epic.listTasks@1.3`. These rows are fetched BY ID and so never pass through
+// the list filter; without the field a client cannot tell whether an id-fetched
+// task belongs to a selected host, and has to choose between showing it
+// unfiltered or dropping it entirely. Both are wrong answers.
+export const epicGetTaskContextsV12 = defineRpcContract({
+  method: "epic.getTaskContexts",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: getTaskContextsRequestSchema,
+  responseSchema: getTaskContextsResponseSchema,
+});
+
+export const epicGetTaskContextsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicGetTaskContextsV11,
+  typeof epicGetTaskContextsV12
+>({
+  from: epicGetTaskContextsV11.schemaVersion,
+  to: epicGetTaskContextsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `chatHostIds` stays ABSENT on an upgraded v1.1 row rather than becoming
+  // `[]`. An old host did not report no visible chat hosts; it reported
+  // nothing, and only absence lets the local predicate abstain instead of
+  // filtering the row out.
+  upgradeResponse: (response) => response,
 });
 
 /**
@@ -445,7 +500,6 @@ export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
   }),
   upgradeResponse: (response) => response,
 });
-
 
 export const epicRenameChatV10 = defineRpcContract({
   method: "epic.renameChat",

@@ -7,7 +7,10 @@ import type { WebSocketCloseEvent, WebSocketErrorEvent } from "../ws-factory";
 import type { TimerHandle, IntervalHandle } from "../timer-handle";
 import {
   RELAY_DIAL_TIMEOUT_MS,
+  RELAY_AWAITING_PING_INTERVAL_MS,
+  RELAY_AWAITING_PONG_TIMEOUT_MS,
   RELAY_PING_INTERVAL_MS,
+  RELAY_PING_TICK_MS,
   RELAY_PONG_TIMEOUT_MS,
 } from "./config";
 
@@ -85,11 +88,28 @@ export class RelaySocket {
   private closed = false;
   private dialTimer: TimerHandle | null = null;
   private pingTimer: IntervalHandle | null = null;
-  private lastPongAt: number;
+  /** Last time ANY frame arrived from the relay (pong, control, or data). */
+  private lastInboundAt: number;
+  /**
+   * Whether application traffic is currently outstanding - explicit state, NOT
+   * a comparison of the two timestamps.
+   *
+   * `lastOutboundAt > lastInboundAt` looks equivalent and is not: `Date.now()`
+   * has millisecond resolution, so a send issued from an inbound frame's own
+   * handler - a stream frame answered by the next request, the commonest shape
+   * on this socket - reads equal, and a strict comparison resolves the tie as
+   * "not awaiting". That parks a genuinely half-open socket on the 60s idle
+   * deadline instead of the 12s detection one, for exactly the traffic pattern
+   * the fast deadline was added to catch.
+   */
+  private awaitingResponse = false;
+  /** When the current unanswered-send run began; the fast deadline's origin. */
+  private awaitingSince = 0;
+  private lastPingSentAt = 0;
 
   constructor(options: RelaySocketOptions) {
     this.handlers = options.handlers;
-    this.lastPongAt = Date.now();
+    this.lastInboundAt = Date.now();
     const dialUrl = withGrantQuery(options.attachBaseUrl, options.grantJws);
     this.socket = options.webSocketFactory.create(dialUrl);
     this.wireSocket(this.socket);
@@ -109,6 +129,7 @@ export class RelaySocket {
     }
     try {
       socket.send(ciphertext);
+      this.noteOutbound();
       return true;
     } catch {
       return false;
@@ -149,6 +170,7 @@ export class RelaySocket {
     }
     try {
       socket.send(JSON.stringify(message));
+      this.noteOutbound();
       return true;
     } catch {
       return false;
@@ -165,13 +187,18 @@ export class RelaySocket {
         clearTimeout(this.dialTimer);
         this.dialTimer = null;
       }
-      this.lastPongAt = Date.now();
+      const now = Date.now();
+      this.lastInboundAt = now;
+      this.awaitingResponse = false;
+      this.awaitingSince = 0;
+      this.lastPingSentAt = now;
       this.startKeepalive();
     };
     socket.onmessage = (event: StreamWebSocketMessageEvent) => {
       if (socket !== this.socket) {
         return;
       }
+      this.noteInbound();
       if (event.type === "binary") {
         this.handlers.onData(event.data);
         return;
@@ -194,7 +221,8 @@ export class RelaySocket {
 
   private handleTextFrame(raw: string): void {
     if (raw === KEEPALIVE_PONG) {
-      this.lastPongAt = Date.now();
+      // `noteInbound` already stamped it; a pong carries no extra meaning now
+      // that every inbound frame counts as proof the socket carries traffic.
       return;
     }
     if (raw === KEEPALIVE_PING) {
@@ -241,10 +269,60 @@ export class RelaySocket {
     }
   }
 
+  /**
+   * True once this client has sent application traffic that nothing at all has
+   * come back after. That is the literal definition of a half-open socket, and
+   * it is the only state worth paying the fast cadence for.
+   *
+   * Keepalive pings deliberately do NOT put the socket in this state. A ping
+   * that set it would make every idle session permanently "awaiting" between
+   * its own ping and pong, which is how a cheap idle cadence turns into a 5 s
+   * one for a backgrounded app that has nothing to say.
+   */
+  private isAwaitingResponse(): boolean {
+    return this.awaitingResponse;
+  }
+
+  /**
+   * Records outbound APPLICATION traffic. `awaitingSince` is stamped only when
+   * this send OPENS a new unanswered run, and that is load-bearing rather than
+   * an optimization: the fast deadline has to be measured from the moment we
+   * started waiting, never from `lastInboundAt`. A healthy idle socket's last
+   * inbound can legitimately be a ~25 s-old pong, so a 12 s deadline measured
+   * against it would fail a perfectly good socket the instant the user typed.
+   */
+  private noteOutbound(): void {
+    if (this.awaitingResponse) {
+      return;
+    }
+    this.awaitingResponse = true;
+    this.awaitingSince = Date.now();
+  }
+
+  /**
+   * ANY inbound frame proves the socket carries traffic, not just a pong, and
+   * closes whatever unanswered run was open. Ordering inside `onmessage` is
+   * what makes the tie safe: this runs before the frame is dispatched, so a
+   * send issued from that dispatch re-opens the run under the same clock
+   * reading rather than being swallowed by it.
+   */
+  private noteInbound(): void {
+    this.lastInboundAt = Date.now();
+    this.awaitingResponse = false;
+  }
+
   private startKeepalive(): void {
     this.clearKeepalive();
     this.pingTimer = setInterval(() => {
-      if (Date.now() - this.lastPongAt >= RELAY_PONG_TIMEOUT_MS) {
+      const now = Date.now();
+      const awaiting = this.isAwaitingResponse();
+      const silentSince = awaiting
+        ? Math.max(this.lastInboundAt, this.awaitingSince)
+        : this.lastInboundAt;
+      const timeoutMs = awaiting
+        ? RELAY_AWAITING_PONG_TIMEOUT_MS
+        : RELAY_PONG_TIMEOUT_MS;
+      if (now - silentSince >= timeoutMs) {
         this.fail(4004, "relay-missed-pongs");
         return;
       }
@@ -252,12 +330,19 @@ export class RelaySocket {
       if (socket === null || !this.opened) {
         return;
       }
+      const pingIntervalMs = awaiting
+        ? RELAY_AWAITING_PING_INTERVAL_MS
+        : RELAY_PING_INTERVAL_MS;
+      if (now - this.lastPingSentAt < pingIntervalMs) {
+        return;
+      }
+      this.lastPingSentAt = now;
       try {
         socket.send(KEEPALIVE_PING);
       } catch {
         this.fail(4005, "relay-ping-send-failed");
       }
-    }, RELAY_PING_INTERVAL_MS);
+    }, RELAY_PING_TICK_MS);
   }
 
   private clearKeepalive(): void {

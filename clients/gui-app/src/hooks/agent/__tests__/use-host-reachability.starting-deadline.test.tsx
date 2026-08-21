@@ -41,7 +41,8 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
  */
 function remoteEntryWithConnectivity(
   hostId: string,
-  connectivity: "unknown" | "local-only",
+  connectivity: "unknown" | "connectable",
+  planAllowsRemote: boolean,
 ): HostDirectoryEntry {
   const listItem: HostListItem = {
     hostId,
@@ -63,6 +64,7 @@ function remoteEntryWithConnectivity(
   return hostListItemToDirectoryEntry(
     listItem,
     "wss://relay.example.test/attach",
+    planAllowsRemote,
   );
 }
 
@@ -170,7 +172,7 @@ describe("useHostReachability - starting-deadline basis", () => {
   // never regress into a death claim off a single unreadable liveness probe.
   it("reports reachable, never a death claim, for indeterminate connectivity", () => {
     list.value = {
-      data: [remoteEntryWithConnectivity("host-a", "unknown")],
+      data: [remoteEntryWithConnectivity("host-a", "unknown", true)],
       fetchStatus: "idle",
     };
     const { result } = renderHook(() => useHostReachability("host-a"));
@@ -194,7 +196,7 @@ describe("useHostReachability - starting-deadline basis", () => {
    */
   it("carries plan-restricted as its own reason, never collapsed to offline", () => {
     list.value = {
-      data: [remoteEntryWithConnectivity("host-a", "local-only")],
+      data: [remoteEntryWithConnectivity("host-a", "connectable", false)],
       fetchStatus: "idle",
     };
     const { result } = renderHook(() => useHostReachability("host-a"));

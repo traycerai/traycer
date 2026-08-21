@@ -743,6 +743,28 @@ export function readStagedWorktreeIntent(
 }
 
 /**
+ * Whether ANY host's copy of this slot holds a staged intent - the read that
+ * matches `clearForAllHosts`'s reach.
+ *
+ * A caller that clears every bucket must ask about every bucket: the same slot
+ * can hold an intent staged while the surface was pinned to another host, and
+ * a check scoped to the currently resolved bucket would report "nothing
+ * staged" while the clear deletes it. Pair the two by breadth - a single-bucket
+ * `clear` goes with {@link readStagedWorktreeIntent}, and this goes with
+ * `clearForAllHosts`.
+ */
+export function anyHostHasStagedWorktreeIntent(
+  key: WorktreeStagingKey,
+): boolean {
+  const identity = hostAgnosticStagingId(worktreeStagingKeyString(key));
+  const intentByKey = useWorktreeIntentStagingStore.getState().intentByKey;
+  return Object.keys(intentByKey).some(
+    (id) =>
+      hostAgnosticStagingId(id) === identity && intentByKey[id] !== undefined,
+  );
+}
+
+/**
  * Current in-memory edit sequence for a staging slot. Used to make rejected
  * action restoration conditional on no newer selection (including a clear).
  */

@@ -17,19 +17,20 @@
 export { BULK_CHUNK_SIZE_BYTES } from "@traycer/protocol/host-transport/chunking";
 
 /**
- * Initial per-session send credits for the bulk (low-priority) class. Interactive
- * and session-control frames are never credit-gated (they must not stall on a
- * slow peer); only bulk frames draw down credits. The peer replenishes via
- * `credit` control frames as it drains its receive buffer.
+ * LEGACY initial per-session send credits for the bulk (low-priority) class,
+ * used only against a peer that did NOT advertise
+ * `SESSION_CAPABILITY_FINE_CREDITS`. Interactive and session-control frames
+ * are never credit-gated (they must not stall on a slow peer); only bulk
+ * frames draw down credits.
+ *
+ * 512 frames × 64 KiB is a 32 MiB un-granted window — larger than an entire
+ * epic bootstrap — which is why it has to stay reachable but must not stay
+ * default: it lets a sender push a whole snapshot with the receiver's drain
+ * rate having no influence at all. Against a peer that advertised fine
+ * credits the session adopts `FINE_INITIAL_BULK_SEND_CREDITS` instead; see the
+ * skew table on that constant for why the shrink cannot be unilateral.
  */
 export const INITIAL_BULK_SEND_CREDITS = 512;
-
-/**
- * How many inbound bulk frames the client consumes before granting a fresh
- * batch of credits back to the peer. Keeps the credit-return traffic coarse so
- * it does not itself become chatter.
- */
-export const INBOUND_CREDIT_GRANT_BATCH = 256;
 
 /**
  * Client-leg re-auth cadence to the relay (§4b, R4-D2). The client re-presents a
@@ -70,6 +71,36 @@ export const RECONNECT_INITIAL_BACKOFF_MS = 1_000;
 export const RECONNECT_MAX_BACKOFF_MS = 30_000;
 
 /**
+ * How long a session must stay READY before its backoff ladder is considered
+ * paid off and resets to the immediate rung.
+ *
+ * Previously the ladder reset the instant the ready boundary was reached,
+ * which is the classic flapping bug: a host that accepts a session and drops
+ * it two seconds later gets re-dialled at the fastest rung forever, because
+ * every doomed attempt "succeeded" long enough to clear the counter. Requiring
+ * sustained health instead means a genuine one-off blip still recovers at the
+ * immediate rung, while a genuinely sick host backs off exactly as intended.
+ *
+ * The reset timer is armed at the ready boundary and cancelled on any
+ * connection loss: `dropConnection` covers socket/session drops, while
+ * `onHostDetached` clears it directly because that relay control edge keeps
+ * the socket alive and does not enter `dropConnection`. Partial credit is
+ * therefore never awarded.
+ *
+ * COLLISION WARNING, for whoever changes this number. It is currently equal to
+ * {@link RECONNECT_MAX_BACKOFF_MS}, and the two are independent concepts - a
+ * probation window and a backoff ceiling - that nothing requires to match.
+ * `remote-session.test.ts` identifies timers by their DELAY, so while these are
+ * equal the probation timer and a capped redial are indistinguishable to a spy
+ * assertion. That has already cost: an assertion of the form
+ * `toHaveBeenCalledWith(fn, 30_000)` was satisfied by the probation timer and
+ * passed for months against a backoff armed at 16s. Three call sites in that
+ * file now clear or fingerprint spies specifically to work around it. Moving
+ * either constant is safe; assuming they are the same one is not.
+ */
+export const RECONNECT_STABLE_RESET_MS = 30_000;
+
+/**
  * How often the session's `DialFailureLog` re-states an UNCHANGED failure
  * cause. At the 30s backoff cap this suppresses ~9 of every 10 attempts while
  * keeping the cause present in any 5-minute log tail (mirrors the host
@@ -101,6 +132,51 @@ export const REMOTE_SESSION_LINGER_MS = 60_000;
  */
 export const RELAY_PING_INTERVAL_MS = 25_000;
 export const RELAY_PONG_TIMEOUT_MS = 60_000;
+
+/**
+ * How often the keepalive loop WAKES. Distinct from how often it PINGS: the
+ * loop now runs two cadences (below) and a single timer that ticks at the
+ * faster of them is what lets it switch between them without tearing the
+ * timer down and re-arming it.
+ */
+export const RELAY_PING_TICK_MS = 5_000;
+
+/**
+ * The AWAITING cadence: used once this client has sent application traffic
+ * that the relay has not answered with anything at all. A half-open socket is
+ * precisely "I send, nothing comes back", so that condition is the detector,
+ * and it is the only state in which paying for a 5 s cadence is worth it.
+ *
+ * The old single pair cost up to ~85 s to notice a dead socket — a 60 s
+ * deadline only TESTED every 25 s — during which the app is silently talking
+ * to nothing. Here the worst case is one tick plus the deadline, ~17 s.
+ *
+ * This is affordable only because reattach is cheap: on a flaky link an eager,
+ * cheap reattach beats a long silent hang, but that trade inverts if a
+ * reattach ever costs a full snapshot again. Anyone lengthening reattach owes
+ * these two constants a second look.
+ *
+ * Idle sessions keep the 25 s/60 s pair above, so a backgrounded app does not
+ * pay for a cadence it cannot benefit from. The relay's auto-response strings
+ * are untouched by any of this — pings still never wake a hibernating DO.
+ *
+ * WHAT THIS DEADLINE ACTUALLY BOUNDS, which is stricter than "time to
+ * reattach": every write surface is gated on `connectionStatus === "open"`, so
+ * a half-open socket is the ONLY interval in which a user can believe they can
+ * act when they cannot. Everywhere else a disconnect disables the affordance.
+ * So the number to minimise is *how long the app can lie about being
+ * connected*, not how long recovery takes.
+ *
+ * PROVISIONAL: 12 s is derived, not measured. It is bounded below by the cost
+ * of being wrong in the other direction — a deadline under the real
+ * round-trip of a merely-slow-but-healthy link produces spurious reattaches,
+ * which is exactly the "eviction for clients that are merely far away" that
+ * governing ruling 1 rejects. Tightening it on argument alone would trade a
+ * measured failure mode for an unmeasured one; the flaky-link scenario
+ * harness is what should move it.
+ */
+export const RELAY_AWAITING_PING_INTERVAL_MS = 5_000;
+export const RELAY_AWAITING_PONG_TIMEOUT_MS = 12_000;
 
 /**
  * Bounded terminal-stream tombstone frontier, mirroring the host's invariant

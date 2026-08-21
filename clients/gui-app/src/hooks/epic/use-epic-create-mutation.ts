@@ -246,6 +246,15 @@ function taskProjectionMatchesRequest(
   if (!matchesRepoFilter(projection.repoLabels, filters)) {
     return false;
   }
+  // A host filter cannot be evaluated from a create projection: the response
+  // carries no `chatHostIds`, and the epic has no chats to own a host yet.
+  // Refuse the optimistic insert rather than guess - inserting would place an
+  // UNVERIFIED row into a host-filtered list, which is the one thing this
+  // filter's fail-closed design exists to prevent. The row appears on the next
+  // fetch, once the server can answer for it.
+  if (filters.chatHostIds !== undefined && filters.chatHostIds.length > 0) {
+    return false;
+  }
   return matchesWorkspaceFilter(projection.workspaces, filters);
 }
 
@@ -270,7 +279,14 @@ function mergeProjectionIntoFacets(
   ) {
     return facets;
   }
-  return { repos, workspaces, ownershipScopes };
+  // `chatHosts` is CARRIED, never rebuilt. Dropping it makes the history gate
+  // read the response as one from a server that cannot filter by host, which
+  // withholds every row behind "Can't filter by host here" - and these entries
+  // never refetch on their own (`staleTime`/`gcTime` at Infinity), so a single
+  // create would strand the list there. It is carried UNCHANGED because a
+  // brand-new epic has no published chats yet, so it contributes to no host's
+  // count; the next real fetch is what introduces one.
+  return { repos, workspaces, ownershipScopes, chatHosts: facets.chatHosts };
 }
 
 function incrementRepoFacets(

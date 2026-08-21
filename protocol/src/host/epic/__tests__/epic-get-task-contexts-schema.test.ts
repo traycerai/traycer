@@ -5,6 +5,7 @@ import {
   GET_TASK_CONTEXTS_MAX_IDS,
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
+  getTaskContextsResponseSchemaPre12,
   getTaskContextsResponseSchemaV10,
   type ListTaskLight,
   listTaskLightSchema,
@@ -45,12 +46,15 @@ describe("epic.getTaskContexts", () => {
     hostRpcRegistry["epic.getTaskContexts"][1].versions[0].contract;
   const v11Contract =
     hostRpcRegistry["epic.getTaskContexts"][1].versions[1].contract;
+  const v12Contract =
+    hostRpcRegistry["epic.getTaskContexts"][1].versions[2].contract;
 
   it("keeps v1.0 frozen and registers the v1.1 explicit-resolution minor", () => {
     expect(v10Contract.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(v11Contract.method).toBe("epic.getTaskContexts");
     expect(v11Contract.schemaVersion).toEqual({ major: 1, minor: 1 });
-    expect(hostRpcRegistry["epic.getTaskContexts"][1].latestMinor).toBe(1);
+    expect(v12Contract.schemaVersion).toEqual({ major: 1, minor: 2 });
+    expect(hostRpcRegistry["epic.getTaskContexts"][1].latestMinor).toBe(2);
     expect(hostRpcRegistry["epic.getTaskContexts"].degrade).toEqual({
       kind: "unsupported",
     });
@@ -60,7 +64,10 @@ describe("epic.getTaskContexts", () => {
     expect(v10Contract.requestSchema).toBe(getTaskContextsRequestSchema);
     expect(v10Contract.responseSchema).toBe(getTaskContextsResponseSchemaV10);
     expect(v11Contract.requestSchema).toBe(getTaskContextsRequestSchema);
-    expect(v11Contract.responseSchema).toBe(getTaskContextsResponseSchema);
+    // v1.1 stays on the pre-@1.2 row: only v1.2 carries `chatHostIds`.
+    expect(v11Contract.responseSchema).toBe(getTaskContextsResponseSchemaPre12);
+    expect(v12Contract.requestSchema).toBe(getTaskContextsRequestSchema);
+    expect(v12Contract.responseSchema).toBe(getTaskContextsResponseSchema);
   });
 
   it("round-trips a request within the id cap", () => {
