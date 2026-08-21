@@ -936,12 +936,18 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
     signal: AbortSignal,
   ): Promise<MintLinkLoginCodeFetchResult> {
-    // Runs in the renderer rather than behind the preload bridge: unlike the
-    // session list above there is no retained-credential handling here, and
-    // the dev renderer origin is on authn's dev CORS allow-list. A packaged
-    // desktop build that needs this surface routes it through Electron main
-    // like `listUserSessions` — until then a blocked origin surfaces as
-    // `network-error`, never a broken auth state.
+    // Runs in the renderer rather than behind the preload bridge, and that is
+    // fine in a PACKAGED build too: authn allows the renderer's own origin
+    // unconditionally, not just in dev. `registerPlugins` unions the env
+    // allowlist with `corsOrigins(...)`, which always contains
+    // `DESKTOP_RENDERER_ORIGIN` = `app://renderer` — the privileged scheme
+    // Electron serves the packaged GUI from. The dev Vite origin arrives
+    // through the same union's `desktopDevOrigin`.
+    //
+    // The bridge is what `listUserSessions` needs for a different reason: it
+    // handles retained step-up credentials, which must not cross into the
+    // renderer. Nothing here touches those, so there is no second reason to
+    // pay for a main-process hop.
     return mintLinkLoginCodeViaHttp(this.authnBaseUrl, bearerToken, signal);
   }
   linkLoginStatus(

@@ -436,11 +436,26 @@ export function LinkPhonePanel() {
   const [respondFailed, setRespondFailed] = useState(false);
   const respond = useRespondLinkLoginMutation();
   const {
-    claim,
+    claim: watchedClaim,
     code,
     deadKind,
     restart: restartCode,
   } = useLinkLoginWatch(signedIn && !approvedDone);
+  /**
+   * A code this panel has already answered for.
+   *
+   * `restartCode()` evicts the MINT query, not the status cache, so a claim
+   * the user just rejected stays in cached status data until the next poll -
+   * up to the poll interval of a fully interactive Approve/Reject card for a
+   * decision already made. A second Approve on it comes back
+   * `already-decided`, which this panel reads as approval and would show a
+   * "signed in" state for a phone the user rejected.
+   */
+  const [decidedCode, setDecidedCode] = useState<string | null>(null);
+  const claim =
+    watchedClaim !== null && watchedClaim.code === decidedCode
+      ? null
+      : watchedClaim;
   const minted = code.data ?? null;
   // `claim-pending` is a state, not an error: the user's single live claim
   // is awaiting the decision on ANOTHER surface. Rendered only when this
@@ -465,8 +480,9 @@ export function LinkPhonePanel() {
       return;
     }
     setRespondFailed(false);
+    const decidedOn = claim.code;
     respond.mutate(
-      { code: claim.code, approve },
+      { code: decidedOn, approve },
       {
         onSuccess: (outcome) => {
           if (approve && (outcome === "ok" || outcome === "already-decided")) {
@@ -485,6 +501,9 @@ export function LinkPhonePanel() {
           // Rejected (or the record vanished): resume with a fresh code.
           // The user's own click authorizes the re-mint; the evicting
           // restart guarantees the dead code cannot be re-served from cache.
+          // Suppressed locally FIRST, because the restart does not reach the
+          // status cache the claim card reads from.
+          setDecidedCode(decidedOn);
           restartCode();
         },
         onError: () => {

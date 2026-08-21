@@ -243,6 +243,34 @@ describe("link-login attempt fence", () => {
    * has to say so, or a caller reading it stays silent about a login that
    * genuinely broke.
    */
+  it("gives up on the approval window and reports timed-out", async () => {
+    // Nobody answers on the desktop. `LINK_LOGIN_APPROVAL_TIMEOUT_MS` and the
+    // `failCurrent({ kind: "timed-out" })` tail had no coverage, so a change
+    // to the deadline arithmetic would have failed nothing.
+    const { service } = makeService();
+    const { script, restore } = installLinkFetch();
+    try {
+      // A wide server-directed interval on purpose: the DEADLINE is what is
+      // under test, and pacing at the default 1s would drive 130 polls to
+      // reach it.
+      script.claimResponse = () =>
+        json({ status: "claimed", secret: "S".repeat(43), interval: 30 }, 200);
+      script.tokenResponse = () =>
+        json({ error: "authorization_pending" }, 428);
+      const resultPromise = service.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(130_000);
+      const result = await resultPromise;
+
+      expect(result.kind).toBe("timed-out");
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      // A code verdict, so the surface renders the precise copy and the
+      // generic sign-in error stays out of it.
+      expect(service.getLastError()).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
   it("a validation failure on the CURRENT attempt is failed, not superseded", async () => {
     const { service } = makeService();
     const { script, restore } = installLinkFetch();
