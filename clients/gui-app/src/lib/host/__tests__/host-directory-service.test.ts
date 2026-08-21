@@ -244,6 +244,69 @@ describe("HostDirectoryService", () => {
     vi.restoreAllMocks();
   });
 
+  it("P2 FIX - tells listeners when the shell seed adopts a local host id, on a machine whose host has not announced", async () => {
+    // The seed is the ONE `adoptLocalHostId` caller with no emit behind it -
+    // `onLocalHostChange` emits immediately after its own call, and the poll
+    // path's `emitIfSnapshotChanged` can decline. It is also a real state
+    // change: `snapshot()` reads `lastKnownLocalHostId` to neutralise this
+    // machine's registry twin into a `bootingLocalEntry`.
+    //
+    // A machine with NO local snapshot is the population that matters, and it
+    // is also the cold start: nothing has announced, so the durable id is the
+    // only thing that can answer "which host is mine" - and a consumer that
+    // subscribed and was never told still believes the answer is null.
+    const host = makeHost(null);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: () => Promise.resolve("desktop-pid-123"),
+      remoteFetcher: null,
+    });
+    await directory.start();
+
+    expect(directory.getLocalHostId()).toBe("desktop-pid-123");
+    // The live entry is null here and always was - which is exactly why a
+    // consumer reading `getLocalEntry()?.hostId` cannot see this machine.
+    expect(directory.getLocalEntry()).toBeNull();
+  });
+
+  it("P2 FIX - and on the POLL reseed, where the merged snapshot is unchanged and emitIfSnapshotChanged would otherwise decline", async () => {
+    // The start path happens to be covered already (the local-host
+    // subscription emits right after the seed), so this is the arm that
+    // actually needs the emit: the host announces itself to the SHELL later,
+    // the poll picks the id up, and nothing else about the merged snapshot
+    // moves - no local entry, no remote rows - so the poll's own
+    // change-gated emit correctly declines and every consumer is left
+    // believing this machine has no id.
+    vi.useFakeTimers();
+    const host = makeHost(null);
+    let seededId: string | null = null;
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: () => Promise.resolve(seededId),
+      remoteFetcher: null,
+    });
+
+    await directory.start();
+    expect(directory.getLocalHostId()).toBeNull();
+
+    let notifications = 0;
+    directory.onChange(() => {
+      notifications += 1;
+    });
+
+    // The shell can answer now. Nothing else has changed.
+    seededId = "desktop-pid-123";
+    await vi.advanceTimersByTimeAsync(HOST_DIRECTORY_REFRESH_POLL_MS);
+
+    expect(directory.getLocalHostId()).toBe("desktop-pid-123");
+    expect(await directory.list()).toEqual([]);
+    expect(notifications).toBe(1);
+  });
+
   it("seeds the local entry from the runner-host onLocalHostChange subscription", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
