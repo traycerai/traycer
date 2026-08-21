@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   CLASSIFIED_LABELS_FOR_TESTS,
   classifyContentRecovery,
@@ -283,6 +284,132 @@ describe("content recovery classification", () => {
     // Leading round-trips through `parseLeadingSlashCommand`, so warning here
     // would be noise on the common case.
     expect(report.size).toBe(0);
+  });
+
+  // `-CUdW`: "leading" is a claim about the RECOVERY TEXT, not about node
+  // position. A skill chip is legal inside a blockquote, and it is genuinely
+  // the document's first inline node there - but the seam emits `> /review`,
+  // and `LEADING_SLASH_COMMAND_REGEX` accepts only spaces and tabs before the
+  // trigger. So it pastes back as prose, silently.
+  it("counts a leading skill chip inside a blockquote as a loss", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "slashCommand",
+                  attrs: { kind: "skill", name: "review" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(report.get("command")).toBe(1);
+  });
+
+  // Same criterion, the other wrapper that prefixes its first line: an ordered
+  // item recovers as `1. /review`.
+  it("counts a leading skill chip inside an ordered list as a loss", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "orderedList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    {
+                      type: "slashCommand",
+                      attrs: { kind: "skill", name: "review" },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(report.get("command")).toBe(1);
+  });
+
+  // The criterion is CONVERTIBILITY, not "unwrapped". A bullet item carries no
+  // marker in the recovery text - `leaves bullet markers off, which the
+  // criterion allows` - so a chip in the first one still lands at offset 0 and
+  // the converter still rebuilds it. Warning here would be a false loss.
+  it("reports nothing for a leading skill chip in a bullet item", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "bulletList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    {
+                      type: "slashCommand",
+                      attrs: { kind: "skill", name: "review" },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(report.size).toBe(0);
+  });
+
+  // `-G8sl`: a blockquote is not text-complete, because BOTH paste paths
+  // deliberately dissolve it - `normalizeComposerMarkdownNode` hoists a parsed
+  // blockquote's children into the doc, and `sanitizeMarkdownHtml` unwraps
+  // `<blockquote>` via STRIP_TAGS. So a resend never rebuilds the node and
+  // never reaches the serializer's `<user_quoted_section>` branch: the agent
+  // stops being told which part was quoted.
+  it("counts a blockquote as a loss, because pasting it back cannot rebuild it", () => {
+    const quoted: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "the part I am asking about" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    // The CATEGORY, deliberately - not the `> ` prefix. What is lost is the
+    // quote-ness, and a test that asserted the prefix would pass just as well
+    // if the prefix were the only thing that ever came back.
+    expect(classifyContentRecovery(quoted).get("quotedBlock")).toBe(1);
+    // The founding invariant still holds: the quoted TEXT is inlined, so the
+    // send is stated with its content rather than merely reported lost.
+    expect(recoveryTextFromContent(quoted)).toContain(
+      "the part I am asking about",
+    );
   });
 
   it("reports nothing for a native slash-command chip", () => {

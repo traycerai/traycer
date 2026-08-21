@@ -257,6 +257,17 @@ export function unrecoverableSendNotice(
           verbPhrase: "will paste as plain text from where they sit - re-pick",
           tail: "so they run again",
         }),
+        // The quoted text is right there in the copy below, `> ` and all -
+        // what does not survive is that it was QUOTED. Both paste paths
+        // dissolve a blockquote, so the resend reads as ordinary prose and the
+        // agent is no longer told which part was being asked about.
+        countedClause({
+          count: losses.get("quotedBlock") ?? 0,
+          singular: "quoted block",
+          plural: "quoted blocks",
+          verbPhrase: "will paste back as ordinary text - re-apply",
+          tail: "with the composer's quote control so the agent sees them as quotes",
+        }),
         (losses.get("unknown") ?? 0) > 0
           ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
           : "",

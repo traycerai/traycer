@@ -21,6 +21,11 @@ export type ContentRecoveryLoss =
   | "quote"
   /** A slash chip whose `/name` will not round-trip from where it sits. */
   | "command"
+  /**
+   * A blockquote's QUOTE-NESS. The text survives; the fact that it was quoted
+   * does not, because neither paste path can rebuild the node.
+   */
+  | "quotedBlock"
   /** A node kind nothing has classified - see the fail-closed rule below. */
   | "unknown";
 
@@ -56,8 +61,9 @@ const TEXT_COMPLETE_NODE_TYPES: ReadonlySet<string> = new Set([
   "codeBlock",
   "mermaidBlock",
   "uiPreviewBlock",
-  "blockquote",
   "table",
+  // `blockquote` is NOT here - see `LOSSY_NODE_TYPES`. Its text survives but
+  // its quote-ness does not, because no paste path can rebuild the node.
   // `slashCommand` is NOT here: whether it survives depends on its kind and
   // its position, which a type-only set cannot express. See `lostSlashChip`.
 ]);
@@ -72,12 +78,29 @@ const TRANSPARENT_NODE_TYPES: ReadonlySet<string> = new Set([
   "attachmentGroup",
 ]);
 
-/** Node kinds that carry something the projection drops, and what it is. */
+/**
+ * Node kinds that carry something the projection drops, and what it is.
+ *
+ * `blockquote` is here on CONVERTIBILITY, which is the same criterion
+ * {@link lostSlashChip} applies: the seam emits `> ...` faithfully, but both
+ * paste paths deliberately dissolve a quote on the way back in -
+ * `normalizeComposerMarkdownNode` hoists a parsed blockquote's children into
+ * the doc, and `sanitizeMarkdownHtml` unwraps `<blockquote>` through
+ * STRIP_TAGS. So a resend never rebuilds the node and so never reaches
+ * `serializeBlockquote`'s `<user_quoted_section>`: the agent stops being told
+ * which part was quoted.
+ *
+ * This is not in tension with marks being text-complete. For a mark the paste
+ * path REBUILDS the structure from the delimiters, so parity and
+ * convertibility agree; for a quote it cannot, and where the two diverge the
+ * classification fails closed.
+ */
 const LOSSY_NODE_TYPES: ReadonlyMap<string, ContentRecoveryLoss> = new Map([
   ["image", "attachment"],
   ["imageAttachment", "attachment"],
   ["mention", "mention"],
   ["sourcedQuote", "quote"],
+  ["blockquote", "quotedBlock"],
 ]);
 
 /**
@@ -114,7 +137,7 @@ export function classifyContentRecovery(
   content: JsonContent,
 ): ContentRecoveryReport {
   const counts = new Map<ContentRecoveryLoss, number>();
-  visitSiblings([content], counts, firstInlineNode(content));
+  visitSiblings([content], counts, firstConvertibleInlineNode(content));
   return counts;
 }
 
@@ -181,12 +204,42 @@ function lostSlashChip(
   return true;
 }
 
-/** The document's first inline node - the only position that round-trips. */
-function firstInlineNode(content: JsonContent): JsonContent | null {
+/**
+ * Containers whose own line prefix pushes their first child off column zero in
+ * the RECOVERY TEXT.
+ *
+ * `LEADING_SLASH_COMMAND_REGEX` anchors at the start of the whole prompt and
+ * accepts only spaces and tabs before the trigger, so anything else in front
+ * of a `/name` - `> ` from a quote, `1. ` from an ordered item - stops the
+ * converter rebuilding it. `bulletList` is deliberately absent: this module
+ * emits no bullet marker, so a chip in the first bullet item still lands at
+ * column zero and still round-trips.
+ */
+const LINE_PREFIXING_NODE_TYPES: ReadonlySet<string> = new Set([
+  "blockquote",
+  "sourcedQuote",
+  "orderedList",
+]);
+
+/**
+ * The one position a slash chip round-trips from: first inline node, reached
+ * without passing through anything that prefixes its line.
+ *
+ * Node position alone was the wrong question. A skill chip inside a leading
+ * blockquote IS the document's first inline node, yet it recovers as
+ * `> /review` and pastes back as prose. What decides it is the position the
+ * CONVERTER parses, so the walk stops at any wrapper the seam prefixes -
+ * matching what this module actually emits rather than what the tree looks
+ * like.
+ */
+function firstConvertibleInlineNode(content: JsonContent): JsonContent | null {
   const children = content.content ?? [];
   if (children.length === 0) return null;
   const first = children[0];
-  return (first.content ?? []).length === 0 ? first : firstInlineNode(first);
+  if (LINE_PREFIXING_NODE_TYPES.has(first.type ?? "")) return null;
+  return (first.content ?? []).length === 0
+    ? first
+    : firstConvertibleInlineNode(first);
 }
 
 function lossForNodeType(type: string | undefined): ContentRecoveryLoss | null {
