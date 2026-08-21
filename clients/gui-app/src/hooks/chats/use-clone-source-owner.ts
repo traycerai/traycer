@@ -55,9 +55,15 @@ export interface ResolveCloneSourceOwnerArgs {
   /** `epic.listCloudChats`' rows, or `null` when the list has not answered. */
   readonly cloudChats: readonly CloudChatSummary[] | null;
   /**
-   * The host the source chat is bound to, when the surface knows it - the
-   * dead tile's `sourceHostId`, the fork dialog's tab host. Used ONLY to break
-   * a tie, never to filter: see below.
+   * The host that OWNS the source chat, when the surface genuinely knows it -
+   * the dead tile's `sourceHostId`, which every mount resolves from the chat's
+   * own binding or its cloud row. Used ONLY to break a tie, never to filter:
+   * see below.
+   *
+   * NOT the host a surface happens to be reading through. A published copy is
+   * served by whatever host the DEVICE runs, which is generally not the
+   * owner's, so a serving host here would resolve a colliding id to the
+   * viewer's own row. Pass `null` unless the value is the owner's host.
    */
   readonly sourceOwnerHostId: string | null;
 }

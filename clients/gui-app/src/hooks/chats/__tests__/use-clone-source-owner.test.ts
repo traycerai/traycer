@@ -154,6 +154,36 @@ describe("resolveCloneSourceOwnerUserId", () => {
     ).toBeNull();
   });
 
+  // The trap the fork dialog fell into: a published copy is read through the
+  // host SERVING it, generally the viewer's own machine. Handed that host as
+  // the tie-breaker, a colliding id resolves to the viewer's own unrelated row
+  // - a wrong owner, which the host TRUSTS, rather than an absent one. Callers
+  // that cannot name the OWNING host must pass `null` and take the degrade.
+  it("resolves a collision to the viewer's own row when handed a serving host - why callers must pass the owning host or null", () => {
+    const colliding = [
+      cloudRow("chat-1", "viewer-user", "viewer-own-host"),
+      cloudRow("chat-1", "collaborator-user", "collaborator-host"),
+    ];
+    // The serving host IS the viewer's own, so this picks the wrong owner...
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: colliding,
+        sourceOwnerHostId: "viewer-own-host",
+      }),
+    ).toBe("viewer-user");
+    // ...whereas declining to name a host degrades honestly.
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: colliding,
+        sourceOwnerHostId: null,
+      }),
+    ).toBeNull();
+  });
+
   // The tie-breaker must not become a filter: one row is already unambiguous,
   // and a caller whose bound host disagrees for a reason this function cannot
   // see must not lose the owner it used to resolve.
