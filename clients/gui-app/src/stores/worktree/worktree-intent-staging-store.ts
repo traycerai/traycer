@@ -350,6 +350,38 @@ interface WorktreeIntentStagingStore {
     key: WorktreeStagingKey,
     clientActionId: string,
   ) => void;
+  /**
+   * Put this slot back exactly as a dispatch that never left the client found
+   * it: its pick, and the consumption mark its consume DISPLACED.
+   *
+   * {@link WorktreeIntentStagingState.consumeForDispatch} is unconditional - a
+   * dispatch is the slot's current state whether or not it took a pick - so
+   * its rollback has to be unconditional too. Restoring only the PICK leaves
+   * the intent-free case marked for an action that never became pending, and
+   * nothing can ever resolve such a mark: no ack, sweep or restoration names
+   * it. It stands until some unrelated user mutation, refusing every
+   * owner-matched hand-back in the meantime against a phantom owner.
+   *
+   * `mark` is what the consume displaced, NOT a clear. A send that never
+   * reached the host supersedes nothing, so an earlier dispatch that really
+   * did take this slot is still its owner. Dropping the mark instead would be
+   * the opposite lie from the phantom - it reports the slot as "empty because
+   * the user chose to send without a pick", which both strands that
+   * dispatch's own hand-back and sends a restored prompt back UNBOUND, since
+   * {@link stagedWorktreeIntentAwaitsDispatchOutcome} is the gate the
+   * prompt-restore path checks.
+   *
+   * {@link WorktreeIntentStagingState.setIntent} cannot serve here: it drops
+   * the mark only on its non-empty branch, and a `null` intent takes the
+   * delete-and-bump path that leaves the mark exactly where it was.
+   */
+  readonly rollBackDispatch: (
+    key: WorktreeStagingKey,
+    restore: {
+      readonly intent: WorktreeIntent | null;
+      readonly mark: DispatchConsumptionMark | undefined;
+    },
+  ) => void;
   /** Merge one folder's intent into the staged intent for `key`. */
   readonly stageEntry: (
     key: WorktreeStagingKey,
@@ -587,6 +619,19 @@ export function stagedWorktreeIntentAwaitsDispatchOutcome(
  * choice. Only the former is worth stating - telling someone their worktree
  * was deleted when they simply re-picked would be a lie.
  */
+/**
+ * The consumption mark a dispatch is about to displace, captured so a dispatch
+ * that never leaves the client can put it back. See
+ * {@link WorktreeIntentStagingState.rollBackDispatch}.
+ */
+export function stagedDispatchConsumptionMark(
+  key: WorktreeStagingKey,
+): DispatchConsumptionMark | undefined {
+  return useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+    worktreeStagingKeyString(key)
+  ];
+}
+
 /**
  * Whether the slot is awaiting THIS action's outcome specifically - the bar a
  * hand-back of the PICK has to clear. See {@link DispatchConsumptionMark}.
@@ -876,6 +921,36 @@ export const useWorktreeIntentStagingStore =
                 ...state.consumedForDispatchByKey,
                 [id]: { clientActionId },
               },
+            };
+          }),
+        rollBackDispatch: (key, restore) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            const intentByKey = { ...state.intentByKey };
+            if (
+              restore.intent === null ||
+              restore.intent.entries.length === 0
+            ) {
+              delete intentByKey[id];
+            } else {
+              intentByKey[id] = restore.intent;
+            }
+            const consumedForDispatchByKey = {
+              ...state.consumedForDispatchByKey,
+            };
+            if (restore.mark === undefined) {
+              delete consumedForDispatchByKey[id];
+            } else {
+              consumedForDispatchByKey[id] = restore.mark;
+            }
+            return {
+              intentByKey,
+              consumedForDispatchByKey,
+              // The dispatch is undone, but the counter is monotonic by
+              // construction and nothing compares it - the mark is the only
+              // discriminator. Bumping keeps that invariant rather than
+              // pretending the attempt never touched the slot.
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
         clearForAllHosts: (key) =>

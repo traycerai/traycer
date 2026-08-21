@@ -1583,6 +1583,174 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
+  // `consumeForDispatch` is UNCONDITIONAL - a dispatch is the slot's current
+  // state whether or not it took a pick - so its rollback has to be too. A
+  // send refused locally (intent-free, racing a disconnection) never reached
+  // the wire, so the slot must come back exactly as it was found.
+  //
+  // Left marked, the mark names an action that never became pending: no ack,
+  // sweep or restoration can ever resolve it, so it stands until some
+  // unrelated user mutation clears it, and every owner-matched hand-back in
+  // the meantime is refused against a phantom owner.
+  it("leaves no consumption mark when a refused intent-free send found none", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // Nothing staged, and the connection is gone: the send is refused before
+    // it reaches the wire.
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    // The slot was empty and unmarked before the attempt; it is empty and
+    // unmarked after it.
+    expect(
+      useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // The other half of "exactly as it was found": when the slot was empty
+  // because an EARLIER dispatch took it, the rollback restores THAT mark.
+  //
+  // A send that never left the client supersedes nothing, so clearing the slot
+  // clean would be the opposite lie from the phantom - it reports "empty by
+  // user choice" and strands the earlier dispatch's pick just as surely.
+  it("hands a superseded dispatch its slot back when the next send is refused locally", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const editIntent = worktreeIntentFor("edit-branch");
+
+    // The edit consumes the slot and never gets its ack.
+    useWorktreeIntentStagingStore.getState().stageIntent(key, editIntent);
+    expect(
+      harness.handle.store.getState().editUserMessage({
+        targetMessageId: "msg-original",
+        content: CONTENT,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+
+    // A send then finds the slot empty (the edit took the pick) and is refused
+    // locally. It never reached the host, so the edit is still the last
+    // dispatch that actually took this slot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    // The reconnect sweeps the still-pending edit. No prompt is handed back,
+    // so the sweep's own fallback decides - and it may, because the edit still
+    // owns the consumption.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(editIntent);
+  });
+
+  // The restore path deliberately does NOT match on owner - a prompt and the
+  // worktree it was written for travel together, whichever dispatch consumed
+  // last. So the rollback must leave the slot still reporting what it truly
+  // is: empty BECAUSE a dispatch took it. Clearing it clean would report
+  // "empty by user choice" and send the prompt back unbound, which is the
+  // silent-local-run this whole path exists to prevent.
+  it("still returns a restored prompt's binding after a refused intent-free send", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent = worktreeIntentFor("send-branch");
+
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // A second send finds the slot empty and is refused locally.
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          SECOND_CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    // The reconnect snapshot omits the first send, so its prompt comes back -
+    // and its binding has to come with it.
+    emitSnapshot(callbacks, "owner");
+
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
   it("does not restore a rejected worktree intent after a newer explicit clear", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();

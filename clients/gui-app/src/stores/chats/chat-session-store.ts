@@ -37,6 +37,7 @@ import {
 } from "@/lib/notifications/live-chat-completion-acknowledgements";
 import {
   readStagedWorktreeIntent,
+  stagedDispatchConsumptionMark,
   stagedWorktreeIntentAwaitsDispatchFrom,
   stagedWorktreeIntentAwaitsDispatchOutcome,
   worktreeIntentWasSweptMidDispatch,
@@ -2510,7 +2511,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Unconditional: a dispatch is this slot's current state whether or
         // not it took a pick. Skipping the intent-free case left an earlier
         // action's mark standing, so that action could hand back a choice this
-        // send had already superseded.
+        // send had already superseded. Captured first so a send REFUSED below
+        // can put back what this consume displaces - see `rollBackDispatch`.
+        const supersededMark = stagedDispatchConsumptionMark(stagedKey);
         stagingStore.consumeForDispatch(stagedKey, clientActionId);
         // Captured once, before dispatch, and reused for the optimistic echo
         // below - a queued send (this false) gets NO optimistic transcript
@@ -2562,9 +2565,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             : null,
         });
         if (sentClientActionId === null) {
-          if (worktreeIntent !== null) {
-            stagingStore.setIntent(stagedKey, worktreeIntent);
-          }
+          // This send never reached the wire, so the slot goes back exactly as
+          // it was found - pick AND displaced mark. An unconditional consume
+          // needs an unconditional rollback.
+          stagingStore.rollBackDispatch(stagedKey, {
+            intent: worktreeIntent,
+            mark: supersededMark,
+          });
           return null;
         }
         const optimisticQueuedItem = optimisticQueuedItemForSend({
@@ -2732,7 +2739,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Unconditional: a dispatch is this slot's current state whether or
         // not it took a pick. Skipping the intent-free case left an earlier
         // action's mark standing, so that action could hand back a choice this
-        // send had already superseded.
+        // send had already superseded. Captured first so an edit REFUSED below
+        // can put back what this consume displaces - see `rollBackDispatch`.
+        const supersededMark = stagedDispatchConsumptionMark(stagedKey);
         stagingStore.consumeForDispatch(stagedKey, clientActionId);
         const sentClientActionId = sendAction({
           set,
@@ -2754,9 +2763,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
         if (sentClientActionId === null) {
-          if (worktreeIntent !== null) {
-            stagingStore.setIntent(stagedKey, worktreeIntent);
-          }
+          // Same rule as `sendMessage`: a refused dispatch restores the pick
+          // and the mark it displaced, not just the pick.
+          stagingStore.rollBackDispatch(stagedKey, {
+            intent: worktreeIntent,
+            mark: supersededMark,
+          });
           return null;
         }
         if (worktreeIntent !== null) {
