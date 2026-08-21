@@ -440,8 +440,15 @@ function withoutDispatchMark(
 }
 
 /**
- * Whether the slot is empty because a dispatch took it and nothing has touched
- * it since - the only state in which a send may hand its pick back.
+ * Whether the slot is empty because THIS action's dispatch took it and nothing
+ * has touched it since - the only state in which it may hand its pick back.
+ *
+ * It deliberately does NOT record which action consumed the slot. The last
+ * consumer is not the one owed a hand-back: two sends can each consume a pick
+ * and die, and the one whose PROMPT comes back to the composer is the one
+ * whose binding must come with it, whichever consumed last. Precedence between
+ * several dead claimants is decided by the caller (see the snapshot handler),
+ * not by ownership of the mark.
  */
 export function stagedWorktreeIntentAwaitsDispatchOutcome(
   key: WorktreeStagingKey,

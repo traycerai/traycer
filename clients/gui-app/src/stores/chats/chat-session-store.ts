@@ -880,6 +880,11 @@ export interface StagedWorktreeIntentSource {
  * Occupancy alone is not enough either: an explicit user clear also leaves the
  * slot empty, and that IS a choice to send without one. The store's marker
  * separates the two - only a dispatch sets it, every user mutation drops it.
+ *
+ * The slot holds ONE pick, so when several dead actions each want theirs back
+ * the caller decides precedence: the action whose PROMPT is handed to the
+ * composer wins, because a prompt and the worktree it was written for have to
+ * travel together. See the snapshot handler.
  */
 /**
  * Keep the background-stop slices in lockstep with the running-only list: a
@@ -903,6 +908,26 @@ function backgroundStopSlices(
       nextBackgroundItems,
     ),
   };
+}
+
+/**
+ * Restore the FIRST claimant that has something to stage, in priority order.
+ * Later claimants are dropped rather than layered: the slot holds one pick,
+ * and `restoreStagedWorktreeIntent`'s own guard would refuse them anyway once
+ * the first has filled the slot - this just makes the ordering deliberate
+ * instead of dependent on which caller happened to run first.
+ */
+function restoreOneWorktreeIntent(
+  claimants: ReadonlyArray<StagedWorktreeIntentSource | null | undefined>,
+  stagingKey: WorktreeStagingKey,
+): void {
+  const owed = claimants.find(
+    (claimant) =>
+      claimant !== null &&
+      claimant !== undefined &&
+      claimant.restoreWorktreeIntent !== null,
+  );
+  restoreStagedWorktreeIntent(owed ?? null, stagingKey);
 }
 
 function restoreStagedWorktreeIntent(
@@ -1224,21 +1249,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           get().pendingActions,
           connectionEpoch,
         );
-        if (sweep.sweptActionIds.size > 0) {
-          const stagingKey: WorktreeStagingKey = {
-            surface: "owner",
-            hostId: options.hostId,
-            epicId: options.epicId,
-            ownerKind: "chat",
-            ownerId: options.chatId,
-          };
-          // Every swept id came from this same `pendingActions` snapshot, so
-          // the lookup is always present.
-          const sweptPendings = get().pendingActions;
-          sweep.sweptActionIds.forEach((sweptId) => {
-            restoreStagedWorktreeIntent(sweptPendings[sweptId], stagingKey);
-          });
-        }
+        // Every swept id came from this same `pendingActions` snapshot, so the
+        // lookup is always present. DEFERRED past the reconcile rather than
+        // applied here: the slot holds one pick, and a swept edit is not the
+        // only claimant. See `restoreOneWorktreeIntent` below for who wins.
+        const sweptPendings = get().pendingActions;
+        const sweptWorktreeIntents = [...sweep.sweptActionIds].map(
+          (sweptId) => sweptPendings[sweptId],
+        );
         let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
           null;
         set((state) => {
@@ -1416,15 +1434,27 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         // A prompt handed back to the composer takes its staged worktree with
         // it, or the resubmit silently runs against the chat's previous
-        // binding. Same revision guard as the rejection ack and the reconnect
-        // sweep: a NEWER pick made since dispatch wins.
-        restoreStagedWorktreeIntent(restoredWorktreeIntentForSnapshot, {
-          surface: "owner",
-          hostId: options.hostId,
-          epicId: options.epicId,
-          ownerKind: "chat",
-          ownerId: options.chatId,
-        });
+        // binding.
+        //
+        // PRECEDENCE, because the slot holds one pick and a reconnect can kill
+        // several actions that each want theirs back. The prompt in the
+        // composer wins: a prompt and the worktree it was written for have to
+        // travel together, and staging an unrelated action's binding beside it
+        // is worse than staging none - the resend looks right and runs
+        // somewhere else. A swept edit only gets its binding back when no
+        // prompt is being handed back, which is the case the sweep's own
+        // reasoning was written for (an edit dropped before its ack never runs
+        // the rejection path, so nothing else would restore it).
+        restoreOneWorktreeIntent(
+          [restoredWorktreeIntentForSnapshot, ...sweptWorktreeIntents],
+          {
+            surface: "owner",
+            hostId: options.hostId,
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          },
+        );
         // A deferred session stop that survived the sweep (its turn stop was
         // accepted before the connection dropped) may never see another
         // turn-state frame - the turn could have settled while offline - so

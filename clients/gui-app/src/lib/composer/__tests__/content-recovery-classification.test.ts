@@ -374,6 +374,89 @@ describe("content recovery classification", () => {
     expect(text).toBe("```\n    if True:\n        pass\n```");
   });
 
+  // R10 `-AdAM`: a list marker is visible in its absence, but a NUMBER is not.
+  // The composer preserves non-default `attrs.start`, so dissolving the list
+  // silently renumbered the user's steps from 1.
+  it("keeps ordered-list numbering, including a non-default start", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "orderedList",
+          attrs: { start: 2 },
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "First" }],
+                },
+              ],
+            },
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Second" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(text).toBe("2. First\n3. Second");
+  });
+
+  it("leaves bullet markers off, which the criterion allows", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "bulletList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "one" }] },
+              ],
+            },
+            {
+              type: "listItem",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "two" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    // A `- ` is visible in its absence and retypeable; a number is not.
+    expect(text).toBe("one\ntwo");
+  });
+
+  // R10 `-AdAI`: content ending in a newline plus the join's own newline made
+  // a blank code line the user never wrote. The serializer strips exactly one
+  // terminal newline; match it byte for byte.
+  it("does not double a code block's terminal newline", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          attrs: { language: "sh" },
+          content: [{ type: "text", text: "echo hi\n" }],
+        },
+      ],
+    });
+
+    expect(text).toBe("```sh\necho hi\n```");
+  });
+
   it("carries a code block's language into the fence", () => {
     const text = recoveryTextFromContent({
       type: "doc",

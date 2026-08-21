@@ -1841,6 +1841,75 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(1);
   });
 
+  // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
+  // WHICH one. With a dead edit and a dead send both wanting their intent
+  // back, the sweep runs first and the older EDIT claimed the mark - so the
+  // send's recovered prompt landed in the composer bound to the edit's
+  // worktree. Wrong binding is worse than none: the resend looks right.
+  it("re-stages the intent belonging to the prompt it handed back", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const editIntent = worktreeIntentFor("feat/edit");
+    const sendIntent = worktreeIntentFor("feat/send");
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, editIntent);
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    // A newer pick, consumed by a SEND. The slot's last consumer is the send.
+    useWorktreeIntentStagingStore.getState().setIntent(key, sendIntent);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // Both die. The sweep restores the edit first, then the reconcile hands
+    // the send's prompt back.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The prompt in the composer is the SEND's...
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(SECOND_CONTENT);
+    // ...so the worktree staged with it must be the SEND's, and never the
+    // edit's - an unrelated action's restoration must not bind this prompt.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(sendIntent);
+  });
+
   // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
   // the user changes settings and a `turnStateChanged` settles the send before
   // another snapshot lands, the live composer already holds the new tuple - so

@@ -236,6 +236,9 @@ function prepareForProjection(
   return nodes.flatMap((node) => {
     // A list container contributes nothing itself; its items become siblings
     // so the newline-joining entry point separates them.
+    if (node.type === "orderedList") {
+      return numberedListItems(node);
+    }
     if (LIST_CONTAINER_TYPES.has(node.type ?? "")) {
       return prepareForProjection(node.content ?? []);
     }
@@ -271,13 +274,42 @@ const LIST_CONTAINER_TYPES: ReadonlySet<string> = new Set([
   "listItem",
 ]);
 
+/**
+ * Ordered items keep their NUMBER; bullets deliberately do not keep their `-`.
+ *
+ * Both are markers, but they fail the module's criterion differently. A `- `
+ * is visible in its absence - the reader sees a plain line and retypes the
+ * dash. A number is not: the composer preserves a non-default `attrs.start`,
+ * so dissolving `2. / 3.` into bare lines silently renumbers the user's steps
+ * from 1 with nothing on screen saying so. That is invisible loss, which is
+ * exactly what this module counts as a loss.
+ */
+function numberedListItems(list: JsonContent): ReadonlyArray<JsonContent> {
+  const rawStart = list.attrs?.start;
+  const start = typeof rawStart === "number" ? rawStart : 1;
+  return (list.content ?? []).map((item, index) => {
+    const itemText = extractPlainTextFromComposerJSONContent({
+      type: "doc",
+      content: [...prepareForProjection(item.content ?? [])],
+    });
+    return {
+      type: "paragraph",
+      content: [{ type: "text", text: `${start + index}. ${itemText}` }],
+    };
+  });
+}
+
 function fencedCodeBlock(node: JsonContent): string {
   const language = node.attrs?.language;
   const info = typeof language === "string" ? language : "";
-  const inner = extractPlainTextFromComposerJSONContent({
+  const projected = extractPlainTextFromComposerJSONContent({
     type: "doc",
     content: [...(node.content ?? [])],
   });
+  // Exactly the serializer's rule (`json-content-serializer`): ONE terminal
+  // newline is dropped before the closing fence. Without it the join's own
+  // newline doubles, producing a blank code line the user never wrote.
+  const inner = projected.endsWith("\n") ? projected.slice(0, -1) : projected;
   return ["```" + info, inner, "```"].join("\n");
 }
 
