@@ -367,6 +367,73 @@ describe("runLinkPhoneFlow", () => {
     ).rejects.toThrowError(/stdin attached to a terminal/);
   });
 
+  it("stops when the status poll is refused rather than watching blind", async () => {
+    // An `unauthorized` status is the credential dying mid-watch. Continuing
+    // would leave a QR on screen whose claim this terminal can no longer see,
+    // so the phone waits on an approval that can never be asked for.
+    statusMock.mockResolvedValue({ kind: "unauthorized" });
+
+    const result = await runWithPolls(interactiveCtx(), 1);
+
+    expect(result.status).toBe("rejected");
+    expect(
+      (result.status === "rejected" ? result.reason : new Error("")).message,
+    ).toContain("re-authenticate");
+    expect(respondMock).not.toHaveBeenCalled();
+  });
+
+  it("stops when the code was already decided somewhere else", async () => {
+    // Another surface answered this claim. There is nothing left to approve,
+    // and the flow says so instead of prompting for a decision that would be
+    // refused.
+    for (const decided of ["approved", "denied"] as const) {
+      vi.clearAllMocks();
+      mintMock.mockResolvedValue(mintedCode("ABCDE-FGHJK"));
+      statusMock.mockResolvedValue({
+        kind: "ok" as const,
+        response: { status: decided, claimant: null },
+      });
+
+      const result = await runWithPolls(interactiveCtx(), 1);
+
+      expect(result.status).toBe("rejected");
+      expect(
+        (result.status === "rejected" ? result.reason : new Error("")).message,
+      ).toContain("already decided somewhere else");
+      expect(respondMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("reports a decision the server says was already taken", async () => {
+    // The approval raced another surface's answer. The claim is spent either
+    // way, so this is a plain report, not a retry.
+    statusMock.mockResolvedValue(CLAIMED);
+    respondMock.mockResolvedValue({ kind: "already-decided" });
+    answer.current = "y";
+
+    const result = await runWithPolls(interactiveCtx(), 1);
+
+    expect(result.status).toBe("rejected");
+    expect(
+      (result.status === "rejected" ? result.reason : new Error("")).message,
+    ).toContain("already decided");
+  });
+
+  it("reports a decision the server refused to accept", async () => {
+    // The bearer died between the mint and the answer; nothing was decided,
+    // and the phone is still waiting. Saying so beats exiting silently.
+    statusMock.mockResolvedValue(CLAIMED);
+    respondMock.mockResolvedValue({ kind: "unauthorized" });
+    answer.current = "y";
+
+    const result = await runWithPolls(interactiveCtx(), 1);
+
+    expect(result.status).toBe("rejected");
+    expect(
+      (result.status === "rejected" ? result.reason : new Error("")).message,
+    ).toContain("re-authenticate");
+  });
+
   it("does not sign in when the user is not logged in", async () => {
     credentialsMock.mockResolvedValue({ kind: "no-credentials" });
 

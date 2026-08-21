@@ -376,6 +376,67 @@ describe("LinkPhonePanel", () => {
     expect(mocks.evictLinkLoginCode).toHaveBeenCalled();
   });
 
+  it("a lost respond keeps the claim and says so, instead of re-minting", () => {
+    // The decision never reached the server, so the phone is still waiting on
+    // it. Silently swapping in a fresh QR would answer a network problem by
+    // invalidating the code the user was mid-way through approving - and say
+    // nothing about why.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
+    );
+    const respond = {
+      isPending: false,
+      mutate: vi.fn(
+        (
+          _variables: { code: string; approve: boolean },
+          options: { onSuccess: (outcome: string) => void },
+        ) => {
+          options.onSuccess("failed");
+        },
+      ),
+    };
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    render(<LinkPhonePanel />);
+    act(() => {
+      screen.getByTestId("link-phone-approve").click();
+    });
+
+    expect(screen.getByTestId("link-phone-respond-failed")).toBeTruthy();
+    // The claim card is still up, so the same decision can simply be retaken.
+    expect(screen.getByTestId("link-phone-confirm")).toBeTruthy();
+    expect(screen.queryByTestId("link-phone-approved")).toBeNull();
+    expect(mocks.evictLinkLoginCode).not.toHaveBeenCalled();
+  });
+
+  it("a thrown respond is treated the same as a lost one", () => {
+    // `onError` is the transport failing before the mutation ever produced an
+    // outcome; the claim is no more spent than in the case above.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
+    );
+    const respond = {
+      isPending: false,
+      mutate: vi.fn(
+        (
+          _variables: { code: string; approve: boolean },
+          options: { onError: (error: Error) => void },
+        ) => {
+          options.onError(new Error("offline"));
+        },
+      ),
+    };
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    render(<LinkPhonePanel />);
+    act(() => {
+      screen.getByTestId("link-phone-approve").click();
+    });
+
+    expect(screen.getByTestId("link-phone-respond-failed")).toBeTruthy();
+    expect(mocks.evictLinkLoginCode).not.toHaveBeenCalled();
+  });
+
   it("a self-reported device name renders verbatim on the card", () => {
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
