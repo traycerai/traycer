@@ -68,9 +68,18 @@ describe("managedCommand.subscribeOutput@1.0 frames", () => {
       managedCommandSubscribeOutputServerFrameSchema.parse({
         kind: "output",
         lines: [{ channel: "stdout", text: "partial", atMs: null }],
+        start: POSITION,
         hasBinaryPayload: false,
       }),
     ).toBeDefined();
+
+    expect(() =>
+      managedCommandSubscribeOutputServerFrameSchema.parse({
+        kind: "output",
+        lines: [{ channel: "stdout", text: "unpositioned", atMs: null }],
+        hasBinaryPayload: false,
+      }),
+    ).toThrow();
   });
 
   it("bounds one load-older window", () => {
@@ -92,6 +101,17 @@ describe("managedCommand.subscribeOutput@1.0 frames", () => {
         hasBinaryPayload: false,
       }),
     ).toThrow();
+  });
+
+  it("accepts a fieldless resnapshot request - the viewer's ask for a fresh live tail after detaching", () => {
+    // No `requestId`: unlike `loadOlder`, a resnapshot is answered with the
+    // same `snapshot` frame a reconnect produces, which the client already
+    // treats as a full reset regardless of which request produced it.
+    const parsed = managedCommandSubscribeOutputClientFrameSchema.parse({
+      kind: "resnapshot",
+      hasBinaryPayload: false,
+    });
+    expect(parsed).toEqual({ kind: "resnapshot", hasBinaryPayload: false });
   });
 });
 
