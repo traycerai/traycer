@@ -413,6 +413,47 @@ describe("content recovery classification", () => {
     expect(text).toBe("2. First\n3. Second");
   });
 
+  // R12 `-A8bL`: depth and association are structure, not decoration - a
+  // nested step read as a sibling of its parent.
+  it("indents a nested list under its parent item", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "orderedList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "parent" }],
+                },
+                {
+                  type: "orderedList",
+                  content: [
+                    {
+                      type: "listItem",
+                      content: [
+                        {
+                          type: "paragraph",
+                          content: [{ type: "text", text: "child" }],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    // Numbering restarts per level, and the child sits under its parent.
+    expect(text).toBe("1. parent\n   1. child");
+  });
+
   it("leaves bullet markers off, which the criterion allows", () => {
     const text = recoveryTextFromContent({
       type: "doc",

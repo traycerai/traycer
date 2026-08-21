@@ -911,21 +911,31 @@ function backgroundStopSlices(
 }
 
 /**
- * Restore the FIRST claimant that has something to stage, in priority order.
- * Later claimants are dropped rather than layered: the slot holds one pick,
- * and `restoreStagedWorktreeIntent`'s own guard would refuse them anyway once
- * the first has filled the slot - this just makes the ordering deliberate
- * instead of dependent on which caller happened to run first.
+ * Decide the slot between claimants that a reconnect killed together.
+ *
+ * The restored PROMPT is terminal, and terminal either way. If it carried a
+ * worktree, that worktree is staged with it; if it was deliberately sent
+ * WITHOUT one, the slot stays empty - that is its dispatch state, and it is
+ * just as much a decision. What must not happen is a lower-priority claimant
+ * filling the gap: an unrelated action's binding attaching itself to this
+ * prompt is the wrong-binding hazard, and a prompt sent with no worktree is
+ * exactly where it used to slip in, because a null claim looked like no claim.
+ *
+ * Only when NO prompt came back do the swept actions get their bindings, which
+ * is the case the sweep's own reasoning was written for.
  */
 function restoreOneWorktreeIntent(
-  claimants: ReadonlyArray<StagedWorktreeIntentSource | null | undefined>,
+  restoredPrompt: StagedWorktreeIntentSource | null,
+  sweptClaimants: ReadonlyArray<StagedWorktreeIntentSource | undefined>,
   stagingKey: WorktreeStagingKey,
 ): void {
-  const owed = claimants.find(
+  if (restoredPrompt !== null) {
+    restoreStagedWorktreeIntent(restoredPrompt, stagingKey);
+    return;
+  }
+  const owed = sweptClaimants.find(
     (claimant) =>
-      claimant !== null &&
-      claimant !== undefined &&
-      claimant.restoreWorktreeIntent !== null,
+      claimant !== undefined && claimant.restoreWorktreeIntent !== null,
   );
   restoreStagedWorktreeIntent(owed ?? null, stagingKey);
 }
@@ -1446,7 +1456,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         // reasoning was written for (an edit dropped before its ack never runs
         // the rejection path, so nothing else would restore it).
         restoreOneWorktreeIntent(
-          [restoredWorktreeIntentForSnapshot, ...sweptWorktreeIntents],
+          restoredWorktreeIntentForSnapshot,
+          sweptWorktreeIntents,
           {
             surface: "owner",
             hostId: options.hostId,

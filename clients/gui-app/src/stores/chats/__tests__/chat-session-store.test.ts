@@ -1883,6 +1883,71 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain(" in /repo");
   });
 
+  // R12 `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
+  // dispatched with no worktree still decides the slot - it just decides it is
+  // empty. Skipping a null claim let a stale edit's binding attach itself to a
+  // prompt that was sent without one: the same wrong-binding hazard as round
+  // 10, reached through the gap in the precedence rule.
+  it("leaves the slot empty when the winning prompt carried no worktree", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    // A send deliberately dispatched with NO worktree staged.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The send's prompt won restoration and was sent without a worktree - so
+    // the composer must be exactly that: prompt back, slot empty.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(SECOND_CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
   // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
   // WHICH one. With a dead edit and a dead send both wanting their intent
   // back, the sweep runs first and the older EDIT claimed the mark - so the

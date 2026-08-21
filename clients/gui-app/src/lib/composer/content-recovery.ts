@@ -236,10 +236,12 @@ function prepareForProjection(
   return nodes.flatMap((node) => {
     // A list container contributes nothing itself; its items become siblings
     // so the newline-joining entry point separates them.
-    if (node.type === "orderedList") {
+    // Both list kinds go through one walk: bullets keep no marker but DO keep
+    // their nesting, which is structure rather than decoration.
+    if (isListNode(node)) {
       return numberedListItems(node);
     }
-    if (LIST_CONTAINER_TYPES.has(node.type ?? "")) {
+    if (node.type === "listItem") {
       return prepareForProjection(node.content ?? []);
     }
     const source = atomSource(node);
@@ -275,12 +277,6 @@ function prepareForProjection(
   });
 }
 
-const LIST_CONTAINER_TYPES: ReadonlySet<string> = new Set([
-  "bulletList",
-  "orderedList",
-  "listItem",
-]);
-
 /**
  * Ordered items keep their NUMBER; bullets deliberately do not keep their `-`.
  *
@@ -292,18 +288,50 @@ const LIST_CONTAINER_TYPES: ReadonlySet<string> = new Set([
  * exactly what this module counts as a loss.
  */
 function numberedListItems(list: JsonContent): ReadonlyArray<JsonContent> {
+  return listItemLines(list, "").map((line) => ({
+    type: "paragraph",
+    content: [{ type: "text", text: line }],
+  }));
+}
+
+/**
+ * One line per item, with children INDENTED under their parent's marker.
+ *
+ * A nested list or a continuation paragraph used to contribute only its
+ * parent's first line, so `1. parent` / `1. child` came back with the depth
+ * and the association gone - two steps reading as siblings. Numbering is
+ * computed per level, so a nested list restarts from its own `start`.
+ */
+function listItemLines(
+  list: JsonContent,
+  indent: string,
+): ReadonlyArray<string> {
   const rawStart = list.attrs?.start;
+  const ordered = list.type === "orderedList";
   const start = typeof rawStart === "number" ? rawStart : 1;
-  return (list.content ?? []).map((item, index) => {
-    const itemText = extractPlainTextFromComposerJSONContent({
+  return (list.content ?? []).flatMap((item, index) => {
+    const marker = ordered ? `${start + index}. ` : "";
+    const childIndent = `${indent}${" ".repeat(marker.length > 0 ? marker.length : 2)}`;
+    const blocks = item.content ?? [];
+    const own = extractPlainTextFromComposerJSONContent({
       type: "doc",
-      content: [...prepareForProjection(item.content ?? [])],
+      content: [
+        ...prepareForProjection(blocks.filter((block) => !isListNode(block))),
+      ],
     });
-    return {
-      type: "paragraph",
-      content: [{ type: "text", text: `${start + index}. ${itemText}` }],
-    };
+    const ownLines = own.length === 0 ? [""] : own.split("\n");
+    return [
+      `${indent}${marker}${ownLines[0]}`,
+      ...ownLines.slice(1).map((line) => `${childIndent}${line}`),
+      ...blocks
+        .filter((block) => isListNode(block))
+        .flatMap((child) => listItemLines(child, childIndent)),
+    ];
   });
+}
+
+function isListNode(node: JsonContent): boolean {
+  return node.type === "bulletList" || node.type === "orderedList";
 }
 
 function fencedCodeBlock(node: JsonContent): string {
