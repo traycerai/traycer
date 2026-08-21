@@ -472,6 +472,58 @@ describe("LinkPhonePanel", () => {
     expect(mocks.evictLinkLoginCode).toHaveBeenCalled();
   });
 
+  it("shows the replacement code after a decided-elsewhere card", () => {
+    // The card REPLACED the Approve/Reject controls, so nothing else can
+    // clear the state gating it. Without clearing it here the re-mint happens
+    // behind a card that never goes away - the user is stuck on a dead end
+    // with a fresh code they cannot see.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
+    );
+    const respond = {
+      isPending: false,
+      mutate: vi.fn(
+        (
+          _variables: { code: string; approve: boolean },
+          options: { onSuccess: (outcome: string) => void },
+        ) => {
+          options.onSuccess("already-decided");
+        },
+      ),
+    };
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    const view = render(<LinkPhonePanel />);
+    act(() => {
+      screen.getByTestId("link-phone-approve").click();
+    });
+    expect(screen.getByTestId("link-phone-decided-elsewhere")).toBeTruthy();
+
+    // The re-mint lands and the claim is gone with the spent code.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({ status: "unclaimed", claimant: null }),
+    );
+    mocks.useAuthLinkLoginCode.mockReturnValue({
+      ...queryResultWithCode(Date.now()),
+      data: {
+        code: "22222-33333",
+        expires_in: 60,
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+    act(() => {
+      screen.getByTestId("link-phone-decided-elsewhere-new").click();
+    });
+    act(() => {
+      view.rerender(<LinkPhonePanel />);
+      vi.advanceTimersByTime(2_100);
+    });
+
+    expect(screen.queryByTestId("link-phone-decided-elsewhere")).toBeNull();
+    expect(screen.getByTestId("link-phone-qr-tile")).toBeTruthy();
+    expect(screen.getByText("22222-33333")).toBeTruthy();
+  });
+
   it("reports an approval that landed elsewhere as exactly that", () => {
     // The mirror: Reject answered second means an approval already won, and
     // that phone IS signed in. Saying "rejected" would be equally false.

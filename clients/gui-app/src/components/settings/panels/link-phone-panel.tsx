@@ -548,6 +548,23 @@ export function LinkPhonePanel() {
     restartCode();
   };
 
+  /**
+   * "Show a new code", from every terminal card.
+   *
+   * Every piece of state that made a terminal card render is cleared BEFORE
+   * the re-mint. `restartCode()` alone only evicts the mint query, and the
+   * cards that gate on local state replaced the controls that could have
+   * cleared it - so a terminal card would sit on screen over a code that had
+   * already been replaced behind it, with no way back except unmounting the
+   * panel.
+   */
+  const showNewCode = () => {
+    setDecidedElsewhere(null);
+    setDecidedCode(null);
+    setRespondFailedCode(null);
+    restartCode();
+  };
+
   const decide = (approve: boolean) => {
     if (claim === null) {
       return;
@@ -625,7 +642,7 @@ export function LinkPhonePanel() {
           )}
           onDecide={decide}
           onRestart={resumeAfterApproval}
-          onShowNew={restartCode}
+          onShowNew={showNewCode}
         />
       </div>
     </SettingsPanelShell>
