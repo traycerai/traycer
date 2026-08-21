@@ -17,6 +17,7 @@ import {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   openNotificationsStream,
@@ -82,6 +83,7 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -115,6 +117,9 @@ export function NotificationsSessionProvider(
   const localHostEntry = useReactiveLocalHostEntry();
   const streamAuth = useStreamAuthRevalidator();
   const localStreamClient = useHostStreamClientFor(localHostEntry, streamAuth);
+  // Unary acknowledgements share the stream's local-host binding. The
+  // app-wide effective host can still be unresolved when this stream opens.
+  const localHostClient = useHostClientFor(localHostEntry);
   const localHostId = localHostEntry?.hostId ?? null;
   const queryClient = useQueryClient();
   const authService = useAuthService();
@@ -147,7 +152,7 @@ export function NotificationsSessionProvider(
   >(null);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
-  const markEntityReadMutation = useNotificationMarkEntityRead();
+  const markEntityReadMutation = useNotificationMarkEntityRead(localHostClient);
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<FocusedNotificationScope | null>(null);
   // Notification-feed delivery is independent from the live chat stream. A
@@ -824,7 +829,11 @@ export function NotificationsSessionProvider(
     };
   }, [tearDown]);
 
-  return <>{props.children}</>;
+  return (
+    <NotificationConsumptionContext.Provider value={consumeEntity}>
+      {props.children}
+    </NotificationConsumptionContext.Provider>
+  );
 }
 
 /**

@@ -16,9 +16,7 @@ import {
 
 export interface NotificationIndicatorState {
   readonly unreadFailure: boolean;
-  /** Failure that is not a renderer-local terminal lifecycle failure. Host
-   * failures use this arm because the released indicator response does not
-   * carry a terminal subtype. */
+  /** Failure that is not an agent/terminal lifecycle outcome. */
   readonly unreadNonTerminalFailure?: boolean;
   /** GUI-local subtype used to distinguish terminal failures on aggregate
    * task surfaces. When true, `unreadFailure` is also true. */
@@ -60,6 +58,39 @@ export function selectNotificationIndicatorState(
   indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
   const hostState = selectHostIndicatorState(indicators, entity, originHostId);
+  const {
+    terminal: unreadLocalTerminalFailure,
+    nonTerminal: unreadLocalNonTerminalFailure,
+  } = selectUnreadLocalFailures(state, entity, originHostId);
+  const unreadLocalFailure =
+    unreadLocalTerminalFailure || unreadLocalNonTerminalFailure;
+  const hostFailureIsAggregateAttention =
+    entity.chatId === undefined && hostState.unreadFailure;
+  if (!unreadLocalFailure && hostState === EMPTY_HOST_INDICATOR_STATE) {
+    return EMPTY_NOTIFICATION_INDICATOR_STATE;
+  }
+  return {
+    unreadFailure: unreadLocalFailure || hostState.unreadFailure,
+    unreadNonTerminalFailure:
+      unreadLocalNonTerminalFailure || hostFailureIsAggregateAttention,
+    // The host indicator's failure bit is produced by terminal notification
+    // chronology. Treat it as terminal status so a newer running turn can own
+    // the glyph while the historical failure remains in the feed.
+    unreadTerminalFailure:
+      unreadLocalTerminalFailure ||
+      (hostState.unreadFailure && !hostFailureIsAggregateAttention),
+    pendingFork: hostState.pendingFork,
+    pendingApproval: hostState.pendingApproval,
+    pendingInterview: hostState.pendingInterview,
+    unreadDone: hostState.unreadDone,
+  };
+}
+
+function selectUnreadLocalFailures(
+  state: Pick<AppLocalNotificationsState, "byId">,
+  entity: HostNotificationsEntityRef,
+  originHostId: string | null,
+): { readonly terminal: boolean; readonly nonTerminal: boolean } {
   let unreadLocalTerminalFailure = false;
   let unreadLocalNonTerminalFailure = false;
   for (const entry of Object.values(state.byId)) {
@@ -76,20 +107,9 @@ export function selectNotificationIndicatorState(
       unreadLocalNonTerminalFailure = true;
     }
   }
-  const unreadLocalFailure =
-    unreadLocalTerminalFailure || unreadLocalNonTerminalFailure;
-  if (!unreadLocalFailure && hostState === EMPTY_HOST_INDICATOR_STATE) {
-    return EMPTY_NOTIFICATION_INDICATOR_STATE;
-  }
   return {
-    unreadFailure: unreadLocalFailure || hostState.unreadFailure,
-    unreadNonTerminalFailure:
-      unreadLocalNonTerminalFailure || hostState.unreadFailure,
-    unreadTerminalFailure: unreadLocalTerminalFailure,
-    pendingFork: hostState.pendingFork,
-    pendingApproval: hostState.pendingApproval,
-    pendingInterview: hostState.pendingInterview,
-    unreadDone: hostState.unreadDone,
+    terminal: unreadLocalTerminalFailure,
+    nonTerminal: unreadLocalNonTerminalFailure,
   };
 }
 
@@ -136,12 +156,11 @@ function selectHostIndicatorState(
  * Unread, unresolved prompt notifications light their respective pending
  * actions. A resolved-but-unread row remains a notification-stream concern,
  * not a false claim that its chat is still waiting for an action. Terminal rows
- * first resolve to the newest outcome for each lifecycle group and exact entity
- * within one origin host, whose timestamps share a clock domain. Those
+ * first resolve to the newest terminal outcome for each exact entity within
+ * one origin host, whose timestamps share a clock domain. Those
  * per-host winners are then rolled into epic state. This lets a later success
- * replace an earlier failure from the same lifecycle without comparing clocks
- * across hosts or allowing an independent lifecycle, host, or entity's success
- * to hide a real failure.
+ * replace an earlier failure's GLYPH without comparing clocks across hosts or
+ * altering the historical failure row retained in the feed.
  * `pendingFork` is always false here: fork truth is host-local and is merged
  * from the host response after this feed-row derivation, never inferred from a
  * retained cloud row.
@@ -272,13 +291,13 @@ interface CloudIndicatorAccumulator {
   readonly chatTerminalWinners: CloudTerminalWinners;
 }
 
-/** Exact entity -> origin host -> lifecycle group -> latest terminal entry in
- * that host's clock. Independent lifecycle groups must never supersede one
- * another merely because they address the same chat or epic. */
-type CloudTerminalWinners = Map<
-  string,
-  Map<string, Map<string, HostNotificationEntry>>
->;
+/** Exact entity -> origin host -> latest terminal entry in causal write order. */
+type CloudTerminalCandidate = {
+  readonly entryId: string;
+  readonly entry: HostNotificationEntry;
+};
+
+type CloudTerminalWinners = Map<string, Map<string, CloudTerminalCandidate>>;
 
 function collectCloudIndicatorEntry(
   accumulator: CloudIndicatorAccumulator,
@@ -298,7 +317,7 @@ function collectCloudIndicatorEntry(
       winners: terminalWinnersForEpic(accumulator.epicTerminalWinners, epicId),
       entityId: chatId === null ? "epic" : `chat:${chatId}`,
       originHostId,
-      coalesceKey: row.coalesceKey,
+      entryId: row.entryId,
       candidate: entry,
     });
   }
@@ -313,7 +332,7 @@ function collectCloudIndicatorEntry(
       winners: accumulator.chatTerminalWinners,
       entityId: chatId,
       originHostId,
-      coalesceKey: row.coalesceKey,
+      entryId: row.entryId,
       candidate: entry,
     });
   }
@@ -355,19 +374,48 @@ function retainLatestTerminal(input: {
   readonly winners: CloudTerminalWinners;
   readonly entityId: string;
   readonly originHostId: string;
-  readonly coalesceKey: string;
+  readonly entryId: string;
   readonly candidate: HostNotificationEntry;
 }): void {
   if (!isTerminalEntry(input.candidate)) return;
   const originWinners = terminalWinnersForEntity(input.winners, input.entityId);
-  const groupWinners = terminalWinnersForOrigin(
-    originWinners,
-    input.originHostId,
-  );
-  const current = groupWinners.get(input.coalesceKey);
-  if (current === undefined || terminalEntryIsNewer(input.candidate, current)) {
-    groupWinners.set(input.coalesceKey, input.candidate);
+  const current = originWinners.get(input.originHostId);
+  const candidate = { entryId: input.entryId, entry: input.candidate };
+  if (
+    current === undefined ||
+    terminalCandidateSupersedes(candidate, current)
+  ) {
+    originWinners.set(input.originHostId, candidate);
   }
+}
+
+function terminalCandidateSupersedes(
+  candidate: CloudTerminalCandidate,
+  current: CloudTerminalCandidate,
+): boolean {
+  const candidateIsRecovery = isAutomaticRecoveryEntry(candidate.entry);
+  const currentIsRecovery = isAutomaticRecoveryEntry(current.entry);
+  if (candidateIsRecovery && !currentIsRecovery) {
+    return (
+      current.entry.severity === "failure" &&
+      terminalEntryIsNewer(candidate, current)
+    );
+  }
+  if (!candidateIsRecovery && currentIsRecovery) {
+    return (
+      candidate.entry.severity === "done" ||
+      terminalEntryIsNewer(candidate, current)
+    );
+  }
+  return terminalEntryIsNewer(candidate, current);
+}
+
+function isAutomaticRecoveryEntry(entry: HostNotificationEntry): boolean {
+  return (
+    entry.kind === "agent.stopped" &&
+    "automaticRecovery" in entry.payload &&
+    entry.payload.automaticRecovery === true
+  );
 }
 
 function terminalEntriesForEpic(
@@ -377,9 +425,9 @@ function terminalEntriesForEpic(
 }
 
 function terminalEntriesForOrigins(
-  winners: Map<string, Map<string, HostNotificationEntry>>,
+  winners: Map<string, CloudTerminalCandidate>,
 ): ReadonlyArray<HostNotificationEntry> {
-  return [...winners.values()].flatMap((group) => [...group.values()]);
+  return [...winners.values()].map((candidate) => candidate.entry);
 }
 
 function mergeTerminalContributions(
@@ -400,22 +448,11 @@ function mergeTerminalContributions(
 function terminalWinnersForEntity(
   winners: CloudTerminalWinners,
   entityId: string,
-): Map<string, Map<string, HostNotificationEntry>> {
+): Map<string, CloudTerminalCandidate> {
   const existing = winners.get(entityId);
   if (existing !== undefined) return existing;
-  const created = new Map<string, Map<string, HostNotificationEntry>>();
+  const created = new Map<string, CloudTerminalCandidate>();
   winners.set(entityId, created);
-  return created;
-}
-
-function terminalWinnersForOrigin(
-  winners: Map<string, Map<string, HostNotificationEntry>>,
-  originHostId: string,
-): Map<string, HostNotificationEntry> {
-  const existing = winners.get(originHostId);
-  if (existing !== undefined) return existing;
-  const created = new Map<string, HostNotificationEntry>();
-  winners.set(originHostId, created);
   return created;
 }
 
@@ -424,16 +461,17 @@ function isTerminalEntry(entry: HostNotificationEntry): boolean {
 }
 
 function terminalEntryIsNewer(
-  candidate: HostNotificationEntry,
-  current: HostNotificationEntry,
+  candidate: CloudTerminalCandidate,
+  current: CloudTerminalCandidate,
 ): boolean {
-  if (candidate.updatedAt !== current.updatedAt) {
-    return candidate.updatedAt > current.updatedAt;
-  }
-  if ((candidate.readAt === null) !== (current.readAt === null)) {
-    return candidate.readAt === null;
-  }
-  return candidate.severity === "failure" && current.severity === "done";
+  // The origin store clamps every terminal occurrence for one exact entity
+  // to a durable causal timestamp. Retain the entry-id tie-breaker for
+  // deterministic ordering and compatibility with rows minted by older hosts.
+  return (
+    candidate.entry.updatedAt > current.entry.updatedAt ||
+    (candidate.entry.updatedAt === current.entry.updatedAt &&
+      candidate.entryId > current.entryId)
+  );
 }
 
 function terminalIndicatorContribution(

@@ -15,6 +15,10 @@ import {
   EMPTY_WORKTREE_TIER_FILTERS,
   useWorktreesSettingsViewStore,
 } from "@/stores/settings/worktrees-settings-view-store";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 
 /**
  * The `hostSurface` destination family: a notification about a host-managed
@@ -33,6 +37,7 @@ describe("host surface notification routing", () => {
       sortMode: DEFAULT_WORKTREE_SORT_MODE,
       tierFilters: EMPTY_WORKTREE_TIER_FILTERS,
     });
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
   });
 
   it("opens Settings → Worktrees and remembers the section on the tab", () => {
@@ -128,5 +133,108 @@ describe("host surface notification routing", () => {
     expect(
       parseNotificationPayload({ kind: "hostSurface", surface: "testBoxes" }),
     ).toBeNull();
+  });
+
+  it("does not park an unscoped transcript jump on the hostless fallback", () => {
+    const navigate = vi.fn();
+
+    routeNotification(
+      navigate,
+      {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        messageId: "message-with-provider-error",
+      },
+      1_000,
+    );
+
+    expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
+    expect(navigate).toHaveBeenCalled();
+  });
+
+  it("parses a chat failure's durable event anchor", () => {
+    expect(
+      parseNotificationPayload({
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        eventId: "queued-preparation-failure",
+      }),
+    ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: undefined,
+      eventId: "queued-preparation-failure",
+    });
+  });
+
+  it("turns only an unqualified completed chat payload into an end jump", () => {
+    expect(
+      parseNotificationPayload({
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        outcome: "completed",
+        backgroundWorkRunning: false,
+        messageId: "qualified-done-anchor",
+      }),
+    ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: undefined,
+      eventId: undefined,
+      scrollToEnd: true,
+    });
+    expect(
+      parseNotificationPayload({
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        outcome: "completed",
+        backgroundWorkRunning: true,
+        messageId: "qualified-done-anchor",
+      }),
+    ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: "qualified-done-anchor",
+      eventId: undefined,
+    });
+  });
+
+  it("isolates same-id transcript jumps by origin host", () => {
+    const store = useChatTranscriptJumpStore.getState();
+    store.requestJump("host-a", "chat-1", {
+      kind: "message",
+      messageId: "message-a",
+    });
+    store.requestJump("host-b", "chat-1", {
+      kind: "message",
+      messageId: "message-b",
+    });
+
+    const state = useChatTranscriptJumpStore.getState();
+    const hostAKey = chatTranscriptJumpKey("host-a", "chat-1");
+    const hostBKey = chatTranscriptJumpKey("host-b", "chat-1");
+    expect(state.requestsByChatId[hostAKey]?.target).toEqual({
+      kind: "message",
+      messageId: "message-a",
+    });
+    expect(state.requestsByChatId[hostBKey]?.target).toEqual({
+      kind: "message",
+      messageId: "message-b",
+    });
+
+    const hostARequestId = state.requestsByChatId[hostAKey]?.requestId;
+    expect(hostARequestId).toBeDefined();
+    if (hostARequestId === undefined) return;
+    state.consumeJump("host-a", "chat-1", hostARequestId);
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[hostBKey],
+    ).toBeDefined();
   });
 });

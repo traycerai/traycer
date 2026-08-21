@@ -905,6 +905,15 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.adoptLocalHostId(hostId);
+    // THE SEED PATH IS A STATE CHANGE AND HAS TO SAY SO. `snapshot()` reads
+    // `lastKnownLocalHostId` to neutralise this machine's registry twin into a
+    // `bootingLocalEntry`, so adopting an id here changes what every listener
+    // would compute - and this is the one caller of `adoptLocalHostId` with no
+    // emit behind it (`onLocalHostChange` emits immediately after its own
+    // call). Without this, the durable id could move from null to a real id
+    // with nobody told, which `emit`'s own doc already promises cannot happen
+    // for a re-enrollment.
+    this.emit();
     appLogger.debug("[host-directory] seeded local host id from shell", {
       hostId,
     });

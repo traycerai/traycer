@@ -533,6 +533,14 @@ export function reconcileQueueChange(
  * {@link sweepStalePendingActions} applies to every other action kind. A
  * same-connection dispatch missing from a snapshot has simply outrun it.
  *
+ * That is not a rare race. The host broadcasts snapshots on a LIVE connection
+ * for many unrelated reasons - `finishActiveTurn` pushes one at every turn
+ * end, the pump-backlog backfill pushes another - and one built before the
+ * host processed the send frame naturally lacks the message without that send
+ * being lost. Its ack (or `messageAccepted`) is still coming; if the
+ * connection drops first the epoch bumps and the next snapshot settles it
+ * truthfully.
+ *
  * Pure function - all timing inputs must be passed explicitly.
  */
 export function reconcileSnapshotChange(

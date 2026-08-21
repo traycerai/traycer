@@ -117,6 +117,7 @@ import {
   agentInboxSubscribeV10,
   agentInboxSubscribeV11,
   agentInboxSubscribeV12,
+  agentInboxSubscribeV13,
 } from "@traycer/protocol/host/agent/inbox";
 import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
 import {
@@ -7846,7 +7847,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       // already-known object is silently dropped by a @1.0/@1.1 monitor's own
       // non-strict zod parse, so the resolver builds the @1.2 shape
       // unconditionally rather than branching on negotiated minor.
-      latestMinor: 2,
+      // @1.3 adds structured stop-initiator provenance to notice frames.
+      latestMinor: 3,
       versions: {
         0: {
           contract: agentInboxSubscribeV10,
@@ -7856,6 +7858,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: agentInboxSubscribeV12,
+        },
+        3: {
+          contract: agentInboxSubscribeV13,
         },
       },
     },

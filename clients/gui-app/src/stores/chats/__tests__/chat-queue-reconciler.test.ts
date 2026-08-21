@@ -355,7 +355,7 @@ describe("chat-queue-reconciler", () => {
       expect(result.pendingUserMessages).toEqual([]);
     });
 
-    it("creates failedSendRestoration for unconfirmed send with restore content", () => {
+    it("creates failedSendRestoration for an unconfirmed send from an earlier connection", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileSnapshotInput = {
         pendingActions: { "action-1": pendingAction },
@@ -375,6 +375,58 @@ describe("chat-queue-reconciler", () => {
       expect(result.failedSendRestoration).not.toBeNull();
       expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
       expect(result.failedSendRestoration?.content).toEqual(CONTENT);
+    });
+
+    it("keeps an unconfirmed send from the snapshot's own connection pending, without restoration", () => {
+      // A steady-state refresh snapshot (turn finished, backlog backfill) built
+      // before the host processed the send lacks the message; the ack is still
+      // coming on this connection, so nothing is lost and nothing is restored.
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const pendingUser = createPendingUserMessage("action-1", "msg-1");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [pendingUser],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 0,
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.acceptedActions).toEqual({});
+      expect(result.pendingUserMessages).toEqual([pendingUser]);
+      expect(result.failedSendRestoration).toBeNull();
+      // Nothing was lost, so nothing is stated either.
+      expect(result.appendedErrorNotices).toEqual([]);
+    });
+
+    it("keeps an unconfirmed editUserMessage from the snapshot's own connection pending", () => {
+      const pendingAction = createPendingAction(
+        "action-1",
+        "msg-1",
+        "editUserMessage",
+      );
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 0,
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.failedSendRestoration).toBeNull();
     });
 
     it("preserves existing failedSendRestoration and does not overwrite", () => {

@@ -1,5 +1,5 @@
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -11,6 +11,7 @@ import {
   type RequestContext,
 } from "@traycer/protocol/auth/request-context";
 import {
+  HOST_AVAILABILITY_SWEEP_WINDOW_MS,
   HostClient,
   type HostClientChangeEvent,
   type HostQueryInvalidationOptions,
@@ -371,6 +372,37 @@ describe("HostClient", () => {
     await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["mock-local"]);
     expect(events).toEqual([]);
+  });
+
+  it("coalesces recovery bursts across wiring cooldowns while unannounced sweeps bypass the time gate", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, invalidator, events } = buildHostClientWithMock();
+
+      client.notifyHostAvailabilityRecovered("mock-local");
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toEqual(["mock-local"]);
+
+      await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS / 2);
+      client.notifyHostAvailabilityRecovered("mock-local");
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toHaveLength(1);
+
+      // Rotation/ready-boundary sweeps are correctness boundaries, not noisy
+      // recovery hints, so they remain immediate even inside the recovery gate.
+      client.invalidateHostScopeUnannounced("mock-local");
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toHaveLength(2);
+      expect(events).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(HOST_AVAILABILITY_SWEEP_WINDOW_MS / 2);
+      await flushAvailabilityCoalescing();
+      expect(invalidator.calls).toHaveLength(3);
+      expect(events).toHaveLength(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("delegates a requester's unary request to the messenger under that host's authority", async () => {

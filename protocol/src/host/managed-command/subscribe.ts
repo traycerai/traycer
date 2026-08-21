@@ -122,12 +122,15 @@ export const managedCommandSubscribeOutputServerFrameSchema =
       /** Nothing older than `start` is retained; the viewer stops asking. */
       reachedStart: z.boolean(),
     }),
-    // Lines appended since the last frame, oldest first. The client appends;
-    // there is no position to reconcile because the host never re-sends one.
+    // Lines appended since the last frame, oldest first. `start` is the exact
+    // log boundary before the first line. A following viewer may discard whole
+    // frames, advance its held start to this cursor, and later page the gap
+    // back without guessing byte offsets or losing rotation stability.
     z.object({
       kind: z.literal("output"),
       ...textFrameFields,
       lines: z.array(managedCommandLogLineSchema),
+      start: managedCommandLogPositionSchema,
     }),
     z.object({
       kind: z.literal("older"),
@@ -176,6 +179,13 @@ export const managedCommandSubscribeOutputClientFrameSchema =
         .int()
         .positive()
         .max(MANAGED_COMMAND_MAX_WINDOW_LINES),
+    }),
+    // Re-base a viewer that deliberately detached from live output while
+    // reading history. The host serializes this through the live pump so the
+    // next `output` starts exactly where the replacement snapshot ends.
+    z.object({
+      kind: z.literal("resnapshot"),
+      ...textFrameFields,
     }),
     z.object({
       kind: z.literal("ping"),
