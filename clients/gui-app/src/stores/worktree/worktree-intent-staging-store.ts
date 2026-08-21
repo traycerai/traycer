@@ -532,14 +532,28 @@ export interface DispatchConsumptionMark {
 }
 
 /**
- * Mark consumed slots whose own pick references something the sweep removed.
+ * Record WHAT a sweep removed, per consumed slot, for the hand-backs that have
+ * not happened yet.
  *
  * Slots CONSUMED by an in-flight dispatch are invisible to the intent loop -
- * they hold no intent to filter, because the dispatch took it - so the mark
- * carries the entries instead. Only marks that actually intersect `removed`
- * are purged: over-purging costs a hand-back for a send whose worktree
- * survived, and now that the refusal is STATED it would tell that user their
- * worktree was deleted when it is still there.
+ * they hold no intent to filter, because the dispatch took it. And this store
+ * cannot do the intersection test itself: the pick lives on the pending
+ * action, and several dispatches may have taken DIFFERENT picks from one slot
+ * over time, so the mark describes only the latest. What it can record is that
+ * a sweep happened while a dispatch was out. So every host-matching consumed
+ * slot accumulates the removed refs, and each hand-back tests its OWN intent
+ * against them later ({@link worktreeIntentWasSweptMidDispatch}) - the moment
+ * the correct entries are actually in hand.
+ *
+ * No filtering here, and no "purged" state on the mark: an earlier design
+ * decided at PURGE time and either refused a hand-back whose worktree
+ * survived, or spared one whose worktree was gone. Deciding at hand-back time
+ * is what makes the refusal - and the statement that now accompanies it -
+ * true of the intent it is about.
+ *
+ * A slot whose host segment is EMPTY is the unresolved-host bucket, which no
+ * host can claim and any host's sweep may concern, so it accumulates from
+ * every sweep rather than being skipped.
  *
  * Extracted so the purge updater stays under its complexity budget.
  */
@@ -1066,10 +1080,12 @@ export const useWorktreeIntentStagingStore =
             // loop above - they hold no intent to filter, because the dispatch
             // took it. Their pick lives on the pending action, so this store
             // cannot tell whether it names a removed worktree; what it CAN
-            // tell is that a sweep happened while that dispatch was out. Mark
-            // those `purged` so the hand-back refuses rather than staging a
-            // worktree that may be gone, and so the refusal can be STATED
-            // instead of the prompt coming back silently unbound.
+            // tell is that a sweep happened while that dispatch was out. So it
+            // records WHAT was removed against each such slot, and the
+            // hand-back tests its own intent against that record - refusing
+            // only when the pick it is actually holding was swept, and giving
+            // the refusal something true to STATE instead of the prompt coming
+            // back silently unbound.
             const sweptRefsByKey = accumulateSweptRefs(
               state.sweptRefsByKey,
               state.consumedForDispatchByKey,

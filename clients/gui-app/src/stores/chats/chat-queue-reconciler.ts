@@ -1135,7 +1135,16 @@ function pendingUserMessageFromPendingAction(
     action.messageId === null ||
     action.restoreContent === null ||
     action.sender === null ||
-    action.settings === null
+    action.settings === null ||
+    // Joined the guard rather than being defaulted. A synthesized
+    // `{ type: "PERSONAL" }` is a CLAIM about which account a send was
+    // dispatched under, and this module turns that claim into a drift
+    // statement about which account a resend would charge - so inventing one
+    // is how the notice comes to name an account the send never used.
+    // `sendSeededUserMessage` was changed for exactly this reason; this is the
+    // same rule at the site that reconstructs rather than the one that seeds.
+    // A send always carries both fields, so nothing real is excluded here.
+    action.accountContext === null
   ) {
     return undefined;
   }
@@ -1145,8 +1154,8 @@ function pendingUserMessageFromPendingAction(
     content: action.restoreContent,
     sender: action.sender,
     settings: action.settings,
-    accountContext: { type: "PERSONAL" },
-    deliveryPolicy: null,
+    accountContext: action.accountContext,
+    deliveryPolicy: action.deliveryPolicy,
     timestamp: action.createdAt,
     restoreWorktreeIntent: action.restoreWorktreeIntent,
   };

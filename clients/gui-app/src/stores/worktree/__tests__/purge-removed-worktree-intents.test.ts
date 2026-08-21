@@ -513,4 +513,31 @@ describe("purge and an in-flight dispatch", () => {
       }),
     ).toBe(false);
   });
+
+  // The `slotSegment !== ""` half of the host guard, which nothing exercised:
+  // dropping it left the whole suite green. An EMPTY host segment is the
+  // unresolved-host bucket, not a host - no machine can claim it, and any
+  // machine's sweep may concern it - so it must accumulate from every sweep
+  // rather than being filtered out as "not this host".
+  it("records a sweep against an unresolved-host slot, whichever host swept", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const unresolvedKey = { ...key, hostId: null };
+    useWorktreeIntentStagingStore.getState().setIntent(unresolvedKey, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(unresolvedKey, "action-1");
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(unresolvedKey)).toBe(true);
+    expect(
+      worktreeIntentWasSweptMidDispatch(unresolvedKey, {
+        entries: [existingBranchIntent("traycer/gone-branch")],
+      }),
+    ).toBe(true);
+  });
 });
