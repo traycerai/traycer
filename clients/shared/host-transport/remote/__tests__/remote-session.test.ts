@@ -2959,6 +2959,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
         await vi.waitFor(() => expect(streamBDelivered).not.toBeNull(), WAIT);
         expect(streamBDelivered).toEqual(normalEnvelope);
         expect(session.isReady()).toBe(true);
+        expect(relay.openBearers).toHaveLength(1);
         expect(relay.errors).toEqual([]);
       } finally {
         streamB.close();

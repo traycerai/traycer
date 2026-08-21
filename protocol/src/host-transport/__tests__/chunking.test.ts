@@ -467,7 +467,13 @@ describe("body compression round-trip (T5)", () => {
       vi.mocked(inflateSync).mockClear();
       const push = vi.spyOn(Inflate.prototype, "push");
       try {
-        expect(() => reassembler.accept(frame)).toThrow(MuxFrameDecodeError);
+        const acceptBomb = (): void => {
+          reassembler.accept(frame);
+        };
+        expect(acceptBomb).toThrow(MuxFrameDecodeError);
+        expect(acceptBomb).toThrow(
+          "compressed frame inflated to more than 1 bytes, declared 1",
+        );
         expect(inflateSync).not.toHaveBeenCalled();
         // An unbounded `Inflate.push(deflated, true)` calls its callback only
         // after all 4 MiB of output; the forged one-byte declaration permits

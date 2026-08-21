@@ -220,9 +220,10 @@ stream never splits across the two queues):
   **⚠️ reconcile:** a peer's initial receive window MUST be ≥ the batch size the
   other end grants at for the pairing in force, or the first bootstrap
   deadlocks — that floor compares a frame count against a frame count, so
-  body compression cannot move it. `INITIAL_BULK_SEND_CREDITS` /
-  `INBOUND_CREDIT_GRANT_BATCH` are the pre-negotiation spellings and no longer
-  exist under those names on the client.
+  body compression cannot move it. `INITIAL_BULK_SEND_CREDITS` remains the
+  client's legacy send-window constant; `INBOUND_CREDIT_GRANT_BATCH` was the
+  old batch spelling and is now split into
+  `FINE_INBOUND_CREDIT_GRANT_BATCH` and `LEGACY_INBOUND_CREDIT_GRANT_BATCH`.
 
 ## 8. 64 KiB bulk chunking
 

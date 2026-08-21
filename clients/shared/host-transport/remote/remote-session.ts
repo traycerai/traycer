@@ -3470,7 +3470,10 @@ function abortedRequestError(
 /** The stream-fatal code for one of the three per-stream inbound failures {@link RemoteSession.failStreamOnInboundError} routes. */
 function streamInboundFailureCode(
   error: ChunkReassemblyError | MuxMessageSizeError | MuxFrameDecodeError,
-): string {
+):
+  | "STREAM_MESSAGE_TOO_LARGE"
+  | "STREAM_BODY_DECODE_FAILED"
+  | "STREAM_CHUNK_REASSEMBLY_FAILED" {
   if (error instanceof MuxMessageSizeError) {
     return "STREAM_MESSAGE_TOO_LARGE";
   }

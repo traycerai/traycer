@@ -82,8 +82,10 @@ export const RECONNECT_MAX_BACKOFF_MS = 30_000;
  * immediate rung, while a genuinely sick host backs off exactly as intended.
  *
  * The reset timer is armed at the ready boundary and cancelled on any
- * connection loss (in `dropConnection`, so every drop path clears it), so
- * partial credit is never awarded.
+ * connection loss: `dropConnection` covers socket/session drops, while
+ * `onHostDetached` clears it directly because that relay control edge keeps
+ * the socket alive and does not enter `dropConnection`. Partial credit is
+ * therefore never awarded.
  *
  * COLLISION WARNING, for whoever changes this number. It is currently equal to
  * {@link RECONNECT_MAX_BACKOFF_MS}, and the two are independent concepts - a
