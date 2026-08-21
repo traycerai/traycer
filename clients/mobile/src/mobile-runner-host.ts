@@ -412,7 +412,12 @@ export class MobileRunnerHost implements IRunnerHost {
   ): Promise<MintHostCredentialFetchResult> {
     // The caller's own bearer: the mint is not step-up gated, so a retained
     // step-up credential must not be substituted here.
-    return mintHostCredentialViaHttp(this.authnBaseUrl, bearerToken, request, null);
+    return mintHostCredentialViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      request,
+      null,
+    );
   }
 
   requestStepUpChallenge(

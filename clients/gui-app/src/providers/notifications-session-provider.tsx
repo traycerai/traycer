@@ -190,7 +190,8 @@ export function NotificationsSessionProvider(
   >(null);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
-  const markEntityReadMutation = useNotificationMarkEntityRead(servingHostClient);
+  const markEntityReadMutation =
+    useNotificationMarkEntityRead(servingHostClient);
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<FocusedNotificationScope | null>(null);
   // Notification-feed delivery is independent from the live chat stream. A

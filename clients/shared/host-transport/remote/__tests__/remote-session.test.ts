@@ -6,7 +6,15 @@ import type {
   SelectionIncompatibility,
   SelectionTransportKind,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { z } from "zod";
 import {
   defineFallbackMethodDegrade,
@@ -1182,7 +1190,7 @@ describe("RemoteSession terminal close notification", () => {
 describe("RemoteSession relay policy kills", () => {
   // Exact-delay assertions below: pin the redial jitter to its ceiling so the
   // capped rung schedules at precisely RECONNECT_MAX_BACKOFF_MS.
-  let jitterPin: ReturnType<typeof vi.spyOn>;
+  let jitterPin: MockInstance<() => number>;
   beforeEach(() => {
     jitterPin = vi.spyOn(Math, "random").mockReturnValue(1);
   });
@@ -1406,7 +1414,7 @@ describe("RemoteSession availability-recovered evidence", () => {
 describe("RemoteSession reconnect ladder accounting", () => {
   // Exact-delay assertions below: pin the redial jitter to its ceiling so
   // rung delays equal their un-jittered bases.
-  let jitterPin: ReturnType<typeof vi.spyOn>;
+  let jitterPin: MockInstance<() => number>;
   beforeEach(() => {
     jitterPin = vi.spyOn(Math, "random").mockReturnValue(1);
   });
@@ -4463,7 +4471,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
   // non-immediate rung carries is pinned to its ceiling (factor 1.0 = the
   // un-jittered base). The jitter's own behaviour is covered by the wake and
   // escalation suites, which assert ranges against real randomness.
-  let jitterPin: ReturnType<typeof vi.spyOn>;
+  let jitterPin: MockInstance<() => number>;
   beforeEach(() => {
     jitterPin = vi.spyOn(Math, "random").mockReturnValue(1);
   });
