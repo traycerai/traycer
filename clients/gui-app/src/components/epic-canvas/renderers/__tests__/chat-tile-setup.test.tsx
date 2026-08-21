@@ -1075,6 +1075,67 @@ describe("<ChatTileErrorNoticeToasts />", () => {
       duration: Number.POSITIVE_INFINITY,
     });
   });
+
+  // `-CbBV`: the report affordance must not destroy what it reports about.
+  //
+  // Sonner's CANCEL button calls `deleteToast()` unconditionally once its
+  // `onClick` returns - `preventDefault` is not consulted on that path - so
+  // the auto-added "Report issue" cancel dismissed the infinite last-copy
+  // toast. `CHAT_ACTION_REPORT_CONTEXT` carries `message: null`, and
+  // `rememberErrorNotice` has already retained the id so nothing replays it:
+  // using the report affordance destroyed the only copy of the draft.
+  //
+  // Sonner's ACTION button DOES check `event.defaultPrevented`, so that is
+  // where a report affordance on a last-copy toast has to live.
+  it("keeps a last-copy toast alive when its report affordance is used", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message:
+            "A message was not recorded before the turn stopped. Copy the message below to resend it:\nthe draft nobody has any more",
+          severity: "warning",
+          clientActionId: "send-report-1",
+        },
+      });
+    });
+
+    const options = readWarningOptions();
+    // No CANCEL button: that is the one sonner always dismisses on.
+    expect(options.cancel ?? null).toBeNull();
+    // The report affordance rides the ACTION slot instead.
+    expect(options.action).toMatchObject({ label: "Report issue" });
+
+    // Using it opens the report dialog...
+    const preventDefault = vi.fn();
+    act(() => {
+      const action = options.action;
+      if (
+        typeof action !== "object" ||
+        action === null ||
+        !("onClick" in action)
+      ) {
+        throw new Error("Expected a last-copy report action.");
+      }
+      action.onClick({ preventDefault } as never);
+    });
+    expect(useDesktopDialogStore.getState().reportIssueContext).toMatchObject({
+      title: "Agent action failed",
+      source: "Chat",
+    });
+    // ...and suppresses sonner's dismissal, so the only copy stays on screen.
+    expect(preventDefault).toHaveBeenCalled();
+  });
 });
 
 describe("<ChatTileRestoreResultToasts />", () => {

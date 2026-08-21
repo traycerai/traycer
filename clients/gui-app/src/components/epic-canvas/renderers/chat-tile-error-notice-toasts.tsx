@@ -11,6 +11,7 @@ import {
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { noticeCarriesOnlyCopy } from "@/stores/chats/chat-queue-reconciler";
 import {
+  createRetainingReportAction,
   reportableErrorToast,
   reportableWarningToast,
 } from "@/lib/reportable-error-toast";
@@ -110,8 +111,19 @@ function showErrorNoticeToast(notice: ChatErrorNotice): void {
   // expire on the default timer would put the only remaining copy of someone's
   // text on a few-second fuse - so it stays until dismissed. The `Toaster`
   // renders a close button by default, so this can always be dismissed.
+  //
+  // Its report affordance moves to the ACTION slot, and the CANCEL slot is
+  // explicitly emptied. Sonner dismisses unconditionally on a cancel click, so
+  // the auto-added "Report issue" cancel destroyed the very text it was
+  // reporting about: the report draft does not carry the notice body, and
+  // `rememberErrorNotice` has already retained this id so nothing replays it.
+  // See `createRetainingReportAction`.
   const options: ExternalToast | undefined = noticeCarriesOnlyCopy(notice)
-    ? { duration: Number.POSITIVE_INFINITY }
+    ? {
+        duration: Number.POSITIVE_INFINITY,
+        cancel: null,
+        action: createRetainingReportAction(CHAT_ACTION_REPORT_CONTEXT),
+      }
     : undefined;
   if (notice.severity === "error") {
     reportableErrorToast(message, options, CHAT_ACTION_REPORT_CONTEXT);
