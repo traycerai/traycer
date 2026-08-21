@@ -367,6 +367,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
     const resolvedOwner = resolveCloneSourceOwnerUserId({
       chatId: "source-chat-1",
       localRecordOwnerUserId: null,
+      sourceOwnerHostId: "owner-host",
       cloudChats: [
         {
           identity: {

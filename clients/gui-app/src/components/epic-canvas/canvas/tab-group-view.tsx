@@ -64,6 +64,7 @@ import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body
 import type {
   EpicCanvasTileRef,
   EpicNodeRef,
+  PublishedChatTileRef,
   SplitDirection,
   TilePane,
 } from "@/stores/epics/canvas/types";
@@ -691,7 +692,14 @@ function usePublishedChatFallbackRef(args: {
     EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
   readonly activeHostId: string | null;
 }): {
-  readonly fallbackRef: EpicCanvasTileRef | null;
+  /**
+   * Narrowed to the published-chat shape (the only ref this hook ever
+   * builds) so the substitution mount can thread `ownerUserId` - the owner
+   * the OPENING ROW resolved - into the banner instead of leaving the
+   * banner's container to re-derive it from a second cloud lookup that can
+   * fail independently (cold-review finding).
+   */
+  readonly fallbackRef: PublishedChatTileRef | null;
   readonly ownerHostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
   readonly isCloudKnown: boolean;
@@ -984,6 +992,12 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
         <ChatDeadTileBanner
           hostLabel={ownerHostLabel}
           reason="chat-no-longer-shared"
+          // Both moot for this reason: the revoked copy never varies by owner
+          // and declares `offersClone: false`, so neither flag can render
+          // anything. Passed as the do-nothing pair, like `noopClone`.
+          ownedByViewer
+          cloneAllowed={false}
+          showsPublishedCopy={false}
           onClone={noopClone}
           cloning={false}
           className={undefined}
@@ -1003,7 +1017,13 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           sourceHostId={activeTab.hostId}
           hostLabel={ownerHostLabel}
           reason={deadTileBannerReason}
+          showsPublishedCopy
           testId={`chat-dead-tile-${activeTab.id}`}
+          // The owner the opening row already resolved (the fallback ref is
+          // only built once one exists) - threading it means the banner's
+          // ownership verdict cannot disagree with the copy rendered under
+          // it, and does not depend on the container's own cloud lookup.
+          sourceOwnerUserId={publishedFallbackRef.ownerUserId}
         />
         <EpicNodeTile
           node={publishedFallbackRef}
