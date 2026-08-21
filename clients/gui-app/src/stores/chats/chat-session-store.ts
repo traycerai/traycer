@@ -822,14 +822,20 @@ function appendErrorNotice(
         noticeCarriesOnlyCopy(notice) &&
         notice.clientActionId === next.clientActionId,
     );
-    if (alreadyStated) return notices;
+    // Never capped, and never counted against ordinary history below.
+    return alreadyStated ? notices : [...notices, next];
   }
-  if (notices.length < MAX_ERROR_NOTICE_RECORDS) {
+  // The cap applies to ORDINARY history only. Counting total length made the
+  // exemption's cost fall on ordinary notices: with the ring full of retained
+  // drafts there was one usable slot left, so the next ordinary error evicted
+  // the previous one before an inactive pane could ever show it. The exemption
+  // protects drafts; it must not quietly shrink everything else.
+  const ordinaryCount = notices.filter(
+    (notice) => !noticeCarriesOnlyCopy(notice),
+  ).length;
+  if (ordinaryCount < MAX_ERROR_NOTICE_RECORDS) {
     return [...notices, next];
   }
-  // FIFO eviction once the cap is reached - of the oldest EVICTABLE record.
-  // With nothing evictable the ring grows by one rather than dropping a
-  // draft; ordinary history then rotates through that slot as usual.
   const evictable = notices.findIndex(
     (notice) => !noticeCarriesOnlyCopy(notice),
   );
@@ -1248,6 +1254,22 @@ export function createChatSessionStoreWithNotificationDependencies(
               nextTurnId: frame.snapshot.activeTurn?.turnId ?? null,
             },
           );
+          // A changed persisted tuple is an authoritative host-side update
+          // (for example `agent.configure`) and must replace the live picker.
+          // An unchanged tuple is ordinary stream traffic, so keep any local
+          // composer edits that have not been committed by a send yet.
+          const authoritativeSettingsChanged =
+            state.chat === null ||
+            !nullableChatRunSettingsEqual(
+              state.chat.settings,
+              frame.snapshot.chat.settings,
+            );
+          // What a RESEND would run under after this snapshot lands. The
+          // drift statement compares against this, not the persisted tuple:
+          // a local pick the user just made is what the composer will send.
+          const nextComposerSettings = authoritativeSettingsChanged
+            ? frame.snapshot.chat.settings
+            : state.currentComposerSettings;
           const now = Date.now();
           // This snapshot is the authority for everything a lost connection
           // left in limbo: pendings dispatched on an earlier connection will
@@ -1263,7 +1285,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             queue: frame.snapshot.queue,
             failedSendRestoration: state.failedSendRestoration,
             connectionEpoch,
-            currentSettings: frame.snapshot.chat.settings,
+            currentSettings: nextComposerSettings,
             nowMs: now,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their
@@ -1284,19 +1306,9 @@ export function createChatSessionStoreWithNotificationDependencies(
               messages,
               queue: frame.snapshot.queue,
               failedSendRestoration: pending.failedSendRestoration,
-              currentSettings: frame.snapshot.chat.settings,
+              currentSettings: nextComposerSettings,
             },
           );
-          // A changed persisted tuple is an authoritative host-side update
-          // (for example `agent.configure`) and must replace the live picker.
-          // An unchanged tuple is ordinary stream traffic, so keep any local
-          // composer edits that have not been committed by a send yet.
-          const authoritativeSettingsChanged =
-            state.chat === null ||
-            !nullableChatRunSettingsEqual(
-              state.chat.settings,
-              frame.snapshot.chat.settings,
-            );
           restoredWorktreeIntentForSnapshot =
             settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
           return {
@@ -1304,9 +1316,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               ...frame.snapshot.chat,
               messages: [...messages],
             },
-            currentComposerSettings: authoritativeSettingsChanged
-              ? frame.snapshot.chat.settings
-              : state.currentComposerSettings,
+            currentComposerSettings: nextComposerSettings,
             access: frame.snapshot.access,
             messages,
             events: frame.snapshot.chat.events,
@@ -1667,7 +1677,11 @@ export function createChatSessionStoreWithNotificationDependencies(
               messages: nextMessages,
               queue: state.queue,
               failedSendRestoration: state.failedSendRestoration,
-              currentSettings: state.chat?.settings ?? null,
+              // The LIVE composer tuple, not the last snapshot's persisted
+              // one: a resend runs under what the composer holds now, and a
+              // settle can arrive before any snapshot carries a just-made
+              // change - which is precisely when the warning matters.
+              currentSettings: state.currentComposerSettings,
             },
           );
           restoredWorktreeIntentForTurnState =

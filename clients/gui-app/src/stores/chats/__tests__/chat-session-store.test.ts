@@ -1841,6 +1841,144 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(1);
   });
 
+  // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
+  // the user changes settings and a `turnStateChanged` settles the send before
+  // another snapshot lands, the live composer already holds the new tuple - so
+  // the clause was omitted exactly when the change most worth warning about
+  // had just been made.
+  it("compares drift against the live composer, not the last snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent.at(-1);
+    if (second === undefined || second.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // The user switches model. No snapshot follows - just the settle.
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings(UPDATED_SETTINGS);
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("gpt-5-codex");
+  });
+
+  // R9 `-AQUm`: `null` is a VALUE - "use the default" - not an absence. A send
+  // dispatched under default effort and settled after the user picked an
+  // explicit one drifts, and dropping the field because its sent value was
+  // null hid exactly that.
+  it("states drift from a default to an explicit value", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const defaulted = { ...SETTINGS, serviceTier: null };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: defaulted,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: { ...defaulted, serviceTier: "priority" },
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("service tier default");
+  });
+
+  // R9 `-AQUo`: the exemption's cost must not be paid by ordinary history. The
+  // cap counted TOTAL length, so retained records crowded the ordinary window
+  // down to nothing and an ordinary notice was evicted before it was ever seen.
+  it("keeps the ordinary notice window intact alongside retained records", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_NOT_RECORDED",
+          message: `draft ${index}`,
+          severity: "warning",
+          clientActionId: `send-${index}`,
+        },
+      });
+    }
+    for (let index = 0; index < 4; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: `pending ${index}`,
+          severity: "warning",
+          clientActionId: `approval-${index}`,
+        },
+      });
+    }
+
+    const state = harness.handle.store.getState();
+    // Every draft survives...
+    expect(
+      state.errorNotices.filter((n) => n.code === "SEND_NOT_RECORDED"),
+    ).toHaveLength(MAX_ERROR_NOTICE_RECORDS);
+    // ...and ordinary history still gets its own window rather than one slot.
+    expect(
+      state.errorNotices.filter((n) => n.code === "APPROVAL_NOT_PENDING"),
+    ).toHaveLength(4);
+  });
+
   // R8 `-6Te`: the dead send's run settings die with it, so a resend picks up
   // whatever the chat uses NOW. A different model changes what the agent does,
   // silently - same statement-obligation class as the worktree.

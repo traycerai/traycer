@@ -312,30 +312,30 @@ function settingsDriftClause(
   current: ChatRunSettings | null,
 ): string {
   if (sent === null || current === null) return "";
-  const drifted = {
-    harness: sent.harnessId === current.harnessId ? null : sent.harnessId,
-    model: sent.model === current.model ? null : sent.model,
-    "permission mode":
-      sent.permissionMode === current.permissionMode
-        ? null
-        : sent.permissionMode,
-    "reasoning effort":
-      sent.reasoningEffort === current.reasoningEffort
-        ? null
-        : sent.reasoningEffort,
-    "service tier":
-      sent.serviceTier === current.serviceTier ? null : sent.serviceTier,
-    "agent mode": sent.agentMode === current.agentMode ? null : sent.agentMode,
-    profile:
-      (sent.profileId ?? null) === (current.profileId ?? null)
-        ? null
-        : sent.profileId,
-  } satisfies Record<string, string | null>;
-  const named = Object.entries(drifted).flatMap(([label, value]) =>
-    value === null ? [] : [`${label} ${value}`],
+  // Keyed by every field via `satisfies`, so a new setting forces an entry
+  // here rather than silently never being compared.
+  const fields = {
+    harness: [sent.harnessId, current.harnessId],
+    model: [sent.model, current.model],
+    "permission mode": [sent.permissionMode, current.permissionMode],
+    "reasoning effort": [sent.reasoningEffort, current.reasoningEffort],
+    "service tier": [sent.serviceTier, current.serviceTier],
+    "agent mode": [sent.agentMode, current.agentMode],
+    profile: [sent.profileId ?? null, current.profileId ?? null],
+  } satisfies Record<string, readonly [string | null, string | null]>;
+  // `null` is a VALUE - "use the default" - not an absence. Dropping a field
+  // because its SENT value was null hid the drift that matters most: a send
+  // dispatched on the default and resent under an explicit pick behaves
+  // differently. Only genuinely EQUAL values are dropped, and a null is named.
+  const named = Object.entries(fields).flatMap(([label, [was, now]]) =>
+    was === now ? [] : [`${label} ${describeSetting(was)}`],
   );
   if (named.length === 0) return "";
   return ` It was going to run with ${named.join(", ")}; the chat uses different settings now, so a resend will not match unless you set them back.`;
+}
+
+function describeSetting(value: string | null): string {
+  return value === null ? "default" : value;
 }
 
 type StagedBranchSelection = Extract<
