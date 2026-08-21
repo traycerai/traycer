@@ -112,15 +112,20 @@ async function askApproval(question: string): Promise<boolean> {
   });
   try {
     const answer = await new Promise<string>((resolve) => {
-      rl.question(question, resolve);
-      // Ctrl-D (or a closed/piped stdin) ends the stream without ever
-      // answering, and `question`'s callback then never fires - the flow would
-      // hang here forever, after a phone has already claimed the code. Closing
-      // is not a yes, so it resolves to the same empty answer a bare newline
-      // gives, and the default-to-NO rule below does the rest.
+      // Registered BEFORE `question`, not after: stdin can already be at EOF
+      // when the prompt goes up (a piped or closed input), in which case the
+      // close lands during `question` itself and a listener attached on the
+      // next line would never hear it - the flow then waits forever on an
+      // answer that can no longer come.
+      //
+      // Ctrl-D ends the stream without ever answering, and `question`'s
+      // callback never fires. Closing is not a yes, so it resolves to the same
+      // empty answer a bare newline gives and the default-to-NO rule below
+      // does the rest.
       rl.once("close", () => {
         resolve("");
       });
+      rl.question(question, resolve);
     });
     const normalized = answer.trim().toLowerCase();
     return normalized === "y" || normalized === "yes";

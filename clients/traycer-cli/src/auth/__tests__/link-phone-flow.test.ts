@@ -33,15 +33,36 @@ vi.mock("../../../../shared/auth/link-login", async (importOriginal) => {
 
 vi.mock("../validate", () => ({ validateStoredCredentials: vi.fn() }));
 
-// The approval prompt. `answer.current` is what the human "types".
-const answer = vi.hoisted(() => ({ current: "" }));
+// The approval prompt. `answer.current` is what the human "types"; `null` is
+// Ctrl-D — the stream closes and the question is never answered at all, which
+// the double has to be able to express or the deny-on-close path is untestable.
+const answer = vi.hoisted(() => ({ current: "" as string | null }));
 vi.mock("node:readline", () => ({
-  createInterface: () => ({
-    question: (_prompt: string, callback: (value: string) => void) => {
-      callback(answer.current);
-    },
-    close: () => {},
-  }),
+  createInterface: () => {
+    const closeHandlers: (() => void)[] = [];
+    const emitClose = (): void => {
+      for (const handler of closeHandlers.splice(0)) {
+        handler();
+      }
+    };
+    return {
+      once: (event: string, handler: () => void) => {
+        if (event === "close") {
+          closeHandlers.push(handler);
+        }
+      },
+      question: (_prompt: string, callback: (value: string) => void) => {
+        const typed = answer.current;
+        if (typed === null) {
+          // Real readline fires `close` and never invokes the callback.
+          emitClose();
+          return;
+        }
+        callback(typed);
+      },
+      close: emitClose,
+    };
+  },
 }));
 
 const mintMock = vi.mocked(mintLinkLoginCodeViaHttp);
@@ -432,6 +453,26 @@ describe("runLinkPhoneFlow", () => {
     expect(
       (result.status === "rejected" ? result.reason : new Error("")).message,
     ).toContain("re-authenticate");
+  });
+
+  it("denies when stdin closes without an answer", async () => {
+    // Ctrl-D, or a piped stdin that ends. readline emits `close` and never
+    // calls back, so without the close handler the flow waits forever - after
+    // a phone has already claimed the code and is sitting on the approval.
+    statusMock.mockResolvedValue(CLAIMED);
+    answer.current = null;
+
+    const result = await runWithPolls(interactiveCtx(), 1);
+
+    expect(result.status).toBe("fulfilled");
+    // Closing is not consent: the same deny the confirm gate gives a bare
+    // newline.
+    expect(respondMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "bearer-1",
+      "ABCDE-FGHJK",
+      false,
+    );
   });
 
   it("does not sign in when the user is not logged in", async () => {

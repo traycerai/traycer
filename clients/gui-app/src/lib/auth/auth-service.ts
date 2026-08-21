@@ -85,6 +85,16 @@ const LEGACY_ACCESS_TOKEN_KEY = "traycer.token";
 const LEGACY_REFRESH_TOKEN_KEY = "traycer.refresh-token";
 
 /**
+ * The kinds a surface actually renders: the CODE VERDICTS, and nothing else.
+ * A completed sign-in speaks for itself, and the two non-verdict outcomes
+ * (`superseded`, `failed`) are either silent or already presented globally.
+ */
+export type LinkLoginFailureKind = Exclude<
+  LinkLoginSignInResult["kind"],
+  "signed-in" | "superseded" | "failed"
+>;
+
+/**
  * Terminal outcome of {@link AuthService.signInWithLinkCode}. `invalid-code`
  * covers expired, claimed-elsewhere, and never-existed codes
  * indistinguishably (the server does not say which); `denied` is the desktop
@@ -98,16 +108,6 @@ const LEGACY_REFRESH_TOKEN_KEY = "traycer.refresh-token";
  * caller adding the code-verdict copy would both duplicate the message and
  * misdescribe it). `LinkLoginFailureKind` is the set a surface may render.
  */
-/**
- * The kinds a surface actually renders: the CODE VERDICTS, and nothing else.
- * A completed sign-in speaks for itself, and the two non-verdict outcomes
- * (`superseded`, `failed`) are either silent or already presented globally.
- */
-export type LinkLoginFailureKind = Exclude<
-  LinkLoginSignInResult["kind"],
-  "signed-in" | "superseded" | "failed"
->;
-
 export type LinkLoginSignInResult =
   | { readonly kind: "signed-in" }
   /**
@@ -2881,6 +2881,14 @@ export class AuthService {
     // nothing.
     const describer = this.runnerHost.deviceDescriber;
     const described = describer === null ? null : await describer.describe();
+    // Fenced BEFORE the claim, not only after it. `describe()` is a native
+    // round trip, and a newer sign-in landing during it would otherwise let
+    // this dead attempt spend the account's single live unclaimed code: the QR
+    // still on the desktop screen dies, and the desktop raises an approval
+    // prompt for a claim nobody is waiting on.
+    if (this.isDisposed() || this.activeAttempt !== attempt) {
+      return { kind: "superseded" };
+    }
     const claimed = await claimLinkLoginCodeViaHttp(
       authnBaseUrl,
       code,

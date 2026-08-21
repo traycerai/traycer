@@ -202,7 +202,17 @@ export class FileTokenStore {
       // removed — not rehydrated — on this launch. Reads suppress the pair
       // regardless; the drain (retried on the store's own cadence on
       // failure) is what actually completes the delete.
-      const clean = await this.store.drainQuarantine(null);
+      //
+      // Bounded like the init gate above, and for the same reason: an
+      // unbounded drain waits out the store's full lock timeout, so a
+      // contended lock delays the first credential read by that long. An
+      // aborted acquisition comes back `lock-busy`, which returns false and
+      // re-arms the store's own retry - and reads stay suppressed by the
+      // quarantine record in the meantime, so nothing is served that
+      // shouldn't be.
+      const clean = await this.store.drainQuarantine(
+        AbortSignal.timeout(INIT_GATE_WAIT_MS),
+      );
       if (!clean) {
         log.warn(
           "[file-token-store] quarantined credential delete still pending",

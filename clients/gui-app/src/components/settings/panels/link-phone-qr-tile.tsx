@@ -295,7 +295,13 @@ export function LinkPhoneQrTile(props: {
           data-testid="link-phone-qr-placeholder"
         >
           {/* The paper's own geometry, so the frame sits on this edge too. */}
-          <Skeleton className="absolute inset-[1.4%] rounded-[4%]" />
+          <Skeleton
+            className="absolute"
+            style={{
+              inset: `${FRAME_CENTRE_INSET_PERCENT}%`,
+              borderRadius: `${FRAME_RADIUS_PERCENT}%`,
+            }}
+          />
           <div className="absolute inset-0 flex items-center justify-center">
             <AgentSpinningDots
               className={undefined}
@@ -325,7 +331,8 @@ export function LinkPhoneQrTile(props: {
             aria-hidden="true"
             // 22% of the tile's width: the covered area sits well inside level
             // H's recovery budget, and the ink matches the symbol's own.
-            className="flex aspect-square w-[22%] items-center justify-center rounded-[28%] bg-[#0B0B0F]"
+            className="flex aspect-square w-[22%] items-center justify-center rounded-[28%]"
+            style={{ backgroundColor: QR_INK }}
           >
             <BrandMark className="h-auto w-[56%]" />
           </div>

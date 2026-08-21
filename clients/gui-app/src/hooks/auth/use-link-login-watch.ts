@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { MintLinkLoginCodeResponse } from "@traycer/protocol/auth/link-login";
+import type {
+  LinkLoginStatusResponse,
+  MintLinkLoginCodeResponse,
+} from "@traycer/protocol/auth/link-login";
 import {
   useAuthLinkLoginCode,
   useEvictLinkLoginCode,
@@ -69,37 +72,44 @@ function claimFromStatus(
   code: string | null,
   datum: LinkLoginStatusDatum | null | undefined,
 ): LiveClaim | null {
-  if (
-    code === null ||
-    datum === null ||
-    datum === undefined ||
-    datum === "gone" ||
-    datum.status !== "claimed" ||
-    datum.claimant === null
-  ) {
+  const claimant = claimantOf(datum);
+  if (code === null || claimant === null) {
     return null;
   }
   return {
     code,
-    address: datum.claimant.address,
-    userAgent: datum.claimant.userAgent,
-    location: datum.claimant.location,
+    address: claimant.address,
+    userAgent: claimant.userAgent,
+    location: claimant.location,
   };
+}
+
+/**
+ * The claimant a status datum carries, or `null` for every state that has
+ * none — absent, `"gone"`, not yet claimed, or claimed with no metadata.
+ *
+ * One narrowing rather than two: both readers below need exactly this shape,
+ * and a change to `LinkLoginStatusDatum` should not have to be noticed twice.
+ */
+function claimantOf(
+  datum: LinkLoginStatusDatum | null | undefined,
+): LinkLoginStatusResponse["claimant"] | null {
+  if (
+    datum === null ||
+    datum === undefined ||
+    datum === "gone" ||
+    datum.status !== "claimed"
+  ) {
+    return null;
+  }
+  return datum.claimant;
 }
 
 function claimedAtMsFromStatus(
   datum: LinkLoginStatusDatum | null | undefined,
 ): number | null {
-  if (
-    datum === null ||
-    datum === undefined ||
-    datum === "gone" ||
-    datum.status !== "claimed" ||
-    datum.claimant === null
-  ) {
-    return null;
-  }
-  return datum.claimant.claimedAt;
+  const claimant = claimantOf(datum);
+  return claimant === null ? null : claimant.claimedAt;
 }
 
 interface WatchSnapshot {

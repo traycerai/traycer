@@ -18,7 +18,19 @@ import { appLogger, describeLogError } from "@/lib/logger";
  */
 export function platformOriginFromSignInUrl(signInUrl: string): string | null {
   try {
-    return new URL(signInUrl).origin;
+    const parsed = new URL(signInUrl);
+    // `URL.origin` is the STRING "null" for any scheme with an opaque origin -
+    // `file:`, `data:`, a custom scheme. Those parse without throwing, so
+    // without this guard the strict form returns "null" as if it were an
+    // address, and a caller that trusts it composes `null/link?code=<live>`.
+    // The whole contract here is that no answer is better than a wrong one.
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      appLogger.warn("[auth] sign-in URL has a non-web scheme", {
+        scheme: parsed.protocol,
+      });
+      return null;
+    }
+    return parsed.origin;
   } catch (error) {
     appLogger.warn("[auth] sign-in URL has no parseable origin", {
       error: describeLogError(error),
