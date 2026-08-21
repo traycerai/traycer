@@ -89,7 +89,11 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import {
+  chatTranscriptEventRowId,
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
@@ -399,7 +403,10 @@ export function ChatTile(props: ChatTileProps) {
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
-  // costs no extra host RPC.
+  // costs no extra host RPC. The provider is handed `tabHostId` alongside it
+  // because this list is evidence about a profile only for anchors minted on
+  // THIS host - an anchor a fork carried from another machine names a
+  // profile id that is host-local there and can never match here.
   const providersList = useTabProvidersList({
     enabled: true,
     subscribed: false,
@@ -476,6 +483,7 @@ export function ChatTile(props: ChatTileProps) {
       {deadTileBanner}
       <TombstonedProfileProvider
         providers={providersList.data?.providers ?? []}
+        hostId={tabHostId}
       >
         <ChatTileSessionView
           handle={handle}
@@ -626,6 +634,34 @@ function messageIdForBlock(
     ),
   );
   return owner?.id ?? null;
+}
+
+/**
+ * Resolve a durable protocol message id to the row id used by the rendered
+ * transcript. User rows keep their protocol id, while assistant records are
+ * projected into turn-keyed rows (`assistant:<turnId>`) and retain the
+ * protocol id only as `persistentMessageId`. Terminal notifications point at
+ * that durable id, so an id-only lookup silently waits forever for a row that
+ * can never exist.
+ *
+ * Prefer an exact rendered id. When projection split one assistant turn into
+ * several rows, choose the trailing matching slice: completion and failure
+ * notifications describe the terminal edge of that persisted assistant
+ * record, and the completion marker is stamped on the final assistant slice
+ * in the current transcript projection.
+ */
+function messageIdForTranscriptTarget(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+): string | null {
+  const exact = messages.find((message) => message.id === messageId);
+  if (exact !== undefined) return exact.id;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.persistentMessageId === messageId) return message.id;
+  }
+  return null;
 }
 
 /**
@@ -813,6 +849,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       }
       backgroundScrollRequestIdRef.current += 1;
       setBackgroundScrollRequest({
+        kind: "message",
         messageId,
         blockId,
         requestId: backgroundScrollRequestIdRef.current,
@@ -836,8 +873,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const scrollToMessage = useCallback((messageId: string): void => {
     backgroundScrollRequestIdRef.current += 1;
     setBackgroundScrollRequest({
+      kind: "message",
       messageId,
       blockId: null,
+      requestId: backgroundScrollRequestIdRef.current,
+    });
+  }, []);
+  const scrollToTranscriptEnd = useCallback((): void => {
+    backgroundScrollRequestIdRef.current += 1;
+    setBackgroundScrollRequest({
+      kind: "end",
       requestId: backgroundScrollRequestIdRef.current,
     });
   }, []);
@@ -846,7 +891,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // from another tile, possibly before this one exists - `openTileInEpic`
   // mounts it and the request is waiting here when it renders.
   const transcriptJump = useChatTranscriptJumpStore(
-    (s) => s.requestsByChatId[props.node.id],
+    (s) => s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
   );
   const consumeTranscriptJump = useChatTranscriptJumpStore(
     (s) => s.consumeJump,
@@ -863,11 +908,19 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (transcriptJump === undefined) return;
     if (!view.snapshotLoaded) return;
     const target = transcriptJump.target;
+    if (target.kind === "end") {
+      scrollToTranscriptEnd();
+      consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+      return;
+    }
     const resolveTargetMessageId = (): string | null => {
       if (target.kind === "message") {
+        return messageIdForTranscriptTarget(view.messages, target.messageId);
+      }
+      if (target.kind === "event") {
+        const eventRowId = chatTranscriptEventRowId(target.eventId);
         return (
-          view.messages.find((message) => message.id === target.messageId)
-            ?.id ?? null
+          view.messages.find((message) => message.id === eventRowId)?.id ?? null
         );
       }
       if (target.kind === "sent-message") {
@@ -893,12 +946,14 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       // land the same way: scroll to the owning row, no card to expand.
       scrollToMessage(messageId);
     }
-    consumeTranscriptJump(props.node.id, transcriptJump.requestId);
+    consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
   }, [
     consumeTranscriptJump,
+    hostId,
     props.node.id,
     scrollToBlock,
     scrollToMessage,
+    scrollToTranscriptEnd,
     transcriptJump,
     view.lower.backgroundItems,
     view.messages,
@@ -915,12 +970,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (pendingTranscriptJumpId === null) return;
     const chatId = props.node.id;
     const timer = setTimeout(() => {
-      consumeTranscriptJump(chatId, pendingTranscriptJumpId);
+      consumeTranscriptJump(hostId, chatId, pendingTranscriptJumpId);
     }, TRANSCRIPT_JUMP_TTL_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [consumeTranscriptJump, pendingTranscriptJumpId, props.node.id]);
+  }, [consumeTranscriptJump, hostId, pendingTranscriptJumpId, props.node.id]);
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.

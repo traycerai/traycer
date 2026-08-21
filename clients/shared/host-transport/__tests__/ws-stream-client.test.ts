@@ -21,6 +21,7 @@ import type {
   HostCredentialMintFlow,
   HostCredentialMintOutcome,
 } from "../host-credential-mint-flow";
+import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
 import {
   hostNotificationsSubscribeServerFrameSchema,
   type HostNotificationEntry,
@@ -168,6 +169,7 @@ function makeClient(options: {
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: options.factory,
     dialTimeoutMs: 1000,
@@ -210,6 +212,7 @@ function makeRotatableClient(
     bearer: () => ctx.credentials,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: factory,
     dialTimeoutMs: 1000,
@@ -242,6 +245,7 @@ function makeClientWithEvidence(options: {
     bearer: () => ctx?.credentials ?? null,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: options.evidence,
     webSocketFactory: options.factory,
     dialTimeoutMs: 1000,
@@ -366,7 +370,7 @@ describe("WsStreamClient", () => {
     expect(subscribeFrame).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-1" },
     });
 
@@ -404,7 +408,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-1" },
     });
 
@@ -476,7 +480,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-1" },
     });
 
@@ -586,6 +590,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
@@ -1231,7 +1236,7 @@ describe("WsStreamClient", () => {
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unsupported");
 
-    client.reconnectAll("host-endpoint-change");
+    client.reconnectAll("host-endpoint-change", { probeFirst: false });
     expect(
       client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unknown");
@@ -1327,6 +1332,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1382,6 +1388,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1400,7 +1407,7 @@ describe("WsStreamClient", () => {
     expect(firstSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-42" },
     });
 
@@ -1420,7 +1427,7 @@ describe("WsStreamClient", () => {
     expect(secondSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-42" },
     });
 
@@ -1438,6 +1445,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1567,6 +1575,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1604,7 +1613,7 @@ describe("WsStreamClient", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: { epicId: "epic-42" },
     });
     expect(statuses.at(-1)).toBe("open");
@@ -1625,6 +1634,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1674,6 +1684,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1709,6 +1720,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1757,6 +1769,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1798,6 +1811,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1853,6 +1867,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1903,6 +1918,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -1950,6 +1966,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2025,6 +2042,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2062,6 +2080,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2105,6 +2124,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
@@ -2213,6 +2233,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -2248,6 +2269,7 @@ describe("WsStreamClient", () => {
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -2446,6 +2468,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       bearer: () => makeRequestContext("expired").credentials,
       auth,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -3020,6 +3043,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       bearer: () => ctx.credentials,
       auth,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
@@ -3098,6 +3122,91 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     session.close();
   });
 
+  it("wake probe KEEPS a session whose socket still answers a ping", async () => {
+    // The overnight-sleep incident in miniature: a lid-open fires a wake while
+    // the localhost socket to a local host is perfectly alive. Dropping it
+    // re-runs every stream's open against a machine whose network has not
+    // finished coming back - which is what turned the RECOVERY signal into the
+    // damage. A session that answers must be left alone.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      // Far outside the 5s probe window, so the heartbeat cannot re-dial and
+      // confuse what this test is measuring.
+      pingIntervalMs: 120_000,
+      pongTimeoutMs: 600_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    await flush();
+    completeHandshake(sockets[0].socket);
+    await flush();
+    expect(sockets).toHaveLength(1);
+
+    // Fake timers only for the probe window; the handshake above needs real
+    // ones (this describe block runs on real timers).
+    vi.useFakeTimers();
+    try {
+      client.reconnectAll("wake-resume", { probeFirst: true });
+      // The probe is a real ping on the wire...
+      const pinged = sockets[0].socket.textSent.some((raw) =>
+        raw.includes('"kind":"ping"'),
+      );
+      expect(pinged).toBe(true);
+      // ...answered before the probe deadline.
+      sockets[0].socket.fireText({ kind: "pong", hasBinaryPayload: false });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      // No re-dial, and the original socket was never closed.
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0].socket.closed).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    session.close();
+  });
+
+  it("wake probe RE-DIALS a session whose socket has gone silent", async () => {
+    // The other half, and the reason the timeout IS the mechanism: a half-open
+    // socket after sleep fails only by not answering. Without this arm the
+    // probe would be a way to never reconnect anything.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 120_000,
+      pongTimeoutMs: 600_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    await flush();
+    completeHandshake(sockets[0].socket);
+    await flush();
+    expect(sockets).toHaveLength(1);
+
+    vi.useFakeTimers();
+    try {
+      client.reconnectAll("wake-resume", { probeFirst: true });
+      // A probe really went out, so the re-dial below is the TIMEOUT path and
+      // not the "nothing live to probe" shortcut.
+      expect(
+        sockets[0].socket.textSent.some((raw) => raw.includes('"kind":"ping"')),
+      ).toBe(true);
+      // No pong: the socket is half-open. Cross the probe deadline.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(sockets.length).toBeGreaterThanOrEqual(2);
+      expect(sockets[0].socket.closed).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    session.close();
+  });
+
   it("does not orphan a healthy socket when a stale revalidation resolves after a concurrent wake reconnect", async () => {
     const { factory, sockets } = makeFactory();
     const deferred = makeDeferredRevalidator();
@@ -3117,7 +3226,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
 
     // A concurrent wake re-dials and FULLY reconnects socket 1 while the
     // revalidation is still pending.
-    client.reconnectAll("wake-resume");
+    client.reconnectAll("wake-resume", { probeFirst: false });
     await wait(30);
     expect(sockets.length).toBeGreaterThanOrEqual(2);
     const socket1 = sockets[1].socket;
@@ -3249,6 +3358,40 @@ describe("WsStreamClient host credential provisioning", () => {
       bearer: () => ctx.credentials,
       auth: null,
       hostCredentialMint: options.mint,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: options.factory,
+      dialTimeoutMs: 1000,
+      openAckTimeoutMs: 1000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+  }
+
+  /**
+   * Same wiring as `makeProvisioningClient`, plus a caller-supplied
+   * `onHostCredentialState` observer - the tap the client fires on every ack
+   * that carries a state, ahead of (and independent from) the mint machinery
+   * above.
+   */
+  function makeProvisioningClientWithObserver(options: {
+    readonly factory: IStreamWebSocketFactory;
+    readonly mint: HostCredentialMintFlow | null;
+    readonly endpoint: () => HostDirectoryEntry | null;
+    readonly authToken: string | undefined;
+    readonly onState: (hostId: string, state: HostCredentialState) => void;
+  }): WsStreamClient<typeof hostStreamRpcRegistry> {
+    const token = options.authToken ?? "token-abc";
+    const ctx = makeRequestContext(token);
+    return new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: options.endpoint,
+      bearer: () => ctx.credentials,
+      auth: null,
+      hostCredentialMint: options.mint,
+      onHostCredentialState: options.onState,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: options.factory,
       dialTimeoutMs: 1000,
@@ -3767,6 +3910,172 @@ describe("WsStreamClient host credential provisioning", () => {
     expect(allProvisionFrames(sockets)).toHaveLength(0);
     void session;
   });
+
+  describe("onHostCredentialState observer", () => {
+    it("fires with the host's active state, ahead of the mint machinery, which ignores active", async () => {
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => {
+          observed.push({ hostId, state });
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, "active");
+      await flush();
+
+      expect(observed).toEqual([{ hostId: HOST_A.hostId, state: "active" }]);
+      expect(mint).not.toHaveBeenCalled();
+      session.close();
+    });
+
+    it("fires even when the subscribed method's version is INCOMPATIBLE", async () => {
+      // The credential state is a HANDSHAKE fact, not a per-method one. It
+      // used to be reported only after the compatibility gate, so a host that
+      // advertised the capability but disagreed with this build about one
+      // method's version looked indistinguishable from an unreachable host -
+      // and the CLI's install probe reported it as such and could not
+      // provision it.
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => {
+          observed.push({ hostId, state });
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+
+      const socket = sockets[0].socket;
+      socket.fireOpen();
+      const openParsed = JSON.parse(socket.textSent[0]) as {
+        readonly manifest: Record<string, { major: number; minor: number }>;
+      };
+      // Same ack, but the host claims a major this build cannot speak.
+      const theirManifest = {
+        ...openParsed.manifest,
+        "epic.subscribe": {
+          major: openParsed.manifest["epic.subscribe"].major + 1,
+          minor: 0,
+        },
+      };
+      socket.fireText({
+        ...streamOpenAck(theirManifest, [CAP_PROVISION]),
+        hostCredentialState: "missing",
+      });
+      await flush();
+
+      expect(observed).toEqual([{ hostId: HOST_A.hostId, state: "missing" }]);
+      session.close();
+    });
+
+    it("fires before the mint flow is invoked for a non-active state", async () => {
+      const order: string[] = [];
+      const mint = vi.fn(async () => {
+        order.push("mint-invoked");
+        return { kind: "unavailable" as const };
+      });
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: () => {
+          order.push("observer-fired");
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, "missing");
+      await flush();
+
+      expect(order).toEqual(["observer-fired", "mint-invoked"]);
+      expect(mint).toHaveBeenCalledTimes(1);
+      session.close();
+    });
+
+    it("does not stop the mint flow from running when the observer throws", async () => {
+      const outcome = provisioned({
+        token: "host-access-jws-throw",
+        refreshToken: "refresh-jwe-throw",
+      });
+      const mint = vi.fn(async () => outcome);
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: () => {
+          throw new Error("observer boom");
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, "missing");
+      await flush();
+
+      expect(mint).toHaveBeenCalledTimes(1);
+      const frames = provisionFrames(sockets[0].socket);
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toEqual({
+        kind: "hostCredentialProvision",
+        token: outcome.token,
+        refreshToken: outcome.refreshToken,
+        familyId: outcome.familyId,
+        provisionedAt: outcome.provisionedAt,
+      });
+      session.close();
+    });
+
+    it("is not called when the ack carries no hostCredentialState, or the capability is absent", async () => {
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => {
+          observed.push({ hostId, state });
+        },
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      // Older host: no `hostCredentialProvision` capability advertised at all.
+      completeProvisionHandshake(sockets[0].socket, "omit");
+      await flush();
+      expect(observed).toHaveLength(0);
+      expect(mint).not.toHaveBeenCalled();
+
+      // Capability advertised, but the host reports no state yet.
+      sockets[0].socket.fireClose(1000, "drop", false);
+      await wait(30);
+      const next = sockets[sockets.length - 1].socket;
+      completeProvisionHandshake(next, null);
+      await flush();
+
+      expect(observed).toHaveLength(0);
+      expect(mint).not.toHaveBeenCalled();
+      session.close();
+    });
+  });
 });
 
 describe("WsStreamClient readiness", () => {
@@ -3859,5 +4168,184 @@ describe("WsStreamClient readiness", () => {
     client.close("test-teardown");
 
     expect(client.isReady()).toBe(false);
+  });
+});
+
+describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
+  // Fake timers are installed BEFORE the client exists: the heartbeat interval
+  // is armed at subscribe time, and an interval created under real timers is
+  // never advanced by `advanceTimersByTime` - a test that installs them later
+  // passes whether or not the bug is present.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function settleHandshake(
+    sockets: ReadonlyArray<{ socket: StubStreamWebSocket }>,
+  ) {
+    await vi.advanceTimersByTimeAsync(0);
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    return stub;
+  }
+
+  // The wake probe exists to KEEP a socket that survived a lid-open. But the
+  // heartbeat interval is still armed across the sleep holding a PRE-sleep
+  // `lastPongAt`, so its next tick took the `missed-pongs` branch and tore the
+  // socket down before the probe could be answered - the stale deadline
+  // pre-empting the detector meant to decide, and re-running every stream's
+  // open on a machine whose Wi-Fi is still re-associating.
+  it("does not let the pre-sleep pong deadline tear down a socket the probe is still testing", async () => {
+    const { factory, sockets } = makeFactory();
+    // The heartbeat must be able to TICK inside the 5s wake-probe window, or
+    // the race this pins cannot occur at all.
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 1_000,
+      pongTimeoutMs: 2_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+
+    // Sleep: the wall clock jumps far past `pongTimeoutMs` while no timer got
+    // to run, which is exactly what a suspended machine does.
+    vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
+
+    const sentBeforeProbe = stub.textSent.length;
+    client.reconnectAll("wake-resume", { probeFirst: true });
+    // The probe really went out on the SAME socket.
+    expect(stub.textSent.length).toBe(sentBeforeProbe + 1);
+    expect(parseText(stub.textSent[sentBeforeProbe]).kind).toBe("ping");
+    expect(stub.closed).toBeNull();
+
+    // The heartbeat's next tick lands while the probe is still outstanding. It
+    // must not fire `missed-pongs` on the strength of the pre-sleep timestamp.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(stub.closed).toBeNull();
+    expect(sockets).toHaveLength(1);
+
+    session.close();
+  });
+
+  // The other direction: rebasing the deadline must not make a genuinely dead
+  // socket immortal - the probe timeout still has to condemn it, and for its
+  // own reason rather than the heartbeat's.
+  it("still force-reconnects when the probe goes unanswered", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+
+    vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
+    client.reconnectAll("wake-resume", { probeFirst: true });
+    expect(stub.closed).toBeNull();
+
+    // No pong arrives; the 5s wake-probe timeout is the detector.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stub.closed?.reason).toBe("wake-resume-probe-timeout");
+
+    session.close();
+  });
+
+  // Keeping the socket must not also swallow the recovery signal. Rebasing
+  // `lastPongAt` at probe time makes the probe's own pong read as a round
+  // trip, and since a successful probe deliberately AVOIDS the reconnect, the
+  // handshake-time recovery emission never runs either - the wake that
+  // bridged a sleep-length gap fired neither signal, and host RPC queries
+  // stranded in error state before the sleep (whose other automatic recovery
+  // routes are disabled) stayed stranded until a manual refresh.
+  it("still emits availability recovery when the wake probe's pong bridges a sleep-length gap", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 1_000,
+      pongTimeoutMs: 2_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+    expect(recovered).not.toHaveBeenCalled();
+
+    // Sleep: the wall clock jumps far past every threshold with no timer run.
+    vi.setSystemTime(Date.now() + 8 * 60 * 60 * 1000);
+    client.reconnectAll("wake-resume", { probeFirst: true });
+
+    // The probe's pong: the socket survived (kept, no reconnect) AND the gap
+    // it answers is the whole sleep - that positive edge is the only recovery
+    // signal this path has.
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(stub.closed).toBeNull();
+
+    // The baseline was consumed: the next healthy-cadence pong is measured
+    // against the rebased timestamp and must NOT double-fire.
+    await vi.advanceTimersByTimeAsync(1_000);
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
+  });
+
+  // A probe is only ever sent on a device-wake / network-online signal - an
+  // epoch in which host-scoped queries may have failed while the socket
+  // survived. When that cycle is SHORTER than the heartbeat threshold
+  // (pingIntervalMs + slack), the gap check reads the probe's pong as a round
+  // trip and fires nothing - and with `refetchOnReconnect` disabled on the
+  // query client, the errored queries have no other automatic route back. A
+  // successful probe is a recovery edge in its own right, independent of the
+  // stall threshold.
+  it("emits availability recovery for a successful wake probe even when the outage was shorter than the heartbeat threshold", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 1_000,
+      pongTimeoutMs: 2_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const stub = await settleHandshake(sockets);
+    expect(recovered).not.toHaveBeenCalled();
+
+    // A brief offline/resume cycle: well under pingIntervalMs (1s) + the 5s
+    // recovery slack, so the gap-based arm can never fire for it.
+    vi.setSystemTime(Date.now() + 2_000);
+    client.reconnectAll("wake-resume", { probeFirst: true });
+
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(stub.closed).toBeNull();
+
+    // Healthy-cadence pongs after the probe settled stay silent.
+    await vi.advanceTimersByTimeAsync(1_000);
+    stub.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
   });
 });

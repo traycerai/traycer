@@ -65,6 +65,31 @@ export function overviewMethodDegrade(
   return supported === false ? "unsupported" : null;
 }
 
+/**
+ * {@link overviewMethodDegrade} with the local-maintenance fallback folded in:
+ * a method the handshake definitively refused (`false`) does NOT degrade when
+ * the fallback lane can serve it — the control renders live and the decorated
+ * client answers it over the desktop CLI bridge instead.
+ *
+ * Enablement and routing must read the SAME two inputs or they tear: a button
+ * enabled here while the client would still send the RPC dispatches a call the
+ * handshake already refused, and the inverse leaves a served method behind a
+ * degrade notice. The routing half lives in
+ * `lib/host/local-maintenance-fallback-client.ts`, whose serve condition is
+ * exactly `supported === false && fallbackServes`.
+ *
+ * `null` stays "no degrade, no fallback": the tri-state discipline above is
+ * unchanged, and the fallback never triggers on ignorance — a call in flight
+ * while support is unknown goes over real RPC and resolves the handshake.
+ */
+export function resolveOverviewMethodDegrade(
+  supported: boolean | null,
+  fallbackServes: boolean,
+): OverviewDegradeReason | null {
+  if (supported !== false) return null;
+  return fallbackServes ? null : "unsupported";
+}
+
 export function describeOverviewDegrade(
   reason: OverviewDegradeReason,
   hostName: string,

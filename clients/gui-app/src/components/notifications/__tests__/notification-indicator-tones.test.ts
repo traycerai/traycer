@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   NOTIFICATION_STATUS_TONES,
   notificationFeedTone,
+  TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
 
 describe("notification status tone registry", () => {
@@ -56,6 +57,25 @@ describe("notification status tone registry", () => {
         resolvedAt: null,
       }),
     ).toBe(NOTIFICATION_STATUS_TONES.failure);
+  });
+
+  it("uses the failure glyph for the agent surface", () => {
+    expect(
+      notificationFeedTone({
+        severity: "failure",
+        hostKind: "agent.stopped",
+        resolvedAt: null,
+        agentSurface: "gui",
+      }),
+    ).toBe(NOTIFICATION_STATUS_TONES.failure);
+    expect(
+      notificationFeedTone({
+        severity: "failure",
+        hostKind: "agent.stopped",
+        resolvedAt: null,
+        agentSurface: "tui",
+      }),
+    ).toBe(TERMINAL_FAILURE_TONE);
   });
 
   it("leaves informational events to their surface-specific neutral icon", () => {

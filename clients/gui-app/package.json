@@ -10,7 +10,7 @@
     ".": "./index.ts"
   },
   "scripts": {
-    "compile": "tsc -b",
+    "compile": "NODE_OPTIONS=--max-old-space-size=6144 tsc -b",
     "lint": "NODE_OPTIONS=--max-old-space-size=6144 eslint . --cache --fix --max-warnings 0",
     "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
     "format": "bun x prettier --write .",

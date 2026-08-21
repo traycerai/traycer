@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -40,8 +39,6 @@ const COMPOSER_KEY = composerSurfaceKey("tab-test");
 const mocks = vi.hoisted(() => ({
   selectById: vi.fn(),
   effectiveHostId: { current: "host-home" },
-  /** Last `onValueChange` handed to the mocked `Select`. */
-  onValueChange: { current: null as ((value: string) => void) | null },
 }));
 
 const HOST_ENTRIES = [
@@ -62,48 +59,6 @@ const HOST_ENTRIES = [
     transportDialability: "dialable",
   },
 ];
-
-// Radix `Select` never opens in jsdom without pointer plumbing, so the picker
-// is reduced to its contract: a value, a change handler, and one clickable row
-// per host. That is exactly the surface this suite is about.
-vi.mock("@/components/ui/select", () => ({
-  Select: (props: {
-    readonly children: ReactNode;
-    readonly value: string | undefined;
-    readonly onValueChange: (value: string) => void;
-    readonly disabled: boolean;
-  }) => {
-    mocks.onValueChange.current = props.onValueChange;
-    return (
-      <div data-testid="host-select" data-value={props.value ?? ""}>
-        {props.children}
-      </div>
-    );
-  },
-  SelectTrigger: (props: { readonly children: ReactNode }) => (
-    <button type="button">{props.children}</button>
-  ),
-  SelectValue: (props: { readonly placeholder: string }) => (
-    <span data-testid="host-select-label">{props.placeholder}</span>
-  ),
-  SelectContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SelectItem: (props: {
-    readonly children: ReactNode;
-    readonly value: string;
-    readonly disabled: boolean;
-  }) => (
-    <button
-      type="button"
-      data-testid={`host-option-${props.value}`}
-      disabled={props.disabled}
-      onClick={() => mocks.onValueChange.current?.(props.value)}
-    >
-      {props.children}
-    </button>
-  ),
-}));
 
 // `selectById` is the ONLY thing this suite asserts about the binding: it must
 // never be reached from a composer pick again.
@@ -126,21 +81,24 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: HOST_ENTRIES }),
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({
-    status: "reachable",
-    hostLabel: "Home Mac",
-    unavailability: null,
-  }),
-  useRemoteSessionPollReadiness: () => true,
-}));
-
-vi.mock("@/hooks/host/use-remote-hosts-plan-gate", () => ({
-  useRemoteHostsPlanRestricted: () => false,
-}));
-
 vi.mock("@/hooks/host/use-refresh-host-directory-on-open", () => ({
   useRefreshHostDirectoryOnOpen: () => undefined,
+}));
+
+vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/auth/use-registered-hosts-query")
+  >()),
+  useRegisteredHostsPollLiveness: () => undefined,
+}));
+
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: vi.fn(),
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
 }));
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
@@ -175,9 +133,22 @@ vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
-  const { hostOptionsFixture } =
+  const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  return { useHostOptions: () => hostOptionsFixture({}) };
+  return {
+    useHostOptions: () =>
+      hostOptionsFixture({
+        hosts: [
+          hostScopeOptionFixture({ hostId: "host-home", name: "Home Mac" }),
+          hostScopeOptionFixture({
+            hostId: "host-build",
+            name: "Build Box",
+            isLocalMachine: false,
+          }),
+        ],
+        activeHostId: mocks.effectiveHostId.current,
+      }),
+  };
 });
 
 function renderComposerPicker(
@@ -214,14 +185,22 @@ function pinnedHostId(): string | undefined {
 }
 
 function chipLabel(): string {
-  return screen.getByTestId("host-select-label").textContent;
+  const label = screen
+    .getByRole("button", { name: /^Host:/ })
+    .querySelector(".truncate");
+  if (label === null) throw new Error("host switcher label is missing");
+  return label.textContent;
+}
+
+function pickBuildHost(): void {
+  fireEvent.click(screen.getByRole("button", { name: /^Host:/ }));
+  fireEvent.click(screen.getByRole("option", { name: /Build Box/ }));
 }
 
 beforeEach(() => {
   useSurfaceHostSelectionStore.getState().resetForTests();
   mocks.selectById.mockClear();
   mocks.effectiveHostId.current = "host-home";
-  mocks.onValueChange.current = null;
 });
 
 afterEach(cleanup);
@@ -230,7 +209,7 @@ describe("composer host picker writes a surface pin", () => {
   it("pins the picked host instead of moving the app-wide selection", () => {
     renderComposerPicker({ kind: "active" });
 
-    fireEvent.click(screen.getByTestId("host-option-host-build"));
+    pickBuildHost();
 
     expect(pinnedHostId()).toBe("host-build");
     // The whole point of the row: placing one chat elsewhere must not move
@@ -240,7 +219,7 @@ describe("composer host picker writes a surface pin", () => {
 
   it("keys the pin per WINDOW, so both composer instances agree", () => {
     renderComposerPicker({ kind: "active" });
-    fireEvent.click(screen.getByTestId("host-option-host-build"));
+    pickBuildHost();
 
     // ONE key for this window, whichever composer instance wrote it: a
     // per-component key would let the app-wide new-conversation modal
@@ -256,7 +235,7 @@ describe("composer host picker writes a surface pin", () => {
     renderComposerPicker({ kind: "active" });
     expect(chipLabel()).toBe("Home Mac");
 
-    fireEvent.click(screen.getByTestId("host-option-host-build"));
+    pickBuildHost();
     expect(chipLabel()).toBe("Build Box");
 
     // Derivation moves the effective host; a PINNED surface keeps its own (D6).
@@ -284,10 +263,13 @@ describe("composer host picker writes a surface pin", () => {
       .setSelection(COMPOSER_KEY, "host-retired");
     renderComposerPicker({ kind: "active" });
 
-    // "Local" is the pre-directory default for a FOLLOWING surface. Showing it
-    // for a pin to a machine the directory no longer carries would report a
-    // dead pin as the local host.
+    // "Local" is the pre-directory default for a FOLLOWING surface. The
+    // shared picker keeps identity and status separate, then combines both in
+    // the accessible name.
     expect(chipLabel()).toBe("Unavailable");
+    expect(
+      screen.getByRole("button", { name: "Host: Unavailable, offline" }),
+    ).toBeTruthy();
   });
 
   it("writes nothing from the FIXED arm (§55: fork dialogs are inert)", () => {
@@ -297,7 +279,9 @@ describe("composer host picker writes a surface pin", () => {
       hostClient: null,
     });
 
-    fireEvent.click(screen.getByTestId("host-option-host-build"));
+    const trigger = screen.getByRole("button", { name: /^Host:/ });
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("option", { name: /Build Box/ })).toBeNull();
 
     expect(pinnedHostId()).toBeUndefined();
     expect(mocks.selectById).not.toHaveBeenCalled();

@@ -328,7 +328,7 @@ function useNewTerminalWorkspaceItems(
   const directory = useHostDirectoryList();
   // Dialability depends on the pull-only session cache, so a memo keyed on
   // directory state alone freezes the row list while the palette is open: a
-  // session dying under an `offline`/`local-only` host would keep offering a
+  // session dying under an `offline`/plan-restricted host would keep offering a
   // row whose launch gate then silently declines. The subscription re-renders
   // on a readiness flip; the launch-time gate inside `run` stays an ambient
   // live read, which is correct for an action.

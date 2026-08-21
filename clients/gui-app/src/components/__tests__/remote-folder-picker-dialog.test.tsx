@@ -13,7 +13,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   WorkspaceBrowseFoldersResponse,
-  WorkspacePrepareFoldersResponseV11,
+  WorkspacePrepareFoldersResponseV12,
   WorkspaceRecentEntry,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -56,18 +56,16 @@ vi.mock("@/hooks/workspace/use-workspace-browse-folders-query", () => ({
 }));
 
 /**
- * `workspace.prepareFolders` v1.1 conveniences, faked at the same seam as the
+ * `workspace.prepareFolders` conveniences, faked at the same seam as the
  * browse query. `undefined` data stands in for the fail-closed
  * `DOWNGRADE_UNSUPPORTED` a v1.0 host answers these with - the picker must
  * treat that as "absent", never as an error.
  */
 let recentEntries: readonly WorkspaceRecentEntry[] | undefined;
 let reportedHomeDir: string | null | undefined;
-const recordedRecents: string[] = [];
-
 function prepareFoldersResponse(
-  fields: Partial<WorkspacePrepareFoldersResponseV11>,
-): WorkspacePrepareFoldersResponseV11 {
+  fields: Partial<WorkspacePrepareFoldersResponseV12>,
+): WorkspacePrepareFoldersResponseV12 {
   return {
     operation: "prepare",
     folders: [],
@@ -102,17 +100,6 @@ vi.mock("@/hooks/workspace/use-workspace-get-home-dir-query", () => ({
           }),
   }),
 }));
-
-vi.mock(
-  "@/hooks/workspace/use-workspace-record-recent-workspace-mutation",
-  () => ({
-    useWorkspaceRecordRecentWorkspace: () => ({
-      mutate: (path: string) => {
-        recordedRecents.push(path);
-      },
-    }),
-  }),
-);
 
 /**
  * A real (mock-messenger) HostClient: the store's request contract takes the
@@ -192,7 +179,6 @@ describe("<RemoteFolderPickerDialog />", () => {
     // pre-existing expectation describes the picker WITHOUT recents.
     recentEntries = undefined;
     reportedHomeDir = undefined;
-    recordedRecents.length = 0;
     useRemoteFolderPickerStore.setState({
       open: false,
       client: null,
@@ -689,7 +675,6 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(pathInput().value).toBe("/srv/project ");
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
     await expect(pick).resolves.toBe("/srv/project ");
-    expect(recordedRecents).toEqual(["/srv/project "]);
   });
 
   it("whitespace-only input is still no path at all", async () => {
@@ -727,7 +712,6 @@ describe("<RemoteFolderPickerDialog />", () => {
     );
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
     await expect(pick).resolves.toBe("/Users/tester/code");
-    expect(recordedRecents).toEqual(["/Users/tester/code"]);
   });
 
   it("a host that answers neither convenience operation still browses", async () => {
@@ -879,7 +863,6 @@ describe("<RemoteFolderPickerDialog />", () => {
       await screen.findAllByTestId("remote-folder-picker-row");
       fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
       await expect(pick).resolves.toBe("C:\\Users\\tester");
-      expect(recordedRecents).toEqual(["C:\\Users\\tester"]);
     });
 
     it("keeps the drive root itself addable", async () => {

@@ -8,11 +8,13 @@ import type { AuthEra } from "../../auth/request-context-provider";
 import {
   createRemoteHostFetcher,
   fetchRegisteredHostsViaHttp,
+  hasRecentHostCheckIn,
   hostListItemToDirectoryEntry,
   hostUnavailability,
   isConfirmedHostDeath,
   isConfirmedTransportRefusal,
   isWithinRelayFuseGrace,
+  PLAN_GATED_HOST_FRESHNESS_MS,
   RELAY_FUSE_MAX_ATTACH_MS,
   RELAY_FUSE_MAX_CLOCK_SKEW_MS,
   type HostListFetchResult,
@@ -141,15 +143,27 @@ describe("fetchRegisteredHostsViaHttp", () => {
 
 const RELAY_BASE_URL = "wss://relay.example.test/attach";
 
+/**
+ * The account axis, named rather than spelled `true`/`false` at 40 call sites:
+ * the wire carries pure liveness and the projection stamps this beside it.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+const PLAN_GATED = false;
+
 describe("hostListItemToDirectoryEntry", () => {
   it("enriches a remote entry with the status DTO, connectable via the shared relay endpoint (S2/T14)", () => {
-    const entry = hostListItemToDirectoryEntry(onlineItem(), RELAY_BASE_URL);
+    const entry = hostListItemToDirectoryEntry(
+      onlineItem(),
+      RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
+    );
     expect(entry.kind).toBe("remote");
     expect(entry.websocketUrl).toBe(RELAY_BASE_URL);
     expect(entry.transportDialability).toBe("dialable");
     expect(entry.version).toBe("1.4.2");
     expect(entry.label).toBe("prod-devbox");
     expect(entry.remoteStatus.connectivity).toBe("connectable");
+    expect(entry.planAllowsRemote).toBe(true);
   });
 
   it("reads not-dialable when the host is not connectable", () => {
@@ -157,7 +171,11 @@ describe("hostListItemToDirectoryEntry", () => {
       ...onlineItem(),
       status: { ...onlineItem().status, connectivity: "offline" },
     };
-    const entry = hostListItemToDirectoryEntry(item, RELAY_BASE_URL);
+    const entry = hostListItemToDirectoryEntry(
+      item,
+      RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
+    );
     expect(entry.transportDialability).toBe("not-dialable");
     // `websocketUrl` is the relay's fixed attach endpoint, carried through
     // regardless of dialability — production rejects this entry as
@@ -165,23 +183,36 @@ describe("hostListItemToDirectoryEntry", () => {
     expect(entry.websocketUrl).toBe(RELAY_BASE_URL);
   });
 
-  it("reads not-dialable for local-only and unknown connectivity alike", () => {
-    for (const connectivity of ["local-only", "unknown"] as const) {
-      const item: HostListItem = {
-        ...onlineItem(),
-        status: { ...onlineItem().status, connectivity },
-      };
-      expect(
-        hostListItemToDirectoryEntry(item, RELAY_BASE_URL).transportDialability,
-      ).toBe("not-dialable");
-    }
+  it("reads not-dialable for unknown connectivity", () => {
+    const item: HostListItem = {
+      ...onlineItem(),
+      status: { ...onlineItem().status, connectivity: "unknown" },
+    };
+    expect(
+      hostListItemToDirectoryEntry(item, RELAY_BASE_URL, PLAN_ALLOWS_REMOTE)
+        .transportDialability,
+    ).toBe("not-dialable");
+  });
+
+  it("stamps the plan flag and refuses to dial a LIVE host the account cannot attach to", () => {
+    // The attach grant 403s (`plan_restricted`) before a socket exists, so a
+    // `connectable` host on an unpaid plan is not dialable however alive it is.
+    const entry = hostListItemToDirectoryEntry(
+      onlineItem(),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(entry.planAllowsRemote).toBe(false);
+    expect(entry.remoteStatus.connectivity).toBe("connectable");
+    expect(entry.transportDialability).toBe("not-dialable");
   });
 
   it("falls back to the hostId when the host has no display name", () => {
     const item: HostListItem = { ...onlineItem(), displayName: null };
-    expect(hostListItemToDirectoryEntry(item, RELAY_BASE_URL).label).toBe(
-      "host-1",
-    );
+    expect(
+      hostListItemToDirectoryEntry(item, RELAY_BASE_URL, PLAN_ALLOWS_REMOTE)
+        .label,
+    ).toBe("host-1");
   });
 });
 
@@ -190,6 +221,7 @@ describe("createRemoteHostFetcher", () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => ({ kind: "ok", response: envelope() }),
       getBearerToken: () => null,
+      getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
     expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "signed-out" });
@@ -199,6 +231,7 @@ describe("createRemoteHostFetcher", () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => ({ kind: "ok", response: envelope() }),
       getBearerToken: () => "jwt",
+      getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
     const outcome = await fetcher(AMBIENT_ERA);
@@ -214,6 +247,7 @@ describe("createRemoteHostFetcher", () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => ({ kind: "unauthorized" }),
       getBearerToken: () => "jwt",
+      getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
     expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "signed-out" });
@@ -224,6 +258,7 @@ describe("createRemoteHostFetcher", () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: async () => result,
       getBearerToken: () => "jwt",
+      getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
     expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "failed" });
@@ -233,6 +268,7 @@ describe("createRemoteHostFetcher", () => {
     const fetcher = createRemoteHostFetcher({
       listHosts: () => Promise.reject(new Error("ipc bridge torn down")),
       getBearerToken: () => "jwt",
+      getPlanAllowsRemote: () => PLAN_ALLOWS_REMOTE,
       relayBaseUrl: RELAY_BASE_URL,
     });
     expect(await fetcher(AMBIENT_ERA)).toEqual({ kind: "failed" });
@@ -327,17 +363,52 @@ describe("isWithinRelayFuseGrace", () => {
   });
 
   it("is false for any non-offline connectivity, regardless of lastSeenAt", () => {
-    for (const connectivity of [
-      "unknown",
-      "connectable",
-      "local-only",
-    ] as const) {
+    for (const connectivity of ["unknown", "connectable"] as const) {
       const status: HostStatusDTO = {
         ...offlineStatus(isoBefore(60_000)),
         connectivity,
       };
       expect(isWithinRelayFuseGrace(status, NOW)).toBe(false);
     }
+  });
+});
+
+describe("hasRecentHostCheckIn", () => {
+  it("accepts a check-in just inside the three-refresh freshness window", () => {
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(isoBefore(PLAN_GATED_HOST_FRESHNESS_MS - 1)),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects the exact freshness boundary, null, and malformed stamps", () => {
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(isoBefore(PLAN_GATED_HOST_FRESHNESS_MS)),
+        NOW,
+      ),
+    ).toBe(false);
+    expect(hasRecentHostCheckIn(offlineStatus(null), NOW)).toBe(false);
+    expect(hasRecentHostCheckIn(offlineStatus("not-a-date"), NOW)).toBe(false);
+  });
+
+  it("allows plausible future skew but rejects a corrupt future stamp", () => {
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(new Date(NOW + 60_000).toISOString()),
+        NOW,
+      ),
+    ).toBe(true);
+    expect(
+      hasRecentHostCheckIn(
+        offlineStatus(
+          new Date(NOW + RELAY_FUSE_MAX_CLOCK_SKEW_MS + 1).toISOString(),
+        ),
+        NOW,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -363,6 +434,7 @@ describe("hostListItemToDirectoryEntry - relayFuseGrace (F7)", () => {
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(entry.relayFuseGrace).toBe(true);
   });
@@ -371,12 +443,17 @@ describe("hostListItemToDirectoryEntry - relayFuseGrace (F7)", () => {
     const entry = hostListItemToDirectoryEntry(
       offlineItem(GENUINE_OFFLINE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(entry.relayFuseGrace).toBe(false);
   });
 
   it("is false for a connectable host", () => {
-    const entry = hostListItemToDirectoryEntry(onlineItem(), RELAY_BASE_URL);
+    const entry = hostListItemToDirectoryEntry(
+      onlineItem(),
+      RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
+    );
     expect(entry.relayFuseGrace).toBe(false);
   });
 });
@@ -386,6 +463,7 @@ describe("hostUnavailability - offline stays authoritative under fuse grace (P1)
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(hostUnavailability(entry)).toBe("offline");
   });
@@ -394,6 +472,7 @@ describe("hostUnavailability - offline stays authoritative under fuse grace (P1)
     const entry = hostListItemToDirectoryEntry(
       offlineItem(GENUINE_OFFLINE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(hostUnavailability(entry)).toBe("offline");
   });
@@ -404,6 +483,7 @@ describe("isConfirmedHostDeath - fuse grace never exempts; only dial success doe
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(isConfirmedHostDeath(entry, true)).toBe(false);
   });
@@ -417,6 +497,7 @@ describe("isConfirmedHostDeath - fuse grace never exempts; only dial success doe
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(isConfirmedHostDeath(entry, false)).toBe(true);
   });
@@ -425,6 +506,7 @@ describe("isConfirmedHostDeath - fuse grace never exempts; only dial success doe
     const entry = hostListItemToDirectoryEntry(
       offlineItem(GENUINE_OFFLINE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(isConfirmedHostDeath(entry, false)).toBe(true);
   });
@@ -435,6 +517,7 @@ describe("isConfirmedTransportRefusal - F7 (recovery dial attempted during fuse 
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(isConfirmedTransportRefusal(entry, false)).toBe(false);
   });
@@ -443,6 +526,7 @@ describe("isConfirmedTransportRefusal - F7 (recovery dial attempted during fuse 
     const entry = hostListItemToDirectoryEntry(
       offlineItem(GENUINE_OFFLINE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
   });
@@ -455,8 +539,243 @@ describe("isConfirmedTransportRefusal - F7 (recovery dial attempted during fuse 
     const entry = hostListItemToDirectoryEntry(
       offlineItem(FUSE_GRACE_LAST_SEEN),
       RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(isConfirmedTransportRefusal(entry, false)).toBe(false);
     expect(isConfirmedHostDeath(entry, false)).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The four-state (six-cell) matrix: pure liveness on the wire × the account's
+// plan, combined at projection time. This is the whole contract of the
+// connectivity/plan split, so it is asserted as one table rather than as
+// scattered cases — a cell that changes should change here, visibly.
+// -----------------------------------------------------------------------------
+
+type MatrixRow = {
+  readonly planAllowsRemote: boolean;
+  readonly connectivity: HostStatusDTO["connectivity"];
+  readonly dialability: "dialable" | "not-dialable";
+  readonly unavailability:
+    "offline" | "plan-restricted" | "indeterminate" | null;
+  readonly lastSeenAt: string;
+  readonly why: string;
+};
+
+const MATRIX: readonly MatrixRow[] = [
+  {
+    planAllowsRemote: true,
+    connectivity: "connectable",
+    dialability: "dialable",
+    unavailability: null,
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
+    why: "alive and paid for — the only dialable cell",
+  },
+  {
+    planAllowsRemote: true,
+    connectivity: "offline",
+    dialability: "not-dialable",
+    unavailability: "offline",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
+    why: "positively not attached",
+  },
+  {
+    planAllowsRemote: true,
+    connectivity: "unknown",
+    dialability: "not-dialable",
+    unavailability: "indeterminate",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
+    why: "the liveness read failed — we learned nothing",
+  },
+  {
+    planAllowsRemote: false,
+    connectivity: "connectable",
+    dialability: "not-dialable",
+    unavailability: "plan-restricted",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
+    why: "alive, but the attach grant 403s — the remedy is an upgrade",
+  },
+  {
+    planAllowsRemote: false,
+    connectivity: "offline",
+    dialability: "not-dialable",
+    unavailability: "plan-restricted",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
+    why: "the gated relay is absent by design, while a fresh credential check-in proves the process is running",
+  },
+  {
+    planAllowsRemote: false,
+    connectivity: "offline",
+    dialability: "not-dialable",
+    unavailability: "offline",
+    lastSeenAt: GENUINE_OFFLINE_LAST_SEEN,
+    why: "the gated relay is uninformative and the plan-agnostic process check-in is stale",
+  },
+  {
+    planAllowsRemote: false,
+    connectivity: "unknown",
+    dialability: "not-dialable",
+    unavailability: "plan-restricted",
+    lastSeenAt: FUSE_GRACE_LAST_SEEN,
+    why: "the refusal is deterministic whatever the read would have said, and claims nothing about the process",
+  },
+];
+
+describe("hostUnavailability - the plan × liveness matrix", () => {
+  for (const row of MATRIX) {
+    it(`plan ${row.planAllowsRemote ? "allows" : "gates"} + ${row.connectivity} -> ${
+      row.unavailability ?? "dialable"
+    } (${row.why})`, () => {
+      const item: HostListItem = {
+        ...onlineItem(),
+        status: {
+          ...onlineItem().status,
+          connectivity: row.connectivity,
+          lastSeenAt: row.lastSeenAt,
+        },
+      };
+      const entry = hostListItemToDirectoryEntry(
+        item,
+        RELAY_BASE_URL,
+        row.planAllowsRemote,
+      );
+      expect(entry.transportDialability).toBe(row.dialability);
+      expect(hostUnavailability(entry)).toBe(row.unavailability);
+      // The invariant the matrix exists to keep: dialable IFF nothing is wrong.
+      expect(entry.transportDialability === "dialable").toBe(
+        hostUnavailability(entry) === null,
+      );
+    });
+  }
+});
+
+describe("the plan gate and the death gates", () => {
+  function gatedItem(
+    connectivity: HostStatusDTO["connectivity"],
+    lastSeenAt: string,
+  ): HostListItem {
+    return {
+      ...onlineItem(),
+      status: { ...onlineItem().status, connectivity, lastSeenAt },
+    };
+  }
+
+  it("an unpaid account's stale OFFLINE host is confirmed death", () => {
+    // Under `local-only` this host reported a plan word, `hostUnavailability`
+    // read `plan-restricted`, and failover / re-homing / the clone CTA /
+    // "permanently closed" were all silently disabled by a billing state.
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("offline", GENUINE_OFFLINE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(isConfirmedHostDeath(entry, false)).toBe(true);
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
+  });
+
+  it("an unpaid account's recently checked-in OFFLINE host is plan-restricted, not dead", () => {
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("offline", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(hostUnavailability(entry)).toBe("plan-restricted");
+    expect(isConfirmedHostDeath(entry, false)).toBe(false);
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
+  });
+
+  it("an unpaid account's LIVE host is refused but NOT dead - the remedy is an upgrade, not a retry", () => {
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("connectable", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(hostUnavailability(entry)).toBe("plan-restricted");
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
+    expect(isConfirmedHostDeath(entry, false)).toBe(false);
+  });
+
+  it("an unpaid account's UNKNOWN host never becomes a death claim", () => {
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("unknown", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(hostUnavailability(entry)).toBe("plan-restricted");
+    expect(isConfirmedHostDeath(entry, false)).toBe(false);
+  });
+
+  it("a ready live session outranks the plan gate: the session survives a mid-session downgrade, only NEW dials refuse", () => {
+    // The transport's standing rule, restated across the new axis. The same
+    // entry refuses a fresh dial and keeps an open one.
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("connectable", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(isConfirmedTransportRefusal(entry, true)).toBe(false);
+    expect(isConfirmedTransportRefusal(entry, false)).toBe(true);
+    expect(isConfirmedHostDeath(entry, true)).toBe(false);
+  });
+
+  it("closes the relay-fuse window for a plan-gated entry: the recovery dial it buys would 403 at the grant", () => {
+    const paid = hostListItemToDirectoryEntry(
+      gatedItem("offline", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_ALLOWS_REMOTE,
+    );
+    const gated = hostListItemToDirectoryEntry(
+      gatedItem("offline", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(paid.relayFuseGrace).toBe(true);
+    expect(gated.relayFuseGrace).toBe(false);
+    // The paid row may attempt recovery. The gated row cannot dial, but its
+    // fresh credential check-in keeps it out of the death gates.
+    expect(hostUnavailability(gated)).toBe("plan-restricted");
+    expect(isConfirmedTransportRefusal(paid, false)).toBe(false);
+    expect(isConfirmedTransportRefusal(gated, false)).toBe(true);
+  });
+
+  it("maps the transitional local-only wire value to plan-restricted without claiming death", () => {
+    const entry = hostListItemToDirectoryEntry(
+      gatedItem("local-only", FUSE_GRACE_LAST_SEEN),
+      RELAY_BASE_URL,
+      PLAN_GATED,
+    );
+    expect(hostUnavailability(entry)).toBe("plan-restricted");
+    expect(isConfirmedHostDeath(entry, false)).toBe(false);
+  });
+});
+
+describe("createRemoteHostFetcher - the plan axis", () => {
+  it("stamps the plan onto every projected entry, read per fetch", async () => {
+    let planAllowsRemote = true;
+    const fetcher = createRemoteHostFetcher({
+      listHosts: async () => ({ kind: "ok", response: envelope() }),
+      getBearerToken: () => "jwt",
+      getPlanAllowsRemote: () => planAllowsRemote,
+      relayBaseUrl: RELAY_BASE_URL,
+    });
+
+    const paid = await fetcher(AMBIENT_ERA);
+    expect(paid.kind).toBe("hosts");
+    if (paid.kind === "hosts") {
+      expect(paid.entries[0].transportDialability).toBe("dialable");
+    }
+
+    // A downgrade between polls: the SAME registry row projects differently,
+    // which is what makes the directory re-emit and the row stop being
+    // selectable without any wire change.
+    planAllowsRemote = false;
+    const downgraded = await fetcher(AMBIENT_ERA);
+    expect(downgraded.kind).toBe("hosts");
+    if (downgraded.kind === "hosts") {
+      const entry = downgraded.entries[0];
+      expect(entry.transportDialability).toBe("not-dialable");
+      expect(hostUnavailability(entry)).toBe("plan-restricted");
+    }
   });
 });

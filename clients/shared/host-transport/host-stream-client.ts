@@ -3,8 +3,6 @@ import type {
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamClient } from "./i-stream-client";
-import type { IStreamSession } from "./i-stream-session";
-import type { ParamsOf } from "./ws-stream-client";
 import type { StreamMethodSupport } from "./ws-stream-client";
 
 /**
@@ -20,18 +18,18 @@ import type { StreamMethodSupport } from "./ws-stream-client";
  * against this interface instead of the concrete `WsStreamClient` is what lets
  * it select between the two by `HostDirectoryEntry.kind` (T14).
  */
+/** See {@link IHostStreamClient.reconnectAll}. */
+export type ReconnectAllOptions = {
+  /** Keep sessions whose socket answers a liveness ping. */
+  readonly probeFirst: boolean;
+};
+
 export interface IHostStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > extends IStreamClient<Registry> {
-  /**
-   * Opens a stream whose params are read immediately before every wire
-   * subscribe, including reconnects. Dynamic resume cursors use this instead
-   * of freezing the cursor that happened to be current at session creation.
-   */
-  subscribeWithParamsProvider<Method extends keyof Registry & string>(
-    method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
-  ): IStreamSession;
+  // `subscribeWithParamsProvider` is inherited from `IStreamClient`: it is a
+  // subscribe-shaped capability, and the typed wrappers that use it depend on
+  // that narrower seam.
   close(reason: string): void;
   isClosed(): boolean;
   /** The reason recorded at close, or `null` while still open. */
@@ -52,17 +50,24 @@ export interface IHostStreamClient<
   notifyBearerRotated(): void;
   /**
    * Nudges every open session to reconnect immediately (skip backoff) - used
-   * when a LOCAL host respawns at a new `websocketUrl` under the same identity,
-   * and by the OS/app wake path (`subscribeWakeSignals`).
+   * when a LOCAL host respawns at a new `websocketUrl` under the same
+   * identity, and by the OS/app wake path (`subscribeWakeSignals`). A remote
+   * session has no equivalent "same identity, new address" transition (the
+   * relay attach endpoint is fixed, per-fleet, not per-host), so
+   * `RemoteStreamClient` cannot re-resolve anything; it forwards to the
+   * session's own wake - pull a pending redial forward, and probe a socket
+   * whose keepalive interval may have been frozen along with the runtime.
    *
-   * A remote session has no equivalent "same identity, new address" transition
-   * (the relay attach endpoint is fixed, per-fleet, not per-host), so
-   * `RemoteStreamClient` cannot re-resolve anything; it forwards to the shared
-   * session cache's wake sweep instead, which is the wake half of this contract
-   * - pull a pending redial forward, and check a socket whose keepalive
-   * interval may have been frozen along with the runtime.
+   * `options.probeFirst` distinguishes the two callers, and getting it wrong is
+   * a real regression in either direction:
+   *
+   *  - `false` - the address CHANGED (host respawn). The current socket, alive
+   *    or not, points at the wrong place; it must be dropped.
+   *  - `true` - an OS wake. Most sockets survive a lid-open, and dropping a
+   *    live one re-runs every stream's open against a machine whose network has
+   *    not finished coming back. Probe each session and re-dial only the dead.
    */
-  reconnectAll(reason: string): void;
+  reconnectAll(reason: string, options: ReconnectAllOptions): void;
   /**
    * Whether this client is currently carrying traffic - the readiness of the
    * session(s) IT owns, never a lookup by host. A surface that speaks for one

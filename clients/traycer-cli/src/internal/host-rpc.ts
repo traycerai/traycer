@@ -206,7 +206,13 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   // once the request settles so a `commit-failed` continuation timer never
   // outlives the command.
   const store = createCliCredentialsStore();
-  const revalidator = createStoreBackedRevalidator({ store, lease });
+  // `signal: null`: this revalidator lives for exactly one unary call, whose
+  // own transport timeout already bounds it.
+  const revalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
 
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(

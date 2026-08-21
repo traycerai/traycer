@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { reconcileCli, runLaunchTimeCliReconciliation } from "../cli-reconcile";
 import {
   isNpmCliPackagePath,
+  type BundledCliInstallResult,
   type CliDiscoveryResult,
   type CliInstallManifest,
 } from "../cli-discovery";
@@ -17,11 +18,15 @@ function makeDeps(overrides: {
   bundledVersion?: string;
   discovery?: CliDiscoveryResult;
   probeCliVersion?: (binaryPath: string) => string | null;
+  // Returns the published path, as most cases here care only about that, or
+  // the full result when a case is specifically about a DEFERRED publish
+  // (`published: false`, the CLI lock held by another writer). The harness
+  // adapts the former into the latter.
   installBundledCli?: (opts: {
     bundledCliPath: string;
     version: string;
     source: CliInstallManifest["source"];
-  }) => string;
+  }) => string | BundledCliInstallResult;
   stableCliBinaryPath?: () => string;
   stageBundledCliForUpgrade?: (opts: {
     bundledCliPath: string;
@@ -43,7 +48,17 @@ function makeDeps(overrides: {
   cliBinariesDiffer?: (installedPath: string, bundledPath: string) => boolean;
   now?: () => Date;
 }) {
-  const install = overrides.installBundledCli ?? vi.fn(() => "/stable/traycer");
+  // Typed to the OVERRIDE's union rather than to the deps contract, so the
+  // adapter below is forced to narrow `string` results into the full
+  // `BundledCliInstallResult` - a cast here would let the two drift apart
+  // silently.
+  const install = vi.fn<
+    (opts: {
+      bundledCliPath: string;
+      version: string;
+      source: CliInstallManifest["source"];
+    }) => string | BundledCliInstallResult
+  >(overrides.installBundledCli ?? (() => "/stable/traycer"));
   const writePending = vi.fn(
     overrides.writeCliManifestPendingUpgrade ??
       ((_pending: NonNullable<CliInstallManifest["pendingUpgrade"]>) =>
@@ -72,11 +87,16 @@ function makeDeps(overrides: {
         overrides.discovery ?? ({ kind: "none" } as const),
       probeCliVersion: async (binaryPath: string) =>
         overrides.probeCliVersion?.(binaryPath) ?? null,
-      installBundledCli: (async (opts: {
+      installBundledCli: async (opts: {
         bundledCliPath: string;
         version: string;
         source: CliInstallManifest["source"];
-      }) => install(opts)) as never,
+      }): Promise<BundledCliInstallResult> => {
+        const result = install(opts);
+        return typeof result === "string"
+          ? { path: result, published: true }
+          : result;
+      },
       stableCliBinaryPath:
         overrides.stableCliBinaryPath ?? (() => "/stable/traycer"),
       stageBundledCliForUpgrade: (async (opts: {
@@ -126,6 +146,46 @@ describe("reconcileCli - newest-wins", () => {
     if (result.kind === "upgraded") {
       expect(result.previousVersion).toBe("1.0.0");
       expect(result.newVersion).toBe("1.4.2");
+    }
+  });
+
+  // A publish that DEFERRED behind the CLI lock wrote nothing, so reporting
+  // `upgraded` would record a version this machine is not running - and
+  // because the reported version is what the next comparison trusts, that
+  // wrong record would suppress the retry rather than schedule it.
+  //
+  // Routed to the same `binary-locked` outcome a Windows running-image lock
+  // produces, because it needs the same thing from the user: the existing CLI
+  // still works, the upgrade still needs finishing, and there is already a
+  // "restart to finalize" recovery attached to that reason. A deferral must
+  // land in a state the user can act on, never in a silent dead end.
+  it("reports a deferred publish as upgrade-blocked, not as an upgrade", async () => {
+    const { deps, install } = makeDeps({
+      manifest: {
+        version: "1.0.0",
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: "/old/traycer",
+        source: "desktop",
+        pendingUpgrade: null,
+      },
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      installBundledCli: vi.fn(() => ({
+        path: "/old/traycer",
+        published: false,
+      })),
+    });
+
+    const result = await reconcileCli(deps);
+
+    expect(install).toHaveBeenCalled();
+    expect(result.kind).toBe("upgrade-blocked");
+    if (result.kind === "upgrade-blocked") {
+      expect(result.reason).toBe("binary-locked");
+      // The versions still describe the real machine state: still on 1.0.0,
+      // with 1.4.2 waiting.
+      expect(result.installedVersion).toBe("1.0.0");
+      expect(result.stagedVersion).toBe("1.4.2");
     }
   });
 

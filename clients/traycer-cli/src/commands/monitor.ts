@@ -7,6 +7,7 @@ import {
   agentInboxSubscribeServerFrameSchema,
   agentInboxSubscribeServerFrameSchemaV10,
   agentInboxSubscribeServerFrameSchemaV11,
+  agentInboxSubscribeServerFrameSchemaV12,
   type AgentInboxMessage,
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
@@ -154,7 +155,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   // land a `commit-failed` spend while the monitor keeps running - disposed in
   // the `finally` below.
   const store = createCliCredentialsStore();
-  const revalidator = createStoreBackedRevalidator({ store, lease });
+  // `signal: null`: the monitor's revalidator lives as long as the command
+  // itself - there is no earlier deadline to cancel a rotation against.
+  const revalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
   // refreshes the cached endpoint is the CLI's equivalent of the renderer's
@@ -214,7 +221,14 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       authnBaseUrl: auth.authnBaseUrl,
       bearer: () => readLeaseBearer(lease),
       diag: (message) => diag(message),
+      signal: null,
+      unavailableNote:
+        "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
     }),
+    // The monitor provisions opportunistically and never verifies adoption -
+    // the next connection's ack settles it.
+    onHostCredentialState: null,
     // The CLI has no selection authority to feed: it holds no lease
     // state and never fails a window over.
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -598,6 +612,12 @@ type NormalizedServerFrame =
   | { readonly kind: "role-awareness"; readonly event: RoleAwarenessEvent }
   | { readonly kind: "pong" };
 
+function noticeWithoutStopProvenance(
+  notice: Omit<AgentInboxNotice, "stopInitiator">,
+): AgentInboxNotice {
+  return { ...notice, stopInitiator: null };
+}
+
 /**
  * Parses against the schema tree matching the NEGOTIATED minor, not always
  * the latest one this build knows. A new monitor talking to an old host
@@ -616,7 +636,10 @@ function parseServerFrame(
       return { kind: "message", item: parsed.data.item, eventId: null };
     }
     if (parsed.data.kind === "notice") {
-      return { kind: "notice", notice: parsed.data.notice };
+      return {
+        kind: "notice",
+        notice: noticeWithoutStopProvenance(parsed.data.notice),
+      };
     }
     return { kind: "pong" };
   }
@@ -627,7 +650,31 @@ function parseServerFrame(
       return { kind: "message", item: parsed.data.item, eventId: null };
     }
     if (parsed.data.kind === "notice") {
-      return { kind: "notice", notice: parsed.data.notice };
+      return {
+        kind: "notice",
+        notice: noticeWithoutStopProvenance(parsed.data.notice),
+      };
+    }
+    if (parsed.data.kind === "role-awareness") {
+      return { kind: "role-awareness", event: parsed.data.event };
+    }
+    return { kind: "pong" };
+  }
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor === 2) {
+    const parsed = agentInboxSubscribeServerFrameSchemaV12.safeParse(envelope);
+    if (!parsed.success) return null;
+    if (parsed.data.kind === "message") {
+      return {
+        kind: "message",
+        item: parsed.data.item,
+        eventId: parsed.data.item.eventId,
+      };
+    }
+    if (parsed.data.kind === "notice") {
+      return {
+        kind: "notice",
+        notice: noticeWithoutStopProvenance(parsed.data.notice),
+      };
     }
     if (parsed.data.kind === "role-awareness") {
       return { kind: "role-awareness", event: parsed.data.event };
@@ -841,8 +888,17 @@ function inactivityHeadline(
         ? `${receiverLabel} is blocked waiting on a human — it ${detail} — and will not reply until someone responds`
         : `${receiverLabel} is blocked waiting on a human and will not reply until someone responds`;
     case "receiver-cancelled":
-      return `${receiverLabel} was stopped by the user — your message could not be delivered and this request is now closed`;
+      return `${receiverLabel} was stopped by ${stopInitiatorLabel(notice)} — your message could not be delivered and this request is now closed`;
   }
+}
+
+function stopInitiatorLabel(notice: AgentInboxNotice): string {
+  const initiator = notice.stopInitiator;
+  if (initiator === null || initiator.type === "user") return "the user";
+  const title = initiator.agentTitle?.trim();
+  return title !== undefined && title.length > 0
+    ? `agent ${title} (${initiator.agentId})`
+    : `agent ${initiator.agentId}`;
 }
 
 function printInboxNotice(notice: AgentInboxNotice): void {
@@ -897,7 +953,7 @@ function printReceiverCancelledNotice(
   const plural = dropped.length > 1;
   const headlineLines = plural
     ? [
-        `[traycer inbox] inactivity notice — ${dropped.length} messages you sent could not be delivered; the user stopped the agents you were waiting on:`,
+        `[traycer inbox] inactivity notice — ${dropped.length} messages you sent could not be delivered; ${stopInitiatorLabel(notice)} stopped the agents you were waiting on:`,
         ...dropped.map(
           (thread) =>
             `[traycer inbox]   · agent ${thread.receiverAgentId} (responseId ${thread.responseId})`,

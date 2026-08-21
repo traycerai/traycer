@@ -1155,7 +1155,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           // swept edits restore their staged worktree intent). Controls
           // re-enable; the user can re-issue against the state the snapshot
           // shows. Message sends stay - `reconcileSnapshotChange` settles those
-          // by messageId with composer restoration.
+          // by messageId with composer restoration, and only for sends from
+          // an earlier epoch: this same connection's in-flight sends keep
+          // waiting for their ack (a steady-state refresh snapshot is not
+          // evidence they were lost).
           const pending = reconcileSnapshotChange({
             pendingActions: sweep.pendingActions,
             pendingUserMessages: state.pendingUserMessages,
@@ -1163,6 +1166,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             queue: frame.snapshot.queue,
             failedSendRestoration: state.failedSendRestoration,
             nowMs: now,
+            connectionEpoch,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their
           // ack. A send whose accepted ack landed before the connection died
@@ -1961,9 +1965,16 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       onConnectionStatus: (status, reason) => {
         if (!isCurrentStream(streamGeneration)) return;
+        // A RETRYABLE fatalError is the transport saying "not now" - the client
+        // is already reconnecting on its own backoff and the user needs to do
+        // nothing. Notifying on it turned an overnight sleep into a stack of
+        // "Agent stream closed unexpectedly" rows (one per dark wake), which
+        // read as data loss when nothing was lost. Only an adjudicated close -
+        // one the user must act on - is worth a notification.
         if (
           status === "closed" &&
           reason?.kind === "fatalError" &&
+          reason.details.retryable !== true &&
           fatalCloseNotificationGeneration !== streamGeneration
         ) {
           fatalCloseNotificationGeneration = streamGeneration;

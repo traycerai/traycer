@@ -254,9 +254,9 @@ describe("role awareness rides the NEGOTIATED stream minor", () => {
     ).toBe(true);
   });
 
-  it("installs all three minors, with @1.2 latest", () => {
+  it("installs all four minors, with @1.3 latest", () => {
     const line = hostStreamRpcRegistry["agent.inbox.subscribe"][1];
-    expect(line.latestMinor).toBe(2);
-    expect(Object.keys(line.versions).sort()).toEqual(["0", "1", "2"]);
+    expect(line.latestMinor).toBe(3);
+    expect(Object.keys(line.versions).sort()).toEqual(["0", "1", "2", "3"]);
   });
 });

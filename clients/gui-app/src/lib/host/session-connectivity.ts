@@ -351,6 +351,10 @@ export function useHostSessionWake(): () => void {
     if (streamClient === null) {
       return;
     }
-    streamClient.reconnectAll(SESSION_WAKE_REASON);
+    // Forced, not probe-first: the caller is a person demanding "re-establish
+    // now", and the probe-first flavour would answer a live-but-stuck socket
+    // with nothing. The OS resume path makes the opposite call for the
+    // opposite reason (`subscribeWakeSignals`).
+    streamClient.reconnectAll(SESSION_WAKE_REASON, { probeFirst: false });
   }, [streamClient]);
 }

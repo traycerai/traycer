@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { createLocalMaintenanceFallbackClient } from "@/lib/host/local-maintenance-fallback-client";
 import type {
   ActivateRefusalReason,
   ActivateResult,
@@ -42,6 +43,16 @@ export interface HostScope {
   readonly isViewingActive: boolean;
   readonly status: HostScopeStatus;
   readonly client: HostClient<HostRpcRegistry> | null;
+  /**
+   * True when `client` is the local-maintenance fallback decorator: the
+   * scoped host is THIS machine's local host and the shell has a
+   * `hostManagement` bridge, so the v1.2.0 maintenance RPCs a too-old host
+   * negotiated away are served over the desktop CLI lane instead of degrading
+   * (see `lib/host/local-maintenance-fallback-client.ts`). Enablement must
+   * read this same flag (`resolveOverviewMethodDegrade`) so a control is
+   * live exactly when the client would serve its method.
+   */
+  readonly localMaintenanceFallback: boolean;
   readonly setHostId: (hostId: string) => void;
   /**
    * ACTIVATE: the app's one and only writer of `preferredHostId` (selection
@@ -199,6 +210,41 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     listsResolved,
   });
 
+  // `overrideClient` is null for `connecting`, `unreachable` and `vanished`
+  // — guaranteed by the `connectable` gate on `overrideEntry` above, not by
+  // hope — so only the `following` branch may swap in the ambient client.
+  // Any other branch handing back `ambientClient` would be the exact
+  // substitution this status enum exists to make impossible.
+  const resolvedClient =
+    status === "following" ? ambientClient : overrideClient;
+
+  // The local-maintenance fallback wrap, HERE and nowhere else: this is the
+  // one point where every scope consumer's client is decided, so decorating
+  // here is what guarantees the page's queries and mutations ride the
+  // fallback — including the `following` state, whose binding names no host
+  // and whose own `createRequesterForHostId` resolution would fall through
+  // any decoration applied a level up. Fail-closed gates: this machine's
+  // local host only (`isLocalMachine ?? false` is the row's own fail-closed
+  // read), and only where a `hostManagement` bridge exists (never in a
+  // browser shell, never for a remote scope).
+  const fallbackHostId =
+    host !== null && host.isLocalMachine ? host.hostId : null;
+  const hostManagement = runnerHost.hostManagement;
+  const client = useMemo(() => {
+    if (
+      resolvedClient === null ||
+      fallbackHostId === null ||
+      hostManagement === null
+    ) {
+      return resolvedClient;
+    }
+    return createLocalMaintenanceFallbackClient({
+      client: resolvedClient,
+      localHostId: fallbackHostId,
+      management: hostManagement,
+    });
+  }, [resolvedClient, fallbackHostId, hostManagement]);
+
   return {
     hosts,
     host,
@@ -210,12 +256,8 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     activeHost: findHostOption(hosts, activeHostId),
     isViewingActive: isFollowing,
     status,
-    // `overrideClient` is null for `connecting`, `unreachable` and `vanished`
-    // — guaranteed by the `connectable` gate on `overrideEntry` above, not by
-    // hope — so only the `following` branch may swap in the ambient client.
-    // Any other branch handing back `ambientClient` would be the exact
-    // substitution this status enum exists to make impossible.
-    client: status === "following" ? ambientClient : overrideClient,
+    client,
+    localMaintenanceFallback: client !== null && client !== resolvedClient,
     setHostId: setScopedHostId,
     makeActive,
     isActivating: activatingHostId !== null,

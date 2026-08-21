@@ -117,6 +117,17 @@ export interface WindowNarrationInput {
    * cannot happen.
    */
   readonly localHostExpected: boolean;
+  /**
+   * THIS MACHINE's host id, or null when there is none.
+   *
+   * Carried separately from {@link localHostExpected} because they answer
+   * different questions and one cannot stand in for the other:
+   * `localHostExpected` is "can this shell boot SOME local host", a property
+   * of the shell, and stays true on a desktop whose target is a remote
+   * machine. Only this field can settle whether the host the restarting-target
+   * arm is waiting on is the one this app can actually start.
+   */
+  readonly localHostId: string | null;
 }
 
 /**
@@ -271,10 +282,64 @@ export function deriveWindowNarration(
     // `plan-restricted` reachable at first launch: both derive from dead
     // leases. After the window has served once, ∅ is always the verdict arm;
     // the grace is strictly a launch statement.
+    //
+    // UNLESS THE LOCAL TARGET ITSELF IS RESTARTING, which is a start in
+    // progress stated by the authority's own lease rather than inferred from
+    // the absence of conclusions. The authority holds ∅ for a bounded window
+    // while a never-proven local target cycles (its cold-start hold),
+    // deliberately declining a usable fallback so the app does not hop and hop
+    // back - so during that hold ∅ does NOT mean "nothing can serve this
+    // window", and the scan below would say so anyway the moment the account
+    // contains one dead machine (a retired laptop). That is the same reasoning
+    // the non-∅ cold-start arm already applies further down: whatever else is
+    // wrong out there belongs to the surface chip or the tile, not to the
+    // window's launch story.
+    //
+    // ⚠ THE TARGET MUST BE THIS MACHINE, and `localHostExpected` cannot
+    // establish that - it says the SHELL can boot some local host, which stays
+    // true on a desktop whose target is a remote. Without the identity check,
+    // a preferred REMOTE cycling while the rest of the fleet is offline read
+    // as a launch: the authority skips its (local-only) hold and derives a
+    // real ∅, while this arm relabelled that verdict `cold-start` and put the
+    // local provisioning card - Retry, install progress, the bootstrap log -
+    // in front of a machine this app cannot start, withholding the offline
+    // recovery until the remote's restart episode expired. The narrator's
+    // grace and the authority's hold have to be gated on the SAME premise, or
+    // one of them is narrating a state the other never entered.
+    //
+    // ⚠ ONLY WHERE THE SCAN WOULD HAVE SAID `offline` ANYWAY, and that gate is
+    // the difference between softening a verdict and SUPPRESSING one. This arm
+    // has no clock: it reads a lease status the outage signal can hold for
+    // `LOCAL_EXPECTED_OUTAGE_CEILING_MS` (15 minutes), far past the authority's
+    // 20-second hold, so anything it hides it can hide for the whole outage. On
+    // `offline` there is nothing to hide - the startup card carries the same
+    // recovery, promoting to Retry + Open settings at
+    // `LOCAL_HOST_SLOW_START_THRESHOLD_MS` and adding Report issue once the
+    // install settles in failure - and "Starting Traycer…" is the truer
+    // sentence while the boot is genuinely running. `update-host` is the
+    // opposite: a version fix the user could walk NOW (arm 3 of the scan - an
+    // incompatible OTHER host while the target cycles), and a local restart is
+    // not a reason to withhold it for a quarter of an hour.
+    //
+    // Asking `deriveNoHostVariant` rather than enumerating dead reasons is
+    // deliberate. `plan-restricted` happens to be unreachable in this
+    // population today (its arm needs EVERY lease dead, and a
+    // `restarting-expected` target is not), so an enumeration written against
+    // what is reachable now would be a rule that quietly stops matching when
+    // that precedence moves. Deferring to the scan itself makes a new variant
+    // actionable by default, which is the safe direction to be wrong in.
+    const targetLease = findLease(input.leases, input.targetHostId);
+    const noHostVariant = deriveNoHostVariant(input.leases, input.targetHostId);
+    const localTargetRestarting =
+      input.targetHostId !== null &&
+      input.targetHostId === input.localHostId &&
+      targetLease?.status === "restarting-expected";
     if (
       !input.hasBeenServed &&
       input.localHostExpected &&
-      input.leases.every((lease) => lease.status !== "dead")
+      noHostVariant.kind === "offline" &&
+      (localTargetRestarting ||
+        input.leases.every((lease) => lease.status !== "dead"))
     ) {
       return {
         kind: "narrating",
@@ -285,7 +350,7 @@ export function deriveWindowNarration(
     return {
       kind: "narrating",
       cause: "no-usable-host",
-      variant: deriveNoHostVariant(input.leases, input.targetHostId),
+      variant: noHostVariant,
     };
   }
   if (input.hasBeenServed) return { kind: "silent" };

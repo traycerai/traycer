@@ -66,6 +66,13 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 
+/**
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
+ * stamps it onto every entry at projection time. These fixtures describe an
+ * entitled account unless a case says otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+
 const reconnectEngine = createHostReconnectEngine();
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
@@ -462,6 +469,7 @@ function offlineRemoteOrigin(
       updatePolicy: "manual",
     },
     "wss://relay.example.test/attach",
+    PLAN_ALLOWS_REMOTE,
   );
 }
 
@@ -1670,6 +1678,8 @@ describe("NotificationsPopover", () => {
 
     expect(failed?.dataset.notificationSeverity).toBe("failure");
     expect(failed?.textContent).toContain(TASK_TITLE);
+    expect(failed?.querySelector(".lucide-message-square-x")).not.toBeNull();
+    expect(failed?.querySelector(".lucide-square-terminal")).toBeNull();
     expect(completed?.dataset.notificationSeverity).toBe("done");
     expect(completed?.textContent).toContain(TASK_TITLE);
     expect(stalled?.dataset.notificationSeverity).toBe("failure");
@@ -1837,6 +1847,45 @@ describe("NotificationsPopover", () => {
     expect(captured.epicId).toBe("epic-tui");
     expect(captured.focusArtifactId).toBe("tui-1");
     expect(onNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a TUI agent failure with the terminal glyph", async () => {
+    applyHostSnapshot(
+      [
+        {
+          id: "agent.failed:tui-1",
+          updatedAt: 10,
+          readAt: null,
+          kind: "agent.stopped",
+          sourceRef: "tui-1",
+          severity: "failure",
+          outcome: "errored",
+          epicId: "epic-tui",
+          chatId: "tui-1",
+          payload: {
+            kind: "epic",
+            epicId: "epic-tui",
+            tuiAgentId: "tui-1",
+            agentName: "Terminal agent",
+            taskTitle: "TUI task",
+            outcome: "errored",
+          },
+        },
+      ],
+      { unreadCount: 1, attentionCount: 1 },
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const entry = await screen.findByTestId("notification-entry");
+    expect(entry.querySelector(".lucide-square-terminal")).not.toBeNull();
+    expect(entry.querySelector(".lucide-message-square-x")).toBeNull();
   });
 
   it("marks every notification as read when Mark all read is clicked", async () => {

@@ -7,6 +7,10 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     refetch: () => Promise.resolve(),
   }),
 }));
+
+vi.mock("@/components/chat/chat-progress-icon", () => ({
+  ChatProgressIcon: () => <span data-testid="chat-progress-icon" />,
+}));
 import {
   cleanup,
   fireEvent,
@@ -32,6 +36,7 @@ import {
   installManagedCommandChatSession,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -84,6 +89,8 @@ const terminalAuthorityState = vi.hoisted((): TerminalAuthorityTestState => ({
     >(),
   close: vi.fn<(request: { readonly terminalId: string }) => void>(),
 }));
+
+const consumeNotificationEntity = vi.hoisted(() => vi.fn());
 
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: (input: CapturedDraggableInput) => {
@@ -170,6 +177,14 @@ const TERMINAL_TAB: EpicNodeRef = {
   cwd: "/repo",
 };
 
+const CHAT_TAB: EpicNodeRef = {
+  id: "chat-1",
+  instanceId: "inst-chat-1",
+  type: "chat",
+  name: "Agent chat",
+  hostId: "host-B",
+};
+
 function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -233,31 +248,35 @@ function renderTabStripForTab(
   const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>
-        <TabStrip
-          epicId="epic-1"
-          tabId={VIEW_TAB_ID}
-          groupId="group-1"
-          tabs={[tab]}
-          activeTabId={tab.instanceId}
-          onSelectTab={() => undefined}
-          onCloseTab={input.onClose}
-          onPromotePreview={input.onPromotePreview}
-          onSplit={onSplit}
-          onCloseGroup={() => undefined}
-          onOpenBlankTab={input.onOpenBlankTab}
-          canRenameTabs
-          menuHandlers={{
-            onClose: input.onMenuClose ?? (() => undefined),
-            onCloseOthers: () => undefined,
-            onCloseRight: () => undefined,
-            onCloseAll: () => undefined,
-            onSplit: () => undefined,
-            onRevealInSidebar: () => undefined,
-            onRename: () => undefined,
-          }}
-        />
-      </TooltipProvider>
+      <NotificationConsumptionContext.Provider
+        value={consumeNotificationEntity}
+      >
+        <TooltipProvider delayDuration={0}>
+          <TabStrip
+            epicId="epic-1"
+            tabId={VIEW_TAB_ID}
+            groupId="group-1"
+            tabs={[tab]}
+            activeTabId={tab.instanceId}
+            onSelectTab={() => undefined}
+            onCloseTab={input.onClose}
+            onPromotePreview={input.onPromotePreview}
+            onSplit={onSplit}
+            onCloseGroup={() => undefined}
+            onOpenBlankTab={input.onOpenBlankTab}
+            canRenameTabs
+            menuHandlers={{
+              onClose: input.onMenuClose ?? (() => undefined),
+              onCloseOthers: () => undefined,
+              onCloseRight: () => undefined,
+              onCloseAll: () => undefined,
+              onSplit: () => undefined,
+              onRevealInSidebar: () => undefined,
+              onRename: () => undefined,
+            }}
+          />
+        </TooltipProvider>
+      </NotificationConsumptionContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -273,6 +292,7 @@ describe("<TabStrip />", () => {
     terminalAuthorityState.viewModel = null;
     terminalAuthorityState.rename.mockReset();
     terminalAuthorityState.close.mockReset();
+    consumeNotificationEntity.mockReset();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
@@ -310,6 +330,22 @@ describe("<TabStrip />", () => {
     fireEvent.doubleClick(screen.getByRole("tab", { name: /a\.md/ }));
 
     expect(onPromotePreview).toHaveBeenCalledWith("group-1");
+  });
+
+  it("marks the clicked active chat tab's host-qualified notifications read", () => {
+    renderTabStripForTab(CHAT_TAB, {
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: /Agent chat/ }));
+
+    expect(consumeNotificationEntity).toHaveBeenCalledWith({
+      originHostId: "host-B",
+      entity: { epicId: "epic-1", chatId: "chat-1" },
+    });
   });
 
   it("copies the absolute file path from a workspace-file tab context menu", () => {

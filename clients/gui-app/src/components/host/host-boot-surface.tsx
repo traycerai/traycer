@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { HostBootCard } from "@/components/centered-card";
 import { LocalHostLoadingContent } from "@/components/local-host-loading";
+import { usePressStartActivation } from "@/lib/host/press-start-activation";
 
 /**
  * The WHOLE boot card - headline, progress bar, details disclosure and
@@ -34,11 +35,19 @@ import { LocalHostLoadingContent } from "@/components/local-host-loading";
  *    (web/mobile have no bootstrap log to show), which is the one honest
  *    absence in this family - see `BootstrapLogDisclosure`.
  *  - `Open settings` navigates the router instance, which exists from app
- *    construction even before `RouterProvider` mounts. On the earliest phase
- *    the navigation is therefore QUEUED: it takes effect the moment the router
- *    mounts, and Settings bypasses the readiness gate - so a user staring at a
- *    stuck launch can still get to the page that fixes it. That is the escape
- *    hatch this family must never lose.
+ *    construction even before `RouterProvider` mounts, so a navigation made on
+ *    the earliest phase commits (measured: `router.navigate` sets the location
+ *    on an unmounted router) and Settings bypasses the readiness gate - a user
+ *    staring at a stuck launch can still reach the page that fixes it. That is
+ *    the escape hatch this family must never lose, and it has been lost twice:
+ *      1. the press never became a CLICK, because this card is replaced
+ *         mid-press (`usePressStartActivation`);
+ *      2. the committed route was then overwritten by the desktop's restored
+ *         route, because the route observer did not exist this early
+ *         (`TabNavigationRouteBridge`, now mounted above `HostRuntimeProvider`).
+ *    Both were invisible from inside this file: the card looked unchanged
+ *    either way. Changing how this button activates, or where that bridge
+ *    mounts, reopens one of them.
  */
 export function HostBootSurface(props: {
   readonly testId: string | null;
@@ -65,14 +74,20 @@ export function HostBootSurface(props: {
  * accent link beside a muted toggle reads as the card's primary action - on a
  * surface whose primary action is "wait". The escape hatch stays present and
  * clickable; it just stops shouting.
+ *
+ * It activates on PRESS, not on click, and that is load-bearing rather than
+ * stylistic: this button's own surface is replaced mid-launch, and a press
+ * whose element is removed before release produces no click event at all. See
+ * `usePressStartActivation` for the capture that established it.
  */
 export function BootOpenSettingsButton(props: {
   readonly onOpenSettings: () => void;
 }): ReactNode {
+  const activation = usePressStartActivation(props.onOpenSettings);
   return (
     <button
       type="button"
-      onClick={props.onOpenSettings}
+      {...activation}
       data-testid="host-boot-open-settings"
       className="inline-flex items-center text-ui-xs text-muted-foreground hover:text-foreground"
     >

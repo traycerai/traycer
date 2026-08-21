@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { LivePulse } from "@/components/ui/live-pulse";
-import { useEpicSyncPillState } from "@/lib/epic-selectors";
+import {
+  useEpicHasFreshCloudSyncStatus,
+  useEpicSyncPillState,
+} from "@/lib/epic-selectors";
+import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
@@ -35,15 +39,24 @@ export interface EpicConnectionPillProps {
 export function EpicConnectionPill(props: EpicConnectionPillProps) {
   const derived = useEpicSyncPillState();
   const state = useSyncPillDisplayState(derived);
+  const hasFreshCloudSyncStatus = useEpicHasFreshCloudSyncStatus();
+  // The escalation clock reads the RAW verdict, not the settled display
+  // state: the settle hold renames a genuine `synced` to `syncing` until the
+  // claim has earned its interval - fed the settled state, a real recovery
+  // inside the hold window would be invisible to it. It also reads the
+  // per-cycle cloud-evidence bit directly, because `connected`/`syncing` are
+  // reachable both with and without evidence (legacy hosts never move
+  // `hostDirtyState` off `unknown`) and the label alone cannot end an outage.
+  const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
   const selected = highestSeverityIndicator(
-    indicatorFor(state),
+    indicatorFor(state, linkDownTooLong),
     chatBackupStatus,
   );
   const rawSelected = highestSeverityIndicator(
-    indicatorFor(derived),
+    indicatorFor(derived, linkDownTooLong),
     chatBackupStatus,
   );
   const { indicator } = selected;
@@ -72,7 +85,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
         </button>
       </TooltipWrapper>
       <span className="sr-only" role="status" aria-live="polite">
-        {warningAnnouncement(state, rawSelected)}
+        {warningAnnouncement(state, rawSelected, linkDownTooLong)}
       </span>
     </>
   );
@@ -81,6 +94,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
 function warningAnnouncement(
   state: EpicSyncPillState,
   selected: SelectedIndicator,
+  linkDownTooLong: boolean,
 ): string | null {
   if (
     selected.source === "chat-backup" &&
@@ -94,6 +108,13 @@ function warningAnnouncement(
     case "offlineChangesSavedLocally":
     case "offline":
       return selected.indicator.ariaLabel;
+    // A routine reconnect stays silent - it announces nothing a sighted user
+    // would be interrupted by either. Once it has been down long enough to
+    // escalate, it is worth saying: the copy tells the user their unsent work
+    // depends on this window staying open.
+    case "connecting":
+    case "reconnecting":
+      return linkDownTooLong ? selected.indicator.ariaLabel : null;
     default:
       return null;
   }
@@ -200,6 +221,57 @@ const QUIET_CONTAINER_CLASS =
 const AMBER_CONTAINER_CLASS =
   "rounded-md bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-400";
 
+/**
+ * The two link-down states, and how each reads before and after
+ * {@link LINK_DOWN_ESCALATION_MS}.
+ *
+ * The escalated copy says three things and no more: it is still trying, it
+ * will keep trying by itself, and unsent edits live in this window. The last
+ * is the load-bearing part - the same honesty the `offline` copy owes -
+ * because the retry may never converge and closing the window is what loses
+ * the work.
+ */
+const LINK_DOWN_COPY = {
+  connecting: {
+    label: "Connecting…",
+    stalledLabel: "Still connecting…",
+    message: "Connecting to server",
+    stalledMessage:
+      "Still connecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+  },
+  reconnecting: {
+    label: "Reconnecting…",
+    stalledLabel: "Still reconnecting…",
+    message: "Reconnecting to server",
+    stalledMessage:
+      "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+  },
+} as const;
+
+/**
+ * The amber "link is down" indicator, escalated by
+ * {@link useLinkDownTooLong}. Neither variant makes a durability claim: while
+ * the renderer↔host stream is down the only copy of an unsent edit is in this
+ * window's memory.
+ */
+function linkDownIndicator(
+  kind: "connecting" | "reconnecting",
+  linkDownTooLong: boolean,
+): PillIndicator {
+  const copy = LINK_DOWN_COPY[kind];
+  const message = linkDownTooLong ? copy.stalledMessage : copy.message;
+  return {
+    severity: "warning",
+    containerClassName: AMBER_CONTAINER_CLASS,
+    dotClassName: "text-amber-500",
+    label: linkDownTooLong ? copy.stalledLabel : copy.label,
+    showAgentSpinner: true,
+    pulse: null,
+    tooltip: message,
+    ariaLabel: message,
+  };
+}
+
 const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
   steady: 0,
   activity: 1,
@@ -238,7 +310,10 @@ function indicatorForChatBackup(status: EpicChatBackupStatus): PillIndicator {
   };
 }
 
-function indicatorFor(state: EpicSyncPillState): PillIndicator {
+function indicatorFor(
+  state: EpicSyncPillState,
+  linkDownTooLong: boolean,
+): PillIndicator {
   switch (state) {
     // Icon-only: the steady state is the one users see ~always, so it earns no
     // permanent copy in the status row - the pulse plus its tooltip say it.
@@ -330,29 +405,13 @@ function indicatorFor(state: EpicSyncPillState): PillIndicator {
       };
     // The three link states below make NO durability claim. While the
     // renderer↔host stream is down the only copy of an unsent edit is in this
-    // window's memory, so "saved locally" would be a lie.
+    // window's memory, so "saved locally" would be a lie. The first two carry
+    // an escalated variant once the link has been down long enough that
+    // "…ing" stops being an honest description - see `linkDownIndicator`.
     case "connecting":
-      return {
-        severity: "warning",
-        containerClassName: AMBER_CONTAINER_CLASS,
-        dotClassName: "text-amber-500",
-        label: "Connecting…",
-        showAgentSpinner: true,
-        pulse: null,
-        tooltip: "Connecting to server",
-        ariaLabel: "Connecting to server",
-      };
+      return linkDownIndicator("connecting", linkDownTooLong);
     case "reconnecting":
-      return {
-        severity: "warning",
-        containerClassName: AMBER_CONTAINER_CLASS,
-        dotClassName: "text-amber-500",
-        label: "Reconnecting…",
-        showAgentSpinner: true,
-        pulse: null,
-        tooltip: "Reconnecting to server",
-        ariaLabel: "Reconnecting to server",
-      };
+      return linkDownIndicator("reconnecting", linkDownTooLong);
     case "offline":
       return {
         severity: "danger",

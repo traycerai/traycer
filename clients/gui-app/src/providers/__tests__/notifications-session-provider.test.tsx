@@ -1,7 +1,14 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -189,6 +196,13 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => servingHostFallbackState.boundHostId,
 }));
 
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: (target: HostDirectoryEntry | null) =>
+    target === null || hostState.client === null
+      ? null
+      : hostState.client.createRequester(target),
+}));
+
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string) => {
     if (hostId.length === 0) return null;
@@ -332,6 +346,7 @@ import {
   __setAgentActivityStateForTests,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 function NotificationsSessionProvider(props: {
   readonly children: ReactNode;
@@ -417,6 +432,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
@@ -661,6 +677,16 @@ async function renderHostNotificationsProvider(): Promise<{
   readonly queryClient: QueryClient;
   readonly streamClient: MockWsStreamClient;
 }> {
+  return renderHostNotificationsProviderWithChild(<div />);
+}
+
+async function renderHostNotificationsProviderWithChild(
+  child: ReactNode,
+): Promise<{
+  readonly markReadCalls: Array<HostNotificationsMarkReadRequest>;
+  readonly queryClient: QueryClient;
+  readonly streamClient: MockWsStreamClient;
+}> {
   const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
   const streamClient = new MockWsStreamClient();
   const queryClient = new QueryClient();
@@ -673,9 +699,7 @@ async function renderHostNotificationsProvider(): Promise<{
 
   render(
     <QueryClientProvider client={queryClient}>
-      <NotificationsSessionProvider>
-        <div />
-      </NotificationsSessionProvider>
+      <NotificationsSessionProvider>{child}</NotificationsSessionProvider>
     </QueryClientProvider>,
   );
 
@@ -698,6 +722,23 @@ async function renderHostNotificationsProvider(): Promise<{
   });
 
   return { markReadCalls, queryClient, streamClient };
+}
+
+function ExplicitNotificationConsumptionProbe(): ReactNode {
+  const consume = useContext(NotificationConsumptionContext);
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        consume?.({
+          originHostId: mockLocalHostEntry.hostId,
+          entity: { epicId: "epic-a", chatId: "chat-a" },
+        })
+      }
+    >
+      Consume chat notifications
+    </button>
+  );
 }
 
 function indicatorKey(
@@ -767,6 +808,56 @@ describe("<NotificationsSessionProvider />", () => {
     __setNotificationsStreamFactoryForTests(null);
     resetAuth("signed-out", null, null);
     vi.restoreAllMocks();
+  });
+
+  it("marks a restored focused entity read through the local host before effective-host selection", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    setFocusedChat("epic-startup", "chat-startup");
+
+    const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
+    const streamClient = new MockWsStreamClient();
+    const queryClient = new QueryClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    hostState.client =
+      createHostClient(markReadCalls).createRequesterForHostId(null);
+    streamState.client = streamClient;
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+    const toastSpy = vi.spyOn((await import("sonner")).toast, "error");
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.feed.subscribe",
+      );
+    });
+    act(() => {
+      streamClient.session.emitOpen();
+    });
+
+    await waitFor(() => {
+      expect(markReadCalls).toEqual([
+        {
+          kind: "entity",
+          entity: {
+            epicId: "epic-startup",
+            chatId: "chat-startup",
+          },
+        },
+      ]);
+    });
+    expect(toastSpy).not.toHaveBeenCalled();
   });
 
   it("keeps local failures and ingests collaboration rows alongside the cloud relay", async () => {
@@ -1411,6 +1502,7 @@ describe("<NotificationsSessionProvider />", () => {
       bearer: () => null,
       auth: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
@@ -2510,6 +2602,23 @@ describe("<NotificationsSessionProvider />", () => {
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
+    });
+  });
+
+  it("consumes an explicitly clicked active tab even without a focus transition", async () => {
+    const { markReadCalls } = await renderHostNotificationsProviderWithChild(
+      <ExplicitNotificationConsumptionProbe />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Consume chat notifications" }),
+    );
+
+    await waitFor(() => {
+      expect(markReadCalls).toContainEqual({
+        kind: "entity",
+        entity: { epicId: "epic-a", chatId: "chat-a" },
+      });
     });
   });
 

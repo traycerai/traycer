@@ -76,6 +76,7 @@ function frameAtExactSize(targetBytes: number): EncodeMuxFrameInput {
     chunked: true,
     chunkFirst: true,
     chunkLast: false,
+    compressed: false,
     json: null,
     binary: new Uint8Array(0),
   };

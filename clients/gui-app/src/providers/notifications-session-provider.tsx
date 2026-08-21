@@ -17,6 +17,7 @@ import {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
+import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
@@ -83,6 +84,7 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -128,6 +130,10 @@ export function NotificationsSessionProvider(
     streamAuth,
   );
   const servingHostId = servingHostEntry?.hostId ?? null;
+  // Unary acknowledgements share the stream's serving-host binding (the local
+  // host where one exists, the bound host on a shell without one). The
+  // app-wide effective host can still be unresolved when this stream opens.
+  const servingHostClient = useHostClientFor(servingHostEntry);
   // A serving-host change reaches this component one commit before its
   // transport does: `useHostStreamClientBindingFor` builds the replacement
   // inside an effect, so the value rendered alongside the NEW serving entry
@@ -184,7 +190,8 @@ export function NotificationsSessionProvider(
   >(null);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
-  const markEntityReadMutation = useNotificationMarkEntityRead();
+  const markEntityReadMutation =
+    useNotificationMarkEntityRead(servingHostClient);
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<FocusedNotificationScope | null>(null);
   // Notification-feed delivery is independent from the live chat stream. A
@@ -863,7 +870,11 @@ export function NotificationsSessionProvider(
     };
   }, [tearDown]);
 
-  return <>{props.children}</>;
+  return (
+    <NotificationConsumptionContext.Provider value={consumeEntity}>
+      {props.children}
+    </NotificationConsumptionContext.Provider>
+  );
 }
 
 /**
