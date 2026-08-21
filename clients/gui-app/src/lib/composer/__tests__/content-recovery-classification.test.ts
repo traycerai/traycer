@@ -241,6 +241,73 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
+  // R13 `-BZH5`: the leading-only invariant the round-5 note leaned on is
+  // EXEMPTED for skills - `isLegalSlashChip` returns true for
+  // `kind === "skill"` at any position. A non-leading skill chip's `/name`
+  // does not round-trip, because the raw-text converter only rebuilds a
+  // LEADING one.
+  it("counts a non-leading skill chip as a loss", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "first do this then " },
+            {
+              type: "slashCommand",
+              attrs: { kind: "skill", name: "review" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(report.get("command")).toBe(1);
+  });
+
+  it("reports nothing for a leading skill chip", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "slashCommand",
+              attrs: { kind: "skill", name: "review" },
+            },
+            { type: "text", text: " the diff" },
+          ],
+        },
+      ],
+    });
+
+    // Leading round-trips through `parseLeadingSlashCommand`, so warning here
+    // would be noise on the common case.
+    expect(report.size).toBe(0);
+  });
+
+  it("reports nothing for a native command chip", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "slashCommand",
+              attrs: { kind: "command", name: "compact" },
+            },
+          ],
+        },
+      ],
+    });
+
+    // The leading-only guard still holds for native commands.
+    expect(report.size).toBe(0);
+  });
+
   it("reports nothing for visible formatting marks", () => {
     const report = classifyContentRecovery({
       type: "doc",

@@ -196,6 +196,13 @@ function unrecoverableSendNotice(send: UnrecoverableSend): ChatErrorNotice {
         tail: "so that link comes back",
       }),
       countedClause({
+        count: losses.get("command") ?? 0,
+        singular: "skill chip",
+        plural: "skill chips",
+        verbPhrase: "will paste as plain text from where they sit - re-pick",
+        tail: "so they run again",
+      }),
+      countedClause({
         count: losses.get("link") ?? 0,
         singular: "link",
         plural: "links",

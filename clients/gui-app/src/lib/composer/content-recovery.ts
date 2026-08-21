@@ -21,6 +21,8 @@ export type ContentRecoveryLoss =
   | "quote"
   /** A link mark whose label is not its `href`, so the target is nowhere. */
   | "link"
+  /** A slash chip whose `/name` will not round-trip from where it sits. */
+  | "command"
   /** A node kind nothing has classified - see the fail-closed rule below. */
   | "unknown";
 
@@ -36,13 +38,13 @@ export type ContentRecoveryLoss =
  * claim about what that seam produces, not about the shared projection; the
  * two must agree, and `content-recovery-classification.test.ts` asserts it.
  *
- * `slashCommand` belongs here: it projects to the canonical `/name`, which is
- * exactly the string the composer's raw-text converter turns back into a chip
- * (`parseLeadingSlashCommand` / `buildSubmittedChatJSONContent`). That leans
- * on the editor's LEADING-ONLY invariant - `chat-paste-handler` guards chip
- * insertion to the leading position, so a non-leading `slashCommand`, which
- * would not round-trip, is unconstructible in submitted content. If that
- * invariant ever relaxes, this entry moves to a counted clause.
+ * `slashCommand` is deliberately ABSENT. An earlier note claimed it was
+ * text-complete because the editor only permits a chip at the leading
+ * position, where `parseLeadingSlashCommand` rebuilds it - but
+ * `isLegalSlashChip` EXEMPTS `kind === "skill"`, which is legal anywhere. A
+ * non-leading skill chip projects to a `/name` the converter will not rebuild,
+ * so it is a real loss and the claim was false for half the chips. Whether it
+ * survives depends on kind AND position, which no type-only set can express.
  */
 const TEXT_COMPLETE_NODE_TYPES: ReadonlySet<string> = new Set([
   "doc",
@@ -58,7 +60,8 @@ const TEXT_COMPLETE_NODE_TYPES: ReadonlySet<string> = new Set([
   "uiPreviewBlock",
   "blockquote",
   "table",
-  "slashCommand",
+  // `slashCommand` is NOT here: whether it survives depends on its kind and
+  // its position, which a type-only set cannot express. See `lostSlashChip`.
 ]);
 
 /**
@@ -113,15 +116,8 @@ export function classifyContentRecovery(
   content: JsonContent,
 ): ContentRecoveryReport {
   const counts = new Map<ContentRecoveryLoss, number>();
-  visit(content, counts);
+  visitSiblings([content], counts, firstInlineNode(content));
   return counts;
-}
-
-function visit(
-  node: JsonContent,
-  counts: Map<ContentRecoveryLoss, number>,
-): void {
-  visitSiblings([node], counts);
 }
 
 /**
@@ -138,12 +134,16 @@ function visit(
 function visitSiblings(
   nodes: ReadonlyArray<JsonContent>,
   counts: Map<ContentRecoveryLoss, number>,
+  leadingNode: JsonContent | null,
 ): void {
   let previousLinkHref: string | null = null;
   for (const node of nodes) {
     const loss = lossForNodeType(node.type);
     if (loss !== null) {
       counts.set(loss, (counts.get(loss) ?? 0) + 1);
+    }
+    if (lostSlashChip(node, leadingNode)) {
+      counts.set("command", (counts.get("command") ?? 0) + 1);
     }
     const linkHref = lostLinkHref(node);
     if (linkHref !== null && linkHref !== previousLinkHref) {
@@ -157,8 +157,34 @@ function visitSiblings(
     }
     // Recurse regardless: a sourced quote can wrap a mention, and both losses
     // are real. Only the node's OWN kind decides its own classification.
-    visitSiblings(node.content ?? [], counts);
+    visitSiblings(node.content ?? [], counts, leadingNode);
   }
+}
+
+/**
+ * Whether this slash chip will fail to come back.
+ *
+ * The raw-text converter only rebuilds a LEADING `/name`, so a chip anywhere
+ * else pastes as prose. Native commands cannot BE anywhere else - the editor's
+ * guard holds them to the leading position - but skills are exempt from that
+ * guard and legal mid-sentence, which is exactly the case the old
+ * text-complete claim got wrong.
+ */
+function lostSlashChip(
+  node: JsonContent,
+  leadingNode: JsonContent | null,
+): boolean {
+  if (node.type !== "slashCommand") return false;
+  if (node.attrs?.kind !== "skill") return false;
+  return node !== leadingNode;
+}
+
+/** The document's first inline node - the only position that round-trips. */
+function firstInlineNode(content: JsonContent): JsonContent | null {
+  const children = content.content ?? [];
+  if (children.length === 0) return null;
+  const first = children[0];
+  return (first.content ?? []).length === 0 ? first : firstInlineNode(first);
 }
 
 /** The `href` this node loses, or `null` when it loses none. */
@@ -174,6 +200,9 @@ function lostLinkHref(node: JsonContent): string | null {
 
 function lossForNodeType(type: string | undefined): ContentRecoveryLoss | null {
   if (type === undefined) return null;
+  // Classified per NODE by `lostSlashChip` - kind and position decide it, so
+  // the type-level walk must not also count it as unclassified.
+  if (type === "slashCommand") return null;
   if (TEXT_COMPLETE_NODE_TYPES.has(type)) return null;
   if (TRANSPARENT_NODE_TYPES.has(type)) return null;
   return LOSSY_NODE_TYPES.get(type) ?? "unknown";
@@ -190,6 +219,8 @@ export const CLASSIFIED_LABELS_FOR_TESTS: ReadonlySet<string> = new Set([
   ...LOSSY_NODE_TYPES.keys(),
   ...TEXT_COMPLETE_MARK_TYPES,
   "link",
+  // Classified per node by `lostSlashChip` rather than by type.
+  "slashCommand",
 ]);
 
 /**
