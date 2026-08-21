@@ -85,6 +85,10 @@ import {
 } from "@/hooks/notifications/use-notification-activation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -170,6 +174,7 @@ describe("useNotificationActivation", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
   });
 
   it("routes with an explicitly owned router outside ambient router context", () => {
@@ -617,6 +622,73 @@ describe("useNotificationActivation", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(
       notifiedChatTabId,
     );
+  });
+
+  it("parks a question jump at its interview block", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-question", "Question task");
+    store.openTileInTab(tabId, {
+      id: "chat-question",
+      instanceId: "chat-question-instance",
+      type: "chat",
+      name: "Question agent",
+      hostId: "stub-host",
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "interview",
+          epicId: "epic-question",
+          chatId: "chat-question",
+          interviewBlockId: "interview-block-1",
+        },
+        originHostId: "stub-host",
+        receivedAt: 904,
+        feedId: "host:question",
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-question")
+      ]?.target,
+    ).toEqual({ kind: "block", blockId: "interview-block-1" });
+  });
+
+  it("parks an anchored jump while opening a fresh chat", () => {
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-fresh",
+          chatId: "chat-fresh",
+          messageId: "assistant-message-1",
+        },
+        originHostId: "stub-host",
+        receivedAt: 905,
+        feedId: "host:fresh-chat",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      params: { epicId: "epic-fresh" },
+      search: { focusArtifactId: "chat-fresh" },
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-fresh")
+      ]?.target,
+    ).toEqual({ kind: "message", messageId: "assistant-message-1" });
   });
 
   it("routes TUI agent notifications to the exact open terminal-agent tile", () => {

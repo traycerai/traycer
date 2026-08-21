@@ -1588,6 +1588,7 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
         <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
       }
       statusPresentation="message"
+      agentSurface="gui"
     />
   );
 }

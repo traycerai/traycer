@@ -21,6 +21,10 @@ import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import {
+  type ChatTranscriptJumpTarget,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 
 export type NotificationPayloadKind =
   | "session"
@@ -69,6 +73,10 @@ export interface ChatNotificationPayload {
   readonly kind: "chat";
   readonly epicId: string;
   readonly chatId: string | undefined;
+  /** Optional transcript row associated with the notification occurrence. */
+  readonly messageId?: string;
+  /** Optional durable event associated with an inline transcript occurrence. */
+  readonly eventId?: string;
 }
 
 export interface TerminalNotificationPayload {
@@ -164,10 +172,14 @@ function parseChatPayload(
     return null;
   }
   const chatId = readString(value.chatId);
+  const messageId = readString(value.messageId);
+  const eventId = readString(value.eventId);
   return {
     kind: "chat",
     epicId,
     chatId: chatId === null ? undefined : chatId,
+    messageId: messageId === null ? undefined : messageId,
+    eventId: eventId === null ? undefined : eventId,
   };
 }
 
@@ -355,7 +367,15 @@ export function routeNotification(
 ): void {
   // Host-agnostic legacy entry: no origin to honour, so the hostless fallback
   // is the correct destination and the origin-bound answer is not consulted.
-  routeNotificationForHost(navigate, payload, receivedAt, null);
+  routeNotificationForHost(navigate, payload, receivedAt, {
+    originHostId: null,
+    effectiveHostId: null,
+  });
+}
+
+export interface NotificationHostRouteContext {
+  readonly originHostId: string | null;
+  readonly effectiveHostId: string | null;
 }
 
 /** Cloud approvals/interviews must only reuse a tile bound to their origin.
@@ -373,8 +393,9 @@ export function routeNotificationForHost(
   navigate: NotificationNavigate,
   payload: NotificationPayload,
   receivedAt: number,
-  originHostId: string | null,
+  context: NotificationHostRouteContext,
 ): boolean {
+  const { originHostId, effectiveHostId } = context;
   switch (payload.kind) {
     case "epic":
       navigateToTabIntent(
@@ -392,12 +413,11 @@ export function routeNotificationForHost(
       );
       return true;
     case "chat":
-      return routeEpicChatNotification(
-        navigate,
-        payload,
-        receivedAt,
+      return routeEpicChatNotification(navigate, payload, receivedAt, {
         originHostId,
-      );
+        effectiveHostId,
+        transcriptTarget: chatNotificationTranscriptTarget(payload),
+      });
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
       return true;
@@ -411,9 +431,15 @@ export function routeNotificationForHost(
           kind: "chat",
           epicId: payload.epicId,
           chatId: payload.chatId,
+          messageId: undefined,
+          eventId: undefined,
         },
         receivedAt,
-        originHostId,
+        {
+          originHostId,
+          effectiveHostId,
+          transcriptTarget: null,
+        },
       );
     case "interview":
       return routeEpicChatNotification(
@@ -422,9 +448,18 @@ export function routeNotificationForHost(
           kind: "chat",
           epicId: payload.epicId,
           chatId: payload.chatId,
+          messageId: undefined,
+          eventId: undefined,
         },
         receivedAt,
-        originHostId,
+        {
+          originHostId,
+          effectiveHostId,
+          transcriptTarget:
+            payload.interviewBlockId === undefined
+              ? null
+              : { kind: "block", blockId: payload.interviewBlockId },
+        },
       );
     case "artifact": {
       if (payload.epicId === undefined) {
@@ -548,18 +583,79 @@ function routeTerminalNotification(
   );
 }
 
+interface ChatNotificationRouteContext {
+  readonly originHostId: string | null;
+  readonly effectiveHostId: string | null;
+  readonly transcriptTarget: ChatTranscriptJumpTarget | null;
+}
+
+function chatNotificationTranscriptTarget(
+  payload: ChatNotificationPayload,
+): ChatTranscriptJumpTarget | null {
+  if (payload.eventId !== undefined) {
+    return { kind: "event", eventId: payload.eventId };
+  }
+  if (payload.messageId !== undefined) {
+    return { kind: "message", messageId: payload.messageId };
+  }
+  return null;
+}
+
+function parkChatTranscriptJump(
+  payload: ChatNotificationPayload,
+  context: ChatNotificationRouteContext,
+): void {
+  if (
+    context.originHostId === null ||
+    payload.chatId === undefined ||
+    context.transcriptTarget === null
+  ) {
+    return;
+  }
+  useChatTranscriptJumpStore
+    .getState()
+    .requestJump(
+      context.originHostId,
+      payload.chatId,
+      context.transcriptTarget,
+    );
+}
+
 function routeEpicChatNotification(
   navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
-  originHostId: string | null,
+  context: ChatNotificationRouteContext,
 ): boolean {
   if (
-    routeLegacyTerminalNotification(navigate, payload, receivedAt, originHostId)
+    routeLegacyTerminalNotification(
+      navigate,
+      payload,
+      receivedAt,
+      context.originHostId,
+    )
   )
     return true;
-  if (routeOpenChatNotification(navigate, payload, receivedAt, originHostId))
+  if (
+    routeOpenChatNotification(
+      navigate,
+      payload,
+      receivedAt,
+      context.originHostId,
+    )
+  ) {
+    parkChatTranscriptJump(payload, context);
     return true;
+  }
+  // A fresh tile is opened through a hostless epic intent. Park its jump only
+  // when the window is already addressing the notification's origin host; a
+  // different-host tile with the same chat id must never consume the target.
+  if (
+    context.originHostId !== null &&
+    context.originHostId === context.effectiveHostId
+  ) {
+    parkChatTranscriptJump(payload, context);
+  }
   // Everything above matched a target BOUND to `originHostId`. The fallback
   // below does not: `openOrFocusEpicIntent` is hostless by construction, so it
   // resolves through whichever host is effective. Reported as `false` so an

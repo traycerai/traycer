@@ -123,10 +123,67 @@ describe("merged notifications feed", () => {
       },
     };
 
-    expect(rowFromHostEntry(entry).payload).toEqual({
+    const row = rowFromHostEntry(entry);
+    expect(row.payload).toEqual({
       kind: "chat",
       epicId: "epic-1",
       chatId: "tui-1",
+    });
+    expect(row.agentSurface).toBe("tui");
+  });
+
+  it("preserves transcript anchors from failure and qualified Done rows", () => {
+    const base: HostNotificationEntry = {
+      id: "agent.stopped:chat-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: "chat-1",
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Agent",
+        taskTitle: "Task",
+        outcome: "completed",
+        messageId: "assistant-message-1",
+        backgroundWorkRunning: true,
+      },
+    };
+
+    const qualifiedDone = rowFromHostEntry(base);
+    expect(qualifiedDone.payload).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: "assistant-message-1",
+      eventId: undefined,
+    });
+    expect(qualifiedDone.agentSurface).toBe("gui");
+    expect(
+      rowFromHostEntry({
+        ...base,
+        id: "agent.failed:chat-1:occurrence-1",
+        severity: "failure",
+        outcome: "errored",
+        payload: {
+          ...base.payload,
+          outcome: "errored",
+          occurrenceId: "occurrence-1",
+          messageId: undefined,
+          eventId: "send-failed-event-1",
+        },
+      }).payload,
+    ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: undefined,
+      eventId: "send-failed-event-1",
     });
   });
 

@@ -111,6 +111,11 @@ export const hostNotificationChatStoppedPayloadSchema = z
     message: z.string().optional(),
     reason: z.string().optional(),
     providerId: z.string().optional(),
+    occurrenceId: idSchema.optional(),
+    messageId: idSchema.optional(),
+    eventId: idSchema.optional(),
+    backgroundWorkRunning: z.boolean().optional(),
+    automaticRecovery: z.literal(true).optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationChatStoppedPayload = z.infer<
@@ -135,6 +140,9 @@ export const hostNotificationEpicStoppedPayloadSchema = z
     message: z.string().optional(),
     reason: z.string().optional(),
     providerId: z.string().optional(),
+    occurrenceId: idSchema.optional(),
+    backgroundWorkRunning: z.boolean().optional(),
+    automaticRecovery: z.literal(true).optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationEpicStoppedPayload = z.infer<

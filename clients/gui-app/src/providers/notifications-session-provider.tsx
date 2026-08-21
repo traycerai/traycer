@@ -82,6 +82,7 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -824,7 +825,11 @@ export function NotificationsSessionProvider(
     };
   }, [tearDown]);
 
-  return <>{props.children}</>;
+  return (
+    <NotificationConsumptionContext.Provider value={consumeEntity}>
+      {props.children}
+    </NotificationConsumptionContext.Provider>
+  );
 }
 
 /**

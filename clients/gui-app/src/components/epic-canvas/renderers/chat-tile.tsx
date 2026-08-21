@@ -89,7 +89,11 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import {
+  chatTranscriptEventRowId,
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
@@ -844,7 +848,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // from another tile, possibly before this one exists - `openTileInEpic`
   // mounts it and the request is waiting here when it renders.
   const transcriptJump = useChatTranscriptJumpStore(
-    (s) => s.requestsByChatId[props.node.id],
+    (s) => s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
   );
   const consumeTranscriptJump = useChatTranscriptJumpStore(
     (s) => s.consumeJump,
@@ -866,6 +870,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         return (
           view.messages.find((message) => message.id === target.messageId)
             ?.id ?? null
+        );
+      }
+      if (target.kind === "event") {
+        const eventRowId = chatTranscriptEventRowId(target.eventId);
+        return (
+          view.messages.find((message) => message.id === eventRowId)?.id ?? null
         );
       }
       if (target.kind === "sent-message") {
@@ -891,9 +901,10 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       // land the same way: scroll to the owning row, no card to expand.
       scrollToMessage(messageId);
     }
-    consumeTranscriptJump(props.node.id, transcriptJump.requestId);
+    consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
   }, [
     consumeTranscriptJump,
+    hostId,
     props.node.id,
     scrollToBlock,
     scrollToMessage,
@@ -913,12 +924,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (pendingTranscriptJumpId === null) return;
     const chatId = props.node.id;
     const timer = setTimeout(() => {
-      consumeTranscriptJump(chatId, pendingTranscriptJumpId);
+      consumeTranscriptJump(hostId, chatId, pendingTranscriptJumpId);
     }, TRANSCRIPT_JUMP_TTL_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [consumeTranscriptJump, pendingTranscriptJumpId, props.node.id]);
+  }, [consumeTranscriptJump, hostId, pendingTranscriptJumpId, props.node.id]);
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.
