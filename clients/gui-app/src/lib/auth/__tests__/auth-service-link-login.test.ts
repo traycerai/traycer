@@ -83,6 +83,8 @@ function json(body: object, status: number): Response {
 }
 
 interface LinkFetchScript {
+  /** Mutable: the claim outcome, whose `interval` paces the poll loop. */
+  claimResponse: () => Response;
   /** Mutable: the next token-poll outcome. */
   tokenResponse: () => Response;
   /** Mutable: the /api/v3/user identity-validation outcome. */
@@ -92,6 +94,8 @@ interface LinkFetchScript {
 
 function installLinkFetch(): { script: LinkFetchScript; restore: () => void } {
   const script: LinkFetchScript = {
+    claimResponse: () =>
+      json({ status: "claimed", secret: "S".repeat(43), interval: 1 }, 200),
     tokenResponse: () => json({ error: "authorization_pending" }, 428),
     validationResponse: () => new Response(null, { status: 401 }),
     tokenPolls: [],
@@ -103,9 +107,7 @@ function installLinkFetch(): { script: LinkFetchScript; restore: () => void } {
     value: (input: unknown): Promise<Response> => {
       const url = typeof input === "string" ? input : String(input);
       if (url === CLAIM_URL) {
-        return Promise.resolve(
-          json({ status: "claimed", secret: "S".repeat(43), interval: 1 }, 200),
-        );
+        return Promise.resolve(script.claimResponse());
       }
       if (url === TOKEN_URL) {
         script.tokenPolls.push(url);
@@ -200,6 +202,34 @@ describe("link-login attempt fence", () => {
       expect(service.getLastError()).toBeNull();
       expect(useAuthStore.getState().status).toBe(statusAfterSupersede);
       await deviceSignIn;
+    } finally {
+      restore();
+    }
+  });
+
+  it("a 429 carrying no Retry-After backs off to the advertised interval, not the floor", async () => {
+    const { service } = makeService();
+    const { script, restore } = installLinkFetch();
+    try {
+      script.claimResponse = () =>
+        json({ status: "claimed", secret: "S".repeat(43), interval: 5 }, 200);
+      // A bare 429 — what a rate limiter answers when nothing along the way
+      // attaches a directive. Read as zero it would collapse the wait to the
+      // 1s floor and hammer the bucket that just rejected the poll.
+      script.tokenResponse = () => json({ error: "slow_down" }, 429);
+      const linkResult = service.signInWithLinkCode("ABCDE-FGHJK");
+
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect(script.tokenPolls.length).toBe(1);
+      // At the 1s floor this window would hold four more polls.
+      await vi.advanceTimersByTimeAsync(4_800);
+      expect(script.tokenPolls.length).toBe(1);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(script.tokenPolls.length).toBe(2);
+
+      script.tokenResponse = () => json({ error: "access_denied" }, 400);
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect((await linkResult).kind).toBe("denied");
     } finally {
       restore();
     }

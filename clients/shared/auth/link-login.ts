@@ -9,6 +9,7 @@ import {
   type MintLinkLoginCodeResponse,
 } from "@traycer/protocol/auth/link-login";
 import type { z } from "zod";
+import { parseRetryAfterSeconds } from "./device-auth";
 
 /**
  * Link-login ("link a phone") HTTP client for the confirm-gated flow: the
@@ -140,6 +141,56 @@ export function parseLinkLoginInput(text: string): string | null {
   }
   const normalized = normalizeLinkLoginCodeInput(code);
   return NORMALIZED_CODE_PATTERN.test(normalized) ? normalized : null;
+}
+
+/** The device strings a claimant reports as a bare family, article-less. */
+const CLAIMANT_DEVICE_FAMILIES: Readonly<Record<string, string>> = {
+  iPhone: "an iPhone",
+  iPad: "an iPad",
+};
+
+/** A self-reported name longer than this is UA-shaped, not a device name. */
+const CLAIMANT_DEVICE_NAME_MAX = 40;
+
+/**
+ * Best-effort device line for the approve prompt, from whatever the claimant
+ * reported about itself. Descriptive, not authenticated — the copy says so,
+ * and the real trust anchor is "you minted this code and someone just scanned
+ * it". The result carries its own article where one is needed — it slots into
+ * "Approve sign-in from ___?" and a proper name reads better bare.
+ *
+ * Three shapes arrive here. A bare family ("iPhone") is what iOS reports,
+ * since Apple exposes no marketing-name API; it needs the article added. A
+ * self-reported model name ("Pixel 8") is short and UA-free, and reads best
+ * verbatim. A browser or CFNetwork User-Agent is long and structured, and is
+ * only good for a family bucket. Families are matched first because they
+ * would otherwise satisfy the verbatim test and lose their article.
+ */
+export function claimantDeviceLabel(userAgent: string | null): string {
+  const value = userAgent ?? "";
+  const family = CLAIMANT_DEVICE_FAMILIES[value];
+  if (family !== undefined) {
+    return family;
+  }
+  if (
+    value.length > 0 &&
+    value.length <= CLAIMANT_DEVICE_NAME_MAX &&
+    !value.includes("Mozilla/") &&
+    !value.includes("CFNetwork") &&
+    !value.includes("(")
+  ) {
+    return value;
+  }
+  if (value.includes("iPhone")) {
+    return "an iPhone";
+  }
+  if (value.includes("iPad")) {
+    return "an iPad";
+  }
+  if (value.includes("Android")) {
+    return "an Android device";
+  }
+  return "a device";
 }
 
 async function postJson(
@@ -279,12 +330,17 @@ export async function linkLoginTokenViaHttp(
     return { kind: "authorization-pending" };
   }
   if (response.status === 429) {
-    const retryAfter = Number(response.headers.get("Retry-After"));
-    // A body-less 429 from the outer rate limiter and the engine's paced
-    // slow_down both land here; the caller just waits.
+    // The endpoint's request budget and the engine's paced `slow_down` both
+    // land here; the caller just waits. An ABSENT or unparseable header must
+    // come back as `null`, never as a number: `null` is what makes the poll
+    // loop fall back to the interval it was advertised, whereas a zero is a
+    // valid instruction to retry at once — and a client that retries at once
+    // on a 429 hammers the budget it just exhausted.
     return {
       kind: "slow-down",
-      retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : null,
+      retryAfterSeconds: parseRetryAfterSeconds(
+        response.headers.get("Retry-After"),
+      ),
     };
   }
   if (response.status === 400) {

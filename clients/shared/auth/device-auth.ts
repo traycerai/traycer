@@ -421,12 +421,17 @@ async function readErrorCode(response: Response): Promise<string | null> {
 }
 
 /**
- * Parses a `Retry-After` header value. The device-token endpoint only ever
- * emits integer seconds, so the HTTP-date form is intentionally not handled;
- * an absent or unparseable value yields `null` and the caller falls back to
- * its own backoff increment.
+ * Parses a `Retry-After` header value. The poll endpoints only ever emit
+ * integer seconds, so the HTTP-date form is intentionally not handled; an
+ * absent or unparseable value yields `null` and the caller falls back to its
+ * own backoff increment. Returning `null` rather than a number is the whole
+ * point: a numeric fallback of zero reads as "retry immediately", which is
+ * the opposite of what a 429 asked for.
+ *
+ * Shared with the link-login poll client, whose 429s come from the same two
+ * sources (a paced record throttle and a request budget).
  */
-function parseRetryAfterSeconds(header: string | null): number | null {
+export function parseRetryAfterSeconds(header: string | null): number | null {
   if (header === null) {
     return null;
   }
