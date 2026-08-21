@@ -972,7 +972,8 @@ describe("<ChatTileErrorNoticeToasts />", () => {
         chatId: CHAT_ID,
         notice: {
           code: "SEND_NOT_RECORDED",
-          message: "Copy it from here to resend:\n    if True:\n        pass",
+          message:
+            "Copy the message below to resend it:\n    if True:\n        pass",
           severity: "warning",
           clientActionId: "send-1",
         },
@@ -985,7 +986,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     // Exact: a bare string is what collapses, and the class IS the guarantee.
     expect(rendered.props.className).toBe("whitespace-pre-wrap break-words");
     expect(rendered.props.children).toBe(
-      "Copy it from here to resend:\n    if True:\n        pass",
+      "Copy the message below to resend it:\n    if True:\n        pass",
     );
   });
 
@@ -1007,7 +1008,8 @@ describe("<ChatTileErrorNoticeToasts />", () => {
         chatId: CHAT_ID,
         notice: {
           code: "SEND_NOT_RECORDED",
-          message: "A message was not recorded. Copy it from here: my draft",
+          message:
+            "A message was not recorded.\n\nCopy the message below to resend it:\nmy draft",
           severity: "warning",
           clientActionId: "send-1",
         },

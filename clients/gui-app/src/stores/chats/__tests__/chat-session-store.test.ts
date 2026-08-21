@@ -1832,7 +1832,7 @@ describe("createChatSessionStore", () => {
         notice: {
           code: "SEND_NOT_RECORDED",
           message:
-            "A message was not recorded. Copy it from here to resend: draft",
+            "A message was not recorded.\n\nCopy the message below to resend it:\ndraft",
           severity: "warning",
           clientActionId: "send-1",
         },

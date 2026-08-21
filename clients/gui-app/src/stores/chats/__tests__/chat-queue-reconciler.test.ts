@@ -12,10 +12,12 @@ import {
   reconcileTurnSettled,
   sweepStalePendingActions,
   turnSettledFromStatus,
+  unrecoverableSendNotice,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
   type ReconcileTurnSettledInput,
 } from "@/stores/chats/chat-queue-reconciler";
+import { recoveryTextFromContent } from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
   PendingChatAction,
@@ -1068,6 +1070,75 @@ describe("chat-queue-reconciler", () => {
       // the row loses nothing and a notice would be pure noise.
       expect(result.pendingUserMessages).toEqual([]);
       expect(result.appendedErrorNotices).toEqual([]);
+    });
+  });
+
+  // R13 `-A8bJ`: everything the notice says ABOUT the draft has to be said
+  // before the draft, because the draft is the one part whose extent the
+  // notice does not control. It is verbatim user text of unbounded shape,
+  // rendered pre-wrapped, and the user's next gesture is to select it - so a
+  // clause after it is indistinguishable from a line the user typed.
+  describe("quoted body delimitation", () => {
+    const MULTI_LINE: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "first line" }] },
+        { type: "paragraph", content: [{ type: "text", text: "second line" }] },
+      ],
+    };
+
+    const PREAMBLE =
+      "A message was not recorded, and another unsent message is already " +
+      "waiting in the composer.";
+    const DRIFT =
+      " It was going to run with model gpt-5-codex; the chat uses different " +
+      "settings now, so a resend will not match unless you set them back.";
+    const MARKER = "\n\nCopy the message below to resend it:\n";
+
+    function noticeFor(
+      content: JsonContent,
+      currentSettings: typeof SETTINGS,
+    ): string {
+      return unrecoverableSendNotice({
+        clientActionId: "action-1",
+        content,
+        circumstance: "A message was not recorded",
+        worktreeIntent: null,
+        sentSettings: SETTINGS,
+        currentSettings,
+        sentAccountContext: null,
+        currentAccountContext: null,
+        sentDeliveryPolicy: null,
+      }).message;
+    }
+
+    it("ends with the draft, so nothing can be mistaken for it", () => {
+      const message = noticeFor(MULTI_LINE, { ...SETTINGS, model: "gpt-5.6" });
+      const draft = recoveryTextFromContent(MULTI_LINE);
+
+      // The load-bearing assertion: the draft runs to the END. Select from the
+      // marker to the end of the notice and you have the message, exactly.
+      expect(message.endsWith(`${MARKER}${draft}`)).toBe(true);
+      // And the drift clause - the thing that used to trail the draft - is
+      // said ahead of it, where it cannot be read as a line the user typed.
+      expect(message.slice(0, -draft.length)).toContain("model gpt-5-codex");
+    });
+
+    it("puts every clause ahead of the draft in one exact shape", () => {
+      expect(noticeFor(MULTI_LINE, { ...SETTINGS, model: "gpt-5.6" })).toBe(
+        `${PREAMBLE}${DRIFT}${MARKER}first line\nsecond line`,
+      );
+    });
+
+    it("says no more after a draft that needs no clauses", () => {
+      expect(noticeFor(CONTENT, SETTINGS)).toBe(`${PREAMBLE}${MARKER}Hello`);
+    });
+
+    it("omits the marker entirely when there is no draft to quote", () => {
+      const message = noticeFor({ type: "doc", content: [] }, SETTINGS);
+
+      expect(message).not.toContain("Copy the message below");
+      expect(message).toBe(`${PREAMBLE} It had no recoverable content.`);
     });
   });
 });

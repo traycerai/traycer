@@ -182,55 +182,80 @@ export function unrecoverableSendNotice(
   const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
-    message: [
-      recoverableBody(preamble, text, hasText, attachments),
-      attachmentClause(attachments, hasText),
-      countedClause({
-        count: losses.get("mention") ?? 0,
-        singular: "mention",
-        plural: "mentions",
-        verbPhrase: "will paste as plain text - re-pick",
-        tail: "so the agent sees what they point at again",
-      }),
-      countedClause({
-        count: losses.get("quote") ?? 0,
-        singular: "quoted source",
-        plural: "quoted sources",
-        verbPhrase: "lose the link to what they quote - re-quote",
-        tail: "so that link comes back",
-      }),
-      countedClause({
-        count: losses.get("command") ?? 0,
-        singular: "skill chip",
-        plural: "skill chips",
-        verbPhrase: "will paste as plain text from where they sit - re-pick",
-        tail: "so they run again",
-      }),
-      (losses.get("unknown") ?? 0) > 0
-        ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
-        : "",
-      worktreeClause(worktreeIntent),
-      deliveryClause(send.sentDeliveryPolicy),
-      settingsDriftClause(
-        send.sentSettings,
-        send.currentSettings,
-        send.sentAccountContext,
-        send.currentAccountContext,
-      ),
-    ].join(""),
+    message: statementQuoting(
+      [
+        headline(preamble, hasText, attachments),
+        attachmentClause(attachments, hasText),
+        countedClause({
+          count: losses.get("mention") ?? 0,
+          singular: "mention",
+          plural: "mentions",
+          verbPhrase: "will paste as plain text - re-pick",
+          tail: "so the agent sees what they point at again",
+        }),
+        countedClause({
+          count: losses.get("quote") ?? 0,
+          singular: "quoted source",
+          plural: "quoted sources",
+          verbPhrase: "lose the link to what they quote - re-quote",
+          tail: "so that link comes back",
+        }),
+        countedClause({
+          count: losses.get("command") ?? 0,
+          singular: "skill chip",
+          plural: "skill chips",
+          verbPhrase: "will paste as plain text from where they sit - re-pick",
+          tail: "so they run again",
+        }),
+        (losses.get("unknown") ?? 0) > 0
+          ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
+          : "",
+        worktreeClause(worktreeIntent),
+        deliveryClause(send.sentDeliveryPolicy),
+        settingsDriftClause(
+          send.sentSettings,
+          send.currentSettings,
+          send.sentAccountContext,
+          send.currentAccountContext,
+        ),
+      ].join(""),
+      hasText ? text : null,
+    ),
     severity: "warning",
     clientActionId,
   };
 }
 
-function recoverableBody(
+/**
+ * The one place the quoted draft is separated from everything said about it.
+ *
+ * The draft goes LAST and runs to the end of the notice. Every clause is said
+ * ahead of it, because the draft is the single part of this statement whose
+ * extent the statement does not control: it is verbatim user text of any
+ * shape, and the toast renders the notice pre-wrapped, so a clause after a
+ * multi-line draft reads as one more line of the user's own message. Ending
+ * at the draft makes "from the marker to the end" an exact description of
+ * what to copy - which is the gesture the notice is asking for.
+ *
+ * Fences would read better and cannot be used: the draft is VERBATIM and may
+ * carry a fence line of its own, and a delimiter the payload can forge is not
+ * a delimiter. Position cannot be forged.
+ */
+function statementQuoting(said: string, draft: string | null): string {
+  if (draft === null) return said;
+  return `${said}\n\nCopy the message below to resend it:\n${draft}`;
+}
+
+/**
+ * `attachmentClause` states an attachment-only send, so the bare preamble is
+ * right there; only a send with neither text nor attachments needs saying.
+ */
+function headline(
   preamble: string,
-  text: string,
   hasText: boolean,
   attachmentCount: number,
 ): string {
-  if (hasText) return `${preamble} Copy it from here to resend: ${text}`;
-  if (attachmentCount > 0) return preamble;
+  if (hasText || attachmentCount > 0) return preamble;
   return `${preamble} It had no recoverable content.`;
 }
 
