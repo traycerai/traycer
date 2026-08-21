@@ -1,4 +1,5 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { serializeTextRun } from "@traycer/protocol/common/json-content-serializer";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 
 /**
@@ -104,10 +105,20 @@ const LOSSY_NODE_TYPES: ReadonlyMap<string, ContentRecoveryLoss> = new Map([
 ]);
 
 /**
- * Marks are invisible to a `node.type` walk. These are visible formatting the
- * user can see is missing and retype. `link` is not listed here but is not a
- * loss either - {@link linkedTextNode} emits its target into the text, so it
- * is text-complete via the seam.
+ * Marks are invisible to a `node.type` walk, and these are not losses - but
+ * the REASON changed, and the old one was wrong.
+ *
+ * Round 5 called them text-complete because the styling is visible in its
+ * absence and the user can retype it. That was answering the wrong question:
+ * the serializer emits `**` / `*` / `` ` `` / `~~` on the wire, so those
+ * delimiters are what the agent actually receives, and a recovery copy
+ * without them is a different request - `Use **not** production` recovered as
+ * `Use not production`.
+ *
+ * They are non-losses now because {@link renderMarkedRuns} EMITS them, the
+ * same way `link` has always been a non-loss via the seam rather than by
+ * retypeability. Every entry here is a claim about what the seam produces,
+ * which is the same rule the atom block types are held to.
  */
 const TEXT_COMPLETE_MARK_TYPES: ReadonlySet<string> = new Set([
   "bold",
@@ -296,10 +307,27 @@ export function recoveryTextFromContent(content: JsonContent): string {
   // drops nodes that project to nothing, so empty wrapper paragraphs never
   // reach the output. Re-stripping at the node level would have been a no-op
   // dressed as a safeguard.
-  return extractPlainTextFromComposerJSONContent({
-    ...content,
-    content: [...prepareForProjection(content.content ?? [])],
-  });
+  //
+  // Separated the way `serializeDocument` separates them - `\n\n` between
+  // TOP-LEVEL blocks - because the shared projection joins every surviving
+  // node with a single `\n`, which makes a paragraph break indistinguishable
+  // from a hard break in the copy. The optimistic row is gone by the time this
+  // is read, so a blank line lost here cannot be reconstructed from anywhere.
+  //
+  // The grouping is by ORIGINAL block, not by prepared node: `prepareForProjection`
+  // dissolves a list into one paragraph per item, and those are lines WITHIN
+  // one block - `\n\n` between them would space out a list the serializer
+  // keeps tight. Empty blocks drop out, matching `serializeDocument`'s own
+  // `if (serialized)` guard.
+  return (content.content ?? [])
+    .map((block) =>
+      extractPlainTextFromComposerJSONContent({
+        ...content,
+        content: [...prepareForProjection([block])],
+      }),
+    )
+    .filter((text) => text.length > 0)
+    .join("\n\n");
 }
 
 /**
@@ -312,7 +340,7 @@ function prepareForProjection(
 ): ReadonlyArray<JsonContent> {
   // Links fold across SIBLINGS, so that pass runs over the list rather than
   // per node - see `foldLinkRuns`.
-  return foldLinkRuns(nodes).flatMap((node) => {
+  return renderMarkedRuns(nodes).flatMap((node) => {
     // A list container contributes nothing itself; its items become siblings
     // so the newline-joining entry point separates them.
     // Both list kinds go through one walk: bullets keep no marker but DO keep
@@ -462,53 +490,47 @@ function fenced(
 }
 
 /**
- * Fold consecutive same-href text nodes into ONE `[label](href)`.
+ * Render every inline mark the way the wire serializer renders it.
  *
- * The same adjacency rule counting uses: Tiptap splits a marked run wherever
- * another mark interrupts it, so one link across a bold word arrives as three
- * text nodes. Wrapping each independently emitted three links where the user
- * wrote one - the identical mistake counting made before `-4IH`, so it takes
- * the identical rule rather than a second one that could drift from it.
+ * PARITY, not retypeability. The earlier reasoning held bold/italic/inline-
+ * code/strike to be text-complete because the user can see the styling is
+ * missing and retype it - but `**` is what the agent actually receives, so a
+ * recovery copy without it changes the request. `Use **not** production`
+ * came back as `Use not production`, and once the optimistic row is gone
+ * nothing else records which span was marked.
  *
- * Non-adjacent runs stay separate, because those are genuinely two links.
+ * It calls the serializer's own `serializeTextRun` rather than imitating it.
+ * The run discipline is the subtle part - a mark stays open across a node
+ * boundary, `code` is forced innermost, newly opened marks nest by
+ * continuation length - and a second implementation would drift from the
+ * thing it is supposed to match. Links come along for free: they are just
+ * another entry in the serializer's delimiter table, so this subsumes the
+ * fold-consecutive-hrefs pass it replaces, adjacency rule included.
+ *
+ * Runs are segmented exactly as `serializeChildren` segments them: consecutive
+ * `text` nodes form a run, and any other inline node (a mention, a hardBreak)
+ * ends it.
  */
-function foldLinkRuns(
+function renderMarkedRuns(
   nodes: ReadonlyArray<JsonContent>,
 ): ReadonlyArray<JsonContent> {
   const out: JsonContent[] = [];
-  let runHref: string | null = null;
-  let runText = "";
+  let run: JsonContent[] = [];
   const flush = (): void => {
-    if (runHref === null) return;
-    out.push({ type: "text", text: `[${runText}](${runHref})` });
-    runHref = null;
-    runText = "";
+    if (run.length === 0) return;
+    out.push({ type: "text", text: serializeTextRun(run) });
+    run = [];
   };
   for (const node of nodes) {
-    const href = linkHrefOf(node);
-    if (href === null) {
-      flush();
-      out.push(node);
+    if (node.type === "text") {
+      run.push(node);
       continue;
     }
-    if (href !== runHref) flush();
-    runHref = href;
-    runText += node.text ?? "";
+    flush();
+    out.push(node);
   }
   flush();
   return out;
-}
-
-/** The `href` this text node is linked with, if any. */
-function linkHrefOf(node: JsonContent): string | null {
-  if (node.type !== "text") return null;
-  for (const mark of node.marks ?? []) {
-    if (mark.type !== "link") continue;
-    const href = mark.attrs?.href;
-    if (typeof href !== "string" || href.length === 0) return null;
-    return href;
-  }
-  return null;
 }
 
 function atomFenceLabel(node: JsonContent): string {
@@ -526,10 +548,21 @@ const ATOM_SOURCE_ATTRS: ReadonlyMap<string, string> = new Map([
   ["uiPreviewBlock", "htmlContent"],
 ]);
 
+/**
+ * `null` means "not an atom" - never "an atom with nothing in it".
+ *
+ * Both editor nodes allow an empty source, and both serializers emit the
+ * labeled fence regardless (`readStringAttr` yields `""` for a missing attr,
+ * and the fence is built around it unconditionally). Treating empty as absent
+ * dropped the block entirely, so an atom-only draft was reported as having no
+ * recoverable content at all - the atom inversion again, one level down. The
+ * block KIND is the content: a ` ```mermaid ` fence tells its author what they
+ * had, and an empty one is what the agent would have received.
+ */
 function atomSource(node: JsonContent): string | null {
   const attrName =
     node.type === undefined ? undefined : ATOM_SOURCE_ATTRS.get(node.type);
   if (attrName === undefined) return null;
   const attr = node.attrs?.[attrName];
-  return typeof attr === "string" && attr.length > 0 ? attr : null;
+  return typeof attr === "string" ? attr : "";
 }

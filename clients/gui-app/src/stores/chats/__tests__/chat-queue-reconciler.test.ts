@@ -1195,7 +1195,12 @@ describe("chat-queue-reconciler", () => {
 
     it("puts every clause ahead of the draft in one exact shape", () => {
       expect(noticeFor(MULTI_LINE, { ...SETTINGS, model: "gpt-5.6" })).toBe(
-        `${PREAMBLE}${DRIFT}${MARKER}first line\nsecond line`,
+        // `MULTI_LINE` is two PARAGRAPHS, so the blank line between them is
+        // `-CUdX`: the serializer separates top-level blocks with `\n\n` and
+        // the quote now does too. This expectation previously read
+        // `first line\nsecond line`, which was the defect - it made a
+        // paragraph break indistinguishable from a hard break in the copy.
+        `${PREAMBLE}${DRIFT}${MARKER}first line\n\nsecond line`,
       );
     });
 

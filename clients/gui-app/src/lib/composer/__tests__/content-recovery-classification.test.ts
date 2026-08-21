@@ -135,6 +135,96 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
+  // `-CbBS`: parity supersedes the round-5 retypeability call. The serializer
+  // puts these delimiters on the wire, so they are what the agent receives -
+  // and once the optimistic row is gone, nothing else records which span was
+  // marked. They stay non-losses, but by seam EMISSION now.
+  it("emits inline mark delimiters, matching the serializer", () => {
+    const marked: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Use " },
+            { type: "text", text: "not", marks: [{ type: "bold" }] },
+            { type: "text", text: " production, " },
+            { type: "text", text: "ever", marks: [{ type: "italic" }] },
+            { type: "text", text: " run " },
+            { type: "text", text: "rm -rf", marks: [{ type: "code" }] },
+            { type: "text", text: " or ", marks: [] },
+            { type: "text", text: "sudo", marks: [{ type: "strike" }] },
+          ],
+        },
+      ],
+    };
+
+    expect(recoveryTextFromContent(marked)).toBe(
+      "Use **not** production, *ever* run `rm -rf` or ~~sudo~~",
+    );
+    // Still non-losses - but now because the seam emits them.
+    expect(classifyContentRecovery(marked).size).toBe(0);
+  });
+
+  // `-CUdX`: `serializeDocument` joins TOP-LEVEL blocks with `\n\n`, but the
+  // shared projection joins every surviving node with a single `\n`. Without
+  // this the recovery copy makes a paragraph break look like a hard break, and
+  // the optimistic row that could have settled it is already gone.
+  it("separates top-level blocks with a blank line, matching the serializer", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "first" }] },
+        { type: "paragraph", content: [{ type: "text", text: "second" }] },
+      ],
+    });
+
+    expect(text).toBe("first\n\nsecond");
+  });
+
+  // ...but a list is ONE block. Its items are lines within it, so they keep
+  // the single newline the serializer gives them - spacing them out would be
+  // the same parity error in the other direction.
+  it("keeps a list's items on single newlines inside their block", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "steps:" }] },
+        {
+          type: "orderedList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "one" }] },
+              ],
+            },
+            {
+              type: "listItem",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "two" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(text).toBe("steps:\n\n1. one\n2. two");
+  });
+
+  // `-HVod`: both editor nodes allow an empty source and both serializers emit
+  // the labeled fence anyway. Treating empty as absent dropped the block, so an
+  // atom-only draft was reported as having no recoverable content at all.
+  it("emits an empty atom block's fence, because its serializer does", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [{ type: "mermaidBlock", attrs: { code: "" } }],
+    });
+
+    expect(text).toBe("```mermaid\n\n```");
+  });
+
   it("counts a link whose label hides its target", () => {
     const report = classifyContentRecovery({
       type: "doc",
@@ -463,7 +553,12 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toBe("[the bold runbook](https://example.test/rb)");
+    // The inner `**` is `-CbBS`: this expectation used to read
+    // `[the bold runbook](...)`, which encoded the very mark-dropping the
+    // parity rule now forbids. `jsonContentToMarkdown` on this same input
+    // returns exactly the string below - checked against the serializer, not
+    // reasoned about.
+    expect(text).toBe("[the **bold** runbook](https://example.test/rb)");
   });
 
   it("emits two separated links to the same target separately", () => {
