@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -107,6 +108,7 @@ import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
 import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -684,11 +686,32 @@ function TabItemBody(
   }, [absoluteFilePath, copy]);
 
   const onOpenUsage = useChatUsageMenuHandler(tab, displayTitle);
+  const consumeNotificationEntity = useContext(NotificationConsumptionContext);
 
   const selectTab = useCallback(() => {
     if (rename.isEditing) return;
     onSelect(groupId, tab.instanceId);
-  }, [groupId, onSelect, rename.isEditing, tab.instanceId]);
+    if (
+      isActive &&
+      consumeNotificationEntity !== null &&
+      (tab.type === "chat" ||
+        tab.type === "terminal" ||
+        tab.type === "terminal-agent")
+    ) {
+      consumeNotificationEntity({
+        originHostId: tab.hostId,
+        entity: { epicId, chatId: tab.id },
+      });
+    }
+  }, [
+    consumeNotificationEntity,
+    epicId,
+    groupId,
+    isActive,
+    onSelect,
+    rename.isEditing,
+    tab,
+  ]);
 
   const handleDoubleClick = useCallback(() => {
     if (rename.isEditing) return;
@@ -713,10 +736,10 @@ function TabItemBody(
       if (rename.isEditing) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        onSelect(groupId, tab.instanceId);
+        selectTab();
       }
     },
-    [groupId, onSelect, rename.isEditing, tab.instanceId],
+    [rename.isEditing, selectTab],
   );
   const leaderBadge =
     leaderModifier === null

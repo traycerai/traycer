@@ -1,7 +1,14 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -252,6 +259,7 @@ import {
   __setAgentActivityStateForTests,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 function NotificationsSessionProvider(props: {
   readonly children: ReactNode;
@@ -582,6 +590,16 @@ async function renderHostNotificationsProvider(): Promise<{
   readonly queryClient: QueryClient;
   readonly streamClient: MockWsStreamClient;
 }> {
+  return renderHostNotificationsProviderWithChild(<div />);
+}
+
+async function renderHostNotificationsProviderWithChild(
+  child: ReactNode,
+): Promise<{
+  readonly markReadCalls: Array<HostNotificationsMarkReadRequest>;
+  readonly queryClient: QueryClient;
+  readonly streamClient: MockWsStreamClient;
+}> {
   const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
   const streamClient = new MockWsStreamClient();
   const queryClient = new QueryClient();
@@ -594,9 +612,7 @@ async function renderHostNotificationsProvider(): Promise<{
 
   render(
     <QueryClientProvider client={queryClient}>
-      <NotificationsSessionProvider>
-        <div />
-      </NotificationsSessionProvider>
+      <NotificationsSessionProvider>{child}</NotificationsSessionProvider>
     </QueryClientProvider>,
   );
 
@@ -619,6 +635,23 @@ async function renderHostNotificationsProvider(): Promise<{
   });
 
   return { markReadCalls, queryClient, streamClient };
+}
+
+function ExplicitNotificationConsumptionProbe(): ReactNode {
+  const consume = useContext(NotificationConsumptionContext);
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        consume?.({
+          originHostId: mockLocalHostEntry.hostId,
+          entity: { epicId: "epic-a", chatId: "chat-a" },
+        })
+      }
+    >
+      Consume chat notifications
+    </button>
+  );
 }
 
 function indicatorKey(
@@ -2424,6 +2457,23 @@ describe("<NotificationsSessionProvider />", () => {
       pendingApproval: false,
       pendingInterview: false,
       unreadDone: false,
+    });
+  });
+
+  it("consumes an explicitly clicked active tab even without a focus transition", async () => {
+    const { markReadCalls } = await renderHostNotificationsProviderWithChild(
+      <ExplicitNotificationConsumptionProbe />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Consume chat notifications" }),
+    );
+
+    await waitFor(() => {
+      expect(markReadCalls).toContainEqual({
+        kind: "entity",
+        entity: { epicId: "epic-a", chatId: "chat-a" },
+      });
     });
   });
 

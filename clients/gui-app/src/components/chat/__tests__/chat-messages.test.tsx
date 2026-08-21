@@ -2691,6 +2691,28 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("scrollRequest wiring (coverage restore)", () => {
+    it("routes an explicit end request through the go-live navigation", async () => {
+      const { rerenderWith } = renderChatMessages({
+        messages: makeCompletedTranscript(30),
+        scrollStateKey: "scroll-req-end",
+      });
+      await settleLegendList();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const scrollToEnd = vi.spyOn(list, "scrollToEnd");
+      try {
+        rerenderWith({
+          scrollRequest: { kind: "end", requestId: 40 },
+        });
+
+        expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      } finally {
+        scrollToEnd.mockRestore();
+      }
+    });
+
     it("routes row-only external jumps through navigation and highlights for three seconds", async () => {
       const messages = makeCompletedTranscript(6);
       const target = messages[2];
@@ -2704,6 +2726,7 @@ describe("ChatMessages scroll policy", () => {
       try {
         rerenderWith({
           scrollRequest: {
+            kind: "message",
             messageId: target.id,
             blockId: null,
             requestId: 41,
@@ -2749,6 +2772,7 @@ describe("ChatMessages scroll policy", () => {
 
       rerenderWith({
         scrollRequest: {
+          kind: "message",
           messageId: target.id,
           blockId: null,
           requestId: 42,
@@ -2815,6 +2839,7 @@ describe("ChatMessages scroll policy", () => {
         messages,
         scrollStateKey: "scroll-req",
         scrollRequest: {
+          kind: "message",
           messageId: assistant.id,
           blockId: commandId,
           requestId: 42,
@@ -2847,6 +2872,7 @@ describe("ChatMessages scroll policy", () => {
           } satisfies BackgroundItem,
         ],
         scrollRequest: {
+          kind: "message",
           messageId: assistant.id,
           blockId: commandId,
           requestId: 42,
@@ -2900,6 +2926,7 @@ describe("ChatMessages scroll policy", () => {
         messages,
         scrollStateKey: "scroll-req-open-state",
         scrollRequest: {
+          kind: "message",
           messageId: assistant.id,
           blockId: commandId,
           requestId: 77,
@@ -3580,6 +3607,7 @@ describe("ChatMessages scroll policy", () => {
         // (scrollToTimelineLocationSuppressingFollowRestore).
         rerenderWith({
           scrollRequest: {
+            kind: "message",
             requestId: 10_001,
             messageId: targetId,
             blockId: "",
@@ -3634,6 +3662,7 @@ describe("ChatMessages scroll policy", () => {
 
       rerenderWith({
         scrollRequest: {
+          kind: "message",
           requestId: 10_002,
           messageId: targetId,
           blockId: "",
