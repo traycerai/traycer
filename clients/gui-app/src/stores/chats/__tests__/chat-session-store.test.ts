@@ -2018,6 +2018,81 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
+  // R12 `-BZH4`: a third arrival order the claimant rules never saw. The edit
+  // consumed E; the user then staged S and a send consumed THAT, so the slot's
+  // mark now belongs to the send's dispatch. If the edit's rejection lands
+  // first and hands E back, it takes a slot the send still needs AND
+  // overrides a newer pick the user actually made.
+  it("refuses a rejected action's pick when a later dispatch owns the slot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    const editFrame = harness.sent.at(-1);
+    if (editFrame === undefined || editFrame.kind !== "editUserMessage") {
+      throw new Error("Expected an edit frame");
+    }
+
+    // A NEWER pick, consumed by a send. The mark now represents that dispatch.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/send"));
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    // The EDIT's rejection arrives.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: editFrame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "Host refused the edit.",
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+
+    // It must not take the slot: that mark is the send's outcome to claim,
+    // and E was superseded by the pick the user made after it.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
   // R12 `-BQcb`: the rejection path refuses the hand-back like the reconnect
   // paths do, but states things through its own errorNotice rather than
   // `failedSendRestoration.reason` - so the refusal was silent here while

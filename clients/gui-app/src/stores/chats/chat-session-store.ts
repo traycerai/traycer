@@ -36,6 +36,7 @@ import {
 } from "@/lib/notifications/live-chat-completion-acknowledgements";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentAwaitsDispatchFrom,
   stagedWorktreeIntentAwaitsDispatchOutcome,
   stagedWorktreeIntentWasPurgedMidDispatch,
   stagedWorktreeIntentIsSuspended,
@@ -1568,7 +1569,20 @@ export function createChatSessionStoreWithNotificationDependencies(
           ownerKind: "chat",
           ownerId: options.chatId,
         };
-        if (rejectedPending !== null) {
+        const rejectionOwnsSlot =
+          rejectedPending !== null &&
+          stagedWorktreeIntentAwaitsDispatchFrom(
+            rejectionStagingKey,
+            rejectedPending.clientActionId,
+          );
+        // Only the dispatch that TOOK the slot may put its pick back. An
+        // earlier action's rejection arriving after a later dispatch consumed
+        // its own pick would otherwise steal a slot that dispatch still needs,
+        // and revive a choice the user superseded when they staged the newer
+        // one. The restoration paths deliberately do NOT match on owner - they
+        // hand back a prompt, and round 10 proved the last consumer is not
+        // necessarily the one whose prompt returns.
+        if (rejectedPending !== null && rejectionOwnsSlot) {
           restoreStagedWorktreeIntent(rejectedPending, rejectionStagingKey);
         }
         // Third surface, same rule. This path refuses the hand-back exactly as
@@ -2384,7 +2398,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // race ahead of this transition.
         const stagingStore = useWorktreeIntentStagingStore.getState();
         if (worktreeIntent !== null) {
-          stagingStore.consumeForDispatch(stagedKey);
+          stagingStore.consumeForDispatch(stagedKey, clientActionId);
         }
         // Captured once, before dispatch, and reused for the optimistic echo
         // below - a queued send (this false) gets NO optimistic transcript
@@ -2596,7 +2610,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // prevent.
         const stagingStore = useWorktreeIntentStagingStore.getState();
         if (worktreeIntent !== null) {
-          stagingStore.consumeForDispatch(stagedKey);
+          stagingStore.consumeForDispatch(stagedKey, clientActionId);
         }
         const sentClientActionId = sendAction({
           set,

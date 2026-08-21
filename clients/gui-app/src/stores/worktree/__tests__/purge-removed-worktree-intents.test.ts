@@ -446,7 +446,9 @@ describe("purge and an in-flight dispatch", () => {
     });
     // The send takes the pick; the slot now holds no intent to filter, which
     // is exactly why the purge loop could not see it.
-    useWorktreeIntentStagingStore.getState().consumeForDispatch(key);
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
     expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
 
     useWorktreeIntentStagingStore
@@ -465,7 +467,9 @@ describe("purge and an in-flight dispatch", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(key, { entries: [existingBranchIntent("traycer/kept")] });
-    useWorktreeIntentStagingStore.getState().consumeForDispatch(key);
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
 
     useWorktreeIntentStagingStore
       .getState()
@@ -484,7 +488,9 @@ describe("purge and an in-flight dispatch", () => {
     useWorktreeIntentStagingStore.getState().setIntent(otherKey, {
       entries: [existingBranchIntent("traycer/gone-branch")],
     });
-    useWorktreeIntentStagingStore.getState().consumeForDispatch(otherKey);
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(otherKey, "action-1");
 
     useWorktreeIntentStagingStore
       .getState()

@@ -326,7 +326,10 @@ interface WorktreeIntentStagingStore {
     Record<string, DispatchConsumptionMark | undefined>
   >;
   /** Take the staged intent for a dispatch, marking the slot as consumed. */
-  readonly consumeForDispatch: (key: WorktreeStagingKey) => void;
+  readonly consumeForDispatch: (
+    key: WorktreeStagingKey,
+    clientActionId: string,
+  ) => void;
   /** Merge one folder's intent into the staged intent for `key`. */
   readonly stageEntry: (
     key: WorktreeStagingKey,
@@ -443,6 +446,18 @@ interface WorktreeIntentStagingStore {
 export interface DispatchConsumptionMark {
   readonly state: "awaiting" | "purged";
   /**
+   * Which dispatch took the pick.
+   *
+   * Read ONLY by the rejection surface. Round 10 proved owner-matching wrong
+   * for the restoration paths, but they hand back a PROMPT - and the action
+   * whose prompt returns to the composer is not necessarily the one that
+   * consumed last. A rejection hands back the PICK itself, which does have an
+   * owner: only the dispatch that took the slot may put it back, or an earlier
+   * action's rejection steals a slot a later dispatch still needs and revives
+   * a choice the user has since superseded.
+   */
+  readonly clientActionId: string;
+  /**
    * The entries the dispatch took, kept so a later sweep can ask whether THIS
    * pick references anything removed.
    *
@@ -530,6 +545,24 @@ export function stagedWorktreeIntentAwaitsDispatchOutcome(
  * choice. Only the former is worth stating - telling someone their worktree
  * was deleted when they simply re-picked would be a lie.
  */
+/**
+ * Whether the slot is awaiting THIS action's outcome specifically - the bar a
+ * hand-back of the PICK has to clear. See {@link DispatchConsumptionMark}.
+ */
+export function stagedWorktreeIntentAwaitsDispatchFrom(
+  key: WorktreeStagingKey,
+  clientActionId: string,
+): boolean {
+  const mark =
+    useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+      worktreeStagingKeyString(key)
+    ];
+  return (
+    stagedWorktreeIntentAwaitsDispatchOutcome(key) &&
+    mark?.clientActionId === clientActionId
+  );
+}
+
 export function stagedWorktreeIntentWasPurgedMidDispatch(
   key: WorktreeStagingKey,
 ): boolean {
@@ -785,7 +818,7 @@ export const useWorktreeIntentStagingStore =
               ),
             };
           }),
-        consumeForDispatch: (key) =>
+        consumeForDispatch: (key, clientActionId) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
             const next = { ...state.intentByKey };
@@ -803,6 +836,7 @@ export const useWorktreeIntentStagingStore =
                 ...state.consumedForDispatchByKey,
                 [id]: {
                   state: "awaiting",
+                  clientActionId,
                   entries: state.intentByKey[id]?.entries ?? [],
                 },
               },
