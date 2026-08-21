@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouterState } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { HomeHero } from "@/components/home/home-hero";
@@ -12,6 +12,13 @@ import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
 import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
+import { focusRegisteredActiveComposer } from "@/lib/composer/composer-focus-registry";
+import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
+import {
+  landingTerminalLayoutFor,
+  useLandingTerminalStore,
+} from "@/stores/home/landing-terminal-store";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 
 /**
  * Route-independent landing body. Its exact draft runtime remains the T6
@@ -21,6 +28,7 @@ export function LandingDraftSurface() {
   const draftId = useDraftSurfaceId();
   const { workspaceFolders, settings } = useLandingDraftShell(draftId);
   const activity = useTabSurfaceActivity();
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
   // Pre-mint the mount identity for the null-draft landing so the first
   // substantive edit (which creates a draft and flips this surface's id
@@ -56,9 +64,88 @@ export function LandingDraftSurface() {
     () => renderLandingWorkspaceControls.bind(null, workspaceSurface),
     [workspaceSurface],
   );
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
+  const focusRestorationTargetRef = useRef<HTMLElement | null>(null);
+  const surfaceEffectivelyFocused = activity.focused && !systemModalOpen;
+  const previouslyEffectivelyFocusedRef = useRef(false);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    const rememberFocusedElement = (event: globalThis.FocusEvent): void => {
+      if (
+        event.target instanceof HTMLElement &&
+        surface.contains(event.target)
+      ) {
+        lastFocusedElementRef.current = event.target;
+      }
+    };
+    // Native focus events follow the DOM tree. The landing terminal is owned
+    // by a sibling React root and portaled into this surface's anchor, so a
+    // React onFocusCapture here cannot observe it even though its DOM lives
+    // below this node.
+    document.addEventListener("focusin", rememberFocusedElement);
+    return () =>
+      document.removeEventListener("focusin", rememberFocusedElement);
+  }, []);
+
+  useEffect(() => {
+    const newlyFocused =
+      surfaceEffectivelyFocused && !previouslyEffectivelyFocusedRef.current;
+    previouslyEffectivelyFocusedRef.current = surfaceEffectivelyFocused;
+    if (!surfaceEffectivelyFocused) {
+      focusRestorationTargetRef.current = lastFocusedElementRef.current;
+      return;
+    }
+    if (!newlyFocused || paneActivationFocusIntent.shouldYieldAutoFocus()) {
+      return;
+    }
+
+    const terminalState = useLandingTerminalStore.getState();
+    const layout = landingTerminalLayoutFor(
+      terminalState,
+      draftId ?? "unbound-landing-page",
+    );
+    if (layout.panelOpen && layout.maximized) {
+      const instanceId = terminalState.activeInstanceId;
+      if (instanceId !== null) {
+        focusTerminalInstance(instanceId);
+        return;
+      }
+    }
+
+    const surface = surfaceRef.current;
+    const previous = focusRestorationTargetRef.current;
+    if (
+      surface !== null &&
+      previous !== null &&
+      previous.isConnected &&
+      surface.contains(previous)
+    ) {
+      previous.focus({ preventScroll: true });
+      if (
+        document.activeElement === previous ||
+        (document.activeElement !== null &&
+          previous.contains(document.activeElement))
+      ) {
+        return;
+      }
+    }
+    // The local Tiptap editor may not have registered yet
+    // (`immediatelyRender: false`). Never fall back to a retained inactive
+    // split partner here; if no active endpoint exists, the local editor's own
+    // autofocus effect will run as soon as it registers.
+    focusRegisteredActiveComposer();
+  }, [draftId, paneActivationFocusIntent, surfaceEffectivelyFocused]);
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground">
+    <div
+      ref={surfaceRef}
+      className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground"
+      data-primary-focus-scope="true"
+      data-testid="landing-draft-surface"
+    >
       <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden">
         <div className="mx-auto w-full max-w-3xl px-6 pt-3">
           <HostUpdateBanner className={undefined} />
