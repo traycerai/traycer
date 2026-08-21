@@ -45,7 +45,13 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<!-- Local networking ONLY, not arbitrary loads: everything this lane
+		     talks to over http is on the Mac's LAN address, and the narrower
+		     key covers exactly that while leaving the public internet held to
+		     ATS. Even in a Debug build the broad key is more than the lane
+		     needs, and it is the kind of exception that quietly becomes load
+		     bearing. -->
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>

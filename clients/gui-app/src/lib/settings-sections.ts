@@ -96,9 +96,9 @@ export interface SettingsSection {
  * heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now thirteen. Agent
- * selection, Shell and the host's Diagnostics are the eleventh through
- * thirteenth and go without.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now fourteen.
+ * Notifications, Agent selection, Shell and the host's Diagnostics are the
+ * eleventh through fourteenth and go without.
  *
  * Agent selection is the one that lost a digit to the app-scoped Diagnostics
  * entry below, and that is a genuine cost rather than a tidy outcome: the rule

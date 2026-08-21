@@ -16,6 +16,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // live: a phone that scans just before rotation still has several seconds to
 // redeem before the pictured code expires. Exported so the panel's countdown
 // can derive the rotation moment from the same cadence rather than a copy.
+/**
+ * Treated as expired this far ahead of the server's instant, so a focus
+ * refetch does not hand back a code with a second of life left.
+ */
+const LINK_LOGIN_EXPIRY_SKEW_MS = 5_000;
+
 export const LINK_LOGIN_REMINT_MS = 50_000;
 
 function linkLoginCodeQueryOptions(
@@ -59,7 +65,20 @@ function linkLoginCodeQueryOptions(
     // and the query spins forever.
     refetchInterval: LINK_LOGIN_REMINT_MS,
     refetchOnMount: "always",
-    refetchOnWindowFocus: false,
+    // Conditional, not off. A backgrounded tab has its interval throttled or
+    // frozen, so the panel can come back to the foreground showing a code that
+    // expired minutes ago and would fail on the phone. Refetching on EVERY
+    // focus would burn a fresh code each time the user tabbed away and back,
+    // which the one-live-code rule makes expensive; keying on the displayed
+    // code's own `expires_at` mints only when what is on screen is actually
+    // dead.
+    refetchOnWindowFocus: (query) => {
+      const shown = query.state.data;
+      if (shown === undefined || shown === null) {
+        return true;
+      }
+      return shown.expires_at * 1_000 <= Date.now() + LINK_LOGIN_EXPIRY_SKEW_MS;
+    },
     // A few seconds, not Infinity: when the panel re-enables this query after
     // a decision (rotation was frozen while a claim awaited approval), the
     // cached code is stale by then and must be replaced immediately rather

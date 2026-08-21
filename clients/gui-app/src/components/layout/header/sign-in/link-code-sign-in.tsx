@@ -167,22 +167,33 @@ export function LinkCodeSignIn(props: {
       setOpen(true);
       return;
     }
-    void scanner.scan().then((result) => {
-      switch (result.kind) {
-        case "scanned":
-          submit(result.text);
-          return;
-        case "permission-denied":
-          setNotice("camera-denied");
-          setOpen(true);
-          return;
-        case "canceled":
-          return;
-        case "error":
-          setNotice("scan-error");
-          setOpen(true);
-      }
-    });
+    void scanner
+      .scan()
+      .then((result) => {
+        switch (result.kind) {
+          case "scanned":
+            submit(result.text);
+            return;
+          case "permission-denied":
+            setNotice("camera-denied");
+            setOpen(true);
+            return;
+          case "canceled":
+            return;
+          case "error":
+            setNotice("scan-error");
+            setOpen(true);
+        }
+      })
+      .catch(() => {
+        // The adapter maps every native outcome to a `kind`, so a REJECTION
+        // here is the host itself failing - the plugin missing, the bridge
+        // gone. Same answer as `error` either way: the user asked for a
+        // camera, so they get told it did not open and the typed-code field
+        // they can still use. Silence would read as a tap that did nothing.
+        setNotice("scan-error");
+        setOpen(true);
+      });
   };
 
   const codeEntryForm = (
@@ -194,6 +205,7 @@ export function LinkCodeSignIn(props: {
       }}
     >
       <Input
+        aria-label="Link code"
         value={entry}
         onChange={(event) => {
           setEntry(event.target.value);

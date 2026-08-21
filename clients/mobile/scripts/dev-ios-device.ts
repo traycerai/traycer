@@ -24,8 +24,7 @@
  * the point of this lane. Camera-less testing needs no lane at all — use
  * `make dev-ios` and the typed-code path in the Simulator.
  */
-import { execFileSync, spawn } from "node:child_process";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   mobileRoot,
   readDevRun,
@@ -136,11 +135,25 @@ console.log(`[device] slot=${slot}`);
 console.log(`[device] vite:   ${lanUrls.guiAppBaseUrl.origin}`);
 console.log(`[device] authn:  ${lanUrls.authnBaseUrl}`);
 console.log(`[device] cloud:  ${lanUrls.cloudUiBaseUrl}`);
+// `dist/web` is left holding this run's LAN http URLs. A release build made
+// from the same checkout without re-running `build:web` would ship them, and
+// on a device ATS blocks every one - a shipped app that simply cannot reach
+// its backend. Cheap to say, expensive to discover.
+console.warn(
+  "[device] dist/web now contains LAN http URLs — run `bun run build:web` before any release build from this checkout",
+);
 
 const vite = spawn("bun", ["x", "vite", "--config", "vite.config.ts"], {
   cwd: mobileRoot,
   env,
   stdio: "inherit",
+});
+vite.once("error", (error: Error) => {
+  // `spawn` reports an unspawnable binary here, not by throwing: without a
+  // listener Node raises it as an uncaught exception and the lane dies with a
+  // stack trace instead of the one line that says what to install.
+  console.error(`[device] could not start vite: ${error.message}`);
+  process.exit(1);
 });
 vite.once("exit", (code) => {
   // The phone loads everything from this server; without it the lane is over.

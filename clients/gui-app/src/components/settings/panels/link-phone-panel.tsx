@@ -53,7 +53,14 @@ function useRotationCountdown(props: {
   // remint interval itself, whatever TTL the server hands back — so that
   // interval is the full window the frame drains across.
   const windowSeconds = LINK_LOGIN_REMINT_MS / 1_000;
-  return { secondsLeft, remainingFraction: secondsLeft / windowSeconds };
+  // Clamped HERE, at the producer: the server picks the TTL, so a longer one
+  // than the remint lead makes this ratio exceed 1 before the first rotation.
+  // The tile clamps too, but a fraction above 1 is wrong wherever it is read,
+  // and the second reader would have to remember.
+  return {
+    secondsLeft,
+    remainingFraction: Math.min(1, secondsLeft / windowSeconds),
+  };
 }
 
 /** The verdict whose respond round-trip is in flight, if any. */
@@ -77,6 +84,7 @@ function pendingRespondVerdict(
 function ConfirmClaimCard(props: {
   readonly claim: LiveClaim;
   readonly pendingVerdict: PendingVerdict;
+  readonly respondFailed: boolean;
   readonly onDecide: (approve: boolean) => void;
 }) {
   // Unknown metadata is simply absent — an "unknown" admission reads worse
@@ -106,6 +114,15 @@ function ConfirmClaimCard(props: {
           code yourself.
         </p>
       </div>
+      {props.respondFailed ? (
+        <p
+          className="text-center text-ui-xs text-destructive"
+          data-testid="link-phone-respond-failed"
+        >
+          That didn&apos;t reach the sign-in service. The phone is still waiting
+          — check your connection and answer again.
+        </p>
+      ) : null}
       <div className="flex w-full items-center justify-center gap-3">
         <Button
           variant="default"
@@ -415,6 +432,8 @@ function MintErrorCard(props: {
 export function LinkPhonePanel() {
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const [approvedDone, setApprovedDone] = useState(false);
+  /** A decision that never landed: retryable, and not a reason to re-mint. */
+  const [respondFailed, setRespondFailed] = useState(false);
   const respond = useRespondLinkLoginMutation();
   const {
     claim,
@@ -445,6 +464,7 @@ export function LinkPhonePanel() {
     if (claim === null) {
       return;
     }
+    setRespondFailed(false);
     respond.mutate(
       { code: claim.code, approve },
       {
@@ -453,13 +473,22 @@ export function LinkPhonePanel() {
             setApprovedDone(true);
             return;
           }
+          if (outcome === "failed") {
+            // The decision never reached the server, so the claim is still
+            // sitting there waiting for it. Restarting here would answer a
+            // network problem by silently replacing the QR - the user tapped
+            // Approve and got a different code back, with nothing said. Keep
+            // the card, say what happened, let them tap again.
+            setRespondFailed(true);
+            return;
+          }
           // Rejected (or the record vanished): resume with a fresh code.
           // The user's own click authorizes the re-mint; the evicting
           // restart guarantees the dead code cannot be re-served from cache.
           restartCode();
         },
         onError: () => {
-          restartCode();
+          setRespondFailed(true);
         },
       },
     );
@@ -478,6 +507,7 @@ export function LinkPhonePanel() {
           awaitingElsewhere={awaitingElsewhere}
           deadKind={deadKind}
           minted={minted}
+          respondFailed={respondFailed}
           code={{
             isError: code.isError,
             isRefetching: code.isRefetching,
@@ -515,6 +545,8 @@ function LinkPhonePanelBody(props: {
   readonly minted: MintLinkLoginCodeResponse | null;
   readonly code: PanelCodeView;
   readonly respondVerdict: PendingVerdict;
+  /** A decision the transport lost; the claim is still live and retryable. */
+  readonly respondFailed: boolean;
   readonly onDecide: (approve: boolean) => void;
   readonly onRestart: () => void;
   /** The evicting restart — the ONLY way a dead code is replaced. */
@@ -535,6 +567,7 @@ function LinkPhonePanelBody(props: {
       <ConfirmClaimCard
         claim={props.claim}
         pendingVerdict={props.respondVerdict}
+        respondFailed={props.respondFailed}
         onDecide={props.onDecide}
       />
     );

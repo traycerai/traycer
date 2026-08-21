@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from "react";
+import { memo, useMemo, type ReactElement } from "react";
 import QRCode from "qrcode";
 import { buildLinkLoginQrPayload } from "@traycer-clients/shared/auth/link-login";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
@@ -42,8 +42,9 @@ const MODULE_RADIUS = 0.32;
  * independently rounded boxes stacked on each other cannot promise that.
  */
 const FRAME_STROKE_PERCENT = 2.8;
-const FRAME_CENTRE_INSET_PERCENT = FRAME_STROKE_PERCENT / 2;
-const FRAME_RADIUS_PERCENT = 4;
+/** Exported so a test asserts against this geometry rather than restating it. */
+export const FRAME_CENTRE_INSET_PERCENT = FRAME_STROKE_PERCENT / 2;
+export const FRAME_RADIUS_PERCENT = 4;
 
 /**
  * A QR scans by luminance contrast, not by palette, so the symbol keeps a
@@ -98,19 +99,49 @@ function isFinderModule(row: number, col: number, size: number): boolean {
   );
 }
 
+/**
+ * A finder pattern drawn as three concentric rounded squares, each inset one
+ * module from the last. Sized from `FINDER_SIZE_MODULES` rather than from
+ * literals, so the eye and the region the dot pass skips can never disagree
+ * about how big a finder is.
+ */
 function FinderEye(props: { readonly row: number; readonly col: number }) {
   const x = props.col + QUIET_ZONE_MODULES;
   const y = props.row + QUIET_ZONE_MODULES;
+  const outer = FINDER_SIZE_MODULES;
+  const middle = outer - 2;
+  const inner = outer - 4;
   return (
     <g>
-      <rect x={x} y={y} width={7} height={7} rx={2.2} fill={QR_INK} />
-      <rect x={x + 1} y={y + 1} width={5} height={5} rx={1.5} fill={QR_PAPER} />
-      <rect x={x + 2} y={y + 2} width={3} height={3} rx={1} fill={QR_INK} />
+      <rect x={x} y={y} width={outer} height={outer} rx={2.2} fill={QR_INK} />
+      <rect
+        x={x + 1}
+        y={y + 1}
+        width={middle}
+        height={middle}
+        rx={1.5}
+        fill={QR_PAPER}
+      />
+      <rect
+        x={x + 2}
+        y={y + 2}
+        width={inner}
+        height={inner}
+        rx={1}
+        fill={QR_INK}
+      />
     </g>
   );
 }
 
-function QrSymbolSvg(props: { readonly symbol: QrSymbol }) {
+/**
+ * Memoized because the countdown beside it re-renders the tile once a second
+ * while the symbol itself cannot change - rebuilding several hundred `<rect>`
+ * elements per tick for an identical result.
+ */
+const QrSymbolSvg = memo(function QrSymbolSvg(props: {
+  readonly symbol: QrSymbol;
+}) {
   const { size, bits } = props.symbol;
   const extent = size + QUIET_ZONE_MODULES * 2;
   const modules: ReactElement[] = [];
@@ -161,7 +192,7 @@ function QrSymbolSvg(props: { readonly symbol: QrSymbol }) {
       <FinderEye row={size - FINDER_SIZE_MODULES} col={0} />
     </svg>
   );
-}
+});
 
 /**
  * The code's life drawn on the tile's own frame: the stroke drains clockwise

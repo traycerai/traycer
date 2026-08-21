@@ -109,6 +109,14 @@ export interface MutationResult {
   readonly credentials: StoredCredentials | null;
 }
 
+/**
+ * Ceiling for the quarantine drain's backoff. The drain has to complete
+ * eventually - a pending conditional delete left undone means a dead
+ * credential pair can be rehydrated on a later launch - so the growth stops
+ * here rather than running away.
+ */
+const QUARANTINE_RETRY_MAX_MS = 30_000;
+
 export interface CredentialsMutationStoreOptions {
   readonly paths: CredentialsMutationPaths;
   readonly refresh: RefreshFn;
@@ -503,22 +511,46 @@ export function createCredentialsMutationStore(
   let pending: PendingContinuation | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
   let quarantineRetryTimer: NodeJS.Timeout | null = null;
+  /**
+   * Consecutive failed drains, which is what the delay grows from. A drain
+   * fails when the file is locked or the disk is refusing writes, and neither
+   * clears any faster for being asked every `continuationRetryMs` forever -
+   * an unattended app would spend the rest of its run retrying at a fixed
+   * cadence. Reset the moment a drain comes back clean.
+   */
+  let quarantineRetryAttempts = 0;
   let disposed = false;
   const qPath = quarantinePath(paths.credentialsPath);
 
+  function quarantineRetryDelayMs(): number {
+    // Doubling from the base, capped: the cap is what keeps a long-running
+    // process still checking - the quarantined delete must eventually land, so
+    // backing off without a ceiling would trade one problem for a worse one.
+    return Math.min(
+      QUARANTINE_RETRY_MAX_MS,
+      options.continuationRetryMs * 2 ** quarantineRetryAttempts,
+    );
+  }
+
   function scheduleQuarantineRetry(): void {
     if (quarantineRetryTimer !== null || disposed) return;
+    const delayMs = quarantineRetryDelayMs();
+    quarantineRetryAttempts += 1;
     quarantineRetryTimer = setTimeout(() => {
       quarantineRetryTimer = null;
       void drainQuarantine(null).then(
         (clean) => {
-          if (!clean) scheduleQuarantineRetry();
+          if (clean) {
+            quarantineRetryAttempts = 0;
+            return;
+          }
+          scheduleQuarantineRetry();
         },
         () => {
           scheduleQuarantineRetry();
         },
       );
-    }, options.continuationRetryMs);
+    }, delayMs);
   }
 
   /**

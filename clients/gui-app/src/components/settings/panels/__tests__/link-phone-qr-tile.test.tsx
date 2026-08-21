@@ -10,15 +10,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import QRCode from "qrcode";
 import { buildLinkLoginQrPayload } from "@traycer-clients/shared/auth/link-login";
 
-import { LinkPhoneQrTile } from "../link-phone-qr-tile";
+import {
+  FRAME_CENTRE_INSET_PERCENT,
+  FRAME_RADIUS_PERCENT,
+  LinkPhoneQrTile,
+} from "../link-phone-qr-tile";
 
 const CODE = "ABCDE-FGHJK";
 const PLATFORM = "https://platform.example.test";
 const QUIET_ZONE = 5;
 const FINDER = 7;
-/** The frame's stroke straddles this inset, in percent of the tile's side. */
-const FRAME_CENTRE_INSET_PERCENT = 1.4;
-const FRAME_RADIUS_PERCENT = 4;
 
 function expectedSymbol(code: string) {
   const qr = QRCode.create(buildLinkLoginQrPayload(PLATFORM, code), {

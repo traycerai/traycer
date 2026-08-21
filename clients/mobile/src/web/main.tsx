@@ -200,9 +200,9 @@ function bootstrap(): void {
               ? outcome.entries.map((entry) => entry.hostId)
               : null;
           },
-    // The ML Kit plugin has no web implementation, so the camera capability
-    // exists only on a native install; the browser entry keeps the manual
-    // code-entry path alone.
+    // `@capacitor/barcode-scanner` has no web implementation, so the camera
+    // capability exists only on a native install; the browser entry keeps the
+    // manual code-entry path alone.
     linkCodeScanner: Capacitor.isNativePlatform()
       ? new MobileLinkCodeScanner()
       : null,

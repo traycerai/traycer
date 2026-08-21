@@ -149,7 +149,8 @@ export interface MobileRunnerHostOptions {
   /**
    * Native QR scanner for link-login sign-in, or `null` where no camera
    * exists (the dev web entry, tests). Constructed by the entry point so the
-   * ML Kit plugin import stays out of this module's web-safe dependency set.
+   * barcode-scanner plugin import stays out of this module's web-safe
+   * dependency set.
    */
   readonly linkCodeScanner: ILinkCodeScanner | null;
   /**

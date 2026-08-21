@@ -113,6 +113,14 @@ async function askApproval(question: string): Promise<boolean> {
   try {
     const answer = await new Promise<string>((resolve) => {
       rl.question(question, resolve);
+      // Ctrl-D (or a closed/piped stdin) ends the stream without ever
+      // answering, and `question`'s callback then never fires - the flow would
+      // hang here forever, after a phone has already claimed the code. Closing
+      // is not a yes, so it resolves to the same empty answer a bare newline
+      // gives, and the default-to-NO rule below does the rest.
+      rl.once("close", () => {
+        resolve("");
+      });
     });
     const normalized = answer.trim().toLowerCase();
     return normalized === "y" || normalized === "yes";
@@ -343,6 +351,19 @@ async function watchUntilClaimed(
       const { status: state, claimant } = status.response;
       if (state === "claimed" && claimant !== null) {
         return { code: watched.minted.code, claimant };
+      }
+      if (state === "claimed") {
+        // The schema permits `claimed` with a null claimant, and there is
+        // nothing to show or approve in that state: the prompt IS the claimant
+        // metadata. Polling on would spin until the code expired while the
+        // phone waits on a decision this terminal can never ask for.
+        throw cliError({
+          code: CLI_ERROR_CODES.AUTH_REJECTED,
+          message:
+            "A phone claimed this code but reported nothing about itself, so there is nothing to confirm. Run `traycer link-phone` again for a fresh code.",
+          details: null,
+          exitCode: 1,
+        });
       }
       if (state === "approved" || state === "denied") {
         throw cliError({

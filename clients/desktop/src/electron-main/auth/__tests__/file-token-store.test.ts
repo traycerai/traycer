@@ -215,10 +215,14 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     // zombie is never served and does not survive the launch.
     const relaunched = makeStore();
     expect(await relaunched.get()).toBeNull();
+    // BOTH files inside the wait: the drain removes the pair and clears its
+    // sidecar as one recovery, and the sidecar is not guaranteed gone at the
+    // instant the pair is. Asserting it outside passes on timing rather than
+    // on the invariant.
     await vi.waitFor(() => {
       expect(existsSync(credentialsPath())).toBe(false);
+      expect(existsSync(`${credentialsPath()}.quarantine.json`)).toBe(false);
     });
-    expect(existsSync(`${credentialsPath()}.quarantine.json`)).toBe(false);
     expect(await relaunched.get()).toBeNull();
   });
 
