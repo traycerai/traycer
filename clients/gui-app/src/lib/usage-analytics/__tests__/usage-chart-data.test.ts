@@ -215,6 +215,61 @@ describe("seriesKeysByTotalCost / buildUsageSeriesScaleForBuckets (cost ranking)
     // one long-tail key that overflows into Other.
     expect(scale.colorVar("model-16")).toBe("var(--usage-series-other)");
   });
+
+  it("assigns slots alphabetically among the selected keys, NOT in spend order", () => {
+    const scale = buildUsageSeriesScaleForBuckets(
+      [
+        bucket({ harnessId: "zeta", knownCostUsd: 100 }),
+        bucket({ harnessId: "alpha", knownCostUsd: 1 }),
+      ],
+      "harness",
+    );
+    // Spend ranks zeta first; slot order is deliberately independent of it.
+    expect(scale.order).toEqual(["alpha", "zeta"]);
+    expect(scale.colorVar("alpha")).toBe("var(--usage-series-1)");
+    expect(scale.colorVar("zeta")).toBe("var(--usage-series-2)");
+  });
+
+  it("keeps each series' color when a refetch merely reorders magnitudes", () => {
+    // The regression this decoupling exists for: B overtakes A between two
+    // responses while both stay well inside the cap. Ranking the SLOTS by
+    // spend would swap their colors under a mounted surface.
+    const before = buildUsageSeriesScaleForBuckets(
+      [
+        bucket({ harnessId: "a-series", knownCostUsd: 10 }),
+        bucket({ harnessId: "b-series", knownCostUsd: 9 }),
+      ],
+      "harness",
+    );
+    const after = buildUsageSeriesScaleForBuckets(
+      [
+        bucket({ harnessId: "a-series", knownCostUsd: 10 }),
+        bucket({ harnessId: "b-series", knownCostUsd: 11 }),
+      ],
+      "harness",
+    );
+    expect(after.colorVar("a-series")).toBe(before.colorVar("a-series"));
+    expect(after.colorVar("b-series")).toBe(before.colorVar("b-series"));
+    expect(after.order).toEqual(before.order);
+  });
+
+  it("still SELECTS by spend, so an alphabetically-early but cheap key folds into Other", () => {
+    // 16 expensive keys sorting AFTER "aaa-cheap" alphabetically: if
+    // selection followed the alphabetical slot order rather than spend, the
+    // cheap key would take a slot and an expensive one would fold.
+    const expensive = Array.from(
+      { length: 16 },
+      (_, index) => `zz-${String(index).padStart(2, "0")}`,
+    );
+    const buckets = [
+      ...expensive.map((harnessId) => bucket({ harnessId, knownCostUsd: 50 })),
+      bucket({ harnessId: "aaa-cheap", knownCostUsd: 0.01 }),
+    ];
+    const scale = buildUsageSeriesScaleForBuckets(buckets, "harness");
+    expect(scale.colorVar("aaa-cheap")).toBe("var(--usage-series-other)");
+    expect(scale.order).not.toContain("aaa-cheap");
+    expect(scale.colorVar("zz-00")).toBe("var(--usage-series-1)");
+  });
 });
 
 describe("groupBy: model", () => {

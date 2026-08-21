@@ -2,10 +2,12 @@
  * Categorical color assignment for the per-day chart's harness/model
  * breakdown.
  *
- * Sixteen fixed slots, assigned in the order the caller ranks the keys -
- * `buildUsageSeriesScaleForBuckets` ranks by total known cost, descending,
- * so slot 1 is always the window's biggest spender and "Other" is always
- * the long tail. Slots 1-8 are the dataviz skill's validated primary hues;
+ * Sixteen fixed slots, assigned in the order the caller supplies - which
+ * `buildUsageSeriesScaleForBuckets` splits deliberately: the keys past the
+ * cap are chosen by SPEND (so "Other" is the long tail) while the order of
+ * the ones that fit is total-independent (so a series does not change color
+ * when a refetch merely reorders magnitudes). Slots 1-8 are the dataviz
+ * skill's validated primary hues;
  * 9-16 are their shade/tint cousins (see `usage-analytics-chart.css`), a
  * deliberately weaker ring that only the cheaper series ever land in. Past
  * sixteen distinct keys the tail folds into "Other" rather than generating
