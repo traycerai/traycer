@@ -264,4 +264,25 @@ describe("S2 — host-starting is bounded, and Clone arrives AT the deadline", (
       screen.queryByRole("button", { name: "Clone agent" }),
     ).not.toBeNull();
   });
+
+  // Shared-chat support, wired through the REAL container: `epic.createChat`
+  // is editor-gated host-side, so a known viewer role must withhold the Clone
+  // button the same banner would otherwise offer - the alternative was a
+  // click that died on a bare "You don't have permission" toast. The
+  // editor-role sibling above is the control: same tile, same deadline, the
+  // button present.
+  it("withholds Clone at the deadline for a viewer role, and says why", async () => {
+    epicHarness.install(null, "viewer");
+    renderChatTile();
+    await settleEpicSession();
+
+    act(() => {
+      vi.advanceTimersByTime(HOST_STARTING_BUDGET_MS);
+    });
+
+    const banner = screen.getByTestId(`chat-dead-tile-${CHAT_ARTIFACT.id}`);
+    expect(banner).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    expect(banner.textContent).toContain("view-only access");
+  });
 });

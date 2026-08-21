@@ -354,6 +354,37 @@ export type ChatDeadTileBannerReason =
 export interface ChatDeadTileBannerProps {
   readonly hostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
+  /**
+   * Whether the source chat belongs to the signed-in viewer. `false` is a
+   * collaborator's shared chat, and every host-naming sentence in the copy
+   * table turns false there: the owner's machine can never appear in this
+   * account's host directory, so "unreachable" is a fact about THIS viewer's
+   * fleet - not evidence the machine is off - and `hostLabel` has fallen back
+   * to a raw host id that names nothing the reader can act on. Those reasons
+   * swap to the foreign-owner sentence instead. `true` when the owner is
+   * unknown: a local chat ref is the viewer's own by construction, so only a
+   * positive mismatch may flip the copy.
+   */
+  readonly ownedByViewer: boolean;
+  /**
+   * Whether the viewer's epic role can create agents (editor/owner - the same
+   * gate `epic.createChat` enforces host-side). `false` withholds the Clone
+   * button that role's refusal would otherwise turn into a bare
+   * "You don't have permission" toast, and says why instead. Pass `true`
+   * while the role is still unknown - the host gate is the backstop, and
+   * withholding the way out of a dead tile needs evidence, not doubt.
+   */
+  readonly cloneAllowed: boolean;
+  /**
+   * Whether a readable copy (published or doc-synced) is actually mounted
+   * under this banner. The live tile mounts it above a load state or a cached
+   * live session, where "showing the last published copy" would describe
+   * content that is not on screen - so the foreign-owner copy claims it only
+   * when the mounting surface says so, rather than inferring its own
+   * presentation. The own-chat sentences carry their presentation facts in
+   * the reason copy and do not read this.
+   */
+  readonly showsPublishedCopy: boolean;
   readonly onClone: () => void;
   readonly cloning: boolean;
   readonly className: string | undefined;
@@ -450,8 +481,58 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
   },
 };
 
+/**
+ * The sentence for a collaborator's chat, composed from three independently
+ * true clauses rather than one blanket claim (cold-review finding: the first
+ * cut collapsed presentation state and failure reason into a sentence that
+ * could describe content not on screen, or contradict a host that answered).
+ *
+ * - The FACT varies by reason: the host-unreachable reasons say the owner's
+ *   machine "isn't connected here" - deliberately not "is offline", which is
+ *   unknowable from this account (see `ownedByViewer`) - while the two
+ *   answered-host reasons (`chat-not-visible` / `chat-not-on-this-host`) keep
+ *   their missing-history fact, because "isn't connected" would invert the
+ *   evidence of a host that just spoke. Neither names a host: the label for a
+ *   foreign machine is a raw id.
+ * - The COPY clause appears only when the mounting surface actually shows one
+ *   (`showsPublishedCopy`).
+ * - The CLONE clause matches the sharing panel's promise ("Collaborators can
+ *   view and clone your agent chats"); the view-only arm says why that
+ *   promise does not extend to this reader instead of dangling a button the
+ *   host's editor gate would refuse.
+ */
+function foreignOwnerMessage(input: {
+  readonly reason: ChatDeadTileBannerReason;
+  readonly showsPublishedCopy: boolean;
+  readonly cloneAllowed: boolean;
+}): string {
+  const fact =
+    input.reason === "chat-not-visible" ||
+    input.reason === "chat-not-on-this-host"
+      ? "This agent belongs to another collaborator, and its history isn't available here."
+      : "This agent belongs to another collaborator and lives on their machine, which isn't connected here.";
+  const copyClause = input.showsPublishedCopy
+    ? " Showing the last published copy."
+    : "";
+  const cloneClause = input.cloneAllowed
+    ? " Cloning creates your own agent on the active host."
+    : " You have view-only access to this task, so it can't be cloned.";
+  return `${fact}${copyClause}${cloneClause}`;
+}
+
+const FOREIGN_OWNER_REPORT = {
+  reportTitle: "Shared agent isn't available live",
+  reportMessage:
+    "The agent belongs to another collaborator and its host isn't connected here.",
+};
+
 export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
   const copy = CHAT_DEAD_TILE_BANNER_COPY[props.reason];
+  // The revoked reason keeps its own copy for a foreign owner: it is already
+  // about this viewer's entitlement, not about any host.
+  const foreignOwned =
+    !props.ownedByViewer && props.reason !== "chat-no-longer-shared";
+  const report = foreignOwned ? FOREIGN_OWNER_REPORT : copy;
   return (
     // A live region, like the other two chat banners: which of the three
     // truths above is on screen is carried ONLY by this sentence, and the
@@ -468,8 +549,26 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
         props.className,
       )}
     >
-      <span className="min-w-0 flex-1">{copy.message(props.hostLabel)}</span>
-      {copy.offersClone ? (
+      <span className="min-w-0 flex-1">
+        {foreignOwned
+          ? foreignOwnerMessage({
+              reason: props.reason,
+              showsPublishedCopy: props.showsPublishedCopy,
+              cloneAllowed: props.cloneAllowed,
+            })
+          : copy.message(props.hostLabel)}
+        {/* The own-chat viewer edge (role downgraded after creating the
+            chat): the reason copy still ends in "clone it and carry on", so
+            withholding the button silently would read as broken. */}
+        {!foreignOwned && copy.offersClone && !props.cloneAllowed ? (
+          <>
+            {" "}
+            You have view-only access to this task, so cloning isn&apos;t
+            available.
+          </>
+        ) : null}
+      </span>
+      {copy.offersClone && props.cloneAllowed ? (
         <Button
           type="button"
           variant="outline"
@@ -482,8 +581,8 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
       ) : null}
       <ReportIssueAction
         context={createReportIssueContext({
-          title: copy.reportTitle,
-          message: copy.reportMessage,
+          title: report.reportTitle,
+          message: report.reportMessage,
           code: null,
           source: "Agent",
         })}

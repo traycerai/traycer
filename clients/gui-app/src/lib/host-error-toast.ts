@@ -295,6 +295,39 @@ function hostTerminalVerdictMessage(error: HostRpcError): string | null {
   return null;
 }
 
+/**
+ * The host's role-gate refusal phrases, verbatim.
+ *
+ * An untyped wire contract: `traycer-host`'s `auth-helpers.ts` writes these
+ * into `EpicAccessForbiddenError` messages ("User 'x' does not have editor
+ * access to epic 'y'"), and the FORBIDDEN branch below matches on them to
+ * explain the refusal. The wire carries no structured denial reason, so the
+ * phrase is the whole contract - the host repo pins both sides in
+ * `role-gate-phrase-contract.test.ts` (it reads this file), and drift there
+ * degrades gracefully here to the generic permission sentence.
+ */
+export const EDITOR_ACCESS_DENIED_PHRASE = "does not have editor access";
+export const OWNER_ACCESS_DENIED_PHRASE = "does not have owner access";
+
+/**
+ * The host's epic role gates (`defineEditorResolver` / `defineOwnerResolver`)
+ * state the missing role in a fixed phrase, so - like the AGENT_BUSY branches
+ * below - the phrase is what we branch on. The copy is rewritten rather than
+ * passed through: the raw host text names user and epic ids, which mean
+ * nothing in a toast. Without this, a viewer clicking anything editor-gated
+ * (cloning a shared agent, for one) got the bare generic, indistinguishable
+ * from a bug.
+ */
+function forbiddenToastMessage(message: string): string {
+  if (message.includes(EDITOR_ACCESS_DENIED_PHRASE)) {
+    return "You have view-only access to this task, so you can't make changes to it.";
+  }
+  if (message.includes(OWNER_ACCESS_DENIED_PHRASE)) {
+    return "Only this task's owner can do that.";
+  }
+  return "You don't have permission to do that.";
+}
+
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   const verdict = hostTerminalVerdictMessage(error);
   if (verdict !== null) {
@@ -329,7 +362,7 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
     return "This needs a newer Traycer host. Update the host to continue.";
   }
   if (error.code === "FORBIDDEN") {
-    return "You don't have permission to do that.";
+    return forbiddenToastMessage(error.message);
   }
   if (error.code === "UNAUTHORIZED") {
     if (error.fatalDetails?.retryable === true) {

@@ -79,6 +79,9 @@ describe("<ChatDeadTileBanner />", () => {
       <ChatDeadTileBanner
         hostLabel="mac-mini"
         reason="host-offline"
+        ownedByViewer
+        cloneAllowed
+        showsPublishedCopy={false}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead"
@@ -105,6 +108,9 @@ describe("<ChatDeadTileBanner />", () => {
       <ChatDeadTileBanner
         hostLabel="mac-mini"
         reason="chat-not-visible"
+        ownedByViewer
+        cloneAllowed
+        showsPublishedCopy={false}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-absent"
@@ -133,6 +139,9 @@ describe("<ChatDeadTileBanner />", () => {
       <ChatDeadTileBanner
         hostLabel="mac-mini"
         reason="chat-not-on-this-host"
+        ownedByViewer
+        cloneAllowed
+        showsPublishedCopy={false}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-here"
@@ -166,6 +175,9 @@ describe("<ChatDeadTileBanner />", () => {
       <ChatDeadTileBanner
         hostLabel="mac-mini"
         reason="chat-no-longer-shared"
+        ownedByViewer
+        cloneAllowed={false}
+        showsPublishedCopy={false}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-revoked"
@@ -200,6 +212,9 @@ describe("<ChatDeadTileBanner />", () => {
         <ChatDeadTileBanner
           hostLabel="mac-mini"
           reason={reason}
+          ownedByViewer
+          cloneAllowed
+          showsPublishedCopy={false}
           cloning={false}
           onClone={() => undefined}
           testId={`chat-dead-${reason}`}
@@ -210,4 +225,166 @@ describe("<ChatDeadTileBanner />", () => {
       expect(screen.getByRole("status").textContent).toContain(phrase);
     },
   );
+
+  // Shared-chat support: a collaborator's chat reaches this banner because the
+  // owner's machine can never appear in the viewer's host directory - every
+  // "unreachable" verdict for it is a fact about THIS account's fleet, not
+  // evidence the machine is off. The pre-existing copy asserted exactly that
+  // liveness ("is offline") about a raw host id, which is the misleading
+  // banner this arm exists to replace.
+  describe("collaborator-owned chat (ownedByViewer=false)", () => {
+    it("says whose agent it is, claims no liveness, and names no host", () => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="085b919a-f0a6-42e5-b05e-241738d3dd6a"
+          reason="host-offline"
+          ownedByViewer={false}
+          cloneAllowed
+          showsPublishedCopy
+          cloning={false}
+          onClone={() => undefined}
+          testId="chat-dead-foreign"
+          className={undefined}
+        />,
+      );
+
+      const text = screen.getByTestId("chat-dead-foreign").textContent;
+      expect(text).toContain("belongs to another collaborator");
+      expect(text).toContain("last published copy");
+      // The two claims this copy must NOT make: the machine's liveness, and
+      // a host id label the reader can do nothing with.
+      expect(text).not.toContain("is offline");
+      expect(text).not.toContain("085b919a-f0a6-42e5-b05e-241738d3dd6a");
+      // An editor keeps the way out - the host's fork path deliberately
+      // permits a cross-user source in a shared epic.
+      expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    });
+
+    it("withholds Clone and says why for a view-only collaborator", () => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="085b919a-f0a6-42e5-b05e-241738d3dd6a"
+          reason="host-offline"
+          ownedByViewer={false}
+          cloneAllowed={false}
+          showsPublishedCopy
+          cloning={false}
+          onClone={() => undefined}
+          testId="chat-dead-foreign-viewer"
+          className={undefined}
+        />,
+      );
+
+      const text = screen.getByTestId("chat-dead-foreign-viewer").textContent;
+      expect(text).toContain("belongs to another collaborator");
+      // The reason the button is absent, in the sentence - the alternative
+      // was a button whose click died on a bare "You don't have permission"
+      // toast, which is the defect this gate exists to remove.
+      expect(text).toContain("view-only access");
+      expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    });
+
+    // Cold-review finding: the first cut claimed "showing the last published
+    // copy" unconditionally, but the live tile mounts this banner above a
+    // load state or a cached live session - the claim must follow the
+    // mounting surface's presentation, not the reason.
+    it("claims no published copy when the mounting surface shows none", () => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="some-host-id"
+          reason="host-offline"
+          ownedByViewer={false}
+          cloneAllowed
+          showsPublishedCopy={false}
+          cloning={false}
+          onClone={() => undefined}
+          testId="chat-dead-foreign-no-copy"
+          className={undefined}
+        />,
+      );
+
+      const text = screen.getByTestId("chat-dead-foreign-no-copy").textContent;
+      expect(text).toContain("belongs to another collaborator");
+      expect(text).not.toContain("published copy");
+      expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    });
+
+    // Cold-review finding: `chat-not-visible` / `chat-not-on-this-host` are
+    // picked only after a reachable host ANSWERED, so the foreign sentence
+    // must keep the missing-history fact there - "isn't connected" would
+    // invert the evidence.
+    it("keeps the missing-history fact - not a connectivity claim - when a host answered", () => {
+      for (const reason of [
+        "chat-not-visible",
+        "chat-not-on-this-host",
+      ] as const) {
+        const { unmount } = render(
+          <ChatDeadTileBanner
+            hostLabel="mac-mini"
+            reason={reason}
+            ownedByViewer={false}
+            cloneAllowed
+            showsPublishedCopy
+            cloning={false}
+            onClone={() => undefined}
+            testId={`chat-dead-foreign-${reason}`}
+            className={undefined}
+          />,
+        );
+
+        const text = screen.getByTestId(
+          `chat-dead-foreign-${reason}`,
+        ).textContent;
+        expect(text).toContain("belongs to another collaborator");
+        expect(text).toContain("history isn't available");
+        expect(text).not.toContain("isn't connected");
+        expect(text).not.toContain("mac-mini");
+        unmount();
+      }
+    });
+
+    it("keeps the revoked copy for a collaborator chat - that reason is about the viewer, not a host", () => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="mac-mini"
+          reason="chat-no-longer-shared"
+          ownedByViewer={false}
+          cloneAllowed={false}
+          showsPublishedCopy={false}
+          cloning={false}
+          onClone={() => undefined}
+          testId="chat-dead-foreign-revoked"
+          className={undefined}
+        />,
+      );
+
+      const text = screen.getByTestId("chat-dead-foreign-revoked").textContent;
+      expect(text).toContain("no longer shared with you");
+      expect(text).not.toContain("belongs to another collaborator");
+    });
+  });
+
+  // The own-chat viewer edge: a chat the viewer created before their role was
+  // downgraded. The reason copy still ends in "clone it and carry on", so the
+  // button's absence must be explained rather than silent.
+  it("withholds Clone on the viewer's own chat when the role can't create agents, and says why", () => {
+    render(
+      <ChatDeadTileBanner
+        hostLabel="mac-mini"
+        reason="host-offline"
+        ownedByViewer
+        cloneAllowed={false}
+        showsPublishedCopy={false}
+        cloning={false}
+        onClone={() => undefined}
+        testId="chat-dead-own-viewer"
+        className={undefined}
+      />,
+    );
+
+    const text = screen.getByTestId("chat-dead-own-viewer").textContent;
+    expect(text).toContain("is offline");
+    expect(text).toContain("view-only access");
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+  });
 });
