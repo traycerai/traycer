@@ -1468,6 +1468,121 @@ describe("createChatSessionStore", () => {
     ).toEqual(intent);
   });
 
+  // R14 `-CKjC`: the sweep's fallback is a PICK hand-back for one specific
+  // action, so it inherits the rejection path's ownership rule - a swept
+  // action hands its pick back only when the outstanding consumption is ITS
+  // OWN. Here it is not: a later send consumed the slot and was ACCEPTED, so
+  // the mark names the send. Staging the swept edit's pick on top of that
+  // overwrites a binding an accepted send already ran against, and the next
+  // resend looks right while running somewhere else.
+  it("refuses a swept edit's hand-back when an accepted send owns the slot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const editIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "from-edit",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    const sendIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    };
+
+    // The edit consumes the slot and never gets its ack.
+    useWorktreeIntentStagingStore.getState().stageIntent(key, editIntent);
+    expect(
+      harness.handle.store.getState().editUserMessage({
+        targetMessageId: "msg-original",
+        content: CONTENT,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+
+    // A later send stages its own pick, consumes, and IS accepted - so the
+    // outstanding mark is the send's, and the slot state is the send's.
+    useWorktreeIntentStagingStore.getState().stageIntent(key, sendIntent);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const sendFrame = harness.sent.find((frame) => frame.kind === "send");
+    if (sendFrame === undefined) throw new Error("Expected the send frame");
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: sendFrame.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+
+    // The reconnect sweeps the still-pending edit. The accepted send IS in the
+    // transcript, so it is not restored - this is the sweep's own fallback
+    // deciding alone, with no prompt hand-back to defer to.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedUserMessage("msg-original"),
+        persistedUserMessage(sendFrame.messageId),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The edit does not own the consumption, so its pick stays gone. The
+    // accepted send decided this slot.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
   it("does not restore a rejected worktree intent after a newer explicit clear", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();

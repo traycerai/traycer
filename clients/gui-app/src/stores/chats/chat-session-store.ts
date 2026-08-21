@@ -889,6 +889,20 @@ export interface StagedWorktreeIntentSource {
 }
 
 /**
+ * A swept action's claim on the staged pick.
+ *
+ * It carries the action id because a sweep hand-back is a PICK hand-back for
+ * one specific action, and a pick may only go back to the action that took it
+ * - the same rule the rejection ack applies through `rejectionOwnsSlot`. A
+ * prompt hand-back is deliberately NOT this type: a restored prompt claims the
+ * slot on behalf of whatever the user is about to resend, so it matches on no
+ * owner at all.
+ */
+interface SweptWorktreeClaimant extends StagedWorktreeIntentSource {
+  readonly clientActionId: string;
+}
+
+/**
  * Keep the background-stop slices in lockstep with the running-only list: a
  * task that has left it has settled, so its Stop is no longer in flight.
  * Extracted so the turn-state updater stays under the complexity budget.
@@ -982,7 +996,7 @@ function rejectionNotice(input: {
 
 function restoreOneWorktreeIntent(
   restoredPrompt: StagedWorktreeIntentSource | null,
-  sweptClaimants: ReadonlyArray<StagedWorktreeIntentSource | undefined>,
+  sweptClaimants: ReadonlyArray<SweptWorktreeClaimant | undefined>,
   stagingKey: WorktreeStagingKey,
 ): boolean {
   if (restoredPrompt !== null) {
@@ -1000,9 +1014,21 @@ function restoreOneWorktreeIntent(
       )
     );
   }
+  // OWNERSHIP, not merely "a consumption is outstanding". The mark names
+  // whichever dispatch consumed last, and that dispatch may have gone on to be
+  // ACCEPTED - a later send taking the slot and succeeding leaves the mark
+  // its own, the slot empty, and this swept action with no claim on either.
+  // Handing its pick back there stages a binding over one an accepted send
+  // already ran against, which is the silent-local-run this restore exists to
+  // prevent, arriving by the other door.
   const owed = sweptClaimants.find(
     (claimant) =>
-      claimant !== undefined && claimant.restoreWorktreeIntent !== null,
+      claimant !== undefined &&
+      claimant.restoreWorktreeIntent !== null &&
+      stagedWorktreeIntentAwaitsDispatchFrom(
+        stagingKey,
+        claimant.clientActionId,
+      ),
   );
   restoreStagedWorktreeIntent(owed ?? null, stagingKey);
   return false;
