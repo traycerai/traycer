@@ -13,6 +13,7 @@ import type {
 import {
   TILE_KIND_BLANK,
   TILE_KIND_COMM_GRAPH,
+  TILE_KIND_DELETED_ARTIFACTS,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_PR_DETAIL,
@@ -478,6 +479,23 @@ export interface CommGraphTileRef {
 }
 
 /**
+ * One recovery surface for all retained deletions in an epic.
+ *
+ * The content id is derived from the epic so reopening focuses the existing
+ * tile. Unlike the communication graph, the recovery RPCs are served by the
+ * epic session's host, so `hostId` is a real lifetime binding captured when
+ * the tile first opens.
+ */
+export interface DeletedArtifactsTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_DELETED_ARTIFACTS;
+  readonly name: string;
+  readonly hostId: string;
+  readonly epicId: string;
+}
+
+/**
  * A chat rendered from the last copy its owning host published.
  *
  * ## The identity is the cloud row, not the chat id
@@ -581,6 +599,7 @@ export type EpicCanvasTileRef =
   | SnapshotDiffTileRef
   | ManagedCommandOutputTileRef
   | CommGraphTileRef
+  | DeletedArtifactsTileRef
   | PublishedChatTileRef
   | PrDetailTileRef
   | PrDiffTileRef
@@ -608,6 +627,12 @@ export function isCommGraphTileRef(
   value: EpicCanvasTileRef,
 ): value is CommGraphTileRef {
   return value.type === TILE_KIND_COMM_GRAPH;
+}
+
+export function isDeletedArtifactsTileRef(
+  value: EpicCanvasTileRef,
+): value is DeletedArtifactsTileRef {
+  return value.type === TILE_KIND_DELETED_ARTIFACTS;
 }
 
 export function isGitDiffTileRef(

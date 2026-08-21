@@ -43,6 +43,7 @@ import {
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
+import { ArtifactVersionSettingsSection } from "@/components/settings/panels/artifact-version-settings-section";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerReinstallTraycer } from "@/hooks/runner/use-runner-reinstall-traycer-mutation";
@@ -873,6 +874,12 @@ export function HostOverviewPanel(props: {
             />
           )
         }
+      />
+
+      <ArtifactVersionSettingsSection
+        client={client}
+        hostId={scope.hostId}
+        enabled={usable}
       />
 
       {/* Local machine only, by the nature of the fact rather than a scope

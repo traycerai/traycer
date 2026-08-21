@@ -36,6 +36,7 @@ import {
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
+import { DeletedArtifactsOpenMenuItem } from "@/components/epic-canvas/deleted-artifacts/deleted-artifacts-open-menu-item";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -2083,6 +2084,7 @@ function ChatHeaderMoreMenu(props: {
 }
 
 function ArtifactHeaderMoreMenu(props: {
+  readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
 }) {
@@ -2120,6 +2122,7 @@ function ArtifactHeaderMoreMenu(props: {
             Search artifacts
           </DropdownMenuItem>
         ) : null}
+        <DeletedArtifactsOpenMenuItem epicId={props.epicId} />
         <DropdownMenuItem
           disabled={!selection.canSelect}
           onSelect={selection.enterSelectionMode}
@@ -2159,6 +2162,7 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
             excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
           />
           <ArtifactHeaderMoreMenu
+            epicId={props.epicId}
             tabId={props.tabId}
             collapsed={props.collapsed}
           />

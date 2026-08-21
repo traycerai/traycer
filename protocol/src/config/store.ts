@@ -924,7 +924,7 @@ export function readFeatureSettingsSync(): FeatureSettings {
   } catch {
     // Feature gates must remain safe even when config cannot be read.
   }
-  return { agentRoles: false };
+  return { agentRoles: false, artifactVersioning: false };
 }
 
 /** Enables or disables agent roles while preserving the rest of the config. */

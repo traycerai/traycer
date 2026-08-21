@@ -19,6 +19,8 @@ export const TILE_KIND_MANAGED_COMMAND_OUTPUT = "managed-command-output";
  * `CommGraphTileRef`).
  */
 export const TILE_KIND_COMM_GRAPH = "comm-graph";
+/** Epic-scoped recovery surface for retained artifact deletions. */
+export const TILE_KIND_DELETED_ARTIFACTS = "deleted-artifacts";
 /**
  * A chat this device can only READ: its owning host is out of reach, so the
  * tile renders the last copy that host published to the cloud.
@@ -51,6 +53,7 @@ export type TileKindId =
   | typeof TILE_KIND_SNAPSHOT_DIFF
   | typeof TILE_KIND_MANAGED_COMMAND_OUTPUT
   | typeof TILE_KIND_COMM_GRAPH
+  | typeof TILE_KIND_DELETED_ARTIFACTS
   | typeof TILE_KIND_PUBLISHED_CHAT
   | typeof TILE_KIND_PR_DETAIL
   | typeof TILE_KIND_PR_DIFF
@@ -69,6 +72,7 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_SNAPSHOT_DIFF]: true,
   [TILE_KIND_MANAGED_COMMAND_OUTPUT]: true,
   [TILE_KIND_COMM_GRAPH]: true,
+  [TILE_KIND_DELETED_ARTIFACTS]: true,
   [TILE_KIND_PUBLISHED_CHAT]: true,
   [TILE_KIND_PR_DETAIL]: true,
   [TILE_KIND_PR_DIFF]: true,

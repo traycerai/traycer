@@ -147,6 +147,24 @@ import {
   readChatAttachmentRequestSchema,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
+import {
+  artifactVersionsGetBlobRequestSchema,
+  artifactVersionsGetBlobResponseSchema,
+  artifactVersionsListRequestSchema,
+  artifactVersionsListResponseSchema,
+  artifactVersionsRestoreRequestSchema,
+  artifactVersionsRestoreResponseSchema,
+  deletedArtifactsListRequestSchema,
+  deletedArtifactsListResponseSchema,
+  deletedArtifactsReviveRequestSchema,
+  deletedArtifactsReviveResponseSchema,
+  artifactVersionSettingsGetRequestSchema,
+  artifactVersionSettingsGetResponseSchema,
+  artifactVersionSettingsSetEnabledRequestSchema,
+  artifactVersionSettingsSetRetentionPolicyRequestSchema,
+  artifactVersionSettingsClearHistoryRequestSchema,
+  artifactVersionSettingsCommandResponseSchema,
+} from "@traycer/protocol/host/epic/artifact-versions";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -880,6 +898,73 @@ export const epicReadChatAttachmentV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: readChatAttachmentRequestSchema,
   responseSchema: readChatAttachmentResponseSchema,
+});
+
+// Host-local artifact history. Every method is optional/non-floor: a client
+// connected to a host that predates this family hides the History surfaces,
+// while the rest of the Epic remains fully usable.
+export const epicArtifactVersionsListV10 = defineRpcContract({
+  method: "epic.artifactVersions.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionsListRequestSchema,
+  responseSchema: artifactVersionsListResponseSchema,
+});
+
+export const epicArtifactVersionsGetBlobV10 = defineRpcContract({
+  method: "epic.artifactVersions.getBlob",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionsGetBlobRequestSchema,
+  responseSchema: artifactVersionsGetBlobResponseSchema,
+});
+
+export const epicArtifactVersionsRestoreV10 = defineRpcContract({
+  method: "epic.artifactVersions.restore",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionsRestoreRequestSchema,
+  responseSchema: artifactVersionsRestoreResponseSchema,
+});
+
+export const epicDeletedArtifactsListV10 = defineRpcContract({
+  method: "epic.deletedArtifacts.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: deletedArtifactsListRequestSchema,
+  responseSchema: deletedArtifactsListResponseSchema,
+});
+
+export const epicDeletedArtifactsReviveV10 = defineRpcContract({
+  method: "epic.deletedArtifacts.revive",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: deletedArtifactsReviveRequestSchema,
+  responseSchema: deletedArtifactsReviveResponseSchema,
+});
+
+export const epicArtifactVersionSettingsGetV10 = defineRpcContract({
+  method: "epic.artifactVersionSettings.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionSettingsGetRequestSchema,
+  responseSchema: artifactVersionSettingsGetResponseSchema,
+});
+
+export const epicArtifactVersionSettingsSetEnabledV10 = defineRpcContract({
+  method: "epic.artifactVersionSettings.setEnabled",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionSettingsSetEnabledRequestSchema,
+  responseSchema: artifactVersionSettingsCommandResponseSchema,
+});
+
+export const epicArtifactVersionSettingsSetRetentionPolicyV10 =
+  defineRpcContract({
+    method: "epic.artifactVersionSettings.setRetentionPolicy",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: artifactVersionSettingsSetRetentionPolicyRequestSchema,
+    responseSchema: artifactVersionSettingsCommandResponseSchema,
+  });
+
+export const epicArtifactVersionSettingsClearHistoryV10 = defineRpcContract({
+  method: "epic.artifactVersionSettings.clearHistory",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: artifactVersionSettingsClearHistoryRequestSchema,
+  responseSchema: artifactVersionSettingsCommandResponseSchema,
 });
 
 // The per-chat run-settings tuple the row above deliberately does not carry.

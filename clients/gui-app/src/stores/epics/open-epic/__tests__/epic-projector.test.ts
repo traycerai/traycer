@@ -268,6 +268,45 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
+  it("optimistic delete writes an enriched tombstone before removing the live key", () => {
+    const { handle } = newSession();
+    const ticket = createArtifactInDocForTests(handle.doc, "ticket", null);
+
+    handle.store.getState().deleteArtifact(ticket);
+
+    const root = handle.doc.getMap("epic");
+    const artifacts = root.get("artifacts");
+    const deleted = root.get("deletedArtifacts");
+    if (!(artifacts instanceof Y.Map) || !(deleted instanceof Y.Map)) {
+      throw new Error("artifact maps missing");
+    }
+    const tombstone: unknown = deleted.get(ticket);
+    if (!(tombstone instanceof Y.Map)) throw new Error("tombstone missing");
+    expect(artifacts.has(ticket)).toBe(false);
+    expect(tombstone.toJSON()).toMatchObject({
+      id: ticket,
+      kind: "ticket",
+      title: "New ticket",
+      parentId: null,
+      assignee: "",
+      status: 0,
+    });
+    expect([...tombstone.keys()]).toEqual(
+      expect.arrayContaining([
+        "folderName",
+        "createdAt",
+        "createdManually",
+        "assignee",
+        "status",
+        "deletedAt",
+      ]),
+    );
+    const deletedAt: unknown = tombstone.get("deletedAt");
+    expect(typeof deletedAt).toBe("string");
+    expect(Number.isNaN(Date.parse(deletedAt as string))).toBe(false);
+    handle.dispose();
+  });
+
   it("chat creation populates chats slice and tree as a chat node", () => {
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "chat", null);

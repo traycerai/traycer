@@ -17,6 +17,7 @@ import {
   Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  Trash2,
   X,
 } from "lucide-react";
 import { AnimatePresence, LayoutGroup } from "motion/react";
@@ -52,13 +53,14 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
+  CommGraphTileRef,
+  DeletedArtifactsTileRef,
   EpicCanvasTileRef,
   EpicTerminalRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
-  isCommGraphTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
@@ -1128,9 +1130,7 @@ function TabIcon(props: {
       />
     );
   }
-  if (isCommGraphTileRef(props.tab)) {
-    return <CommGraphTileIcon className="size-3.5" />;
-  }
+  if (isUtilityTileRef(props.tab)) return utilityTileIcon(props.tab);
   // A published copy carries the lock rather than a chat glyph: the tab is
   // readable but cannot be steered, and that is the one thing about it that
   // differs from the chat tab beside it.
@@ -1173,4 +1173,17 @@ function TabIcon(props: {
       defaultIcon={defaultIcon}
     />
   );
+}
+
+type UtilityTileRef = CommGraphTileRef | DeletedArtifactsTileRef;
+
+function isUtilityTileRef(tab: EpicCanvasTileRef): tab is UtilityTileRef {
+  return tab.type === "comm-graph" || tab.type === "deleted-artifacts";
+}
+
+function utilityTileIcon(tab: UtilityTileRef): ReactNode {
+  if (tab.type === "comm-graph") {
+    return <CommGraphTileIcon className="size-3.5" />;
+  }
+  return <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />;
 }

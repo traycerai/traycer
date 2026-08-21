@@ -70,15 +70,7 @@ import type {
   TilePane,
 } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import {
-  isBlankTileRef,
-  isCommGraphTileRef,
-  isPublishedChatTileRef,
-  isDiffTileRef,
-  isManagedCommandOutputTileRef,
-  isPrDetailTileRef,
-  isPrDiffTileRef,
-} from "@/stores/epics/canvas/types";
+import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
 import { surfaceOwnerFor } from "@/components/epic-canvas/surface-host/surface-owner";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
@@ -113,6 +105,12 @@ function positionFor(
 ): "left" | "right" | "top" | "bottom" {
   if (axis === "horizontal") return leading ? "left" : "right";
   return leading ? "top" : "bottom";
+}
+
+function isProjectionBackedTileRef(
+  tile: EpicCanvasTileRef,
+): tile is EpicNodeRef {
+  return isTileRefRecordBacked(tile);
 }
 
 function panelIdForTabType(
@@ -887,36 +885,24 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
         )
       : s.pendingCreateArtifactIds.has(activeTab.id),
   );
-  // Terminals, git-diff tiles, the PR detail/diff pair, workspace files, output
-  // windows, the comm graph, and blank tabs are renderer-only - no cloud-backed
-  // projection, so a lookup miss isn't deletion. (A blank tab's content id is a
-  // throwaway uuid; the comm graph's is derived from the epic id; an output
-  // window's is a managed-command id, which the epic doc never carries at all -
-  // its own stream reports the command's death instead. Without this guard the
-  // artifact lookup would miss and wrongly mark them deleted.)
-  const isRemoteDeleted =
-    activeTab.type === "terminal" ||
-    isDiffTileRef(activeTab) ||
-    isPrDetailTileRef(activeTab) ||
-    isPrDiffTileRef(activeTab) ||
-    isBlankTileRef(activeTab) ||
-    isManagedCommandOutputTileRef(activeTab) ||
-    isCommGraphTileRef(activeTab) ||
-    isPublishedChatTileRef(activeTab) ||
-    activeTab.type === WORKSPACE_FILE_TAB_KIND
-      ? false
-      : computeIsRemoteDeleted({
-          snapshotLoaded,
-          leafArtifact: activeTab,
-          liveArtifact,
-          isSelfDeleted,
-          isPendingCreate,
-          projectionHostId: activeHostIdForRecordGate,
-          isCloudKnown,
-          cloudListAuthorizesChatAbsence,
-          recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
-          retractedAsDeleted: chatRetraction === "deleted",
-        });
+  // Renderer-only tiles have no cloud-backed artifact projection, so a lookup
+  // miss cannot mean deletion. The schema registry is the canonical owner of
+  // that distinction; keeping this gate table-driven also makes new utility
+  // tiles safe by construction.
+  const isRemoteDeleted = isProjectionBackedTileRef(activeTab)
+    ? computeIsRemoteDeleted({
+        snapshotLoaded,
+        leafArtifact: activeTab,
+        liveArtifact,
+        isSelfDeleted,
+        isPendingCreate,
+        projectionHostId: activeHostIdForRecordGate,
+        isCloudKnown,
+        cloudListAuthorizesChatAbsence,
+        recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
+        retractedAsDeleted: chatRetraction === "deleted",
+      })
+    : false;
   const isActive = role !== null && props.selected && props.globallyActive;
 
   // Reports the SAME isRemoteDeleted value this render already uses for the

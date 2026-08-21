@@ -66,6 +66,7 @@ type NonDurableTileType =
   | "managed-command-output"
   | "blank"
   | "comm-graph"
+  | "deleted-artifacts"
   | "pr-detail";
 
 /**

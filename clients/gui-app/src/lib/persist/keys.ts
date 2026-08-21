@@ -242,7 +242,7 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
 
-  // ── Static zustand stores (27) ───────────────────────────────────────────
+  // ── Static zustand stores (28) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -269,6 +269,11 @@ export const PERSIST_STORES = [
   },
   { camelName: "leftPanel", leaf: "left-panel", kind: "static" },
   { camelName: "commGraphPanel", leaf: "comm-graph-panel", kind: "static" },
+  {
+    camelName: "artifactVersionHistoryPanel",
+    leaf: "artifact-version-history-panel",
+    kind: "static",
+  },
   { camelName: "fileTree", leaf: "file-tree", kind: "static" },
   { camelName: "historySearch", leaf: "history-search", kind: "static" },
   { camelName: "landingDraft", leaf: "draft", kind: "static" },
