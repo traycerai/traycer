@@ -631,6 +631,34 @@ function messageIdForBlock(
 }
 
 /**
+ * Resolve a durable protocol message id to the row id used by the rendered
+ * transcript. User rows keep their protocol id, while assistant records are
+ * projected into turn-keyed rows (`assistant:<turnId>`) and retain the
+ * protocol id only as `persistentMessageId`. Terminal notifications point at
+ * that durable id, so an id-only lookup silently waits forever for a row that
+ * can never exist.
+ *
+ * Prefer an exact rendered id. When projection split one assistant turn into
+ * several rows, choose the trailing matching slice: completion and failure
+ * notifications describe the terminal edge of that persisted assistant
+ * record, and the completion marker is stamped on the final assistant slice
+ * in the current transcript projection.
+ */
+function messageIdForTranscriptTarget(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+): string | null {
+  const exact = messages.find((message) => message.id === messageId);
+  if (exact !== undefined) return exact.id;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.persistentMessageId === messageId) return message.id;
+  }
+  return null;
+}
+
+/**
  * Resolves a `sent-message` transcript jump: the message holding this chat's
  * own "Sent message" card for one A2A exchange. Matched on receiver + the
  * VERBATIM text because those are the only identifiers the send block and the
@@ -867,10 +895,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     const target = transcriptJump.target;
     const resolveTargetMessageId = (): string | null => {
       if (target.kind === "message") {
-        return (
-          view.messages.find((message) => message.id === target.messageId)
-            ?.id ?? null
-        );
+        return messageIdForTranscriptTarget(view.messages, target.messageId);
       }
       if (target.kind === "event") {
         const eventRowId = chatTranscriptEventRowId(target.eventId);

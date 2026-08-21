@@ -2986,6 +2986,45 @@ describe("<ChatTile />", () => {
     });
   });
 
+  it("resolves a durable assistant message id to its projected transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          // Notification rows persist the protocol message id. Assistant
+          // transcript rows are keyed by turn (`assistant:<turnId>`), so the
+          // jump must resolve through ChatMessageModel.persistentMessageId.
+          messageId: "next-steps-msg",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
   it("lands an event jump on the exact inline queued-preparation failure", async () => {
     renderChatTile();
     await waitForChatTileLoaded();
