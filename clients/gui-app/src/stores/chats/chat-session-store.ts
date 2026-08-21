@@ -37,7 +37,7 @@ import {
 } from "@/lib/notifications/live-chat-completion-acknowledgements";
 import {
   readStagedWorktreeIntent,
-  stagedDispatchConsumptionMark,
+  stagedDispatchDisplacement,
   stagedWorktreeIntentAwaitsDispatchFrom,
   stagedWorktreeIntentAwaitsDispatchOutcome,
   worktreeIntentWasSweptMidDispatch,
@@ -2513,7 +2513,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // action's mark standing, so that action could hand back a choice this
         // send had already superseded. Captured first so a send REFUSED below
         // can put back what this consume displaces - see `rollBackDispatch`.
-        const supersededMark = stagedDispatchConsumptionMark(stagedKey);
+        const displaced = stagedDispatchDisplacement(stagedKey);
         stagingStore.consumeForDispatch(stagedKey, clientActionId);
         // Captured once, before dispatch, and reused for the optimistic echo
         // below - a queued send (this false) gets NO optimistic transcript
@@ -2566,11 +2566,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         if (sentClientActionId === null) {
           // This send never reached the wire, so the slot goes back exactly as
-          // it was found - pick AND displaced mark. An unconditional consume
-          // needs an unconditional rollback.
+          // it was found - the pick AND everything the consume displaced. An
+          // unconditional consume needs an unconditional rollback.
           stagingStore.rollBackDispatch(stagedKey, {
             intent: worktreeIntent,
-            mark: supersededMark,
+            displaced,
           });
           return null;
         }
@@ -2741,7 +2741,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // action's mark standing, so that action could hand back a choice this
         // send had already superseded. Captured first so an edit REFUSED below
         // can put back what this consume displaces - see `rollBackDispatch`.
-        const supersededMark = stagedDispatchConsumptionMark(stagedKey);
+        const displaced = stagedDispatchDisplacement(stagedKey);
         stagingStore.consumeForDispatch(stagedKey, clientActionId);
         const sentClientActionId = sendAction({
           set,
@@ -2763,11 +2763,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
         if (sentClientActionId === null) {
-          // Same rule as `sendMessage`: a refused dispatch restores the pick
-          // and the mark it displaced, not just the pick.
+          // Same rule as `sendMessage`: a refused dispatch restores everything
+          // it displaced, not just the pick.
           stagingStore.rollBackDispatch(stagedKey, {
             intent: worktreeIntent,
-            mark: supersededMark,
+            displaced,
           });
           return null;
         }

@@ -1694,6 +1694,56 @@ describe("createChatSessionStore", () => {
     ).toEqual(editIntent);
   });
 
+  // The suspended paths are displaced by the consume too, and losing them
+  // fails the dispatch gate OPEN rather than merely losing a pick.
+  //
+  // `stagedWorktreeIntentIsSuspended` only refuses when the suspended set
+  // INTERSECTS the staged intent, so a slot routinely carries suspended paths
+  // the gate ignores - the workspace selector records every folder whose
+  // metadata has not resolved, staged or not. Here `/other-repo` is suspended
+  // while the pick names `/repo`: the send is allowed through, and if the
+  // refusal takes the suspended set with it, the retry of the very draft still
+  // sitting in the composer meets a gate with nothing left to test.
+  it("restores suspended workspace paths a refused send displaced", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent = worktreeIntentFor("feat");
+
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+    // Suspended, but for a folder the pick does not name - so the gate lets
+    // this send through rather than refusing it.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, ["/other-repo"]);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        ),
+    ).toBeNull();
+
+    expect(
+      useWorktreeIntentStagingStore.getState().suspendedWorkspacePathsByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(["/other-repo"]);
+  });
+
   // The restore path deliberately does NOT match on owner - a prompt and the
   // worktree it was written for travel together, whichever dispatch consumed
   // last. So the rollback must leave the slot still reporting what it truly

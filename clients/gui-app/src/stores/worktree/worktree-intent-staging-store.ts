@@ -352,7 +352,7 @@ interface WorktreeIntentStagingStore {
   ) => void;
   /**
    * Put this slot back exactly as a dispatch that never left the client found
-   * it: its pick, and the consumption mark its consume DISPLACED.
+   * it: its pick, and everything its consume DISPLACED.
    *
    * {@link WorktreeIntentStagingState.consumeForDispatch} is unconditional - a
    * dispatch is the slot's current state whether or not it took a pick - so
@@ -371,6 +371,16 @@ interface WorktreeIntentStagingStore {
    * {@link stagedWorktreeIntentAwaitsDispatchOutcome} is the gate the
    * prompt-restore path checks.
    *
+   * The SUSPENDED PATHS ride along for the same reason, and their loss fails
+   * OPEN rather than merely losing a pick. `consumeForDispatch` drops them
+   * too, but `stagedWorktreeIntentIsSuspended` - the gate that refuses to
+   * dispatch a staged create against a workspace whose metadata never
+   * resolved - only bites when the suspended set INTERSECTS the staged
+   * intent. So a slot routinely carries suspended paths the gate ignores (the
+   * workspace selector records every unresolved folder, staged or not), the
+   * refused dispatch takes them with it, and the retry of the very draft left
+   * in the composer sails past a gate that has nothing left to test.
+   *
    * {@link WorktreeIntentStagingState.setIntent} cannot serve here: it drops
    * the mark only on its non-empty branch, and a `null` intent takes the
    * delete-and-bump path that leaves the mark exactly where it was.
@@ -379,7 +389,7 @@ interface WorktreeIntentStagingStore {
     key: WorktreeStagingKey,
     restore: {
       readonly intent: WorktreeIntent | null;
-      readonly mark: DispatchConsumptionMark | undefined;
+      readonly displaced: DisplacedDispatchState;
     },
   ) => void;
   /** Merge one folder's intent into the staged intent for `key`. */
@@ -620,16 +630,33 @@ export function stagedWorktreeIntentAwaitsDispatchOutcome(
  * was deleted when they simply re-picked would be a lie.
  */
 /**
- * The consumption mark a dispatch is about to displace, captured so a dispatch
- * that never leaves the client can put it back. See
+ * The slot state a consume DISPLACES rather than reads - everything
+ * {@link WorktreeIntentStagingState.consumeForDispatch} drops that the pick
+ * itself does not carry.
+ *
+ * Captured as one value so the rollback cannot restore a proper subset of it:
+ * the first version of this restored the mark alone and left the suspended
+ * paths behind, which fails the dispatch gate open.
+ */
+export interface DisplacedDispatchState {
+  readonly mark: DispatchConsumptionMark | undefined;
+  readonly suspendedWorkspacePaths: readonly string[] | undefined;
+}
+
+/**
+ * What a dispatch is about to displace, captured so a dispatch that never
+ * leaves the client can put it back. See
  * {@link WorktreeIntentStagingState.rollBackDispatch}.
  */
-export function stagedDispatchConsumptionMark(
+export function stagedDispatchDisplacement(
   key: WorktreeStagingKey,
-): DispatchConsumptionMark | undefined {
-  return useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
-    worktreeStagingKeyString(key)
-  ];
+): DisplacedDispatchState {
+  const state = useWorktreeIntentStagingStore.getState();
+  const id = worktreeStagingKeyString(key);
+  return {
+    mark: state.consumedForDispatchByKey[id],
+    suspendedWorkspacePaths: state.suspendedWorkspacePathsByKey[id],
+  };
 }
 
 /**
@@ -938,14 +965,24 @@ export const useWorktreeIntentStagingStore =
             const consumedForDispatchByKey = {
               ...state.consumedForDispatchByKey,
             };
-            if (restore.mark === undefined) {
+            if (restore.displaced.mark === undefined) {
               delete consumedForDispatchByKey[id];
             } else {
-              consumedForDispatchByKey[id] = restore.mark;
+              consumedForDispatchByKey[id] = restore.displaced.mark;
+            }
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            if (restore.displaced.suspendedWorkspacePaths === undefined) {
+              delete suspendedWorkspacePathsByKey[id];
+            } else {
+              suspendedWorkspacePathsByKey[id] =
+                restore.displaced.suspendedWorkspacePaths;
             }
             return {
               intentByKey,
               consumedForDispatchByKey,
+              suspendedWorkspacePathsByKey,
               // The dispatch is undone, but the counter is monotonic by
               // construction and nothing compares it - the mark is the only
               // discriminator. Bumping keeps that invariant rather than
