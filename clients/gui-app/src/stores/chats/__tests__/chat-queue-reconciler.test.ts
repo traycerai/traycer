@@ -1181,6 +1181,52 @@ describe("chat-queue-reconciler", () => {
       }).message;
     }
 
+    // `-G8sh`: a NEW chat's `chat.settings` stays null until the first turn,
+    // and the drift guard short-circuited the WHOLE comparison on that null -
+    // including billing, which was perfectly comparable. So an initial send
+    // displaced while the user switched Personal -> Team said nothing about
+    // which account the resend would charge.
+    //
+    // Consistent with this module's own shape, not a redesign: the drift
+    // record is keyed `keyof ChatRunSettings | "accountContext"` precisely
+    // because billing is NOT a run setting, so it must not share their gate.
+    it("states billing drift even before the chat has any settings", () => {
+      const message = unrecoverableSendNotice({
+        clientActionId: "action-1",
+        content: CONTENT,
+        circumstance: "A message was not recorded",
+        worktreeIntent: null,
+        worktreeGone: false,
+        sentSettings: SETTINGS,
+        // The new-chat case: nothing has run yet, so there is no current tuple.
+        currentSettings: null,
+        sentAccountContext: { type: "PERSONAL" },
+        currentAccountContext: { type: "TEAM", teamId: "team-7" },
+        sentDeliveryPolicy: null,
+      }).message;
+
+      expect(message).toContain("billing your personal account");
+    });
+
+    // The other half of the split: run settings still need BOTH sides, because
+    // with one absent there is genuinely nothing to compare.
+    it("says nothing about run settings when the chat has none yet", () => {
+      const message = unrecoverableSendNotice({
+        clientActionId: "action-1",
+        content: CONTENT,
+        circumstance: "A message was not recorded",
+        worktreeIntent: null,
+        worktreeGone: false,
+        sentSettings: SETTINGS,
+        currentSettings: null,
+        sentAccountContext: { type: "PERSONAL" },
+        currentAccountContext: { type: "PERSONAL" },
+        sentDeliveryPolicy: null,
+      }).message;
+
+      expect(message).not.toContain("was going to run with");
+    });
+
     it("ends with the draft, so nothing can be mistaken for it", () => {
       const message = noticeFor(MULTI_LINE, { ...SETTINGS, model: "gpt-5.6" });
       const draft = recoveryTextFromContent(MULTI_LINE);

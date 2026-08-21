@@ -463,7 +463,27 @@ function settingsDriftClause(
   sentAccount: AccountContext | null,
   currentAccount: AccountContext | null,
 ): string {
-  if (sent === null || current === null) return "";
+  // Two comparisons with DIFFERENT preconditions, which is why they are no
+  // longer behind one gate. Billing is not a run setting - the drift record's
+  // key type says so explicitly - and a chat that has never run has
+  // `chat.settings === null` until its first turn. Sharing the run-settings
+  // gate meant an initial send displaced while the user switched Personal ->
+  // Team said nothing about which account the resend would charge, even though
+  // both account contexts were present and comparable the whole time.
+  const named = [
+    ...runSettingsDrift(sent, current),
+    ...accountDrift(sentAccount, currentAccount),
+  ];
+  if (named.length === 0) return "";
+  return ` It was going to run with ${named.join(", ")}; the chat uses different settings now, so a resend will not match unless you set them back.`;
+}
+
+/** Nothing to compare when either side is absent - unlike billing. */
+function runSettingsDrift(
+  sent: ChatRunSettings | null,
+  current: ChatRunSettings | null,
+): ReadonlyArray<string> {
+  if (sent === null || current === null) return [];
   // Keyed by `keyof ChatRunSettings`, NOT `Record<string, ...>`. The earlier
   // shape validated value TYPES only - it never required every field - so the
   // comment claiming a new setting would be forced into the comparison was
@@ -471,7 +491,7 @@ function settingsDriftClause(
   // fails to COMPILE when one is missing, which is what that claim was
   // supposed to buy.
   const values: Record<
-    keyof ChatRunSettings | "accountContext",
+    keyof ChatRunSettings,
     readonly [string | null, string | null]
   > = {
     harnessId: [sent.harnessId, current.harnessId],
@@ -481,22 +501,47 @@ function settingsDriftClause(
     serviceTier: [sent.serviceTier, current.serviceTier],
     agentMode: [sent.agentMode, current.agentMode],
     profileId: [sent.profileId ?? null, current.profileId ?? null],
-    // Billing rides alongside the run settings rather than inside them, so it
-    // is named in the key type explicitly to stay under the same force.
+  };
+  // `null` is a VALUE - "use the default" - not an absence. Dropping a field
+  // because its SENT value was null hid the drift that matters most.
+  return namedDrift(values);
+}
+
+/**
+ * Billing, compared on its OWN terms.
+ *
+ * It rides alongside the run settings rather than inside them, and it is the
+ * one drift with a money consequence - which account a resend charges - so it
+ * is exactly the field that must not be silenced by an unrelated absence.
+ */
+function accountDrift(
+  sentAccount: AccountContext | null,
+  currentAccount: AccountContext | null,
+): ReadonlyArray<string> {
+  return namedDrift({
     accountContext: [
       sentAccount === null ? null : describeAccount(sentAccount),
       currentAccount === null ? null : describeAccount(currentAccount),
     ],
-  };
-  // `null` is a VALUE - "use the default" - not an absence. Dropping a field
-  // because its SENT value was null hid the drift that matters most.
-  const named = Object.entries(values).flatMap(([key, [was, now]]) =>
+  });
+}
+
+function namedDrift(
+  values: Partial<
+    Record<
+      keyof ChatRunSettings | "accountContext",
+      readonly [string | null, string | null]
+    >
+  >,
+): ReadonlyArray<string> {
+  // An absent key is simply not enumerated, so the pair is always present.
+  return Object.entries(values).flatMap(([key, [was, now]]) =>
     was === now
       ? []
-      : [`${DRIFT_LABELS[key as keyof typeof values]} ${describeSetting(was)}`],
+      : [
+          `${DRIFT_LABELS[key as keyof typeof DRIFT_LABELS]} ${describeSetting(was)}`,
+        ],
   );
-  if (named.length === 0) return "";
-  return ` It was going to run with ${named.join(", ")}; the chat uses different settings now, so a resend will not match unless you set them back.`;
 }
 
 function describeAccount(context: AccountContext): string {
