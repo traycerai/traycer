@@ -587,14 +587,16 @@ function FileTreeBodyForResolvedHost(
     onLatchHost,
   ]);
 
-  // A row the REVEAL path is about to select programmatically. Pierre reports
-  // every selection change through the same `onSelectionChange` a click
-  // lands in, and that handler opens the row's preview - which for a reveal
-  // would re-navigate to the very tile the gesture came from. The marker is
-  // consumed by the first change notification after it is set (a match is
-  // swallowed, anything else proceeds and clears it), so a user click is
-  // never suppressed by a stale marker.
-  const programmaticSelectionPathRef = useRef<string | null>(null);
+  // True while the REVEAL path is rewriting the selection programmatically.
+  // Pierre reports every selection change through the same `onSelectionChange`
+  // a click lands in, and that handler opens the row's preview - which for a
+  // reveal would re-navigate to the very tile the gesture came from. A flag
+  // rather than a one-path marker: the rewrite is a deselect of every other
+  // row followed by one select, and with two rows selected the first deselect
+  // already reports a non-empty selection. Pierre notifies synchronously from
+  // inside each `select()` / `deselect()`, so the flag brackets the whole
+  // block and a later user click is never suppressed.
+  const suppressSelectionOpenRef = useRef(false);
   const { model } = useFileTree({
     paths: treePaths,
     initialExpansion: "closed",
@@ -608,9 +610,7 @@ function FileTreeBodyForResolvedHost(
     onSelectionChange: (selectedPaths) => {
       const selectedPath = selectedPaths.at(-1);
       if (selectedPath === undefined) return;
-      const programmaticPath = programmaticSelectionPathRef.current;
-      programmaticSelectionPathRef.current = null;
-      if (programmaticPath === selectedPath) return;
+      if (suppressSelectionOpenRef.current) return;
       handlersRef.current.onSelect(selectedPath);
     },
   });
@@ -666,7 +666,7 @@ function FileTreeBodyForResolvedHost(
     fileNameByPath: nameByTreePath,
     browsing: source.mode === "browse",
     clearSearchQuery,
-    programmaticSelectionPathRef,
+    suppressSelectionOpenRef,
   });
 
   // Git status arrives from its own subscription; push it into Pierre's
@@ -971,7 +971,8 @@ function useWorkspaceFileTreeReveal(args: {
   /** False while a filter drives the tree (either mode) - reveal waits. */
   readonly browsing: boolean;
   readonly clearSearchQuery: () => void;
-  readonly programmaticSelectionPathRef: RefObject<string | null>;
+  /** Set for the whole selection rewrite so no notification opens a preview. */
+  readonly suppressSelectionOpenRef: RefObject<boolean>;
 }): void {
   const {
     model,
@@ -981,7 +982,7 @@ function useWorkspaceFileTreeReveal(args: {
     fileNameByPath,
     browsing,
     clearSearchQuery,
-    programmaticSelectionPathRef,
+    suppressSelectionOpenRef,
   } = args;
 
   // Once per request: drop an active filter so the tree returns to browsing
@@ -1004,13 +1005,15 @@ function useWorkspaceFileTreeReveal(args: {
     if (!fileNameByPath.has(filePath)) return;
     const item = model.getItem(filePath);
     if (item === null) return;
-    for (const selectedPath of model.getSelectedPaths()) {
-      if (selectedPath === filePath) continue;
-      model.getItem(selectedPath)?.deselect();
-    }
-    if (!item.isSelected()) {
-      programmaticSelectionPathRef.current = filePath;
-      item.select();
+    suppressSelectionOpenRef.current = true;
+    try {
+      for (const selectedPath of model.getSelectedPaths()) {
+        if (selectedPath === filePath) continue;
+        model.getItem(selectedPath)?.deselect();
+      }
+      if (!item.isSelected()) item.select();
+    } finally {
+      suppressSelectionOpenRef.current = false;
     }
     model.scrollToPath(filePath, { offset: "nearest" });
     clearFileTreeRevealRequest(viewTabId, request.nonce);
@@ -1018,8 +1021,8 @@ function useWorkspaceFileTreeReveal(args: {
     browsing,
     fileNameByPath,
     model,
-    programmaticSelectionPathRef,
     request,
+    suppressSelectionOpenRef,
     treePaths,
     viewTabId,
   ]);

@@ -1161,6 +1161,80 @@ describe("reveal in sidebar", () => {
     expect(openPreviewSpy).not.toHaveBeenCalled();
   });
 
+  it("replaces a multi-row selection with the revealed row without opening a preview for the survivor", async () => {
+    // With TWO rows selected, deselecting the first already reports a
+    // NON-empty selection (the survivor), before the target is ever selected.
+    // A one-shot path marker set just around `select()` lets that
+    // notification through, opening the survivor's preview and then being
+    // consumed so the target's own `select()` opens another. The suppression
+    // has to span the whole rewrite.
+    requestFileTreeReveal(REVEAL_TAB_ID, {
+      hostId: HOST_ID,
+      workspacePath: WORKSPACE_PATH,
+      filePath: "src/lib/a.ts",
+    });
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [
+          { path: "src/", name: "src", kind: "directory", ignored: false },
+          {
+            path: "readme.md",
+            name: "readme.md",
+            kind: "file",
+            ignored: false,
+          },
+          { path: "notes.md", name: "notes.md", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+    await waitFor(() => {
+      expect(expandedInModel.has("src/")).toBe(true);
+    });
+    // The user's prior multi-selection, seeded directly in the model (a
+    // click-driven selection would open previews of its own).
+    selectedInModel.add("readme.md");
+    selectedInModel.add("notes.md");
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/",
+        entries: [
+          { path: "src/lib/", name: "lib", kind: "directory", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+    await waitFor(() => {
+      expect(expandedInModel.has("src/lib/")).toBe(true);
+    });
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/lib/",
+        entries: [
+          { path: "src/lib/a.ts", name: "a.ts", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(scrollToPathCalls).toHaveLength(1);
+    });
+    expect([...selectedInModel]).toEqual(["src/lib/a.ts"]);
+    expect(openPreviewSpy).not.toHaveBeenCalled();
+  });
+
   it("does not re-fire a consumed request on a later listing", async () => {
     const client = new MockWsStreamClient("unknown");
     renderPanel(client);
