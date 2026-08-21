@@ -2410,9 +2410,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         // revision it may later restore. A synchronous action rejection cannot
         // race ahead of this transition.
         const stagingStore = useWorktreeIntentStagingStore.getState();
-        if (worktreeIntent !== null) {
-          stagingStore.consumeForDispatch(stagedKey, clientActionId);
-        }
+        // Unconditional: a dispatch is this slot's current state whether or
+        // not it took a pick. Skipping the intent-free case left an earlier
+        // action's mark standing, so that action could hand back a choice this
+        // send had already superseded.
+        stagingStore.consumeForDispatch(stagedKey, clientActionId);
         // Captured once, before dispatch, and reused for the optimistic echo
         // below - a queued send (this false) gets NO optimistic transcript
         // row today. Re-deriving this condition after dispatch instead of
@@ -2622,9 +2624,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         // next resend runs there - the silent-local-run the reject exists to
         // prevent.
         const stagingStore = useWorktreeIntentStagingStore.getState();
-        if (worktreeIntent !== null) {
-          stagingStore.consumeForDispatch(stagedKey, clientActionId);
-        }
+        // Unconditional: a dispatch is this slot's current state whether or
+        // not it took a pick. Skipping the intent-free case left an earlier
+        // action's mark standing, so that action could hand back a choice this
+        // send had already superseded.
+        stagingStore.consumeForDispatch(stagedKey, clientActionId);
         const sentClientActionId = sendAction({
           set,
           get,

@@ -2018,6 +2018,75 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
+  // R13 `-BtWD`: the consume-site mirror of round 12's terminal-claim rule. An
+  // intent-FREE send skipped `consumeForDispatch` entirely, so the mark stayed
+  // owned by an earlier edit - and that edit's rejection handed E back even
+  // though a later send had superseded it. A dispatch's state is authoritative
+  // whether or not it took a pick.
+  it("supersedes an outstanding mark even when the send took no pick", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    const editFrame = harness.sent.at(-1);
+    if (editFrame === undefined || editFrame.kind !== "editUserMessage") {
+      throw new Error("Expected an edit frame");
+    }
+    // A later send with NOTHING staged - it takes no pick, but it is still a
+    // dispatch and still the current state of this slot.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: editFrame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "Host refused the edit.",
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
   // R13 `-BmQF`: the sweep tested the LAST consumption's entries, but a
   // restoration hands back its OWN action's intent. Send 1 took A; the user
   // then staged B and send 2 took that, so the mark describes B. A sweep that

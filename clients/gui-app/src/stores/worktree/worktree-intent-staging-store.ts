@@ -463,33 +463,30 @@ interface WorktreeIntentStagingStore {
  * unlike a user's own newer choice this one is worth SAYING: the prompt comes
  * back unbound through no decision of theirs.
  */
+/**
+ * The one outstanding dispatch for a slot: which action took it.
+ *
+ * THE STATE MACHINE, in full, because three defects came from parts of it
+ * living in different heads:
+ *
+ *  - A dispatch RECORDS a mark, whether or not it took a pick. An intent-free
+ *    send is still this slot's current state, and skipping it left an earlier
+ *    action's mark standing so that action could hand back a choice the user
+ *    had already superseded. (Same rule as a restored prompt's terminal claim:
+ *    having nothing to give back is a state, not an absence of one.)
+ *  - Any USER mutation drops the mark - and the swept refs with it, one
+ *    lifetime. A new pick, a clear, an unstage: all of them make whatever a
+ *    dead dispatch was holding irrelevant.
+ *  - A REJECTION may hand its pick back only if the mark is still ITS OWN: the
+ *    pick has an owner. A RESTORATION may not match on owner - it hands back a
+ *    prompt, and the action whose prompt returns is not necessarily the one
+ *    that consumed last.
+ *  - Whether the pick is still VALID is not the mark's business: sweeps record
+ *    what they removed (`sweptRefsByKey`) and each hand-back tests its own
+ *    intent, because the mark describes only the latest consumption.
+ */
 export interface DispatchConsumptionMark {
-  readonly state: "awaiting" | "purged";
-  /**
-   * Which dispatch took the pick.
-   *
-   * Read ONLY by the rejection surface. Round 10 proved owner-matching wrong
-   * for the restoration paths, but they hand back a PROMPT - and the action
-   * whose prompt returns to the composer is not necessarily the one that
-   * consumed last. A rejection hands back the PICK itself, which does have an
-   * owner: only the dispatch that took the slot may put it back, or an earlier
-   * action's rejection steals a slot a later dispatch still needs and revives
-   * a choice the user has since superseded.
-   */
   readonly clientActionId: string;
-  /**
-   * The entries the dispatch took, kept so a later sweep can ask whether THIS
-   * pick references anything removed.
-   *
-   * The consume site is the one moment the store holds the intent in hand -
-   * afterwards it lives on the pending action, out of reach. Without them the
-   * purge had to mark every awaiting slot on the swept host, which lost the
-   * hand-back for sends whose worktree survived and - once the refusal became
-   * a STATEMENT - told those users their worktree was deleted when it was not.
-   * Over-purging stopped being merely conservative the moment it started
-   * speaking.
-   */
-  readonly entries: ReadonlyArray<WorktreeFolderIntent>;
 }
 
 /**
@@ -580,7 +577,7 @@ export function stagedWorktreeIntentAwaitsDispatchOutcome(
   const state = useWorktreeIntentStagingStore.getState();
   return (
     state.intentByKey[id] === undefined &&
-    state.consumedForDispatchByKey[id]?.state === "awaiting"
+    state.consumedForDispatchByKey[id] !== undefined
   );
 }
 
@@ -605,16 +602,6 @@ export function stagedWorktreeIntentAwaitsDispatchFrom(
   return (
     stagedWorktreeIntentAwaitsDispatchOutcome(key) &&
     mark?.clientActionId === clientActionId
-  );
-}
-
-export function stagedWorktreeIntentWasPurgedMidDispatch(
-  key: WorktreeStagingKey,
-): boolean {
-  const id = worktreeStagingKeyString(key);
-  return (
-    useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[id]
-      ?.state === "purged"
   );
 }
 
@@ -887,11 +874,7 @@ export const useWorktreeIntentStagingStore =
               // NOT a user choice - the send took it, and may hand it back.
               consumedForDispatchByKey: {
                 ...state.consumedForDispatchByKey,
-                [id]: {
-                  state: "awaiting",
-                  clientActionId,
-                  entries: state.intentByKey[id]?.entries ?? [],
-                },
+                [id]: { clientActionId },
               },
             };
           }),
