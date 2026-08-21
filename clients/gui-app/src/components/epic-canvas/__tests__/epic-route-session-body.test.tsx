@@ -52,6 +52,10 @@ vi.mock("@/components/epic-canvas/dialogs/epic-migration-modal", () => ({
   ),
 }));
 
+vi.mock("@/components/epic-canvas/epic-plain-terminal-create-owner", () => ({
+  EpicPlainTerminalCreateOwner: () => null,
+}));
+
 const BODY_PROPS = {
   epicId: "epic-a",
   tabId: "tab-a",

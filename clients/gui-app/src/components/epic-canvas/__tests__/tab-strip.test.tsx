@@ -16,7 +16,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -384,7 +383,82 @@ describe("<TabStrip />", () => {
     ).toBeNull();
   });
 
-  it("renders and closes capable terminal tabs through the shared coordinator", async () => {
+  it.each([
+    {
+      name: "before readiness",
+      capability: "unknown" as const,
+      canMutate: false,
+      viewModel: null,
+      title: "Local presentation",
+    },
+    {
+      name: "after PTY startup",
+      capability: "capable" as const,
+      canMutate: true,
+      viewModel: {
+        displayTitle: "Manual title",
+        manualTitle: "Manual title",
+        activeProcessName: "bun",
+        liveCwd: "/repo/live",
+      },
+      title: "Manual title",
+    },
+  ])(
+    "closes a terminal tab $name as a local presentation only",
+    ({ capability, canMutate, viewModel, title }) => {
+      terminalAuthorityState.capability = capability;
+      terminalAuthorityState.canMutate = canMutate;
+      terminalAuthorityState.viewModel = viewModel;
+      const onClose = vi.fn((groupId: string, instanceId: string): void => {
+        useEpicCanvasStore
+          .getState()
+          .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
+      });
+      renderTabStripForTab(TERMINAL_TAB, {
+        onClose,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      });
+
+      expect(
+        screen.getByTestId(`tab-title-${TERMINAL_TAB.instanceId}`).textContent,
+      ).toBe(title);
+
+      fireEvent.click(screen.getByRole("button", { name: `Close ${title}` }));
+
+      expect(terminalAuthorityState.close).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledWith("group-1", TERMINAL_TAB.instanceId);
+      expect(
+        useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
+          ?.tilesByInstanceId[TERMINAL_TAB.instanceId],
+      ).toBeUndefined();
+    },
+  );
+
+  it("offers Edit Title for a capable terminal tab", () => {
+    terminalAuthorityState.capability = "capable";
+    terminalAuthorityState.canMutate = true;
+    terminalAuthorityState.viewModel = {
+      displayTitle: "Manual title",
+      manualTitle: "Manual title",
+      activeProcessName: "bun",
+      liveCwd: "/repo/live",
+    };
+    renderTabStripForTab(TERMINAL_TAB, {
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
+    );
+    expect(screen.getByRole("menuitem", { name: "Edit Title" })).not.toBeNull();
+  });
+
+  it("closes a capable terminal tab from middle-click without a lifetime mutation", () => {
     terminalAuthorityState.capability = "capable";
     terminalAuthorityState.canMutate = true;
     terminalAuthorityState.viewModel = {
@@ -405,57 +479,17 @@ describe("<TabStrip />", () => {
       onSplit: undefined,
     });
 
-    expect(
-      screen.getByTestId(`tab-title-${TERMINAL_TAB.instanceId}`).textContent,
-    ).toBe("Manual title");
-
-    fireEvent.contextMenu(
-      screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
-    );
-    expect(screen.getByRole("menuitem", { name: "Edit Title" })).not.toBeNull();
-    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-
-    fireEvent.click(screen.getByRole("button", { name: "Close Manual title" }));
-    await waitFor(() =>
-      expect(terminalAuthorityState.close).toHaveBeenCalledWith({
-        terminalId: TERMINAL_TAB.id,
-      }),
-    );
-    expect(onClose).toHaveBeenCalledWith("group-1", TERMINAL_TAB.instanceId);
-    expect(
-      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
-        ?.tilesByInstanceId[TERMINAL_TAB.instanceId],
-    ).toEqual(TERMINAL_TAB);
-  });
-
-  it("routes a capable terminal middle-click through shared close without deleting the ref", async () => {
-    terminalAuthorityState.capability = "capable";
-    terminalAuthorityState.canMutate = true;
-    const onClose = vi.fn((groupId: string, instanceId: string): void => {
-      useEpicCanvasStore
-        .getState()
-        .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
-    });
-    renderTabStripForTab(TERMINAL_TAB, {
-      onClose,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
-
     fireEvent(
       screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
       new MouseEvent("auxclick", { bubbles: true, button: 1 }),
     );
 
-    await waitFor(() =>
-      expect(terminalAuthorityState.close).toHaveBeenCalledOnce(),
-    );
+    expect(terminalAuthorityState.close).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith("group-1", TERMINAL_TAB.instanceId);
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
         ?.tilesByInstanceId[TERMINAL_TAB.instanceId],
-    ).toEqual(TERMINAL_TAB);
+    ).toBeUndefined();
   });
 
   it.each([
@@ -518,7 +552,7 @@ describe("<TabStrip />", () => {
     },
   );
 
-  it("fails closed for unknown-capability terminal rename and context close", () => {
+  it("fails closed for unknown-capability terminal rename and still closes the presentation", () => {
     terminalAuthorityState.capability = "unknown";
     terminalAuthorityState.canMutate = false;
     const onMenuClose = vi.fn((groupId: string, instanceId: string): void => {
@@ -548,7 +582,7 @@ describe("<TabStrip />", () => {
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
         ?.tilesByInstanceId[TERMINAL_TAB.instanceId],
-    ).toEqual(TERMINAL_TAB);
+    ).toBeUndefined();
   });
 
   it("opens a blank tab when the empty strip area is double-clicked", () => {

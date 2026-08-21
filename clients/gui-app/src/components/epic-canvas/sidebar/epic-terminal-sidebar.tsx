@@ -19,6 +19,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { v4 as uuidv4 } from "uuid";
+import { toast } from "sonner";
 import { useDraggable } from "@dnd-kit/core";
 import {
   MoreHorizontal,
@@ -26,8 +27,6 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
-import type { RunningPlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -66,15 +65,14 @@ import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-m
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
-  deriveTitleSourceFromSessionTitle,
+  DEFAULT_TERMINAL_TITLE,
   terminalSessionLabel,
 } from "@/lib/terminals/terminal-title";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
 import {
-  findOpenArtifactInTab,
+  findOpenTileInTab,
   useEpicCanvasStore,
   useIsActiveTile,
 } from "@/stores/epics/canvas/store";
@@ -83,92 +81,59 @@ import {
   useLeftPanelSectionCollapsed,
 } from "@/stores/epics/left-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
-import {
-  existingSessionOriginFields,
-  isUnsupportedEpicTerminalRef,
-} from "@/stores/epics/canvas/types";
-import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
-import { isSetupTerminal } from "@/stores/worktree/setup-terminals";
+import { isUnsupportedEpicTerminalRef } from "@/stores/epics/canvas/types";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
 import { useHostPlainTerminalMutations } from "@/hooks/terminal/use-plain-terminal-mutations";
+import { requestEpicTerminalLifetimeClose } from "@/lib/terminals/epic-terminal-close-coordinator";
 import {
-  registerEpicTerminalCloseAuthority,
-  requestEpicTerminalLifetimeClose,
-  type EpicTerminalCloseAuthority,
-} from "@/lib/terminals/epic-terminal-close-coordinator";
+  discardEpicTerminalDurableCreate,
+  retryEpicTerminalDurableCreate,
+  settleEpicTerminalDurableCreate,
+  type EpicTerminalDurableCreateJobView,
+} from "@/lib/terminals/epic-terminal-durable-create-coordinator";
+import { useEpicTerminalDurableCreateJobViews } from "@/hooks/terminal/use-epic-terminal-durable-create";
 import {
+  epicTerminalUiIdentityKey,
+  failedCreateHasAuthoritativeRow,
+} from "@/lib/terminals/pending-create-identity";
+import {
+  getPlainTerminal,
+  plainTerminalCollectionIdentityKey,
   plainTerminalCollectionValues,
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
+import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
+import {
+  reconcileTerminalSidebarSessions,
+  type ListedTerminalSidebarSession,
+  type TerminalSidebarSessionRow,
+} from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
+import { useResolvePlainTerminalOwnerHostClient } from "@/lib/terminals/resolve-plain-terminal-owner-client";
 
 const TERMINALS_PANEL_SKELETON = <TerminalsPanelSkeleton />;
 
-function withLegacyTerminalCloseAuthority(
-  authority: EpicTerminalCloseAuthority,
-  closeLocalRef: () => void,
-): void {
-  const unregister = registerEpicTerminalCloseAuthority(authority);
-  try {
-    closeLocalRef();
-  } finally {
-    unregister();
-  }
-}
-
-function sessionFromDurableProjection(
-  terminal: RunningPlainTerminalProjection,
-): CanonicalTerminalSessionInfo {
-  return {
-    sessionId: terminal.record.terminalId,
-    scope: terminal.record.scope,
-    sessionKind: "terminal",
-    cwd: terminal.record.launch.cwd,
-    shellCommand: terminal.record.launch.shellCommand,
-    shellArgs: terminal.record.launch.shellArgs,
-    cols: terminal.runtime.cols,
-    rows: terminal.runtime.rows,
-    status: "running",
-    exitCode: null,
-    exitReason: null,
-    createdAt: Date.parse(terminal.record.createdAt),
-    title: terminal.record.manualTitle,
-    activeProcessName: terminal.runtime.activeProcessName,
-  };
-}
-
-/**
- * `terminal.list` remains the compatibility source for manager-owned setup and
- * provider-login shells. Durable terminals arrive on the authoritative
- * collection stream, so merge that live projection over any cached unary rows.
- */
-function terminalSidebarSessions(args: {
-  readonly epicId: string;
-  readonly listed: readonly CanonicalTerminalSessionInfo[];
+function failedCreateMatchesAuthoritativeRow(args: {
+  readonly job: EpicTerminalDurableCreateJobView;
+  readonly hostId: string;
   readonly durableCollection: PlainTerminalCollection | undefined;
-}): CanonicalTerminalSessionInfo[] {
-  const listed = args.listed.filter((session) =>
-    isVisibleEpicTerminalSession(session, args.epicId),
-  );
-  const durable = plainTerminalCollectionValues(args.durableCollection).filter(
-    (terminal): terminal is RunningPlainTerminalProjection =>
-      terminal.runtime.status === "running" &&
-      terminal.record.scope.kind === "epic" &&
-      terminal.record.scope.epicId === args.epicId,
-  );
-  if (durable.length === 0) return listed;
-  const durableIds = new Set(
-    durable.map((terminal) => terminal.record.terminalId),
-  );
-  return [
-    ...listed.filter((session) => !durableIds.has(session.sessionId)),
-    ...durable.map(sessionFromDurableProjection),
-  ];
+}): boolean {
+  return failedCreateHasAuthoritativeRow({
+    jobHostId: args.job.request.hostId,
+    jobTerminalId: args.job.request.terminalId,
+    sessionHostId: args.hostId,
+    durableHasTerminalId: (terminalId) =>
+      getPlainTerminal(
+        args.durableCollection,
+        args.job.request.hostId,
+        terminalId,
+      ) !== undefined,
+  });
 }
 
 /**
@@ -229,20 +194,22 @@ function TerminalsPanelBodyLive(props: {
     scope: { kind: "epic", epicId },
   });
   const durableMutations = useHostPlainTerminalMutations(durableAuthority);
-  const requestDurableClose = (terminalId: string) => {
+  const resolveOwnerClient = useResolvePlainTerminalOwnerHostClient();
+  const requestDurableClose = (hostId: string, terminalId: string) => {
     const pending = requestEpicTerminalLifetimeClose({
-      hostId: activeHostId,
+      hostId,
       terminalId,
       capability: durableAuthority.capability.status,
       canMutate: durableAuthority.canMutate,
       close: async () => {
-        await durableMutations.close.mutateAsync({ terminalId });
+        await durableMutations.close.mutateAsync({ hostId, terminalId });
       },
     });
     if (pending === null) return;
     void pending.catch(() => undefined);
   };
   const requestDurableRename = (
+    hostId: string,
     terminalId: string,
     manualTitle: string,
     onSuccess: () => void,
@@ -250,12 +217,27 @@ function TerminalsPanelBodyLive(props: {
     if (!durableAuthority.canMutate || durableMutations.rename.isPending) {
       return;
     }
-    durableMutations.rename.mutate({ terminalId, manualTitle }, { onSuccess });
+    durableMutations.rename.mutate(
+      { hostId, terminalId, manualTitle },
+      { onSuccess },
+    );
   };
 
   const openExisting = useCallback(
-    (session: CanonicalTerminalSessionInfo) => {
-      const found = findOpenArtifactInTab(tabId, session.sessionId);
+    (row: TerminalSidebarSessionRow) => {
+      if (row.durable && resolveOwnerClient(row.hostId) === null) {
+        toast(
+          `Can't open this terminal right now - host ${row.hostId} is not reachable.`,
+        );
+        return;
+      }
+      const tile = makeListedEpicTerminalRef({
+        session: row.session,
+        hostId: row.hostId,
+        instanceId: uuidv4(),
+        durable: row.durable,
+      });
+      const found = findOpenTileInTab(tabId, tile);
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
           prepareSetActiveTileTabFocusTarget(
@@ -267,56 +249,134 @@ function TerminalsPanelBodyLive(props: {
         return;
       }
       navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(
-          tabId,
-          makeTerminalRef(session, activeHostId, uuidv4()),
-        ),
+        prepareOpenTileInTabFocusTarget(tabId, tile),
       );
     },
     [
-      activeHostId,
       epicId,
       navigateNested,
       prepareOpenTileInTabFocusTarget,
       prepareSetActiveTileTabFocusTarget,
+      resolveOwnerClient,
       tabId,
     ],
   );
 
   // Host keeps exited sessions for a 60s grace window; filter so a
   // single kill click feels like "remove" instead of "mark dead".
-  const sessions = useMemo(
+  const reconciled = useMemo(
     () =>
-      terminalSidebarSessions({
+      reconcileTerminalSidebarSessions({
         epicId,
+        servingHostId: activeHostId,
+        capability: durableAuthority.capability.status,
+        coverage: durableAuthority.coverage ?? null,
         listed: list.data?.sessions ?? [],
         durableCollection: durableAuthority.collection,
       }),
-    [durableAuthority.collection, epicId, list.data?.sessions],
+    [
+      activeHostId,
+      durableAuthority.capability.status,
+      durableAuthority.collection,
+      durableAuthority.coverage,
+      epicId,
+      list.data?.sessions,
+    ],
   );
+  const sessions = reconciled.rows;
+  const incompleteFleet = reconciled.incompleteFleet;
+  const showIncompleteFleet = useDelayedTerminalFleetWarning(
+    incompleteFleet,
+    JSON.stringify([activeHostId, epicId]),
+  );
+  const createJobs = useEpicTerminalDurableCreateJobViews(epicId);
+  const failedCreates = useMemo(
+    () =>
+      createJobs.filter((job) => {
+        if (job.status !== "failed") return false;
+        if (job.request.hostId !== activeHostId) return false;
+        return !failedCreateMatchesAuthoritativeRow({
+          job,
+          hostId: activeHostId,
+          durableCollection: durableAuthority.collection,
+        });
+      }),
+    [activeHostId, createJobs, durableAuthority.collection],
+  );
+  const unmarkTerminalPendingCreate = useEpicCanvasStore(
+    (state) => state.unmarkTerminalPendingCreate,
+  );
+  useEffect(() => {
+    for (const job of createJobs) {
+      if (job.status !== "failed") continue;
+      if (
+        !failedCreateMatchesAuthoritativeRow({
+          job,
+          hostId: activeHostId,
+          durableCollection: durableAuthority.collection,
+        })
+      ) {
+        continue;
+      }
+      settleEpicTerminalDurableCreate(
+        job.request.hostId,
+        job.request.terminalId,
+      );
+      unmarkTerminalPendingCreate(job.request.hostId, job.request.terminalId);
+    }
+  }, [
+    activeHostId,
+    createJobs,
+    durableAuthority.collection,
+    unmarkTerminalPendingCreate,
+  ]);
 
   return (
     <SidebarContent className="min-h-0">
       <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
         <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
           <TerminalSidebarBody
-            isLoading={list.isPending ? sessions.length === 0 : false}
-            isError={list.isError}
+            isLoading={
+              failedCreates.length === 0 &&
+              (durableAuthority.capability.status === "unknown" ||
+                (incompleteFleet &&
+                  !showIncompleteFleet &&
+                  sessions.length === 0) ||
+                (sessions.length === 0 &&
+                  (list.isPending ||
+                    (durableAuthority.capability.status === "capable" &&
+                      durableAuthority.collection === undefined))))
+            }
+            isError={Boolean(
+              durableAuthority.capability.status !== "unknown" &&
+              list.isError &&
+              sessions.length === 0,
+            )}
             errorMessage={list.error?.message ?? null}
             isRetrying={list.isFetching}
             onRetry={retryList}
             sessions={sessions}
+            incompleteFleet={showIncompleteFleet}
+            failedCreates={failedCreates}
             epicId={epicId}
             tabId={tabId}
             hostId={activeHostId}
             onOpen={openExisting}
-            capability={durableAuthority.capability.status}
-            canMutate={durableAuthority.canMutate}
+            closeCapability={durableAuthority.capability.status}
+            closeCanMutate={durableAuthority.canMutate}
             closePending={durableMutations.close.isPending}
             onDurableClose={requestDurableClose}
-            durableTerminalIds={Object.keys(
-              durableAuthority.collection?.terminalsById ?? {},
-            )}
+            durableRenameIdentityKeys={
+              new Set(
+                plainTerminalCollectionValues(durableAuthority.collection).map(
+                  (terminal) =>
+                    plainTerminalCollectionIdentityKey(
+                      terminal.record.hostId,
+                      terminal.record.terminalId,
+                    ),
+                ),
+              )
+            }
             durableRenamePending={durableMutations.rename.isPending}
             onDurableRename={requestDurableRename}
           />
@@ -356,51 +416,44 @@ interface TerminalSidebarBodyProps {
   readonly errorMessage: string | null;
   readonly isRetrying: boolean;
   readonly onRetry: () => void;
-  readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
+  readonly sessions: ReadonlyArray<TerminalSidebarSessionRow>;
+  readonly incompleteFleet: boolean;
+  readonly failedCreates: ReadonlyArray<EpicTerminalDurableCreateJobView>;
   readonly epicId: string;
   readonly tabId: string;
   readonly hostId: string;
-  readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
-  readonly capability: "unknown" | "legacy" | "capable";
-  readonly canMutate: boolean;
+  readonly onOpen: (row: TerminalSidebarSessionRow) => void;
+  readonly closeCapability: "unknown" | "legacy" | "capable";
+  readonly closeCanMutate: boolean;
   readonly closePending: boolean;
-  readonly onDurableClose: (terminalId: string) => void;
-  readonly durableTerminalIds: readonly string[];
+  readonly onDurableClose: (hostId: string, terminalId: string) => void;
+  readonly durableRenameIdentityKeys: ReadonlySet<string>;
   readonly durableRenamePending: boolean;
   readonly onDurableRename: (
+    hostId: string,
     terminalId: string,
     manualTitle: string,
     onSuccess: () => void,
   ) => void;
 }
 
-type TerminalSidebarMutationMode = "disabled" | "legacy" | "capable";
+type TerminalSidebarRenameMode = "disabled" | "legacy" | "capable";
 
 /**
- * Which lifetime authority owns a row's rename/close, resolved PER ROW.
- * `capability` and `canMutate` are host-wide, but the sidebar merges two
- * sources: durable projection rows (plain-terminal registry) and
- * `terminal.list` compatibility rows for host-created setup / provider-login
- * shells, which deliberately never enter the durable collection.
- *
- * `canMutate` is only true against a settled, fresh collection snapshot, so
- * checking it BEFORE the projection is what makes a missing projection mean
- * "not durable-backed" rather than "not loaded yet". Unknown capability and a
- * stale capable authority both stay fail-closed.
+ * Which lifetime authority owns a row's rename. `capability` and `canMutate`
+ * are host-wide, but the sidebar merges durable projection rows with
+ * manager-owned compatibility rows from `terminal.list`.
  */
-function resolveTerminalSidebarMutationMode(args: {
+function resolveTerminalSidebarRenameMode(args: {
   readonly capability: "unknown" | "legacy" | "capable";
   readonly canMutate: boolean;
   readonly hasProjection: boolean;
-}): TerminalSidebarMutationMode {
+}): TerminalSidebarRenameMode {
   if (args.capability === "legacy") return "legacy";
   if (args.capability !== "capable") return "disabled";
   if (!args.canMutate) return "disabled";
-  // A row with no durable projection is a `terminal.list` compatibility row
-  // (setup / provider-login shell). The host still serves `terminal.rename`
-  // and `terminal.kill` for it - and only those: the durable resolvers require
-  // an authorized persistent record and would answer terminal-not-found. So
-  // keep the legacy path instead of disabling the action.
+  // A row with no durable projection is a manager-owned compatibility row.
+  // The host still serves `terminal.rename` for it.
   if (!args.hasProjection) return "legacy";
   return "capable";
 }
@@ -459,7 +512,18 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
       </div>
     );
   }
-  if (props.sessions.length === 0) {
+  if (props.sessions.length === 0 && props.failedCreates.length === 0) {
+    if (props.incompleteFleet) {
+      return (
+        <div
+          className="px-2 py-1.5 text-ui-sm text-muted-foreground"
+          data-testid="epic-terminal-sidebar-incomplete-fleet"
+        >
+          Remote terminal coverage is unavailable. This host has no terminals to
+          show.
+        </div>
+      );
+    }
     return (
       <SidebarPanelEmptyState
         icon={TerminalIcon}
@@ -469,41 +533,124 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
       />
     );
   }
-  const durableTerminalIds = new Set(props.durableTerminalIds);
   return (
     <ul
       aria-label="Epic terminals"
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
     >
-      {props.sessions.map((session) => {
-        // One resolution per row, shared by rename and close: both actions
-        // follow the same lifetime authority, and letting them disagree is
-        // exactly how a compatibility row ended up renaming through
-        // `terminal.rename` while closing through `terminal.plain.close`.
-        const mutationMode = resolveTerminalSidebarMutationMode({
-          capability: props.capability,
-          canMutate: props.canMutate,
-          hasProjection: durableTerminalIds.has(session.sessionId),
-        });
-        return (
-          <TerminalRow
-            key={session.sessionId}
-            epicId={props.epicId}
-            tabId={props.tabId}
-            hostId={props.hostId}
-            session={session}
-            onOpen={props.onOpen}
-            closeMode={mutationMode}
-            closePending={props.closePending}
-            onDurableClose={props.onDurableClose}
-            renameMode={mutationMode}
-            durableRenamePending={props.durableRenamePending}
-            onDurableRename={props.onDurableRename}
-          />
-        );
-      })}
+      {props.incompleteFleet ? (
+        <li
+          className="px-2 py-1.5 text-ui-sm text-muted-foreground"
+          data-testid="epic-terminal-sidebar-incomplete-fleet"
+        >
+          Remote terminals are unavailable. Showing this host only.
+        </li>
+      ) : null}
+      {props.sessions.map((row) => (
+        <TerminalRow
+          key={epicTerminalUiIdentityKey(
+            "session",
+            row.hostId,
+            row.session.sessionId,
+          )}
+          epicId={props.epicId}
+          tabId={props.tabId}
+          hostId={row.hostId}
+          session={row.session}
+          runtimeStatus={row.runtimeStatus}
+          durable={row.durable}
+          onOpen={() => props.onOpen(row)}
+          closeCapability={props.closeCapability}
+          closeCanMutate={props.closeCanMutate}
+          closePending={props.closePending}
+          onDurableClose={props.onDurableClose}
+          renameMode={resolveTerminalSidebarRenameMode({
+            capability: props.closeCapability,
+            canMutate: props.closeCanMutate,
+            hasProjection: props.durableRenameIdentityKeys.has(
+              plainTerminalCollectionIdentityKey(
+                row.hostId,
+                row.session.sessionId,
+              ),
+            ),
+          })}
+          durableRenamePending={props.durableRenamePending}
+          onDurableRename={props.onDurableRename}
+        />
+      ))}
+      {props.failedCreates.map((job) => (
+        <FailedHeadlessTerminalCreateRow
+          key={epicTerminalUiIdentityKey(
+            "failed",
+            job.request.hostId,
+            job.request.terminalId,
+          )}
+          job={job}
+        />
+      ))}
     </ul>
+  );
+}
+
+function FailedHeadlessTerminalCreateRow(props: {
+  readonly job: EpicTerminalDurableCreateJobView;
+}) {
+  const { job } = props;
+  const unmarkPendingCreate = useEpicCanvasStore(
+    (state) => state.unmarkTerminalPendingCreate,
+  );
+  const title = DEFAULT_TERMINAL_TITLE;
+  const message = job.error?.message ?? "Could not create terminal.";
+  const identityKey = epicTerminalUiIdentityKey(
+    "failed",
+    job.request.hostId,
+    job.request.terminalId,
+  );
+  return (
+    <li
+      className="rounded-md px-2 py-1.5"
+      data-testid={`epic-terminal-sidebar-failed-create-${identityKey}`}
+    >
+      <div className="flex min-w-0 items-start gap-1.5 text-ui-sm">
+        <TerminalIcon className="mt-0.5 size-3.5 shrink-0 text-destructive/70" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium text-foreground/80">{title}</div>
+          <div className="truncate text-destructive">{message}</div>
+          <div className="mt-1 flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid={`epic-terminal-sidebar-failed-retry-${identityKey}`}
+              onClick={() => {
+                retryEpicTerminalDurableCreate(
+                  job.request.hostId,
+                  job.request.terminalId,
+                );
+              }}
+            >
+              Retry
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-testid={`epic-terminal-sidebar-failed-discard-${identityKey}`}
+              onClick={() => {
+                discardEpicTerminalDurableCreate(
+                  job.request.hostId,
+                  job.request.terminalId,
+                );
+                unmarkPendingCreate(job.request.hostId, job.request.terminalId);
+              }}
+            >
+              Discard
+            </Button>
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -511,14 +658,18 @@ interface TerminalRowProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly hostId: string;
-  readonly session: CanonicalTerminalSessionInfo;
-  readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
-  readonly closeMode: TerminalSidebarMutationMode;
+  readonly session: ListedTerminalSidebarSession;
+  readonly runtimeStatus: "running" | "dormant" | "unknown";
+  readonly durable: boolean;
+  readonly onOpen: () => void;
+  readonly closeCapability: "unknown" | "legacy" | "capable";
+  readonly closeCanMutate: boolean;
   readonly closePending: boolean;
-  readonly onDurableClose: (terminalId: string) => void;
-  readonly renameMode: TerminalSidebarMutationMode;
+  readonly onDurableClose: (hostId: string, terminalId: string) => void;
+  readonly renameMode: TerminalSidebarRenameMode;
   readonly durableRenamePending: boolean;
   readonly onDurableRename: (
+    hostId: string,
     terminalId: string,
     manualTitle: string,
     onSuccess: () => void,
@@ -527,10 +678,14 @@ interface TerminalRowProps {
 
 function TerminalRow(props: TerminalRowProps) {
   const {
+    closeCapability,
+    closeCanMutate,
     closePending,
     durableRenamePending,
     epicId,
     hostId,
+    runtimeStatus,
+    durable,
     onDurableClose,
     onDurableRename,
     onOpen,
@@ -539,7 +694,7 @@ function TerminalRow(props: TerminalRowProps) {
   } = props;
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
-  const isActive = useIsActiveTile(tabId, session.sessionId);
+  const isActive = useIsActiveTile(tabId, session.sessionId, hostId);
   // The row's terminal lives on the host this sidebar LISTS (the Epic
   // session's - see the list above), so kill and rename go to that same
   // client. The app-wide wrappers were the last two reads that stayed on
@@ -575,19 +730,19 @@ function TerminalRow(props: TerminalRowProps) {
   if (renameMode === "capable") renamePending = durableRenamePending;
   if (renameMode === "legacy") renamePending = legacyRename.isPending;
   const canRename = renameMode !== "disabled" && !renamePending;
-  const closeMode = hasUnsupportedFutureRef ? "disabled" : props.closeMode;
-  let closeActionPending = false;
-  if (closeMode === "capable") closeActionPending = closePending;
-  if (closeMode === "legacy") closeActionPending = kill.isPending;
-  const canClose = closeMode !== "disabled" && !closeActionPending;
-
   const label = terminalSessionLabel(session);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
   const tile = useMemo(
-    () => makeTerminalRef(session, hostId, uuidv4()),
-    [hostId, session],
+    () =>
+      makeListedEpicTerminalRef({
+        session,
+        hostId,
+        instanceId: uuidv4(),
+        durable,
+      }),
+    [durable, hostId, session],
   );
   const dragData = useMemo<EpicCanvasTerminalTileDragData>(
     () => ({
@@ -604,7 +759,10 @@ function TerminalRow(props: TerminalRowProps) {
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getPaneScopedDndId(tabId, getTerminalTileDragId(session.sessionId)),
+    id: getPaneScopedDndId(
+      tabId,
+      getTerminalTileDragId(session.sessionId, hostId),
+    ),
     data: dragData,
     disabled: isRenaming,
   });
@@ -633,7 +791,7 @@ function TerminalRow(props: TerminalRowProps) {
     // host round-trip (with rollback on error).
     const finish = (): void => setIsRenaming(false);
     if (renameMode === "capable") {
-      onDurableRename(session.sessionId, trimmed, finish);
+      onDurableRename(hostId, session.sessionId, trimmed, finish);
       return;
     }
     legacyRename.mutate(
@@ -657,40 +815,30 @@ function TerminalRow(props: TerminalRowProps) {
   // only drops the host session (and its sidebar row); the open tile would
   // otherwise linger until the exit frame round-trips - and not at all if the
   // tile is currently unmounted. Closing the tab here makes the action
-  // immediate and mount-independent. `findOpenArtifactInTab` returns null when
+  // immediate and mount-independent. `findOpenTileInTab` returns null when
   // no tab is open for this session, so a sidebar-only session just gets killed.
   const requestClose = () => {
-    if (!canClose) return;
-    if (closeMode === "capable") {
-      onDurableClose(session.sessionId);
+    if (hasUnsupportedFutureRef) return;
+    if (durable) {
+      if (closeCapability !== "capable" || !closeCanMutate || closePending) {
+        return;
+      }
+      onDurableClose(hostId, session.sessionId);
       return;
     }
-    const found = findOpenArtifactInTab(tabId, session.sessionId);
+    if (closeCapability === "unknown" || kill.isPending) return;
+    const found = findOpenTileInTab(
+      tabId,
+      makeListedEpicTerminalRef({
+        session,
+        hostId,
+        instanceId: "legacy-close-lookup",
+        durable: false,
+      }),
+    );
     if (found !== null) {
-      // This branch is reachable only for a row whose lifetime the legacy
-      // session manager owns - a positively-known old host, or a capable
-      // host's compatibility row with no durable projection. Register that
-      // evidence for the synchronous store boundary so it preserves the legacy
-      // local-close behavior without weakening the coordinator's fail-closed
-      // default for unregistered refs.
-      withLegacyTerminalCloseAuthority(
-        {
-          instanceId: found.instanceId,
-          hostId,
-          terminalId: session.sessionId,
-          capability: "legacy",
-          canMutate: false,
-          close: () => Promise.resolve(),
-        },
-        () => {
-          navigateNested(epicId, tabId, () =>
-            prepareCloseCanvasTabFocusTarget(
-              tabId,
-              found.paneId,
-              found.instanceId,
-            ),
-          );
-        },
+      navigateNested(epicId, tabId, () =>
+        prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
       );
     }
     kill.mutate({ sessionId: session.sessionId });
@@ -704,7 +852,11 @@ function TerminalRow(props: TerminalRowProps) {
     sessionId: session.sessionId,
     // Not a pending flag: it also encodes "not permitted" (unsupported future
     // ref, unknown capability, no mutation authority).
-    closeDisabled: !canClose,
+    closeDisabled:
+      hasUnsupportedFutureRef ||
+      (durable
+        ? closeCapability !== "capable" || !closeCanMutate || closePending
+        : closeCapability === "unknown" || kill.isPending),
     onStartRename: startRename,
     renameDisabled: !canRename,
     onRequestClose: requestClose,
@@ -742,7 +894,8 @@ function TerminalRow(props: TerminalRowProps) {
                   {...listeners}
                   type="button"
                   data-testid={`epic-terminal-sidebar-item-${session.sessionId}`}
-                  data-terminal-status={session.status}
+                  data-terminal-host-id={hostId}
+                  data-terminal-status={runtimeStatus}
                   className={cn(
                     "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-8 text-left text-ui-sm transition-colors",
                     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
@@ -751,18 +904,24 @@ function TerminalRow(props: TerminalRowProps) {
                       ? "bg-accent font-medium text-accent-foreground"
                       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
                   )}
-                  onClick={() => onOpen(session)}
+                  onClick={() => onOpen()}
                   onDoubleClick={handleDoubleClick}
                 >
                   <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
                   <div className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate">{label}</span>
+                    {runtimeStatus === "unknown" ? (
+                      <span className="truncate text-ui-xs text-muted-foreground">
+                        Runtime status unavailable
+                      </span>
+                    ) : null}
                   </div>
                   {showNavigatorResourceStats ? (
                     <OwnerResourceChip
                       epicId={epicId}
                       kind="terminal"
                       ownerId={session.sessionId}
+                      hostId={hostId}
                       className={undefined}
                     />
                   ) : null}
@@ -842,31 +1001,4 @@ function terminalRowMenuEntries(
       onSelect: props.onRequestClose,
     },
   ];
-}
-
-function makeTerminalRef(
-  session: CanonicalTerminalSessionInfo,
-  hostId: string,
-  instanceId: string,
-): EpicTerminalRef {
-  // `terminal.list` cannot say who created a session, so a sign-in terminal
-  // reopened from here would otherwise become an ordinary tile that believes it
-  // owns the PTY - and re-creates the id as a bare shell once the host loses
-  // it. The renderer's own record of host-created sign-in terminals supplies
-  // what the wire does not.
-  const signInProviderId = providerLoginTerminalProviderId(
-    hostId,
-    session.sessionId,
-  );
-  const setupSession = isSetupTerminal(hostId, session.sessionId);
-  return {
-    id: session.sessionId,
-    instanceId,
-    type: "terminal",
-    name: terminalSessionLabel(session),
-    titleSource: deriveTitleSourceFromSessionTitle(session.title),
-    hostId,
-    cwd: session.cwd,
-    ...existingSessionOriginFields(signInProviderId, setupSession),
-  };
 }

@@ -33,6 +33,7 @@ import {
   usePaneActivationOwnership,
 } from "@/components/epic-canvas/pane-activation";
 import { cn } from "@/lib/utils";
+import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import {
   useEpicCanvasStore,
   useIsActivePane,
@@ -878,7 +879,13 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     s.selfDeletedArtifactIds.has(activeTab.id),
   );
   const isPendingCreate = useEpicCanvasStore((s) =>
-    s.pendingCreateArtifactIds.has(activeTab.id),
+    activeTab.type === "terminal"
+      ? hasTerminalPendingCreate(
+          s.pendingCreateTerminalIdentities,
+          activeTab.hostId,
+          activeTab.id,
+        )
+      : s.pendingCreateArtifactIds.has(activeTab.id),
   );
   // Terminals, git-diff tiles, the PR detail/diff pair, workspace files, output
   // windows, the comm graph, and blank tabs are renderer-only - no cloud-backed
