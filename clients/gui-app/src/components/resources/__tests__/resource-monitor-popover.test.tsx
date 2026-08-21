@@ -2648,6 +2648,56 @@ describe("ResourceMonitorPopover", () => {
     expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
+  it("opens an untitled live-only agent under the untitled-agent fallback, not a blank tile", async () => {
+    // `useEpicTabDisplayTitle` projects an untitled agent's live title as
+    // `null` and lands on the tile's own `name`, so an unnamed record has to
+    // carry the render-tier fallback itself or the tab strip renders blank.
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    liveAgentsMock.byAgentId["chat-untitled"] = {
+      kind: "chat",
+      title: null,
+      hostId: "host-1",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-untitled",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Untitled agent/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
+    if (!isRecord(input)) throw new Error("expected resource intent input");
+    if (!isRecord(input.preparation)) {
+      throw new Error("expected resource preparation");
+    }
+    if (!isRecord(input.preparation.node)) {
+      throw new Error("expected resource tile node");
+    }
+    expect(input.preparation.node.name).toBe("Untitled agent");
+  });
+
   it("links an agent row that only the live epic projection knows (no tile, no canvas record)", async () => {
     routerMock.pathname = "/epics/epic-1/tab-1";
     liveAgentsMock.byAgentId["chat-live"] = {

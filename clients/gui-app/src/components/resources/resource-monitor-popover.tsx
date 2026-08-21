@@ -4379,7 +4379,11 @@ function openResourceOwner(args: {
         id: record.id,
         instanceId: uuidv4(),
         type: recordType,
-        name: record.name,
+        // The tile's `name` is the fallback `useEpicTabDisplayTitle` lands on
+        // when the live doc has no title, and an untitled agent projects as
+        // `null` there - so an unnamed record has to carry the render-tier
+        // fallback itself, exactly as the palette's openers do.
+        name: displayTitle(record.name, "agent"),
         hostId: record.hostId,
       },
       preview: false,
