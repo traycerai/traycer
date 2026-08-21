@@ -119,6 +119,13 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
     target === null ? null : streamState.client,
 }));
 
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: (target: HostDirectoryEntry | null) =>
+    target === null || hostState.client === null
+      ? null
+      : hostState.client.createRequester(target),
+}));
+
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string) => {
     if (hostId.length === 0) return null;
@@ -713,6 +720,56 @@ describe("<NotificationsSessionProvider />", () => {
     __setNotificationsStreamFactoryForTests(null);
     resetAuth("signed-out", null, null);
     vi.restoreAllMocks();
+  });
+
+  it("marks a restored focused entity read through the local host before effective-host selection", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    setFocusedChat("epic-startup", "chat-startup");
+
+    const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
+    const streamClient = new MockWsStreamClient();
+    const queryClient = new QueryClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    hostState.client =
+      createHostClient(markReadCalls).createRequesterForHostId(null);
+    streamState.client = streamClient;
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+    const toastSpy = vi.spyOn((await import("sonner")).toast, "error");
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.feed.subscribe",
+      );
+    });
+    act(() => {
+      streamClient.session.emitOpen();
+    });
+
+    await waitFor(() => {
+      expect(markReadCalls).toEqual([
+        {
+          kind: "entity",
+          entity: {
+            epicId: "epic-startup",
+            chatId: "chat-startup",
+          },
+        },
+      ]);
+    });
+    expect(toastSpy).not.toHaveBeenCalled();
   });
 
   it("keeps local failures and ingests collaboration rows alongside the cloud relay", async () => {
