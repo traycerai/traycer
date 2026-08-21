@@ -1084,6 +1084,111 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     });
   });
 
+  // `-LV77`: one ACTION legitimately has more than one thing to say. A
+  // rejection states its account on a host-coded warning; if nobody saw that,
+  // the ack says it again as a protected `SEND_RESTORED` under the SAME
+  // `clientActionId`. Keying the tracker by id alone made the second telling a
+  // duplicate of a notice that was MUTED rather than shown, so the one that
+  // was supposed to reach the user was the one dropped.
+  it("shows a second speaker for an action whose first was muted", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "ACTION_REJECTED",
+          message: "STALE-REJECTION-TEXT",
+          severity: "warning",
+          clientActionId: "send-rejected-1",
+        },
+      });
+    });
+
+    // Mounting AFTER the notice landed is the unfocused-pane shape: the replay
+    // sees a warning it will not show.
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+    expect(sonnerToastWarning).not.toHaveBeenCalled();
+
+    // ...so when the store later says the account properly, under the SAME
+    // clientActionId, the dedup does not swallow it.
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SEND_RESTORED",
+          message: "PROTECTED-ACCOUNT-TEXT",
+          severity: "warning",
+          clientActionId: "send-rejected-1",
+        },
+      });
+    });
+
+    // Exactly one toast, and it is the PROTECTED speaker - not the stale
+    // warning resurrected out of the ring. Both assertions matter: an earlier
+    // version of this test used two messages that shared a phrase, so it
+    // passed while showing the wrong one.
+    expect(sonnerToastWarning).toHaveBeenCalledTimes(1);
+    expect(toastText(sonnerToastWarning.mock.lastCall?.[0])).toBe(
+      "PROTECTED-ACCOUNT-TEXT",
+    );
+  });
+
+  // The invariant the mount pass owes the subscription pass. That callback
+  // re-walks the ENTIRE ring on every append with no severity gate, which is
+  // only safe because everything the mount pass declined to show is already
+  // remembered. Skip-without-remember turns each stale warning into a bomb
+  // the next unrelated notice detonates - and a ring holding several bursts
+  // them all at once.
+  it("keeps a muted notice muted when an unrelated notice arrives later", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: "STALE-MUTED-TEXT",
+          severity: "warning",
+          clientActionId: "approval-stale",
+        },
+      });
+    });
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+    expect(sonnerToastWarning).not.toHaveBeenCalled();
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "INTERVIEW_NOT_PENDING",
+          message: "FRESH-TEXT",
+          severity: "warning",
+          clientActionId: "interview-fresh",
+        },
+      });
+    });
+
+    // The fresh one speaks; the muted one stays muted.
+    expect(sonnerToastWarning).toHaveBeenCalledTimes(1);
+    expect(toastText(sonnerToastWarning.mock.lastCall?.[0])).toBe("FRESH-TEXT");
+  });
+
   // `-IfOj`: a toast with NO lifetime needs an owner. The app-level
   // `<Toaster />` is mounted outside the auth-dependent tree, so an infinite
   // last-copy toast survives sign-out and user-switch - and its body is the

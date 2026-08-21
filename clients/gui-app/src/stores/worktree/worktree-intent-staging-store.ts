@@ -424,6 +424,21 @@ interface WorktreeIntentStagingStore {
    * So this clears the mark and swept refs only when they are `clientActionId`'s
    * own, and otherwise leaves the other dispatch's records standing.
    */
+  /**
+   * Take back a pick this dispatch's hand-back staged, when its prompt could
+   * not reach the composer after all.
+   *
+   * Scoped by REVISION rather than by a blanket clear: every mutation of this
+   * slot bumps `revisionByKey`, so an expectation that still matches proves
+   * nothing has touched the slot since the hand-back wrote it - not the user,
+   * not a newer dispatch's consume, not a purge. Anything else and this is a
+   * no-op, which is the fail-closed direction. A blind clear here would
+   * destroy a pick that another dispatch legitimately owns.
+   */
+  readonly releaseIntentForDispatch: (
+    key: WorktreeStagingKey,
+    expectedRevision: number,
+  ) => void;
   readonly restoreIntentForDispatch: (
     key: WorktreeStagingKey,
     intent: WorktreeIntent,
@@ -789,6 +804,19 @@ export const useWorktreeIntentStagingStore =
                 id,
               ),
               sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
+            };
+          }),
+        releaseIntentForDispatch: (key, expectedRevision) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            if ((state.revisionByKey[id] ?? 0) !== expectedRevision) {
+              return state;
+            }
+            const intentByKey = { ...state.intentByKey };
+            delete intentByKey[id];
+            return {
+              intentByKey,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
         restoreIntentForDispatch: (key, intent, clientActionId) =>

@@ -54,6 +54,14 @@ export function ChatTileErrorNoticeToasts(
     // notice that inlines unrecoverable content must join this category rather
     // than rely on its severity.
     handle.store.getState().errorNotices.forEach((notice) => {
+      // Remember FIRST, then decide showability. Deciding first looks like it
+      // fixes the id-poisoning below, and it does - by breaking something
+      // else: the subscription pass re-walks the WHOLE ring on every append
+      // with no severity gate, and it is safe only because everything this
+      // pass declined to show is already muted. Skipping without remembering
+      // turns every stale warning into a time bomb that the next unrelated
+      // append resurrects, all of them at once. Muting is this pass's job;
+      // the poisoning is fixed by the tracker's KEY instead.
       if (!rememberErrorNotice(notice, tracker)) return;
       if (notice.severity !== "error" && !noticeMustSurviveUnfocus(notice)) {
         return;
@@ -106,10 +114,20 @@ function rememberErrorNotice(
       tracker.retainedClientActionIds.add(notice.clientActionId);
       return true;
     }
-    if (tracker.clientActionIds.has(notice.clientActionId)) return false;
+    // Keyed by (code, action), not by action alone. One action legitimately
+    // has more than one thing to say: a rejection states its account on an
+    // `ACTION_REJECTED` notice, and if nobody saw that, the ack says it again
+    // as a protected `SEND_RESTORED` - same `clientActionId`, different
+    // speaker. A bare-id key made the second one a duplicate of a notice that
+    // was muted rather than shown, so the telling that was supposed to reach
+    // the user was the one dropped.
+    //
+    // Still one entry per notice, so the FIFO cap means what it did.
+    const key = deliveryKey(notice);
+    if (tracker.clientActionIds.has(key)) return false;
     addWithFifoEviction(
       tracker.clientActionIds,
-      notice.clientActionId,
+      key,
       MAX_DELIVERED_CLIENT_ACTION_IDS,
     );
     return true;
@@ -117,6 +135,17 @@ function rememberErrorNotice(
   if (tracker.notices.has(notice)) return false;
   tracker.notices.add(notice);
   return true;
+}
+
+/**
+ * The component tracker's key. Deliberately NOT the store's key: the store's
+ * `deliveredNoticeActionIds` answers "did any speaker for this action reach
+ * the user", which is a question about the ACTION, so a bare id is right
+ * there. This one answers "have I already shown THIS notice", which is a
+ * question about the notice.
+ */
+function deliveryKey(notice: ChatErrorNotice): string {
+  return `${notice.code}:${notice.clientActionId ?? ""}`;
 }
 
 function showErrorNoticeToast(notice: ChatErrorNotice): void {

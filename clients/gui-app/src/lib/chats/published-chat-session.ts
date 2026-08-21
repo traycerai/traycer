@@ -368,6 +368,7 @@ export function publishedChatSessionState(
     interviewError: () => null,
     ackAcceptedAction: () => undefined,
     ackFailedSendRestoration: () => undefined,
+    stateFailedSendRestoration: () => undefined,
     markNoticeDelivered: () => undefined,
     takeSetupFailedRestoration: () => null,
     setCurrentComposerSettings: () => undefined,

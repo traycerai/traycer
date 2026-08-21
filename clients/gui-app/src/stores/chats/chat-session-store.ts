@@ -1,5 +1,6 @@
 import {
   addAcceptedAction,
+  confirmAcceptedSendByMessageId,
   noticeCarriesOnlyCopy,
   unrecoverableSendNotice,
   pruneAcceptedActions,
@@ -11,6 +12,7 @@ import {
   turnSettledFromStatus,
   withoutPendingAction,
   deadSendAccountClauses,
+  displacedRestorationNotice,
   EMPTY_DEAD_SEND_ACCOUNT,
   worktreeSweepFor,
   type DeadSendAccount,
@@ -50,6 +52,7 @@ import {
   partitionSweptIntent,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
+  worktreeStagingKeyString,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
@@ -168,12 +171,14 @@ export interface PendingUserMessage {
   readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
   /**
    * The staged worktree choice this send consumed at dispatch, carried here so
-   * it OUTLIVES the accepted ack. `acceptedActions` deliberately keeps only
-   * what action bookkeeping needs, so once the ack lands the pending action -
-   * and with it the only other copy of this binding - is gone. A send stopped
-   * after acceptance but before `messageAccepted` is restored to the composer
-   * by the settled pass, and restoring the prompt without its worktree is the
-   * silent-local-run {@link restoreStagedWorktreeIntent} exists to prevent.
+   * it OUTLIVES the accepted ack. It is copied onto the accepted record too
+   * (`AcceptedChatAction.restoreWorktreeIntent`), because the pending action -
+   * the other copy - is dropped the moment the ack lands. A send stopped after
+   * acceptance but before `messageAccepted` is restored to the composer by the
+   * settled pass, and one that dies on a dropped connection by the accepted
+   * pass in `reconcileSnapshotChange`; restoring either prompt without its
+   * worktree is the silent-local-run {@link restoreStagedWorktreeIntent}
+   * exists to prevent.
    */
   readonly restoreWorktreeIntent: WorktreeIntent | null;
 }
@@ -243,6 +248,17 @@ export interface FailedSendRestorationState {
    * bare from its own notice and once qualified from the ack.
    */
   readonly stated: boolean;
+  /**
+   * The same account, told for a prompt that could NOT reach the composer.
+   *
+   * Baked here rather than derived at displacement, on the same rule the rest
+   * of this family follows: the evidence is in hand when the slot is built and
+   * gone by the time anyone consumes it. The only difference from
+   * {@link reason} is `handedBack` - a displaced prompt's binding is released
+   * rather than returned, so its worktree clauses have to ask for a re-pick
+   * instead of reporting one already made.
+   */
+  readonly displacedReason: string;
 }
 
 export interface LiveAssistantMessage {
@@ -301,14 +317,73 @@ export interface AcceptedChatAction {
   readonly acceptedAt: number;
   /**
    * Structured prompt content carried over from the originating
-   * `PendingChatAction` when the host accepts a `send`. The content
-   * survives `actionAck`/`messageAccepted` and lives on the accepted
-   * record so a later setup-gating `setup.failed` for the same
-   * `messageId` can still restore the prompt to the composer
-   * (Flow 8). `null` for non-`send` actions and after the content has
-   * been consumed once by `takeSetupFailedRestoration`.
+   * `PendingChatAction` when the host accepts a `send`. The content survives
+   * `actionAck`/`messageAccepted` and lives on the accepted record so a later
+   * setup-gating `setup.failed` for the same `messageId` can still restore the
+   * prompt to the composer, AND so a reconnect snapshot can settle an accepted
+   * send that died before the host recorded it - see
+   * {@link reconcileSnapshotChange}. `null` for non-`send` actions and after
+   * the content has been consumed once by `takeSetupFailedRestoration`.
    */
   readonly restoreContent: JsonContent | null;
+  /**
+   * The rest of the recovery tuple, for `send` records only.
+   *
+   * This record used to keep "only what action bookkeeping needs", and that
+   * was the whole defect: a send accepted while a turn was running renders as
+   * a QUEUED item rather than a `pendingUserMessage`, so `pendingActions` was
+   * the only place its recovery fields lived - and the accepted ack moved it
+   * here, dropping them. If the connection then died before `queueChanged` or
+   * `messageAccepted`, no pass could see it: the snapshot reconciler walks
+   * `pendingActions`, the settled pass walks `pendingUserMessages`, and this
+   * record was read by nothing. The draft went with it, silently - a dead send
+   * with no account, which is the one thing this whole surface promises cannot
+   * happen.
+   *
+   * `null` on every non-`send` action.
+   */
+  readonly sender: UserMessageSender | null;
+  readonly settings: ChatRunSettings | null;
+  readonly accountContext: AccountContext | null;
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
+  readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /**
+   * The connection this send was DISPATCHED on, carried across the accepted
+   * ack. Absence from a snapshot is only evidence against an earlier
+   * connection's dispatch - the same bar {@link reconcileSnapshotChange}
+   * applies to pending sends, and for the same reason.
+   */
+  readonly connectionEpoch: number;
+  /**
+   * Whether the HOST has ever confirmed this send - reported it in the
+   * transcript, or parked in the queue.
+   *
+   * Named for the fact rather than the messenger, because confirmation
+   * arrives four ways and only one of them is a snapshot: a live
+   * `queueChanged` (the common case - it fires promptly on the dispatching
+   * connection), a snapshot's messages or queue, `messageAccepted` reporting
+   * the message in the transcript, and - for the order where that frame
+   * outran the ack - the transcript already holding the message when the ack
+   * births this record. The ack itself confirms only that the host RECEIVED
+   * the frame and so never counts on its own. A name that said "in snapshot"
+   * would be false for the doors most sends actually come through.
+   *
+   * Absence stops being evidence once presence has been seen. A queued send
+   * the user then CANCELS is absent from every later snapshot, and without
+   * this the reconnect pass read that absence as death and pushed the
+   * deliberately-discarded prompt back at them - on top of the copy the cancel
+   * UX already put in the composer (`use-chat-queue-actions` replaces the
+   * draft with the canceled item's content). The host's queue is DURABLE
+   * across restarts - it is persisted on the chat record and rehydrated on
+   * boot - so for an observed send, later absence can only mean the user
+   * canceled it or the agent consumed it. Neither is a loss, and neither is
+   * ours to narrate.
+   *
+   * It also covers the cross-client case a clear-on-cancel would miss: another
+   * window of the same user cancels, and this client - which observed the item
+   * - simply stays quiet.
+   */
+  readonly confirmedByHost: boolean;
 }
 
 /**
@@ -681,6 +756,12 @@ export interface ChatSessionState {
    * is the only thing that knows - see {@link ChatSessionState.deliveredNoticeActionIds}.
    */
   markNoticeDelivered: (clientActionId: string) => void;
+  /**
+   * Settle the restoration slot by STATING its prompt instead of handing it to
+   * the composer - see {@link displacedRestorationNotice}. Used when the
+   * composer already holds a newer draft that must not be overwritten.
+   */
+  stateFailedSendRestoration: (clientActionId: string) => void;
   /**
    * Returns the locally-cached structured prompt content keyed by
    * `messageId` (the persistent id the host attaches to `setup.failed`)
@@ -1118,9 +1199,44 @@ function rejectionRestoration(input: {
     reason: `${frame.reason ?? "Message was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, true)
     }`,
+    displacedReason: `${frame.reason ?? "Message was not accepted."}${
+      input.account === null ? "" : deadSendAccountClauses(input.account, false)
+    }`,
     // This path owns a notice and says it there, so the ack stays quiet.
     stated: true,
   };
+}
+
+/**
+ * Drop the accepted records a settling pass - snapshot or live turn-state -
+ * just declared dead. `Record` spread is additive, so a removal needs doing
+ * rather than expressing.
+ */
+function withoutSettledAcceptedActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  settled: ReadonlySet<string>,
+): Readonly<Record<string, AcceptedChatAction>> {
+  if (settled.size === 0) return acceptedActions;
+  return Object.fromEntries(
+    Object.entries(acceptedActions).filter(([id]) => !settled.has(id)),
+  );
+}
+
+/**
+ * ...and the optimistic queue rows that were standing in for them. A settled
+ * send will never be confirmed, so its row would otherwise sit in the queue
+ * claiming a message the host does not have.
+ */
+function queueWithoutSettledAcceptedSends(
+  queue: ChatQueueState,
+  settled: ReadonlySet<string>,
+): ChatQueueState {
+  if (settled.size === 0) return queue;
+  return [...settled].reduce(
+    (next, clientActionId) =>
+      removeOptimisticQueuedItemByClientActionId(next, clientActionId),
+    queue,
+  );
 }
 
 /**
@@ -1159,15 +1275,17 @@ function restoreOneWorktreeIntent(
    * ask - see {@link restorationSlotHeldByOther}.
    */
   restoration: FailedSendRestorationState | null,
-): void {
+): boolean {
   if (restoredPrompt !== null) {
-    restoreStagedWorktreeIntent(restoredPrompt, stagingKey);
+    // Reported ONLY for the restored prompt. The swept-claimant fallback below
+    // belongs to a different `clientActionId`, is never queried at
+    // displacement, and the revision guard already declines to touch it.
+    return restoreStagedWorktreeIntent(restoredPrompt, stagingKey);
     // A prompt that HAD a binding and did not get it back because a sweep ran
     // mid-flight comes back unbound through no decision of the user's - the
     // one refusal worth saying out loud. A refusal caused by their own newer
     // pick is not: they chose it, and claiming their worktree was deleted
     // would be a lie.
-    return;
   }
   // OWNERSHIP, not merely "a consumption is outstanding". The mark names
   // whichever dispatch consumed last, and that dispatch may have gone on to be
@@ -1193,7 +1311,7 @@ function restoreOneWorktreeIntent(
       ),
   );
   restoreStagedWorktreeIntent(owed ?? null, stagingKey);
-  return;
+  return false;
 }
 
 /**
@@ -1219,9 +1337,9 @@ function restoreOneWorktreeIntent(
 function restoreStagedWorktreeIntent(
   source: StagedWorktreeIntentSource | null,
   stagingKey: WorktreeStagingKey,
-): void {
-  if (source === null || source.restoreWorktreeIntent === null) return;
-  if (!stagedWorktreeIntentAwaitsDispatchOutcome(stagingKey)) return;
+): boolean {
+  if (source === null || source.restoreWorktreeIntent === null) return false;
+  if (!stagedWorktreeIntentAwaitsDispatchOutcome(stagingKey)) return false;
   // Tested against THIS intent, not the mark's entries - the mark describes
   // whichever dispatch consumed last, which need not be this one.
   //
@@ -1234,7 +1352,7 @@ function restoreStagedWorktreeIntent(
     stagingKey,
     source.restoreWorktreeIntent,
   );
-  if (survivors === null) return;
+  if (survivors === null) return false;
   // A hand-back, NOT a user pick - so it may only clear its own dispatch's
   // records. The gate above is ownership-blind, so the mark standing here
   // often belongs to a newer, still-pending send whose sweep evidence its
@@ -1242,6 +1360,7 @@ function restoreStagedWorktreeIntent(
   useWorktreeIntentStagingStore
     .getState()
     .restoreIntentForDispatch(stagingKey, survivors, source.clientActionId);
+  return true;
 }
 
 export function createChatSessionStore(
@@ -1306,6 +1425,33 @@ export function createChatSessionStoreWithNotificationDependencies(
     epicId: options.epicId,
     ownerKind: "chat",
     ownerId: options.chatId,
+  };
+  /**
+   * The staging revision each restored prompt's hand-back left behind, so a
+   * later displacement can take that pick back WITHOUT touching one anybody
+   * else owns. Captured at re-stage time - evidence in hand, never re-read
+   * from live records at displacement.
+   */
+  const stagingRevisionByRestoredAction = new Map<string, number>();
+  const recordStagedRevisionFor = (
+    source: StagedWorktreeIntentSource | null,
+    handedBack: boolean,
+  ): void => {
+    // ONLY on a write, and only AFTER it. The hand-back refuses at three
+    // doors before writing, and a refusal bumps no revision - so an
+    // unconditional capture still matches at displacement and the release
+    // deletes whatever is standing at the key, which on the refusal path is
+    // the user's own pick. Capturing the pre-write revision is the mirror
+    // error: the write moves it, the release never matches, and the binding
+    // stays attached to the newer draft. What the release needs is the
+    // revision the hand-back LEFT BEHIND.
+    if (!handedBack || source === null) return;
+    stagingRevisionByRestoredAction.set(
+      source.clientActionId,
+      useWorktreeIntentStagingStore.getState().revisionByKey[
+        worktreeStagingKeyString(ownerStagingKey)
+      ] ?? 0,
+    );
   };
   const worktreePartition: WorktreePartitionFn = (intent) =>
     partitionSweptIntent(ownerStagingKey, intent);
@@ -1627,6 +1773,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             currentAccountContext:
               useAccountContextStore.getState().accountContext,
             worktreePartition,
+            acceptedActions: state.acceptedActions,
             nowMs: now,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their
@@ -1651,6 +1798,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               currentAccountContext:
                 useAccountContextStore.getState().accountContext,
               worktreePartition,
+              acceptedActions: state.acceptedActions,
             },
           );
           restoredWorktreeIntentForSnapshot =
@@ -1666,7 +1814,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             events: frame.snapshot.chat.events,
             queue: mergeQueueWithOptimisticQueuedItems(
               frame.snapshot.queue,
-              state.queue,
+              queueWithoutSettledAcceptedSends(
+                state.queue,
+                pending.settledAcceptedActionIds,
+              ),
               new Set(Object.keys(pending.pendingActions)),
             ),
             runStatus: frame.snapshot.runStatus,
@@ -1718,7 +1869,19 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingActions: pending.pendingActions,
             acceptedActions: pruneAcceptedActions(
               {
-                ...state.acceptedActions,
+                ...withoutSettledAcceptedActions(
+                  state.acceptedActions,
+                  // BOTH passes retire records: the snapshot pass for sends it
+                  // settled itself, the settled pass for rows it recovered.
+                  new Set([
+                    ...pending.settledAcceptedActionIds,
+                    ...settled.settledAcceptedActionIds,
+                  ]),
+                ),
+                // Confirmation stamps first, then this pass's own additions -
+                // an id cannot be in both, but ordering the merge makes that
+                // independent of whether it ever could be.
+                ...pending.confirmedAcceptedActions,
                 ...pending.acceptedActions,
               },
               now,
@@ -1775,7 +1938,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // prompt is being handed back, which is the case the sweep's own
         // reasoning was written for (an edit dropped before its ack never runs
         // the rejection path, so nothing else would restore it).
-        restoreOneWorktreeIntent(
+        const handedBackForSnapshot = restoreOneWorktreeIntent(
           restoredWorktreeIntentForSnapshot,
           sweptWorktreeIntents,
           {
@@ -1789,6 +1952,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           // this pass's own restored prompt, or an earlier pass's still waiting
           // to be consumed.
           get().failedSendRestoration,
+        );
+        recordStagedRevisionFor(
+          restoredWorktreeIntentForSnapshot,
+          handedBackForSnapshot,
         );
         // A deferred session stop that survived the sweep (its turn stop was
         // accepted before the connection dropped) may never see another
@@ -1895,7 +2062,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             rejectedPending.clientActionId,
           )
         ) {
-          restoreStagedWorktreeIntent(rejectedPending, rejectionStagingKey);
+          // Third re-stage site. Same rule as the two reconcile paths: capture
+          // only what the hand-back actually left, so a later displacement can
+          // take back its own write and nothing else.
+          recordStagedRevisionFor(
+            rejectedPending,
+            restoreStagedWorktreeIntent(rejectedPending, rejectionStagingKey),
+          );
         }
         // Third surface, same rule. This path refuses the hand-back exactly as
         // the reconnect paths do, but it states things through its own
@@ -1966,6 +2139,25 @@ export function createChatSessionStoreWithNotificationDependencies(
                 state.acceptedActions,
                 pending,
                 Date.now(),
+                // An ack confirms the host RECEIVED the frame, nothing about
+                // whether the message exists - that rule stands. What CAN
+                // confirm at this door is the transcript the record is born
+                // into: `messageAccepted` legitimately arrives BEFORE the ack
+                // (`takeSetupFailedRestoration` slot 2 documents the order),
+                // and in that order door 5 fired while the send was still
+                // pending, found no accepted record to stamp, and this birth
+                // is the only chance to carry that sighting. A hardcoded
+                // `false` here re-opened the resurrection through the other
+                // arm of the same race.
+                //
+                // The transcript ONLY - deliberately not `state.queue`, which
+                // is merged with locally-minted optimistic items, so reading
+                // it would let our own write confirm our own send. A false
+                // confirmation fails in the dangerous direction (quiet about
+                // a real loss); queue-parked sends are covered in both orders
+                // by the queue and snapshot doors.
+                pending.messageId !== null &&
+                  messageExists(state.messages, pending.messageId),
               ),
               pendingUserMessages: nextPendingUsers,
               pendingBackgroundStops: backgroundStopAck.pendingStops,
@@ -2020,8 +2212,17 @@ export function createChatSessionStoreWithNotificationDependencies(
           const pendingUserMessages = state.pendingUserMessages.filter(
             (message) => message.messageId !== frame.message.messageId,
           );
+          // The fifth confirmation door. Applied on BOTH arms: whether the
+          // message is new to us or already in `messages`, the frame is the
+          // host reporting it in the transcript, and that is the fact the
+          // stamp records.
+          const acceptedActions = confirmAcceptedSendByMessageId(
+            state.acceptedActions,
+            frame.message.messageId,
+          );
           if (messageExists(state.messages, frame.message.messageId)) {
             return {
+              acceptedActions,
               pendingUserMessages,
               queue: removeOptimisticQueuedItemByMessageId(
                 state.queue,
@@ -2030,6 +2231,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             };
           }
           return {
+            acceptedActions,
             messages: [...state.messages, frame.message],
             pendingUserMessages,
             queue: removeOptimisticQueuedItemByMessageId(
@@ -2049,6 +2251,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingActions: state.pendingActions,
             pendingUserMessages: state.pendingUserMessages,
             queue: frame.queue,
+            acceptedActions: state.acceptedActions,
             nowMs: now,
           });
           return {
@@ -2061,6 +2264,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             acceptedActions: pruneAcceptedActions(
               {
                 ...state.acceptedActions,
+                // Confirmation stamps for records that were already accepted
+                // when this frame arrived, then this pass's own transitions.
+                ...patch.confirmedAcceptedActions,
                 ...patch.acceptedActions,
               },
               now,
@@ -2128,6 +2334,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               currentAccountContext:
                 useAccountContextStore.getState().accountContext,
               worktreePartition,
+              acceptedActions: state.acceptedActions,
             },
           );
           restoredWorktreeIntentForTurnState =
@@ -2141,6 +2348,17 @@ export function createChatSessionStoreWithNotificationDependencies(
             // the spread would not have written anyway.
             pendingUserMessages: settledPatch.pendingUserMessages,
             failedSendRestoration: settledPatch.failedSendRestoration,
+            // A record is retired by whichever pass recovers its send - the
+            // reconciler's contract - and this caller recovered it, so the
+            // retirement happens here exactly as at the snapshot site. Left
+            // unretired, the unconfirmed record survived the live settle and
+            // the next snapshot recovered the same send a second time.
+            // Removal only, no `pruneAcceptedActions` wrap: this site never
+            // adds a record, and TTL pruning stays a snapshot-pass concern.
+            acceptedActions: withoutSettledAcceptedActions(
+              state.acceptedActions,
+              settledPatch.settledAcceptedActionIds,
+            ),
             errorNotices: appendErrorNoticeDelta(
               state.errorNotices,
               settledPatch.appendedErrorNotices,
@@ -2167,7 +2385,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Routed through the shared decider rather than calling
         // `restoreStagedWorktreeIntent` directly, so the swept-claimant rule
         // is applied here too.
-        void restoreOneWorktreeIntent(
+        const handedBackForTurnState = restoreOneWorktreeIntent(
           restoredWorktreeIntentForTurnState,
           [],
           {
@@ -2178,6 +2396,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             ownerId: options.chatId,
           },
           get().failedSendRestoration,
+        );
+        recordStagedRevisionFor(
+          restoredWorktreeIntentForTurnState,
+          handedBackForTurnState,
         );
         maybeDispatchPendingBackgroundSessionStop(set, get);
       },
@@ -3533,13 +3755,66 @@ export function createChatSessionStoreWithNotificationDependencies(
           return { deliveredNoticeActionIds: next };
         });
       },
-      ackFailedSendRestoration: (clientActionId) => {
+      stateFailedSendRestoration: (clientActionId) => {
+        // The prompt is NOT going to the composer, so the binding its
+        // hand-back staged must not stay attached to the newer draft - that is
+        // a silent wrong-checkout submit, which "visible in the picker" does
+        // not prevent. Scoped by the revision the hand-back left: if anything
+        // has touched the slot since, this is a no-op.
+        const stagedRevision =
+          stagingRevisionByRestoredAction.get(clientActionId);
+        if (stagedRevision !== undefined) {
+          useWorktreeIntentStagingStore
+            .getState()
+            .releaseIntentForDispatch(ownerStagingKey, stagedRevision);
+          stagingRevisionByRestoredAction.delete(clientActionId);
+        }
         set((state) => {
           const restoration = state.failedSendRestoration;
           if (restoration?.clientActionId !== clientActionId) return {};
-          // Spoken exactly once. The rejection path already said it on its own
-          // notice, so this would be the second telling of one sentence.
-          if (restoration.stated) return { failedSendRestoration: null };
+          return {
+            failedSendRestoration: null,
+            errorNotices: appendErrorNotice(
+              state.errorNotices,
+              displacedRestorationNotice(
+                clientActionId,
+                restoration.content,
+                // The DISPLACED variant, baked at slot creation: its worktree
+                // clauses read `handedBack: false`, because the binding is not
+                // going back with the prompt and has just been released.
+                restoration.displacedReason,
+              ),
+              state.deliveredNoticeActionIds,
+            ),
+          };
+        });
+      },
+      ackFailedSendRestoration: (clientActionId) => {
+        // The composer TOOK the prompt, so its binding stays staged with it.
+        stagingRevisionByRestoredAction.delete(clientActionId);
+        set((state) => {
+          const restoration = state.failedSendRestoration;
+          if (restoration?.clientActionId !== clientActionId) return {};
+          // Spoken exactly once - but "spoken" means REACHED THE USER, not
+          // "was appended". The rejection path owns a notice and says the
+          // account there, so `stated` is right; what it could not know is
+          // whether anyone saw it. `useActivePaneEffect` tears the toast
+          // subscription down while the pane is unfocused, so a rejection that
+          // lands then sits in the ring unseen (and can be evicted by a flood
+          // before the pane returns). Deferring to a notice that was never
+          // shown left the prompt in the composer with silently changed
+          // semantics - the exact silent-resend this surface exists to stop.
+          //
+          // `deliveredNoticeActionIds` is the delivery axis for the whole
+          // surface and is accurate here: `markNoticeDelivered` fires only
+          // where a toast is actually shown. So a stated-and-DELIVERED account
+          // stays quiet, and a stated-but-undelivered one is said here.
+          if (
+            restoration.stated &&
+            state.deliveredNoticeActionIds.has(clientActionId)
+          ) {
+            return { failedSendRestoration: null };
+          }
           // The draft has just landed in the composer, so this is the moment
           // its account is worth reading - and the only moment both handoff
           // branches share. `markFailedByAction` does not ack, but it flips

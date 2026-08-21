@@ -1,6 +1,9 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { serializeTextRun } from "@traycer/protocol/common/json-content-serializer";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  extractPlainTextFromComposerJSONContent,
+  isTransparentToLeadingScan,
+} from "@/lib/composer/tiptap-json-content";
 
 /**
  * What a plain-text projection of composer content LOSES.
@@ -43,6 +46,12 @@ export type ContentRecoveryLoss =
  * "Text-complete" means complete IN THE RECOVERY TEXT, so an entry here is a
  * claim about what that seam produces, not about the shared projection; the
  * two must agree, and `content-recovery-classification.test.ts` asserts it.
+ *
+ * `heading` is here on the TEXT claim, not on the node: the projection emits
+ * the `#` markers `serializeHeading` sends, so the recovery copy is what the
+ * agent received. Pasting it back yields a bold paragraph rather than a
+ * heading - `markdown-paste` demotes every heading tag - which is the same
+ * residual `codeBlock` carries and for the same reason.
  *
  * `slashCommand` is deliberately ABSENT. An earlier note claimed it was
  * text-complete because the editor only permits a chip at the leading
@@ -236,17 +245,6 @@ function lostSlashChip(
 }
 
 /**
- * Containers whose own line prefix pushes their first child off column zero in
- * the RECOVERY TEXT.
- *
- * `LEADING_SLASH_COMMAND_REGEX` anchors at the start of the whole prompt and
- * accepts only spaces and tabs before the trigger, so anything else in front
- * of a `/name` - `> ` from a quote, `1. ` from an ordered item - stops the
- * converter rebuilding it. `bulletList` is deliberately absent: this module
- * emits no bullet marker, so a chip in the first bullet item still lands at
- * column zero and still round-trips.
- */
-/**
  * The serializer's list shape, mirrored so the recovery copy IS the markdown
  * the agent received: `serializeListItem` uses `options.bulletMarker ?? "-"`
  * and `options.listIndent ?? 2`, and this seam is only ever driven with the
@@ -255,19 +253,54 @@ function lostSlashChip(
 const BULLET_MARKER = "-";
 const LIST_INDENT = 2;
 
+/**
+ * Blocks the serializer indents by DEPTH even inside a list item.
+ *
+ * `getIndent` is `listDepth * listIndent`, and the three fence serializers
+ * apply it to every line - the opening fence, the body, and the closing fence.
+ * `serializeParagraph` deliberately does NOT (`inListItem` collapses its indent
+ * to ""), so this is fence-specific rather than a property of block children in
+ * general. Our seam emits fences at column zero, so the depth indent has to be
+ * put back here or a continuation fence goes out two columns short of what the
+ * agent received.
+ */
+const FENCE_NODE_TYPES: ReadonlySet<string> = new Set([
+  "codeBlock",
+  "mermaidBlock",
+  "uiPreviewBlock",
+]);
+
+/**
+ * Blocks whose own line prefix pushes their first child off column zero in the
+ * RECOVERY TEXT.
+ *
+ * `LEADING_SLASH_COMMAND_REGEX` anchors at the start of the whole prompt and
+ * accepts only spaces and tabs before the trigger, so anything else in front of
+ * a `/name` - `> ` from a quote, `1. ` from an ordered item, `## ` from a
+ * heading - stops the converter rebuilding it.
+ *
+ * MEMBERSHIP IS DECIDED BY THIS MODULE'S OWN EMISSION, and the two move
+ * together: whoever teaches `prepareForProjection` to emit a new prefix owes
+ * this set an entry in the same change. Both drifts so far were exactly that
+ * omission - `bulletList` when bullets started emitting `- `, then `heading`
+ * when headings started emitting `#` - and both shipped as a chip reported
+ * SAFE that the converter would not rebuild, the quiet direction of the
+ * failure. `content-recovery-classification.test.ts` now derives the expected
+ * answer from `recoveryTextFromContent` and the converter's own parser rather
+ * than from this list, so a third omission fails there instead of shipping.
+ */
 const LINE_PREFIXING_NODE_TYPES: ReadonlySet<string> = new Set([
   "blockquote",
   "sourcedQuote",
   "orderedList",
-  // Joined the set when bullets started emitting `- ` for parity: a chip in
-  // the first bullet item no longer lands at column zero, so it no longer
-  // round-trips. The membership and the marker are one decision.
   "bulletList",
+  "heading",
 ]);
 
 /**
- * The one position a slash chip round-trips from: first inline node, reached
- * without passing through anything that prefixes its line.
+ * The one position a slash chip round-trips from: the leading token of the
+ * recovery text, reached without passing through anything that prefixes its
+ * line.
  *
  * Node position alone was the wrong question. A skill chip inside a leading
  * blockquote IS the document's first inline node, yet it recovers as
@@ -275,15 +308,29 @@ const LINE_PREFIXING_NODE_TYPES: ReadonlySet<string> = new Set([
  * CONVERTER parses, so the walk stops at any wrapper the seam prefixes -
  * matching what this module actually emits rather than what the tree looks
  * like.
+ *
+ * Two authorities meet here, and each owns its half:
+ *
+ * - what lands at column zero is a fact about THIS module's emission, so
+ *   {@link LINE_PREFIXING_NODE_TYPES} is local and pinned to the seam by
+ *   `content-recovery-classification.test.ts`;
+ * - what counts as leading GIVEN column zero is the converter's, so
+ *   {@link isTransparentToLeadingScan} is imported rather than restated.
+ *
+ * Hard-selecting `children[0]` restated the second half and got it wrong: an
+ * indent-only text node became the "leading position", so `  /review` - which
+ * `LEADING_SLASH_COMMAND_REGEX` rebuilds, spaces and all - was reported as a
+ * chip the user had to re-pick.
  */
 function firstConvertibleInlineNode(content: JsonContent): JsonContent | null {
-  const children = content.content ?? [];
-  if (children.length === 0) return null;
-  const first = children[0];
-  if (LINE_PREFIXING_NODE_TYPES.has(first.type ?? "")) return null;
-  return (first.content ?? []).length === 0
-    ? first
-    : firstConvertibleInlineNode(first);
+  for (const child of content.content ?? []) {
+    if (isTransparentToLeadingScan(child)) continue;
+    if (LINE_PREFIXING_NODE_TYPES.has(child.type ?? "")) return null;
+    return (child.content ?? []).length === 0
+      ? child
+      : firstConvertibleInlineNode(child);
+  }
+  return null;
 }
 
 function lossForNodeType(type: string | undefined): ContentRecoveryLoss | null {
@@ -418,6 +465,30 @@ function prepareForProjection(
         },
       ];
     }
+    // `serializeHeading` sends `${"#".repeat(level)} ${content}`, so a heading
+    // recovered as its bare text is a DIFFERENT request - `## Title` came back
+    // as `Title` and the level was gone the moment the optimistic row went.
+    // Same shape and the same default as the wire (`readNumberAttr(..., 1)`).
+    //
+    // RESIDUAL, on the `codeBlock` precedent above: the TEXT is byte-exact,
+    // but the NODE does not come back. `markdown-paste` actively DEMOTES
+    // headings - `demoteHeadingsToBoldParagraphs` rewrites every `h1`-`h6`
+    // into a bold paragraph - so a copy-back is prose whichever paste path it
+    // takes. Text-complete is a claim about the TEXT, and it holds; the level
+    // reaches the agent, which is what the send was asking for.
+    if (node.type === "heading") {
+      const rawLevel = node.attrs?.level;
+      const level = typeof rawLevel === "number" ? rawLevel : 1;
+      return [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: `${"#".repeat(level)} ` },
+            ...prepareForProjection(node.content ?? []),
+          ],
+        },
+      ];
+    }
     // Rebuild ANY other container around processed children. Hoisting only at
     // the top level left a list nested in a blockquote untouched, so it still
     // joined as `foobar` - the round-5 fix reached one level and stopped.
@@ -479,29 +550,51 @@ function listItemLines(
     const continuationIndent = " ".repeat(
       baseIndent.length + marker.length + 1,
     );
-    // Walked in DOCUMENT ORDER. Partitioning the blocks - prose first, nested
-    // lists appended after - reordered an item whose sub-list is followed by a
-    // continuation paragraph, so the trailing prose jumped above the steps it
-    // was written to follow. Child order is content, not layout.
-    const lines = (item.content ?? []).flatMap((block) => {
-      if (isListNode(block)) return listItemLines(block, depth + 1);
-      const text = extractPlainTextFromComposerJSONContent({
-        type: "doc",
-        content: [...prepareForProjection([block])],
-      });
-      return text.length === 0
-        ? []
-        : text.split("\n").map((line) => `${continuationIndent}${line}`);
-    });
-    // The marker belongs on the item's first line, whatever kind of block that
-    // turned out to be - including a nested list, which carries its own deeper
-    // indent and so must not be re-indented here.
+    // `serializeListItem`'s loop, mirrored literally. Walked in DOCUMENT ORDER
+    // - partitioning the blocks (prose first, nested lists appended after)
+    // reordered an item whose sub-list is followed by a continuation
+    // paragraph, so the trailing prose jumped above the steps it was written
+    // to follow. Child order is content, not layout.
+    //
+    // The FIRST block goes in whole, behind the marker, with its own newlines
+    // untouched: a `hardBreak` in the first paragraph is a bare "\n" on the
+    // wire, so the serializer emits `- foo\nbar` with the second line at
+    // column zero. Indenting every line and then stripping the first gave
+    // `- foo\n  bar` - a continuation indent the agent never received.
+    // Continuation indent belongs to LATER blocks only, per line, and a nested
+    // list passes through unchanged because it already carries its own depth.
+    // Applied BEFORE the first-child/continuation split, because the
+    // serializer bakes it into the block's own text: a fence is already
+    // indented when `serializeListItem` sees it, and the continuation indent
+    // then goes on top of that.
+    const fenceIndent = " ".repeat(depth * LIST_INDENT);
+    const lines: string[] = [];
+    let firstBlock = true;
+    for (const block of item.content ?? []) {
+      const nested = isListNode(block);
+      const projected = nested
+        ? listItemLines(block, depth + 1).join("\n")
+        : extractPlainTextFromComposerJSONContent({
+            type: "doc",
+            content: [...prepareForProjection([block])],
+          });
+      const serialized = FENCE_NODE_TYPES.has(block.type ?? "")
+        ? projected
+            .split("\n")
+            .map((line) => `${fenceIndent}${line}`)
+            .join("\n")
+        : projected;
+      if (firstBlock) {
+        lines.push(`${baseIndent}${marker} ${serialized}`);
+        firstBlock = false;
+        continue;
+      }
+      for (const line of serialized.split("\n")) {
+        lines.push(nested ? line : `${continuationIndent}${line}`);
+      }
+    }
     if (lines.length === 0) return [`${baseIndent}${marker}`];
-    const [first, ...rest] = lines;
-    const firstText = first.startsWith(continuationIndent)
-      ? first.slice(continuationIndent.length)
-      : first.trimStart();
-    return [`${baseIndent}${marker} ${firstText}`, ...rest];
+    return lines;
   });
 }
 
@@ -530,16 +623,24 @@ function tableLines(table: JsonContent): ReadonlyArray<JsonContent> {
   for (const row of table.content ?? []) {
     if (row.type !== "tableRow") continue;
     const cells = (row.content ?? []).map((cell) =>
-      extractPlainTextFromComposerJSONContent({
-        type: "doc",
-        content: [...prepareForProjection(cell.content ?? [])],
-      })
+      // Block children of a CELL join with "", not with a newline:
+      // `serializeTable` builds cell text through `serializeChildren`, whose
+      // `parts.join("")` runs the two paragraphs of a multi-block cell
+      // together. Projecting the cell as one doc instead put a newline between
+      // them - a separator the agent never saw.
+      (cell.content ?? [])
+        .map((block) =>
+          extractPlainTextFromComposerJSONContent({
+            type: "doc",
+            content: [...prepareForProjection([block])],
+          }),
+        )
+        .join("")
         // A literal trailing `\` would otherwise escape the `\|` below and
         // merge two cells - the serializer escapes in this order for the same
         // reason.
         .replace(/\\/g, "\\\\")
-        .replace(/\|/g, "\\|")
-        .replace(/\n/g, " "),
+        .replace(/\|/g, "\\|"),
     );
     const isHeader = (row.content ?? []).some(
       (cell) => cell.type === "tableHeader",

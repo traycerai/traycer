@@ -81,6 +81,13 @@ function createAcceptedAction(
     messageId: null,
     acceptedAt,
     restoreContent: null,
+    sender: null,
+    settings: null,
+    accountContext: null,
+    deliveryPolicy: null,
+    restoreWorktreeIntent: null,
+    connectionEpoch: 0,
+    confirmedByHost: false,
   };
 }
 
@@ -148,6 +155,7 @@ describe("chat-queue-reconciler", () => {
     it("returns unchanged state when no pending actions match queue", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
         queue: { status: "idle", items: [] },
@@ -165,6 +173,7 @@ describe("chat-queue-reconciler", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const pendingUser = createPendingUserMessage("action-1", "msg-1");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [pendingUser],
         queue: {
@@ -213,6 +222,7 @@ describe("chat-queue-reconciler", () => {
         restoreWorktreeIntent: null,
       };
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": action1, "action-2": action2 },
         pendingUserMessages: [user1, user2],
         queue: {
@@ -231,6 +241,7 @@ describe("chat-queue-reconciler", () => {
     it("does not prune old accepted actions on queue change", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
         queue: {
@@ -264,6 +275,7 @@ describe("chat-queue-reconciler", () => {
       };
       const action3 = createPendingAction("action-3", null, "stop");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: {
           "action-1": action1,
           "action-2": action2,
@@ -323,6 +335,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -348,6 +361,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -370,6 +384,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -397,6 +412,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -426,6 +442,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -440,6 +457,7 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-0",
         content: CONTENT,
         reason: "Prior failure",
+        displacedReason: "Prior failure",
         stated: false,
       };
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
@@ -453,6 +471,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -486,6 +505,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -510,6 +530,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -543,6 +564,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -565,6 +587,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -624,6 +647,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -663,6 +687,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -697,6 +722,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -730,6 +756,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -744,6 +771,7 @@ describe("chat-queue-reconciler", () => {
     it("never settles a pending send against a managed-command item", () => {
       const managedItem = createManagedCommandQueueItem("queue-managed");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: {
           "action-1": createPendingAction("action-1", "msg-1", "send"),
         },
@@ -767,6 +795,7 @@ describe("chat-queue-reconciler", () => {
       const managedItem = createManagedCommandQueueItem("queue-managed");
       const promptEcho = createQueueItem("msg-1", CONTENT);
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: {
           "action-1": createPendingAction("action-1", "msg-1", "send"),
         },
@@ -796,6 +825,7 @@ describe("chat-queue-reconciler", () => {
         currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -811,6 +841,7 @@ describe("chat-queue-reconciler", () => {
     it("prunes accepted actions older than 5 minutes on queue change", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
         queue: {
@@ -843,6 +874,7 @@ describe("chat-queue-reconciler", () => {
         .map((user) => createQueueItem(user.messageId, CONTENT));
 
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions,
         pendingUserMessages: pendingUsers,
         queue: {
@@ -987,6 +1019,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" as const },
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         ...overrides,
       };
     }
@@ -999,6 +1032,8 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "The message was not recorded before the turn stopped.",
+        displacedReason:
+          "The message was not recorded before the turn stopped.",
         stated: false,
       });
     });
@@ -1080,6 +1115,8 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-2",
         content: CONTENT_2,
         reason: "The message was not recorded before the turn stopped.",
+        displacedReason:
+          "The message was not recorded before the turn stopped.",
         stated: false,
       });
     });
@@ -1098,6 +1135,7 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-0",
         content: CONTENT_2,
         reason: "Message was not accepted.",
+        displacedReason: "Message was not accepted.",
         stated: false,
       };
       const result = reconcileTurnSettled(
@@ -1135,6 +1173,7 @@ describe("chat-queue-reconciler", () => {
             clientActionId: "action-0",
             content: CONTENT_2,
             reason: "Message was not accepted.",
+            displacedReason: "Message was not accepted.",
             stated: false,
           },
         }),
@@ -1209,6 +1248,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: { ...SETTINGS, model: "gpt-5.6" },
         currentAccountContext: { type: "TEAM", teamId: "team-7" },
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         connectionEpoch: 1,
         nowMs: 5000,
       });
@@ -1233,6 +1273,7 @@ describe("chat-queue-reconciler", () => {
         currentSettings: SETTINGS,
         currentAccountContext: { type: "PERSONAL" },
         worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
       });
 
       const reason = result.failedSendRestoration?.reason ?? "";

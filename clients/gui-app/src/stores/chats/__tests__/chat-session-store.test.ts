@@ -567,6 +567,57 @@ interface SnapshotFrameInput {
   readonly turnInProgress?: boolean;
 }
 
+/**
+ * Put a live turn on the wire, so the next send is QUEUED rather than rendered
+ * as an optimistic `pendingUserMessage` - the shape `-LJlY` lives in.
+ */
+function startTurn(callbacks: ChatStreamCallbacks): void {
+  callbacks.onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    // `isChatSessionSettled` is false as soon as the run is not idle, which
+    // is all this needs - no activeTurn literal to keep in sync.
+    runStatus: "running",
+    activeTurn: null,
+  });
+}
+
+/** A reconnect snapshot that still shows the send parked in the host queue. */
+function emitSnapshotWithQueuedSend(
+  callbacks: ChatStreamCallbacks,
+  messageId: string,
+): void {
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [],
+    pendingFileEditApprovals: [],
+    queue: {
+      status: "running",
+      items: [
+        {
+          kind: "prompt",
+          queueItemId: `queue-${messageId}`,
+          messageId,
+          message: { kind: "user", content: CONTENT },
+          sender: { type: "user", userId: OWNER_ID },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          delivery: "next_turn",
+          status: "pending",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    },
+  });
+}
+
 function emitSnapshotFrame(input: SnapshotFrameInput): void {
   input.callbacks.onConnectionStatus("open", null);
   input.callbacks.onSnapshot({
@@ -1970,6 +2021,1206 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("so it was not restored");
   });
 
+  // `-LJlY`: a send dispatched while a turn is running renders as a QUEUED
+  // item, not a `pendingUserMessage`, so its recovery fields live only on the
+  // pending action - and the accepted ack moves that record to
+  // `acceptedActions`, which nothing walked. A connection dying between the
+  // ack and the host's durable confirmation took the only copy of the draft
+  // with it: a dead send with no account at all.
+  it("restores a queued send whose accepted ack died with the connection", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    // A turn is running, so the send is queued rather than optimistic.
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    acceptLastAction(harness);
+    // It has left `pendingActions` - this record is now the only copy.
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ action: "send", messageId: frame.messageId });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toMatchObject({
+      clientActionId: frame.clientActionId,
+      content: CONTENT,
+    });
+    expect(state.failedSendRestoration?.reason ?? "").toContain(
+      "A queued message was not confirmed after reconnect.",
+    );
+    // The record is gone, and so is the optimistic row standing in for it.
+    expect(state.acceptedActions[frame.clientActionId]).toBeUndefined();
+    expect(
+      state.queue.items.some(
+        (item) => item.kind === "prompt" && item.messageId === frame.messageId,
+      ),
+    ).toBe(false);
+  });
+
+  // `-MPLN`, the durability half. When the composer is busy the prompt cannot
+  // go there, so it becomes a LAST-COPY notice: never evicted, survives an
+  // unfocused pane, text inlined. Anything less and the displaced prompt is
+  // simply destroyed by the newer draft, which is the loss this whole surface
+  // exists to prevent - just arriving from the composer's side.
+  it("states a displaced restoration as a last-copy notice", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    // BY CODE: the rejection already left an `ACTION_REJECTED` notice under
+    // this same action id, and `noticeFor` would hand back whichever came
+    // first. One action, two speakers - the same fact the tracker key learned.
+    const stated = state.errorNotices.find(
+      (notice) =>
+        notice.clientActionId === rejected &&
+        notice.code === "SEND_NOT_RECORDED",
+    );
+    expect(stated).toBeDefined();
+    if (stated === undefined) throw new Error("Expected a last-copy statement");
+    // The account it was carrying survives...
+    expect(stated.message).toContain("Host refused the send.");
+    expect(stated.message).toContain("model");
+    // ...it says why the composer did not take it...
+    expect(stated.message).toContain("started another message");
+    // ...and the text itself is inlined, which is what makes it a last copy.
+    expect(stated.message).toContain("Hello");
+  });
+
+  // `-NRic`: the two passes divide one send between them - the accepted pass
+  // skips a send that still has an optimistic row because the settled pass
+  // owns the row - but nothing retired the RECORD. The next snapshot then
+  // found it never-confirmed, absent and from an earlier epoch, and recovered
+  // the same send a second time.
+  it("recovers a stranded send once, not again on the next snapshot", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    // Not queued: it keeps its optimistic row, so the SETTLED pass owns it.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // Snapshot A settles the stranded row: recovery happens exactly here.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    // ...and the record went with the row.
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toBeUndefined();
+
+    // The composer takes it, freeing the slot.
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    // Snapshot B on a later epoch must find nothing left to recover.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.code === "SEND_NOT_RECORDED",
+      ),
+    ).toEqual([]);
+  });
+
+  // `P42f`: the same divide, at the LIVE site. `-NRic` fixed the record
+  // retirement where the settled pass runs inside a snapshot; the settled
+  // pass also runs on a live `turnStateChanged` frame, and THAT caller
+  // applied every field of the patch except the retirement. So a send
+  // settled live - prompt restored, row dropped - left its unconfirmed
+  // record behind, and the next snapshot found it absent, from an earlier
+  // epoch, never confirmed, and recovered the same send a second time. The
+  // reconciler's own docblock promises "no later pass can find the same send
+  // unaccounted for"; this held it at one of the two call sites.
+  it("recovers a live-settled stranded send once, not again on the next snapshot", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    // Not queued: it keeps its optimistic row, so the SETTLED pass owns it.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // A LIVE settled frame - not a snapshot - settles the stranded row:
+    // recovery happens exactly here.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    // ...and the record went with the row, from this caller too.
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toBeUndefined();
+
+    // The composer takes it, freeing the slot.
+    harness.handle.store
+      .getState()
+      .ackFailedSendRestoration(frame.clientActionId);
+
+    // A snapshot on a later epoch must find nothing left to recover.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.code === "SEND_NOT_RECORDED",
+      ),
+    ).toEqual([]);
+  });
+
+  // `-N1x4`: the displaced path used to leave the older send's re-staged
+  // binding attached to the NEWER draft, so submitting that draft ran in a
+  // checkout the user never picked for it. "Visible in the picker" does not
+  // survive that - it is a silent wrong-checkout submit.
+  it("releases the binding when the prompt is displaced to a notice", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const staged: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [staged] });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    // The hand-back put the binding back with the prompt.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [staged] });
+
+    // The composer is busy, so the prompt is stated rather than restored -
+    // and its binding must not stay attached to somebody else's draft.
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // Per SITE, because the capture ordering is per site: the rejection version
+  // above passes on an ordering the two reconcile paths did not share. This is
+  // the SNAPSHOT path.
+  it("releases the binding when a snapshot-restored prompt is displaced", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+
+    // The snapshot pass restores it and hands the binding back.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeDefined();
+
+    harness.handle.store
+      .getState()
+      .stateFailedSendRestoration(frame.clientActionId);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // ...and the TURN-SETTLED path, whose capture site is different again.
+  it("releases the binding when a turn-settled restored prompt is displaced", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+    // Accepted, so only a live turn settling can strand it.
+    acceptLastAction(harness);
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeDefined();
+
+    harness.handle.store
+      .getState()
+      .stateFailedSendRestoration(frame.clientActionId);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  // ...and the notice then has to ASK for the re-pick, because nothing else
+  // will. With `handedBack: true` the clauses report a binding that came back,
+  // which is now false.
+  it("asks for a re-pick in a displaced notice", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          scripts: null,
+          branch: { type: "existing", name: "feat/kept" },
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (notice) =>
+          notice.clientActionId === rejected &&
+          notice.code === "SEND_NOT_RECORDED",
+      );
+    expect(stated?.message ?? "").toContain("feat/kept");
+    expect(stated?.message ?? "").toContain("re-pick");
+  });
+
+  // The refusal branch. `restoreStagedWorktreeIntent` has three doors that
+  // refuse BEFORE its write, and a refusal bumps no revision - so a capture
+  // taken unconditionally still matches at displacement and the release
+  // deletes whatever is standing at the key. Here that is the user's own
+  // unconsumed pick: nothing was handed back, so nothing may be taken back.
+  it("leaves a standing pick alone when the hand-back was refused", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // The send CONSUMES a staged pick, so its pending action carries a
+    // worktree intent - which is what gets a capture taken for it.
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected a send frame");
+
+    // The user then stages a NEW pick. That write clears the dispatch mark, so
+    // the slot is no longer awaiting any dispatch's outcome and the hand-back
+    // below is REFUSED - their pick wins, correctly.
+    const standingPick: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/users-own-pick",
+      repoIdentifier: null,
+      isPrimary: true,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [standingPick] });
+
+    // A reconnect restoration arrives carrying a worktree intent...
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(
+      harness.handle.store.getState().failedSendRestoration,
+    ).not.toBeNull();
+    // ...and the hand-back was refused: the user's pick still stands.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [standingPick] });
+
+    // The composer is busy, so the prompt is displaced. Nothing was staged by
+    // that hand-back, so the release must take nothing.
+    harness.handle.store
+      .getState()
+      .stateFailedSendRestoration(frame.clientActionId);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [standingPick] });
+  });
+
+  // The blind-clear concern that motivated the old call, as a TEST: the unwind
+  // is scoped by the staging revision the hand-back left, so anything that has
+  // touched the slot since - a user pick, a newer dispatch - makes it a no-op.
+  it("leaves a pick made after the hand-back alone", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    // The user picks something else AFTER the hand-back.
+    const ownPick: WorktreeIntent["entries"][number] = {
+      kind: "local",
+      workspacePath: "/other-repo",
+      repoIdentifier: null,
+      isPrimary: true,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [ownPick] });
+
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    // Their pick stands: the revision moved, so the unwind declined to act.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual({ entries: [ownPick] });
+  });
+
+  // `-NRii`: this notice is the LAST accounting - the optimistic row is gone -
+  // so it owes the same content clauses the displaced statement gives. An
+  // attachment-only prompt produced a notice with no body AND no hint that
+  // anything had existed.
+  it("names attachment losses in a displaced restoration", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        IMAGE_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+    harness.handle.store.getState().stateFailedSendRestoration(rejected);
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (notice) =>
+          notice.clientActionId === rejected &&
+          notice.code === "SEND_NOT_RECORDED",
+      );
+    expect(stated?.message ?? "").toContain("image attachment");
+    // The account is said ONCE: `reason` already carries it, so the shared
+    // builder must not render it a second time.
+    const occurrences =
+      (stated?.message ?? "").split("Host refused the send.").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  // Door 4: the ACK-FIRST ordering. Whether the accepted ack or the
+  // `queueChanged` broadcast wins is a race between an RPC settling and a
+  // broadcast landing. When the queue frame wins, the send is still pending
+  // and the queue pass transitions it - confirmed on the way through. When the
+  // ACK wins, the record has already left `pendingActions`, that pass is a
+  // no-op, and nothing ever marked it confirmed. Cancel-safety rests entirely
+  // on confirmation, so an unstamped record here is a canceled prompt waiting
+  // for the next reconnect to resurrect it.
+  it("stays quiet when the ack beat the queue frame and the user canceled", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // ACK FIRST: the record leaves `pendingActions` before the queue frame.
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toBeUndefined();
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: false });
+
+    // ...then the live queue frame reports it parked. Nothing is pending, so
+    // only the accepted-record stamping pass can see this.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: {
+        status: "running",
+        items: [
+          {
+            kind: "prompt",
+            queueItemId: `queue-${frame.messageId}`,
+            messageId: frame.messageId,
+            message: { kind: "user", content: CONTENT },
+            sender: { type: "user", userId: OWNER_ID },
+            settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
+            delivery: "next_turn",
+            status: "pending",
+            targetTurnId: null,
+            steerRequest: null,
+            fallbackReason: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // The user cancels; the queue empties and the reconnect snapshot lacks it.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "running", items: [] },
+    });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // Door 5: `messageAccepted`, and the one that closes the set. Every other
+  // door reads the queue or a snapshot, so an IMMEDIATE send - one that
+  // materializes straight into the transcript instead of parking - reaches
+  // none of them when its ack wins the race: the record leaves
+  // `pendingActions` at the ack, the two queue passes never see it, and this
+  // frame is the only thing that ever confirms it. Note the absence of
+  // `startTurn` below; that is the whole point of the shape.
+  //
+  // It matters because an accepted message can legitimately go away again.
+  // `editUserMessage` rewrites history from the edited message onward, so a
+  // message this frame appended is gone from every later snapshot - and an
+  // unstamped record reads that absence as death and pushes a deliberately
+  // removed prompt back at the user, the `-MPLI` resurrection through a fifth
+  // door.
+  it("stays quiet when messageAccepted confirmed the send and an edit then removed it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // ACK FIRST: the record leaves `pendingActions` still unconfirmed, and
+    // nothing queues an immediate send, so no queue pass can ever stamp it.
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: false });
+
+    // The host reports it in the transcript. That IS confirmation.
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+    expect(
+      harness.handle.store
+        .getState()
+        .messages.some((message) => message.messageId === frame.messageId),
+    ).toBe(true);
+
+    // ...then an edit rewrites history and the message is gone for good.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // The MIRROR order of door 5's race, which the stamp alone cannot reach.
+  // `messageAccepted` legitimately arrives before the ack - the
+  // `takeSetupFailedRestoration` docblock names this order as its slot 2 - and
+  // in that order door 5 fires while the send is still PENDING: no accepted
+  // record exists, the stamp finds nothing, and that is correct. The ack then
+  // births the record, and a hardcoded `false` at that birth threw away the
+  // sighting: the message sat host-authoritative in `state.messages` while its
+  // record said unconfirmed, so an `editUserMessage` removing it plus a
+  // reconnect resurrected it through the other arm of the same race. Birth
+  // must carry what the transcript already holds.
+  it("stays quiet when messageAccepted outran the ack and an edit then removed it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // TRANSCRIPT FIRST: the host reports the message while the send is still
+    // pending. Door 5 has no record to stamp, and correctly stamps nothing.
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toBeDefined();
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toBeUndefined();
+
+    // ...then the ack lands and the record is BORN. The transcript already
+    // holds the message, and the birth must say so.
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // An edit rewrites history; the message is gone from every later snapshot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // The negative at the same birth: the ack itself still confirms NOTHING.
+  // With no transcript sighting the record must be born unconfirmed, or every
+  // acked-then-dropped send would die silently - the dangerous direction.
+  // Stated as its own test so the claim survives independently of the door
+  // tests that assert it mid-flight.
+  it("births the ack record unconfirmed when the transcript lacks the message", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: false });
+  });
+
+  // The other half of door 5, and the half a stamp door fails at quietly: it
+  // must confirm the record the frame NAMES, not merely some unconfirmed send.
+  // A door that stamps the first record it finds silences a send the host
+  // never confirmed - the exact failure the stamp exists to prevent, inverted
+  // onto a different prompt. So the frame here names the SECOND send while the
+  // first is still unconfirmed, which is the only ordering that can tell the
+  // two apart.
+  it("confirms only the send messageAccepted names, and reports the other", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const [first, second] = harness.sent;
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: first.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    acceptLastAction(harness);
+
+    // The host dispatches the SECOND one out of the queue and reports it.
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: second.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: SECOND_CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    // Named: confirmed, and so silent about its later absence.
+    expect(state.acceptedActions[second.clientActionId]).toMatchObject({
+      confirmedByHost: true,
+    });
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === second.clientActionId,
+      ),
+    ).toEqual([]);
+    // Not named: nothing ever confirmed it, it is gone, and it keeps its
+    // account. Asserted on the CONTENT, because a door that stamped the wrong
+    // record would still leave a restoration here - just the wrong prompt in
+    // it.
+    expect(state.failedSendRestoration?.clientActionId).toBe(
+      first.clientActionId,
+    );
+    expect(state.failedSendRestoration?.content).toEqual(CONTENT);
+  });
+
+  // `-MPLI` through the COMMON door. Confirmation arrives three ways and only
+  // one is a snapshot: a live `queueChanged` fires promptly on the dispatching
+  // connection and is how most queued sends are confirmed. That transition
+  // happens BECAUSE the host's queue reports the message, so it confirms - and
+  // a record left unstamped there resurrects a canceled prompt on the next
+  // reconnect exactly as an unstamped snapshot would.
+  it("stays quiet about a send confirmed by queueChanged and then canceled", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+
+    // Door 1: the host reports it queued. No snapshot involved.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: {
+        status: "running",
+        items: [
+          {
+            kind: "prompt",
+            queueItemId: `queue-${frame.messageId}`,
+            messageId: frame.messageId,
+            message: { kind: "user", content: CONTENT },
+            sender: { type: "user", userId: OWNER_ID },
+            settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
+            delivery: "next_turn",
+            status: "pending",
+            targetTurnId: null,
+            steerRequest: null,
+            fallbackReason: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // The user cancels it, so the queue - and every later snapshot - lacks it.
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "running", items: [] },
+    });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // Door 2: a send still PENDING when a snapshot shows it queued transitions
+  // to accepted BECAUSE of that sighting, so it is confirmed on the way
+  // through. Same rule, third door - and the one an unstamped `false` would
+  // hide behind the other two passing.
+  it("stays quiet about a send a snapshot confirmed while still pending", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    // No ack: it is still pending when the snapshot arrives showing it queued.
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toBeDefined();
+
+    emitSnapshotWithQueuedSend(callbacks, frame.messageId);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // `-MPLI`: absence stops being evidence once presence has been SEEN. A
+  // queued send the user then cancels is absent from every later snapshot, and
+  // reading that as death pushed the deliberately-discarded prompt back at
+  // them - on top of the copy the cancel UX already put in the composer. The
+  // host queue is durable across restarts, so for an observed send a later
+  // absence can only be a cancel or a consumption; neither is ours to narrate.
+  it("stays quiet about a queued send it once saw and the user then canceled", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // A snapshot CONFIRMS it parked in the host queue...
+    emitSnapshotWithQueuedSend(callbacks, frame.messageId);
+    expect(
+      harness.handle.store.getState().acceptedActions[frame.clientActionId],
+    ).toMatchObject({ confirmedByHost: true });
+
+    // ...the user cancels it, so every later snapshot lacks it.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
+  // Same evidence bar as the pending pass, and for the same reason: a refresh
+  // snapshot on the LIVE connection has simply outrun the send.
+  it("keeps a just-accepted queued send when a same-connection snapshot omits it", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    // No connection transition: same epoch.
+    emitSnapshot(callbacks, "owner");
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(state.acceptedActions[frame.clientActionId]).toMatchObject({
+      action: "send",
+    });
+  });
+
+  // PRESENCE is authoritative whatever dispatched it: the host has the send
+  // parked in its queue, so nothing is owed and the record ages out normally.
+  it("settles a queued send the reconnect snapshot still shows queued", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    startTurn(callbacks);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected a send frame");
+    }
+    acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotWithQueuedSend(callbacks, frame.messageId);
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(
+      state.errorNotices.filter(
+        (notice) => notice.clientActionId === frame.clientActionId,
+      ),
+    ).toEqual([]);
+  });
+
   // `-Jy83`: a `SEND_RESTORED` notice is replayable ON PURPOSE - it can arrive
   // while the pane is unfocused, and the ring is its ONLY replay source. The
   // ordinary 32-record cap deleted it before the pane ever came back, so the
@@ -2091,9 +3342,11 @@ describe("createChatSessionStore", () => {
     expect(stated[0].severity).toBe("warning");
   });
 
-  // Spoken exactly ONCE. The rejection path owns an `errorNotice` and states
-  // things there, so the ack must not repeat the same sentence.
-  it("does not repeat a rejection's account when the composer takes the draft", () => {
+  // Spoken exactly ONCE - when the rejection's own notice actually REACHED the
+  // user. `-LV77`: deferring to a notice that was merely appended left the
+  // prompt in the composer with silently changed semantics whenever the pane
+  // was unfocused, so the ack now asks the delivery axis rather than assuming.
+  it("does not repeat a rejection's account the user has already seen", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -2117,6 +3370,8 @@ describe("createChatSessionStore", () => {
     expect(spoken.message).toContain("Host refused the send.");
     expect(spoken.message).toContain("model");
 
+    // The pane was active, so the toast layer showed it and said so.
+    harness.handle.store.getState().markNoticeDelivered(rejected);
     harness.handle.store.getState().ackFailedSendRestoration(rejected);
 
     expect(
@@ -2124,6 +3379,91 @@ describe("createChatSessionStore", () => {
         .getState()
         .errorNotices.filter((notice) => notice.code === "SEND_RESTORED"),
     ).toEqual([]);
+  });
+
+  // ...and the other half of `-LV77`: the pane was NOT active, so nothing
+  // showed the rejection notice. Its qualifications must still reach the user,
+  // because the prompt is sitting in the composer ready to resend under a
+  // different model / account / delivery than it was written for.
+  it("says a rejection's account the user never saw when the draft returns", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    // No `markNoticeDelivered`: the pane was elsewhere, so the ring holds a
+    // notice nobody has seen.
+    harness.handle.store.getState().ackFailedSendRestoration(rejected);
+
+    const spoken = harness.handle.store
+      .getState()
+      .errorNotices.filter((notice) => notice.code === "SEND_RESTORED");
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].message).toContain("model");
+  });
+
+  // The flood case: the rejection notice can be EVICTED before the pane comes
+  // back, so it is not merely unseen but gone. The ack is the backstop either
+  // way, because it asks about delivery rather than about the ring.
+  it("says the account when the rejection notice was evicted before refocus", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
+    const rejected = rejectLastAction(harness, "Host refused the send.");
+
+    for (let index = 0; index < MAX_ERROR_NOTICE_RECORDS * 2; index += 1) {
+      callbacks.onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: `No longer pending (${index}).`,
+          severity: "warning",
+          clientActionId: `approval-${index}`,
+        },
+      });
+    }
+    expect(
+      harness.handle.store
+        .getState()
+        .errorNotices.some((notice) => notice.clientActionId === rejected),
+    ).toBe(false);
+
+    harness.handle.store.getState().ackFailedSendRestoration(rejected);
+
+    const spoken = harness.handle.store
+      .getState()
+      .errorNotices.filter((notice) => notice.code === "SEND_RESTORED");
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].message).toContain("model");
   });
 
   // The silence rule's premise is "the user can see why". It holds when their
@@ -2469,6 +3809,7 @@ describe("createChatSessionStore", () => {
       clientActionId: frame.clientActionId,
       content: CONTENT,
       reason: "Message was not confirmed after reconnect.",
+      displacedReason: "Message was not confirmed after reconnect.",
       stated: false,
     });
   });
@@ -2522,6 +3863,7 @@ describe("createChatSessionStore", () => {
       clientActionId: first.clientActionId,
       content: CONTENT,
       reason: "Message was not confirmed after reconnect.",
+      displacedReason: "Message was not confirmed after reconnect.",
       stated: false,
     });
     // The displaced send is stated, and the statement carries its text - the
@@ -4477,6 +5819,7 @@ describe("createChatSessionStore", () => {
       clientActionId: stranded,
       content: CONTENT,
       reason: "The message was not recorded before the turn stopped.",
+      displacedReason: "The message was not recorded before the turn stopped.",
       stated: false,
     });
     expect(state.errorNotices).toEqual([]);
@@ -9767,6 +11110,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       clientActionId: frame.clientActionId,
       content: CONTENT,
       reason: "The message was not recorded before the turn stopped.",
+      displacedReason: "The message was not recorded before the turn stopped.",
       stated: false,
     });
   });
@@ -9872,6 +11216,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       clientActionId: frame.clientActionId,
       content: CONTENT,
       reason: "The message was not recorded before the turn stopped.",
+      displacedReason: "The message was not recorded before the turn stopped.",
       stated: false,
     });
   });

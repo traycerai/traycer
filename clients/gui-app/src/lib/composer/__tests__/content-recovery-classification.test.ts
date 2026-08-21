@@ -9,6 +9,7 @@ import {
   classifyContentRecovery,
   recoveryTextFromContent,
 } from "@/lib/composer/content-recovery";
+import { parseLeadingSlashCommand } from "@/lib/composer/tiptap-json-content";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -68,6 +69,288 @@ const NESTED_ORDERED_DOC: JsonContent = {
           ],
         },
       ],
+    },
+  ],
+};
+
+/**
+ * `-LJlU`: a `hardBreak` in the item's FIRST paragraph. `serializeHardBreak`
+ * returns a bare "\n" and `serializeListItem` pushes the first child as one
+ * whole string behind the marker, so the second line sits at column zero -
+ * the continuation indent belongs to LATER blocks only.
+ */
+const HARD_BREAK_IN_FIRST_PARAGRAPH_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "foo" },
+                { type: "hardBreak" },
+                { type: "text", text: "bar" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** ...and the same break in a LATER block, which does take the indent. */
+const HARD_BREAK_IN_CONTINUATION_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "orderedList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "step" }] },
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "one" },
+                { type: "hardBreak" },
+                { type: "text", text: "two" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * The corner the mirrored loop settles by construction: the first-child slot
+ * is consumed by whatever the first child IS, including a nested list.
+ */
+const NESTED_LIST_AS_FIRST_CHILD_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "inner" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * `-LV74`: fence blocks carry `listDepth * 2` of their own on EVERY line, and
+ * the continuation indent goes on TOP of that - so a top-level bullet's
+ * continuation fence goes out at four columns, not two. Paragraphs get no
+ * depth indent inside an item, so this is fence-specific.
+ */
+const FENCE_AS_CONTINUATION_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "run" }] },
+            {
+              type: "codeBlock",
+              attrs: { language: "ts" },
+              content: [{ type: "text", text: "const a = 1;\nconst b = 2;" }],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** Depth compounds: a fence one level in carries four of its own. */
+const FENCE_IN_NESTED_ITEM_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "outer" }] },
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "inner" }],
+                    },
+                    {
+                      type: "codeBlock",
+                      attrs: { language: "" },
+                      content: [{ type: "text", text: "deep()" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** ...and as the FIRST child the marker precedes a fence already indented. */
+const FENCE_AS_FIRST_CHILD_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            {
+              type: "codeBlock",
+              attrs: { language: "sh" },
+              content: [{ type: "text", text: "echo hi" }],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * `-MlZl`: `serializeTable` escapes `\` then `|` and nothing else, so an
+ * embedded hardBreak's newline goes out RAW inside the row. Whether that is
+ * well-formed markdown is not the question - it is what the agent received,
+ * and the recovery copy has to match it. Plain-text cells only: cell content
+ * deliberately routes through this module for mentionFormat consistency, which
+ * is documented design rather than drift.
+ */
+const TABLE_WITH_HARD_BREAK_CELL_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "table",
+      content: [
+        {
+          type: "tableRow",
+          content: [
+            {
+              type: "tableHeader",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "h1" }] },
+              ],
+            },
+          ],
+        },
+        {
+          type: "tableRow",
+          content: [
+            {
+              type: "tableCell",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    { type: "text", text: "one" },
+                    { type: "hardBreak" },
+                    { type: "text", text: "two" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** Two block children in one cell - whatever the join is, the byte test says. */
+const TABLE_WITH_MULTI_BLOCK_CELL_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "table",
+      content: [
+        {
+          type: "tableRow",
+          content: [
+            {
+              type: "tableHeader",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "h" }] },
+              ],
+            },
+          ],
+        },
+        {
+          type: "tableRow",
+          content: [
+            {
+              type: "tableCell",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "a" }] },
+                { type: "paragraph", content: [{ type: "text", text: "b" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * `-MlZs`: `serializeHeading` sends `#`-markers, so a heading recovered as
+ * bare text is a different request. Top-level only - the composer schema does
+ * not put headings inside list items.
+ */
+const HEADING_LEVELS_DOC: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "heading",
+      attrs: { level: 2 },
+      content: [{ type: "text", text: "Title" }],
+    },
+    { type: "paragraph", content: [{ type: "text", text: "body" }] },
+    {
+      type: "heading",
+      attrs: { level: 4 },
+      content: [{ type: "text", text: "Deeper" }],
     },
   ],
 };
@@ -607,9 +890,10 @@ describe("content recovery classification", () => {
   // `-Jy8u` flipped this with the marker. The criterion is unchanged -
   // CONVERTIBILITY - but the fact it reads changed: a bullet item now carries
   // `- ` for parity with the serializer, so a chip in the first one recovers
-  // as `- /review` and the converter will not rebuild it. The membership of
-  // `bulletList` in `LINE_PREFIXING_NODE_TYPES` and the marker are ONE
-  // decision, and this is the test that holds them together.
+  // as `- /review` and the converter will not rebuild it. Kept as a stated
+  // expectation now that the block above holds the marker and the membership
+  // together generically: this one says out loud which way a bullet item goes,
+  // and a computed check cannot say that.
   it("counts a leading skill chip in a bullet item as a loss", () => {
     const report = classifyContentRecovery({
       type: "doc",
@@ -637,6 +921,134 @@ describe("content recovery classification", () => {
     });
 
     expect(report.get("command")).toBe(1);
+  });
+
+  // `PKSL`, and the CLASS both drifts on this seam belong to. Whether a chip
+  // round-trips is settled by two implementations neither of which lives in
+  // `lostSlashChip`: what THIS module emits in front of the chip, and what the
+  // converter's parser accepts in front of a trigger. The classifier carried a
+  // hand-written mirror of each, and both drifted -
+  //
+  //  - the emission mirror, twice and QUIETLY: `bulletList` when bullets
+  //    started emitting `- `, `heading` when headings started emitting `#`.
+  //    Each shipped a chip reported SAFE that no paste path rebuilds.
+  //  - the parser mirror, by hard-selecting `children[0]`: an indent-only text
+  //    node became the "leading position", so `  /review` - which
+  //    `LEADING_SLASH_COMMAND_REGEX` rebuilds, spaces and all - was reported as
+  //    a chip to re-pick.
+  //
+  // So the expectation here is COMPUTED, not listed: project the shape with the
+  // real seam, ask the converter's real parser what it would rebuild from that
+  // text, and require the report to agree. A shape nobody thought to enumerate
+  // still gets the right answer, and a third emission change fails HERE instead
+  // of shipping.
+  describe("a chip's classification agrees with the seam and the parser", () => {
+    const CHIP: JsonContent = {
+      type: "slashCommand",
+      attrs: { kind: "skill", name: "review" },
+    };
+    const inParagraph = (
+      ...content: ReadonlyArray<JsonContent>
+    ): JsonContent => ({ type: "paragraph", content: [...content] });
+    const inItem = (type: "bulletList" | "orderedList"): JsonContent => ({
+      type,
+      content: [{ type: "listItem", content: [inParagraph(CHIP)] }],
+    });
+
+    const SHAPES: ReadonlyArray<{
+      readonly label: string;
+      readonly doc: JsonContent;
+    }> = [
+      {
+        label: "a bare leading chip",
+        doc: { type: "doc", content: [inParagraph(CHIP)] },
+      },
+      {
+        label: "a chip behind spaces in their own text node",
+        doc: {
+          type: "doc",
+          content: [inParagraph({ type: "text", text: "  " }, CHIP)],
+        },
+      },
+      {
+        label: "a chip behind a tab",
+        doc: {
+          type: "doc",
+          content: [inParagraph({ type: "text", text: "\t" }, CHIP)],
+        },
+      },
+      {
+        label: "a chip behind a word",
+        doc: {
+          type: "doc",
+          content: [inParagraph({ type: "text", text: "please " }, CHIP)],
+        },
+      },
+      {
+        label: "a chip behind an inline image attachment",
+        doc: {
+          type: "doc",
+          content: [
+            inParagraph(
+              { type: "imageAttachment", attrs: { src: "blob:x" } },
+              CHIP,
+            ),
+          ],
+        },
+      },
+      {
+        label: "a chip after a leading attachment group",
+        doc: {
+          type: "doc",
+          content: [
+            {
+              type: "attachmentGroup",
+              content: [{ type: "imageAttachment", attrs: { src: "blob:x" } }],
+            },
+            inParagraph(CHIP),
+          ],
+        },
+      },
+      {
+        label: "a chip in a leading blockquote",
+        doc: {
+          type: "doc",
+          content: [{ type: "blockquote", content: [inParagraph(CHIP)] }],
+        },
+      },
+      {
+        label: "a chip in a leading sourced quote",
+        doc: {
+          type: "doc",
+          content: [{ type: "sourcedQuote", content: [inParagraph(CHIP)] }],
+        },
+      },
+      {
+        label: "a chip in the first bullet item",
+        doc: { type: "doc", content: [inItem("bulletList")] },
+      },
+      {
+        label: "a chip in the first ordered item",
+        doc: { type: "doc", content: [inItem("orderedList")] },
+      },
+      {
+        label: "a chip in a leading heading",
+        doc: {
+          type: "doc",
+          content: [{ type: "heading", attrs: { level: 2 }, content: [CHIP] }],
+        },
+      },
+    ];
+
+    it.each(SHAPES)("$label", ({ doc }) => {
+      // What the user would actually be handed back, and what the converter
+      // would actually do with it. No restatement of either rule.
+      const recovered = recoveryTextFromContent(doc);
+      const rebuilt = parseLeadingSlashCommand(recovered)?.name === "review";
+      expect(classifyContentRecovery(doc).get("command") ?? 0).toBe(
+        rebuilt ? 0 : 1,
+      );
+    });
   });
 
   // `-G8sl`: a blockquote is not text-complete, because BOTH paste paths
@@ -1100,6 +1512,15 @@ describe("content recovery classification", () => {
       listDoc("orderedList", ["one", "two"]),
       NESTED_ORDERED_DOC,
       NESTED_MIXED_WITH_CONTINUATION_DOC,
+      HARD_BREAK_IN_FIRST_PARAGRAPH_DOC,
+      HARD_BREAK_IN_CONTINUATION_DOC,
+      NESTED_LIST_AS_FIRST_CHILD_DOC,
+      FENCE_AS_CONTINUATION_DOC,
+      FENCE_IN_NESTED_ITEM_DOC,
+      FENCE_AS_FIRST_CHILD_DOC,
+      TABLE_WITH_HARD_BREAK_CELL_DOC,
+      TABLE_WITH_MULTI_BLOCK_CELL_DOC,
+      HEADING_LEVELS_DOC,
     ];
     for (const doc of shapes) {
       expect(recoveryTextFromContent(doc)).toBe(

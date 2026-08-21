@@ -92,6 +92,11 @@ export type ReconcileQueueInput = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly queue: ChatQueueState;
+  /**
+   * Accepted records, because this frame confirms sends that are no longer
+   * pending. See the stamping pass in {@link reconcileQueueChange}.
+   */
+  readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly nowMs: number;
 };
 
@@ -103,6 +108,14 @@ export type ReconcileQueuePatch = {
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  /**
+   * Already-accepted records this frame CONFIRMED - see
+   * {@link AcceptedChatAction.confirmedByHost}. Merged by the caller over its
+   * own map, like the snapshot pass's channel of the same shape.
+   */
+  readonly confirmedAcceptedActions: Readonly<
+    Record<string, AcceptedChatAction>
+  >;
 };
 
 /**
@@ -129,6 +142,14 @@ export type ReconcileSnapshotInput = {
   readonly currentAccountContext: AccountContext | null;
   /** See {@link WorktreePartitionFn}. */
   readonly worktreePartition: WorktreePartitionFn;
+  /**
+   * Accepted records, because an ACCEPTED send can die too. A send dispatched
+   * while a turn is running renders as a queued item rather than a
+   * `pendingUserMessage`, so once its accepted ack moves it out of
+   * `pendingActions` this record is the only place its draft lives. See the
+   * second pass in {@link reconcileSnapshotChange}.
+   */
+  readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly nowMs: number;
 };
 
@@ -174,6 +195,19 @@ export type ReconcileSnapshotPatch = {
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
+  /**
+   * Accepted sends this pass declared dead. The caller REMOVES these from its
+   * `acceptedActions` - `acceptedActions` above is an additive delta, so
+   * removal needs its own channel rather than being expressible as one.
+   */
+  readonly settledAcceptedActionIds: ReadonlySet<string>;
+  /**
+   * Accepted records this pass STAMPED as confirmed. Merged by the caller over
+   * its own map - see {@link AcceptedChatAction.confirmedByHost}.
+   */
+  readonly confirmedAcceptedActions: Readonly<
+    Record<string, AcceptedChatAction>
+  >;
   /**
    * The staged worktree choice belonging to the send whose prompt just claimed
    * the restoration slot, for the caller to re-stage under the revision guard.
@@ -263,77 +297,134 @@ export interface UnrecoverableSend {
   readonly account: DeadSendAccount;
 }
 
-export function unrecoverableSendNotice(
-  send: UnrecoverableSend,
-): ChatErrorNotice {
-  const { clientActionId, content, circumstance } = send;
-  // The quote is VERBATIM; only the branch decision is trimmed. A message of
-  // pure whitespace has nothing to hand back, but a code block whose first
-  // line is indented very much does - and trimming the quote itself is what
-  // used to corrupt it.
+/**
+ * Everything a dead send's statement says about its CONTENT - the headline and
+ * the loss clauses, in canonical order.
+ *
+ * Shared because both statements are the last accounting of the same thing.
+ * The displaced-restoration notice originally carried only the quoted text, so
+ * an attachment-only prompt produced a notice with no body AND no mention that
+ * anything had existed - the row was already gone, so nothing else was ever
+ * going to say it.
+ *
+ * Deliberately does NOT include the account tail (worktree, delivery, drift).
+ * The two callers get that from different places and only one of them may add
+ * it: `unrecoverableSendNotice` renders the account itself, while a displaced
+ * restoration's `reason` already has those clauses baked in by whichever pass
+ * built the slot. Rendering it here would say the account twice in one notice.
+ */
+function contentLossStatement(content: JsonContent, preamble: string): string {
   const text = recoveryTextFromContent(content);
   const hasText = text.trim().length > 0;
   const losses = classifyContentRecovery(content);
   const attachments = losses.get("attachment") ?? 0;
-  const preamble = `${circumstance}, and another unsent message is already waiting in the composer.`;
+  return [
+    headline(preamble, hasText, attachments),
+    attachmentClause(attachments, hasText),
+    countedClause({
+      count: losses.get("mention") ?? 0,
+      singular: "mention",
+      plural: "mentions",
+      verbPhrase: "will paste as plain text - re-pick",
+      tail: "so the agent sees what they point at again",
+    }),
+    countedClause({
+      count: losses.get("quote") ?? 0,
+      singular: "quoted source",
+      plural: "quoted sources",
+      verbPhrase: "lose the link to what they quote - re-quote",
+      tail: "so that link comes back",
+    }),
+    countedClause({
+      count: losses.get("command") ?? 0,
+      singular: "skill chip",
+      plural: "skill chips",
+      verbPhrase: "will paste as plain text from where they sit - re-pick",
+      tail: "so they run again",
+    }),
+    countedClause({
+      count: losses.get("table") ?? 0,
+      singular: "table",
+      plural: "tables",
+      verbPhrase:
+        "will paste back as markdown text rather than a grid - rebuild",
+      tail: "if the layout matters",
+    }),
+    countedClause({
+      count: losses.get("quotedBlock") ?? 0,
+      singular: "quoted block",
+      plural: "quoted blocks",
+      verbPhrase: "will paste back as ordinary text - re-apply",
+      tail: "with the composer's quote control so the agent sees them as quotes",
+    }),
+    (losses.get("unknown") ?? 0) > 0
+      ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
+      : "",
+  ].join("");
+}
+
+/** The verbatim draft this statement is handing back, or `null` if there is none. */
+function quotedDraftOf(content: JsonContent): string | null {
+  const text = recoveryTextFromContent(content);
+  return text.trim().length > 0 ? text : null;
+}
+
+export function unrecoverableSendNotice(
+  send: UnrecoverableSend,
+): ChatErrorNotice {
+  const { clientActionId, content, circumstance } = send;
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
     message: statementQuoting(
       [
-        headline(preamble, hasText, attachments),
-        attachmentClause(attachments, hasText),
-        countedClause({
-          count: losses.get("mention") ?? 0,
-          singular: "mention",
-          plural: "mentions",
-          verbPhrase: "will paste as plain text - re-pick",
-          tail: "so the agent sees what they point at again",
-        }),
-        countedClause({
-          count: losses.get("quote") ?? 0,
-          singular: "quoted source",
-          plural: "quoted sources",
-          verbPhrase: "lose the link to what they quote - re-quote",
-          tail: "so that link comes back",
-        }),
-        countedClause({
-          count: losses.get("command") ?? 0,
-          singular: "skill chip",
-          plural: "skill chips",
-          verbPhrase: "will paste as plain text from where they sit - re-pick",
-          tail: "so they run again",
-        }),
-        // The quoted text is right there in the copy below, `> ` and all -
-        // what does not survive is that it was QUOTED. Both paste paths
-        // dissolve a blockquote, so the resend reads as ordinary prose and the
-        // agent is no longer told which part was being asked about.
-        // The grid is in the copy below as markdown, so the cells are not
-        // lost - what is lost is the TABLE, which the composer cannot rebuild
-        // from that text because it has no table node at all.
-        countedClause({
-          count: losses.get("table") ?? 0,
-          singular: "table",
-          plural: "tables",
-          verbPhrase:
-            "will paste back as markdown text rather than a grid - rebuild",
-          tail: "if the layout matters",
-        }),
-        countedClause({
-          count: losses.get("quotedBlock") ?? 0,
-          singular: "quoted block",
-          plural: "quoted blocks",
-          verbPhrase: "will paste back as ordinary text - re-apply",
-          tail: "with the composer's quote control so the agent sees them as quotes",
-        }),
-        (losses.get("unknown") ?? 0) > 0
-          ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
-          : "",
-        // Everything after the losses is the shared account, rendered in the
-        // one canonical order. `false`: a STATED send's binding did not come
-        // back, so its surviving folders still have to be re-picked.
+        contentLossStatement(
+          content,
+          `${circumstance}, and another unsent message is already waiting in the composer.`,
+        ),
+        // The account tail. Only THIS caller renders it - see
+        // `contentLossStatement`.
         deadSendAccountClauses(send.account, false),
       ].join(""),
-      hasText ? text : null,
+      quotedDraftOf(content),
+    ),
+    severity: "warning",
+    clientActionId,
+  };
+}
+
+/**
+ * The statement for a restored prompt the composer could NOT take, because the
+ * user has already typed something else there.
+ *
+ * Every restoration path ends at one unconditional `replaceDraftContent`, so
+ * any of them could overwrite a newer unsent draft - and the accepted-send
+ * pass makes that typical rather than rare, since queueing a send and carrying
+ * on typing is the ordinary way to use a queue. Whichever text loses, one of
+ * them must not simply vanish.
+ *
+ * The NEWER draft wins the composer: it is what the user is looking at and
+ * still editing. The older prompt becomes a last-copy notice, which is exactly
+ * the durability it needs - `SEND_NOT_RECORDED` is never evicted from the
+ * ring, survives an unfocused pane, and inlines the text verbatim. The account
+ * already composed for the restoration rides along, so nothing that was going
+ * to be said about the resend is lost with the slot.
+ */
+export function displacedRestorationNotice(
+  clientActionId: string,
+  content: JsonContent,
+  reason: string,
+): ChatErrorNotice {
+  return {
+    code: SEND_NOT_RECORDED_NOTICE_CODE,
+    message: statementQuoting(
+      // `reason` already carries the account clauses, baked in by whichever
+      // pass built the restoration slot - so this path must not render them a
+      // second time. The shared builder deliberately stops at the losses.
+      contentLossStatement(
+        content,
+        `${reason} It was not put back in the composer, because you have started another message there.`,
+      ),
+      quotedDraftOf(content),
     ),
     severity: "warning",
     clientActionId,
@@ -776,11 +867,13 @@ export function reconcileQueueChange(
     input.pendingUserMessages,
     input.queue,
   );
+  const confirmedAcceptedActions = confirmAcceptedSendsInQueue(input);
   if (queuedPendingActionIds.size === 0) {
     return {
       pendingActions: input.pendingActions,
       acceptedActions: {},
       pendingUserMessages: input.pendingUserMessages,
+      confirmedAcceptedActions,
     };
   }
   const queuedPendingActions = Object.values(input.pendingActions).filter(
@@ -792,7 +885,9 @@ export function reconcileQueueChange(
   );
   const nextAcceptedActions = pruneAcceptedActions(
     queuedPendingActions.reduce(
-      (next, action) => addAcceptedAction(next, action, input.nowMs),
+      // This transition happens BECAUSE the host's queue reports the
+      // message - the confirmation IS the trigger.
+      (next, action) => addAcceptedAction(next, action, input.nowMs, true),
       {},
     ),
     input.nowMs,
@@ -803,6 +898,105 @@ export function reconcileQueueChange(
     pendingUserMessages: input.pendingUserMessages.filter(
       (message) => !queuedPendingActionIds.has(message.clientActionId),
     ),
+    confirmedAcceptedActions,
+  };
+}
+
+/**
+ * Stamp accepted sends this live queue frame CONFIRMS.
+ *
+ * The fourth confirmation door, and the one the pending walk above cannot
+ * reach. Whether the accepted ack or the `queueChanged` broadcast arrives
+ * first is a race between an RPC settling and a broadcast landing: when the
+ * queue frame wins, the send is still pending and the walk above transitions
+ * it (confirmed on the way through); when the ACK wins, the record has already
+ * left `pendingActions`, this pass was a no-op, and nothing ever marked it
+ * confirmed. The design has no clear-on-cancel by choice - cancel-safety rests
+ * entirely on confirmation - so an unstamped record here is a canceled prompt
+ * waiting to be resurrected by the next reconnect.
+ *
+ * STAMP ONLY. There is deliberately no absence arm: an item leaving a live
+ * queue means dispatched or canceled, and nothing here can tell those apart.
+ * Only the snapshot pass, which has the epoch bar, may conclude from absence.
+ */
+function confirmAcceptedSendsInQueue(
+  input: ReconcileQueueInput,
+): Readonly<Record<string, AcceptedChatAction>> {
+  // A send that still has an optimistic row belongs to the settled pass, the
+  // same partition `reconcileAcceptedSends` keeps.
+  const optimisticRowIds = new Set(
+    input.pendingUserMessages.map((message) => message.clientActionId),
+  );
+  return Object.values(input.acceptedActions).reduce<
+    Record<string, AcceptedChatAction>
+  >((confirmed, accepted) => {
+    if (
+      accepted.action !== "send" ||
+      accepted.messageId === null ||
+      accepted.confirmedByHost ||
+      optimisticRowIds.has(accepted.clientActionId)
+    ) {
+      return confirmed;
+    }
+    if (!queueContainsPendingSend(input.queue, accepted.messageId, undefined)) {
+      return confirmed;
+    }
+    confirmed[accepted.clientActionId] = {
+      ...accepted,
+      confirmedByHost: true,
+    };
+    return confirmed;
+  }, {});
+}
+
+/**
+ * Stamp the accepted send a `messageAccepted` frame CONFIRMS.
+ *
+ * The fifth confirmation door, and the one that closes the set. The other four
+ * all run off the queue or a snapshot, so a send that never parks in the queue
+ * - an immediate send on an idle chat, which materializes straight into the
+ * transcript - reaches none of them when its ack wins the race: the record
+ * leaves `pendingActions` at the ack, the queue passes never see it, and the
+ * frame that DOES confirm it is this one.
+ *
+ * Stamping here is true to the fact, not a convenience: the frame reports the
+ * message in the host's transcript, which is the same evidence a snapshot's
+ * `messages` carries and a strictly earlier sighting of it.
+ *
+ * It matters because an accepted message can legitimately VANISH again.
+ * `editUserMessage` rewrites history from the edited message onward, so a
+ * message this frame appended is gone from every later snapshot - and an
+ * unstamped record reads that absence as death and pushes a deliberately
+ * removed prompt back at the user, the same resurrection `-MPLI` fixed for
+ * cancel. Absence stops being evidence once presence has been seen, whichever
+ * door saw it.
+ *
+ * STAMP ONLY, like the queue door: this frame says nothing about a send it
+ * does not name, so there is no absence arm. Returns the input untouched when
+ * nothing matches, so an unrelated `messageAccepted` does not churn the store.
+ *
+ * This door covers only the ack-first ORDER of its race. The frame can also
+ * legitimately arrive before the ack (`takeSetupFailedRestoration` slot 2
+ * documents that order), in which case the send is still pending, there is no
+ * accepted record here to stamp, and finding nothing is correct - the ack
+ * door carries the sighting instead, by birthing the record with what the
+ * transcript already holds (see the `addAcceptedAction` call in
+ * `onActionAck`). The two halves close the race together.
+ */
+export function confirmAcceptedSendByMessageId(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  messageId: string,
+): Readonly<Record<string, AcceptedChatAction>> {
+  const accepted = Object.values(acceptedActions).find(
+    (candidate) =>
+      candidate.action === "send" &&
+      candidate.messageId === messageId &&
+      !candidate.confirmedByHost,
+  );
+  if (accepted === undefined) return acceptedActions;
+  return {
+    ...acceptedActions,
+    [accepted.clientActionId]: { ...accepted, confirmedByHost: true },
   };
 }
 
@@ -844,8 +1038,10 @@ export function reconcileSnapshotChange(
     failedSendRestoration: input.failedSendRestoration,
     appendedErrorNotices: [],
     restoredWorktreeIntent: null,
+    settledAcceptedActionIds: NO_SETTLED_ACCEPTED_IDS,
+    confirmedAcceptedActions: {},
   };
-  return Object.values(input.pendingActions).reduce(
+  const afterPending = Object.values(input.pendingActions).reduce(
     (next, pending): ReconcileSnapshotPatch => {
       if (
         (pending.action !== "send" && pending.action !== "editUserMessage") ||
@@ -869,6 +1065,8 @@ export function reconcileSnapshotChange(
             next.acceptedActions,
             pending,
             input.nowMs,
+            // Reached only when the snapshot SHOWS the message.
+            true,
           ),
           pendingUserMessages: next.pendingUserMessages.filter(
             (message) => message.clientActionId !== pending.clientActionId,
@@ -931,6 +1129,20 @@ export function reconcileSnapshotChange(
           ],
         };
       }
+      // Computed once: the two variants of this account must describe the same
+      // evidence and differ only in whether the binding came back.
+      const snapshotAccount: DeadSendAccount = {
+        worktree: worktreeSweepFor(
+          pending.restoreWorktreeIntent,
+          input.worktreePartition,
+          false,
+        ),
+        sentSettings: pending.settings,
+        currentSettings: input.currentSettings,
+        sentAccountContext: pending.accountContext,
+        currentAccountContext: input.currentAccountContext,
+        sentDeliveryPolicy: pending.deliveryPolicy,
+      };
       return {
         ...next,
         pendingActions: withoutPendingAction(
@@ -944,19 +1156,12 @@ export function reconcileSnapshotChange(
           clientActionId: pending.clientActionId,
           content: pending.restoreContent,
           reason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
-            {
-              worktree: worktreeSweepFor(
-                pending.restoreWorktreeIntent,
-                input.worktreePartition,
-                false,
-              ),
-              sentSettings: pending.settings,
-              currentSettings: input.currentSettings,
-              sentAccountContext: pending.accountContext,
-              currentAccountContext: input.currentAccountContext,
-              sentDeliveryPolicy: pending.deliveryPolicy,
-            },
+            snapshotAccount,
             true,
+          )}`,
+          displacedReason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
+            snapshotAccount,
+            false,
           )}`,
           // This pass has no surface of its own; the ack speaks for it.
           stated: false,
@@ -967,6 +1172,140 @@ export function reconcileSnapshotChange(
       };
     },
     initial,
+  );
+  return reconcileAcceptedSends(afterPending, input, acceptedMessageIds);
+}
+
+const NO_SETTLED_ACCEPTED_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Settle ACCEPTED sends the snapshot cannot account for.
+ *
+ * A send dispatched while a turn is running (or with anything already queued)
+ * is rendered as a QUEUED item, not a `pendingUserMessage` - so
+ * `shouldRenderSendAsPendingUserMessage` is false and its recovery fields live
+ * only on the pending action. The accepted ack then moves that record to
+ * `acceptedActions`, and until this pass existed that was a one-way door: the
+ * snapshot pass above walks `pendingActions`, {@link reconcileTurnSettled}
+ * walks `pendingUserMessages`, and nothing walked here. A connection dying
+ * between the accepted ack and the host's `queueChanged`/`messageAccepted`
+ * took the only copy of that draft with it - a dead send with no account, in
+ * the one surface built to guarantee every dead send leaves one.
+ *
+ * The evidence bar is the pending pass's, unchanged, and for the same reasons.
+ * PRESENCE - the message is in `messages` or the queue - is authoritative
+ * whatever connection dispatched it, and settles the record with nothing owed.
+ * ABSENCE settles it only when it was dispatched on an EARLIER connection: a
+ * same-connection refresh snapshot built before the host processed the send
+ * has simply outrun it, and its `queueChanged` is still coming.
+ *
+ * Death then goes through exactly the machinery the pending pass uses - the
+ * single-slot `failedSendRestoration` on first-writer-wins, the shared
+ * {@link deadSendAccountClauses} account, `unrecoverableSendNotice` for
+ * whoever loses the slot. No new dialect for a fourth speaker.
+ */
+function reconcileAcceptedSends(
+  patch: ReconcileSnapshotPatch,
+  input: ReconcileSnapshotInput,
+  acceptedMessageIds: ReadonlySet<string>,
+): ReconcileSnapshotPatch {
+  // A send that still has an optimistic user-message row belongs to
+  // {@link reconcileTurnSettled}, which walks exactly those and states them as
+  // "not recorded before the turn stopped". Claiming it here would be a second
+  // pass settling one send - the slot is single and first-writer-wins, so the
+  // two would race and the account would depend on pass order. The gap this
+  // pass exists for is the send with NO row: queued, so never optimistic.
+  const optimisticRowIds = new Set(
+    input.pendingUserMessages.map((message) => message.clientActionId),
+  );
+  return Object.values(input.acceptedActions).reduce(
+    (next, accepted): ReconcileSnapshotPatch => {
+      if (
+        accepted.action !== "send" ||
+        accepted.messageId === null ||
+        accepted.restoreContent === null ||
+        optimisticRowIds.has(accepted.clientActionId)
+      ) {
+        return next;
+      }
+      // Presence is authoritative whatever dispatched it - and it is worth
+      // RECORDING, not just returning on. A send confirmed once can later go
+      // absent because the user canceled it or the agent consumed it, and
+      // both are absences this pass must stay quiet about. The record is kept
+      // rather than dropped: `takeSetupFailedRestoration` still needs it.
+      if (
+        acceptedMessageIds.has(accepted.messageId) ||
+        queueContainsPendingSend(input.queue, accepted.messageId, undefined)
+      ) {
+        if (accepted.confirmedByHost) return next;
+        return {
+          ...next,
+          confirmedAcceptedActions: {
+            ...next.confirmedAcceptedActions,
+            [accepted.clientActionId]: {
+              ...accepted,
+              confirmedByHost: true,
+            },
+          },
+        };
+      }
+      // Absence is only evidence for a send nothing has ever confirmed.
+      if (accepted.confirmedByHost) return next;
+      // ...and absence is evidence only against a dead connection.
+      if (accepted.connectionEpoch >= input.connectionEpoch) return next;
+      const settledAcceptedActionIds = new Set(next.settledAcceptedActionIds);
+      settledAcceptedActionIds.add(accepted.clientActionId);
+      const account: DeadSendAccount = {
+        worktree: worktreeSweepFor(
+          accepted.restoreWorktreeIntent,
+          input.worktreePartition,
+          false,
+        ),
+        sentSettings: accepted.settings,
+        currentSettings: input.currentSettings,
+        sentAccountContext: accepted.accountContext,
+        currentAccountContext: input.currentAccountContext,
+        sentDeliveryPolicy: accepted.deliveryPolicy,
+      };
+      // First-writer-wins, shared with the pending pass: whoever has waited
+      // longest keeps the composer, and everyone else is STATED with their
+      // text inlined.
+      if (next.failedSendRestoration !== null) {
+        return {
+          ...next,
+          settledAcceptedActionIds,
+          appendedErrorNotices: [
+            ...next.appendedErrorNotices,
+            unrecoverableSendNotice({
+              clientActionId: accepted.clientActionId,
+              content: accepted.restoreContent,
+              circumstance:
+                "A queued message was not confirmed after reconnect",
+              account,
+            }),
+          ],
+        };
+      }
+      return {
+        ...next,
+        settledAcceptedActionIds,
+        failedSendRestoration: {
+          clientActionId: accepted.clientActionId,
+          content: accepted.restoreContent,
+          reason: `A queued message was not confirmed after reconnect.${deadSendAccountClauses(
+            account,
+            true,
+          )}`,
+          displacedReason: `A queued message was not confirmed after reconnect.${deadSendAccountClauses(
+            account,
+            false,
+          )}`,
+          stated: false,
+        },
+        restoredWorktreeIntent: accepted,
+      };
+    },
+    patch,
   );
 }
 
@@ -986,6 +1325,11 @@ export type ReconcileTurnSettledInput = {
   readonly currentAccountContext: AccountContext | null;
   /** See {@link WorktreePartitionFn}. */
   readonly worktreePartition: WorktreePartitionFn;
+  /**
+   * Accepted records, so a row this pass settles can retire its record in the
+   * same breath - see {@link ReconcileTurnSettledPatch.settledAcceptedActionIds}.
+   */
+  readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
 };
 
 export type ReconcileTurnSettledPatch = {
@@ -995,6 +1339,17 @@ export type ReconcileTurnSettledPatch = {
   readonly appendedErrorNotices: ReadonlyArray<ChatErrorNotice>;
   /** See {@link ReconcileSnapshotPatch.restoredWorktreeIntent}. */
   readonly restoredWorktreeIntent: StagedWorktreeIntentSource | null;
+  /**
+   * Accepted records whose ROW this pass just settled.
+   *
+   * The two passes divide one send between them: the accepted pass skips a
+   * send that still has an optimistic row, because this pass owns the row -
+   * but nothing retired the RECORD, so the next snapshot found it
+   * never-confirmed, absent and from an earlier epoch, and settled the same
+   * send a second time. One recovery, two statements. A record is retired by
+   * whichever pass recovers its send, and that is this one.
+   */
+  readonly settledAcceptedActionIds: ReadonlySet<string>;
 };
 
 /**
@@ -1060,6 +1415,7 @@ export function reconcileTurnSettled(
       failedSendRestoration: input.failedSendRestoration,
       appendedErrorNotices: [],
       restoredWorktreeIntent: null,
+      settledAcceptedActionIds: NO_SETTLED_ACCEPTED_IDS,
     };
   }
   const confirmedMessageIds = confirmedMessageIdsForMessages(input.messages);
@@ -1074,6 +1430,7 @@ export function reconcileTurnSettled(
       failedSendRestoration: input.failedSendRestoration,
       appendedErrorNotices: [],
       restoredWorktreeIntent: null,
+      settledAcceptedActionIds: NO_SETTLED_ACCEPTED_IDS,
     };
   }
   const restorable = stranded.find(
@@ -1082,6 +1439,22 @@ export function reconcileTurnSettled(
   const strandedActionIds = new Set(
     stranded.map((message) => message.clientActionId),
   );
+  // Same rule as the snapshot arm: one account, two tellings.
+  const settledAccount: DeadSendAccount | null =
+    restorable === undefined
+      ? null
+      : {
+          worktree: worktreeSweepFor(
+            restorable.restoreWorktreeIntent,
+            input.worktreePartition,
+            false,
+          ),
+          sentSettings: restorable.settings,
+          currentSettings: input.currentSettings,
+          sentAccountContext: restorable.accountContext,
+          currentAccountContext: input.currentAccountContext,
+          sentDeliveryPolicy: restorable.deliveryPolicy,
+        };
   // Who actually gets the composer back: `restorable` only claims the slot
   // when it is free, because the slot is first-writer-wins. Everyone else
   // whose message never reached the transcript is losing their only copy, so
@@ -1091,6 +1464,14 @@ export function reconcileTurnSettled(
       ? restorable.clientActionId
       : null;
   return {
+    // Every stranded row this pass settled - restored or stated - takes its
+    // accepted record with it, so no later pass can find the same send
+    // unaccounted for and recover it twice.
+    settledAcceptedActionIds: new Set(
+      [...strandedActionIds].filter((clientActionId) =>
+        Object.hasOwn(input.acceptedActions, clientActionId),
+      ),
+    ),
     pendingUserMessages: input.pendingUserMessages.filter(
       (message) => !strandedActionIds.has(message.clientActionId),
     ),
@@ -1101,19 +1482,12 @@ export function reconcileTurnSettled(
             clientActionId: restorable.clientActionId,
             content: restorable.content,
             reason: `The message was not recorded before the turn stopped.${deadSendAccountClauses(
-              {
-                worktree: worktreeSweepFor(
-                  restorable.restoreWorktreeIntent,
-                  input.worktreePartition,
-                  false,
-                ),
-                sentSettings: restorable.settings,
-                currentSettings: input.currentSettings,
-                sentAccountContext: restorable.accountContext,
-                currentAccountContext: input.currentAccountContext,
-                sentDeliveryPolicy: restorable.deliveryPolicy,
-              },
+              settledAccount ?? EMPTY_DEAD_SEND_ACCOUNT,
               true,
+            )}`,
+            displacedReason: `The message was not recorded before the turn stopped.${deadSendAccountClauses(
+              settledAccount ?? EMPTY_DEAD_SEND_ACCOUNT,
+              false,
             )}`,
             stated: false,
           },
@@ -1353,6 +1727,19 @@ export function addAcceptedAction(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
   pending: PendingChatAction,
   now: number,
+  /**
+   * Whether host state in hand at this transition CONFIRMS the send. Explicit
+   * at every call site, because the answer differs per door and a default
+   * would silently give the wrong one to whichever door forgot: the queue and
+   * snapshot passes transition BECAUSE the host reported the message, so they
+   * pass `true`; the accepted ack - which says only that the frame arrived -
+   * passes what the TRANSCRIPT already holds at birth, because a
+   * `messageAccepted` that outran the ack fired door 5 before there was a
+   * record to stamp, and the birth is the only chance to carry that sighting.
+   * Getting this wrong resurrects a canceled prompt - see
+   * {@link AcceptedChatAction.confirmedByHost}.
+   */
+  confirmedByHost: boolean,
 ): Readonly<Record<string, AcceptedChatAction>> {
   return pruneAcceptedActions(
     {
@@ -1364,6 +1751,16 @@ export function addAcceptedAction(
         messageId: pending.messageId,
         acceptedAt: now,
         restoreContent: pending.restoreContent,
+        // The recovery tuple travels with the record now - see
+        // `AcceptedChatAction`. A queued send's ONLY copy lives here between
+        // its accepted ack and the host's durable confirmation.
+        sender: pending.sender,
+        settings: pending.settings,
+        accountContext: pending.accountContext,
+        deliveryPolicy: pending.deliveryPolicy,
+        restoreWorktreeIntent: pending.restoreWorktreeIntent,
+        connectionEpoch: pending.connectionEpoch,
+        confirmedByHost,
       },
     },
     now,

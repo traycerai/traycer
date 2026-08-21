@@ -107,6 +107,13 @@ describe("nextHandoffTransition", () => {
           messageId: "message-1",
           acceptedAt: 1000,
           restoreContent: null,
+          sender: null,
+          settings: null,
+          accountContext: null,
+          deliveryPolicy: null,
+          restoreWorktreeIntent: null,
+          connectionEpoch: 0,
+          confirmedByHost: false,
         },
       },
     });
@@ -150,6 +157,7 @@ describe("nextHandoffTransition", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "Rejected",
+        displacedReason: "Rejected",
         stated: false,
       },
     });
@@ -170,6 +178,7 @@ describe("nextHandoffTransition", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "Rejected",
+        displacedReason: "Rejected",
         stated: false,
       },
     });
@@ -186,6 +195,7 @@ describe("nextHandoffTransition", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "Rejected",
+        displacedReason: "Rejected",
         stated: false,
       },
     });
