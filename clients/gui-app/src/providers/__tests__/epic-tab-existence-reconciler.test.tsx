@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -176,7 +180,19 @@ function buildMessengerFactory(
 
 let nextRequestId = 1;
 
-function mountReconciler(options: MountOptions): QueryClient {
+interface MountedReconciler {
+  readonly queryClient: QueryClient;
+  /**
+   * Mounts / unmounts ONLY the reconciler, keeping this window's host runtime
+   * and query cache. A whole-tree remount would restart the runtime, and
+   * `HostClient.setRequestContext` invalidates the entire `["host"]` scope on
+   * every start - a deliberate credential fence, and not the shape a route
+   * change produces.
+   */
+  readonly setReconcilerMounted: (mounted: boolean) => void;
+}
+
+function mountReconciler(options: MountOptions): MountedReconciler {
   const host = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -207,27 +223,45 @@ function mountReconciler(options: MountOptions): QueryClient {
       mutations: { retry: false },
     },
   });
-  render(
+  // Hoisted so a `rerender` hands `HostRuntimeProvider` identical props and
+  // therefore does not restart the runtime.
+  const messengerFactory = buildMessengerFactory(options);
+  const remoteFetcher = () =>
+    Promise.resolve({ kind: "hosts" as const, entries: [] });
+  const tree = (reconcilerMounted: boolean) => (
     <RunnerHostProvider runnerHost={host}>
       <QueryClientProvider client={queryClient}>
         <HostRuntimeProvider
           registry={hostRpcRegistry}
-          messengerFactory={buildMessengerFactory(options)}
+          messengerFactory={messengerFactory}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() =>
-            Promise.resolve({ kind: "hosts" as const, entries: [] })
-          }
+          remoteFetcher={remoteFetcher}
           fallback={<div data-testid="runtime-fallback">runtime loading</div>}
         >
           <HostCompatibilityProvider>
-            <EpicTabExistenceReconciler />
+            {reconcilerMounted ? <EpicTabExistenceReconciler /> : null}
           </HostCompatibilityProvider>
         </HostRuntimeProvider>
       </QueryClientProvider>
-    </RunnerHostProvider>,
+    </RunnerHostProvider>
   );
-  return queryClient;
+  const { rerender } = render(tree(true));
+  return {
+    queryClient,
+    setReconcilerMounted: (mounted: boolean) => {
+      rerender(tree(mounted));
+    },
+  };
+}
+
+/** Every cache key the reconciler's batch currently occupies. */
+function reconcileQueryKeys(queryClient: QueryClient): ReadonlyArray<QueryKey> {
+  return queryClient
+    .getQueryCache()
+    .getAll()
+    .map((query) => query.queryKey)
+    .filter((queryKey) => queryKey.includes("epic.getTaskContexts"));
 }
 
 function unsupportedError(): HostRpcError {
@@ -273,7 +307,7 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
       }),
     );
 
-    const queryClient = mountReconciler({ getTaskContexts });
+    const { queryClient } = mountReconciler({ getTaskContexts });
 
     // Settle the runtime: host.status has to resolve before the reconciler's
     // other gates would have opened, so this waits past the point where an
@@ -303,7 +337,7 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
       throw unsupportedError();
     });
 
-    const queryClient = mountReconciler({ getTaskContexts });
+    const { queryClient } = mountReconciler({ getTaskContexts });
 
     await waitFor(() => {
       expect(getTaskContexts).toHaveBeenCalledTimes(1);
@@ -335,7 +369,7 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
       });
     });
 
-    const queryClient = mountReconciler({ getTaskContexts });
+    const { queryClient } = mountReconciler({ getTaskContexts });
 
     await waitFor(() => {
       expect(getTaskContexts).toHaveBeenCalledTimes(1);
@@ -365,7 +399,7 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
     });
     const getTaskContexts = vi.fn((_params: GetTaskContextsRequest) => pending);
 
-    const queryClient = mountReconciler({ getTaskContexts });
+    const { queryClient } = mountReconciler({ getTaskContexts });
 
     await waitFor(() => {
       expect(getTaskContexts).toHaveBeenCalledTimes(1);
@@ -383,6 +417,84 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
     await waitFor(() => {
       expect(collectOpenEpicIds()).not.toContain(OPEN_EPIC_ID);
     });
+    queryClient.clear();
+  });
+
+  it("reuses the completed batch across a remount inside the stale window", async () => {
+    // The churn this pins: the run used to suffix its cache key with a
+    // process-global `attempt`, so every remount minted a brand-new key and
+    // re-fanned the batch - one `POST /tasks/context` per open tab, per
+    // remount, forever. Key stability alone is not enough either: with the
+    // default zero stale time react-query refetches a remounted observer.
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    const getTaskContexts = vi.fn(
+      (_params: GetTaskContextsRequest): GetTaskContextsResponse => ({
+        tasks: {
+          [OPEN_EPIC_ID]: { status: "unknown", reason: "transport" },
+        },
+      }),
+    );
+
+    const { queryClient, setReconcilerMounted } = mountReconciler({
+      getTaskContexts,
+    });
+    await waitFor(() => {
+      expect(getTaskContexts).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(reconcileQueryKeys(queryClient)).toHaveLength(1);
+    });
+    const keyAfterFirstRun = reconcileQueryKeys(queryClient)[0];
+    const findRun = () =>
+      queryClient.getQueryCache().find({ queryKey: keyAfterFirstRun });
+
+    await act(async () => {
+      setReconcilerMounted(false);
+      await Promise.resolve();
+    });
+    expect(findRun()?.getObserversCount()).toBe(0);
+    await act(async () => {
+      setReconcilerMounted(true);
+      await Promise.resolve();
+    });
+    // Re-attached to the same cache entry, so the remounted run got that far
+    // and any refetch it would schedule has been scheduled.
+    await waitFor(() => {
+      expect(findRun()?.getObserversCount()).toBe(1);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getTaskContexts).toHaveBeenCalledTimes(1);
+    expect(reconcileQueryKeys(queryClient)).toEqual([keyAfterFirstRun]);
+    expect(collectOpenEpicIds()).toContain(OPEN_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("keeps host, user and canvas-hydration identity inside the cache key", async () => {
+    // Dropping `attempt` must not drop the SCOPE with it: a permission- and
+    // host-dependent answer may never be reused across a host swap, an account
+    // switch, or a canvas rehydration.
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
+    const getTaskContexts = vi.fn(
+      (_params: GetTaskContextsRequest): GetTaskContextsResponse =>
+        UNKNOWN_TASK_CONTEXTS,
+    );
+
+    const { queryClient } = mountReconciler({ getTaskContexts });
+    await waitFor(() => {
+      expect(reconcileQueryKeys(queryClient)).toHaveLength(1);
+    });
+
+    const key = reconcileQueryKeys(queryClient)[0];
+    expect(key.at(-1)).toBe(`${localSnapshot.hostId}:test-user:1`);
     queryClient.clear();
   });
 
@@ -404,7 +516,7 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
       (_params: GetTaskContextsRequest): GetTaskContextsResponse => response,
     );
 
-    const queryClient = mountReconciler({ getTaskContexts });
+    const { queryClient } = mountReconciler({ getTaskContexts });
 
     await waitFor(() => {
       expect(getTaskContexts).toHaveBeenCalledTimes(1);
