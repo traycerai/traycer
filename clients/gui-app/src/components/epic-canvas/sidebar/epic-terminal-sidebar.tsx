@@ -88,6 +88,7 @@ import {
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
 import { useHostPlainTerminalMutations } from "@/hooks/terminal/use-plain-terminal-mutations";
 import { requestEpicTerminalLifetimeClose } from "@/lib/terminals/epic-terminal-close-coordinator";
 import {
@@ -115,29 +116,7 @@ import {
 } from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
 import { useResolvePlainTerminalOwnerHostClient } from "@/lib/terminals/resolve-plain-terminal-owner-client";
 
-const INCOMPLETE_FLEET_NOTICE_DELAY_MS = 750;
 const TERMINALS_PANEL_SKELETON = <TerminalsPanelSkeleton />;
-
-function useDelayedIncompleteFleet(
-  incomplete: boolean,
-  contextKey: string,
-): boolean {
-  const [visibleContextKey, setVisibleContextKey] = useState<string | null>(
-    null,
-  );
-  useEffect(() => {
-    if (!incomplete) {
-      const timer = window.setTimeout(() => setVisibleContextKey(null), 0);
-      return () => window.clearTimeout(timer);
-    }
-    const timer = window.setTimeout(
-      () => setVisibleContextKey(contextKey),
-      INCOMPLETE_FLEET_NOTICE_DELAY_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [contextKey, incomplete]);
-  return incomplete && visibleContextKey === contextKey;
-}
 
 function failedCreateMatchesAuthoritativeRow(args: {
   readonly job: EpicTerminalDurableCreateJobView;
@@ -306,7 +285,7 @@ function TerminalsPanelBodyLive(props: {
   );
   const sessions = reconciled.rows;
   const incompleteFleet = reconciled.incompleteFleet;
-  const showIncompleteFleet = useDelayedIncompleteFleet(
+  const showIncompleteFleet = useDelayedTerminalFleetWarning(
     incompleteFleet,
     JSON.stringify([activeHostId, epicId]),
   );
