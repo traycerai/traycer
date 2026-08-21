@@ -20,7 +20,6 @@ import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
-import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
 
 const testState = vi.hoisted(() => ({
   reachability: {
@@ -145,7 +144,6 @@ import { TerminalTile } from "../terminal-tile";
 
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-1";
-let unregisterCloseAuthorities: Array<() => void> = [];
 
 function withTabHost(node: ReactNode): ReactNode {
   // A sign-in tile that has exited renders the restart button, and that button
@@ -209,16 +207,6 @@ function openTerminalFixture(inactiveClose: boolean): {
   const store = useEpicCanvasStore.getState();
   const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
   const closingNode = terminalNode("terminal-1", "inst-terminal-1");
-  unregisterCloseAuthorities.push(
-    registerEpicTerminalCloseAuthority({
-      instanceId: closingNode.instanceId,
-      hostId: closingNode.hostId,
-      terminalId: closingNode.id,
-      capability: "legacy",
-      canMutate: false,
-      close: () => Promise.resolve(),
-    }),
-  );
   store.openTileInTab(viewTabId, closingNode);
   const activeNode = inactiveClose
     ? terminalNode("terminal-2", "inst-terminal-2")
@@ -254,8 +242,6 @@ describe("<TerminalTile /> close navigation", () => {
 
   afterEach(() => {
     cleanup();
-    for (const unregister of unregisterCloseAuthorities) unregister();
-    unregisterCloseAuthorities = [];
   });
 
   it("routes unreachable-banner close for an active tile through the nested-focus boundary", () => {
@@ -492,16 +478,6 @@ describe("<TerminalTile /> close navigation", () => {
     const store = useEpicCanvasStore.getState();
     const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
     const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
-    unregisterCloseAuthorities.push(
-      registerEpicTerminalCloseAuthority({
-        instanceId: signInNode.instanceId,
-        hostId: signInNode.hostId,
-        terminalId: signInNode.id,
-        capability: "legacy",
-        canMutate: false,
-        close: () => Promise.resolve(),
-      }),
-    );
     store.openTileInTab(viewTabId, signInNode);
     const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvasBefore === undefined) throw new Error("expected view tab canvas");

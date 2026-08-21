@@ -15,6 +15,8 @@ import type { CommGraphFeedHealth } from "@/components/epic-canvas/comm-graph/us
 const mocks = vi.hoisted(() => ({
   useEpicSyncPillState: vi.fn(),
   chatBackupStatus: null as EpicChatBackupStatus | null,
+  terminalCoverage: null as
+    "partial-serving-host" | "complete-fleet" | "complete-local" | null,
   commGraphFeedHealth: null as CommGraphFeedHealth | null,
 }));
 
@@ -45,6 +47,15 @@ vi.mock(
     useCommGraphFeedHealth: () => mocks.commGraphFeedHealth,
   }),
 );
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => "host-a",
+}));
+vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
+  useHostPlainTerminalAuthority: () => ({
+    hostId: "host-a",
+    coverage: mocks.terminalCoverage,
+  }),
+}));
 
 const OFFLINE_COPY =
   "Disconnected. Unsent changes stay in this window until it reconnects — keep it open.";
@@ -88,6 +99,7 @@ describe("<EpicConnectionPill />", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     mocks.chatBackupStatus = null;
+    mocks.terminalCoverage = null;
     mocks.commGraphFeedHealth = null;
   });
 
@@ -322,6 +334,38 @@ describe("<EpicConnectionPill />", () => {
       "Chat backup failing · 1 chat not backed up",
     );
     await expectTooltip("Chat backup failing · 1 chat not backed up");
+  });
+
+  it("turns amber for sustained remote-terminal catalog degradation without flashing during the local-first frame", () => {
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    renderPill("hostPending");
+
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "artifact",
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(749);
+    });
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "artifact",
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("terminal-catalog");
+    expect(pill.textContent).toContain("Remote terminals unavailable");
+    expect(pill.className).toContain("bg-amber-500/10");
+    expect(pill.getAttribute("aria-label")).toBe(
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
+    );
   });
 
   it("shows the highest severity across artifact sync and chat backup", async () => {

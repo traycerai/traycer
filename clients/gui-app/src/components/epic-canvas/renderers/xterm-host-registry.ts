@@ -7,6 +7,9 @@ import type {
 import type { CanvasAddon } from "@xterm/addon-canvas";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
+import type { TerminalWarmSessionIdentity } from "@/stores/terminals/terminal-session-registry";
+
+export type { TerminalWarmSessionIdentity };
 
 /**
  * Per-mount callbacks the live xterm engine reaches through. The engine is
@@ -64,6 +67,8 @@ export interface XtermHostControls {
  */
 export interface XtermHostEntry {
   readonly sessionId: string;
+  /** Bound owner host. `null` is the explicit hostless/non-terminal path. */
+  readonly hostId: string | null;
   readonly containerEl: HTMLDivElement;
   readonly term: Terminal;
   readonly fitAddon: FitAddon;
@@ -270,11 +275,11 @@ export function rekeyXtermHost(
  * effect. Idempotent: with the new id already registered it no-ops.
  */
 export function adoptWarmSessionInstance(
-  sessionId: string,
+  identity: TerminalWarmSessionIdentity,
   instanceId: string,
 ): void {
   const registry = getTerminalSessionRegistry();
-  const oldInstanceId = registry.findAdoptableInstanceId(sessionId, instanceId);
+  const oldInstanceId = registry.findAdoptableInstanceId(identity, instanceId);
   if (oldInstanceId === null) return;
   // The handle may only move together with its engine - the warm store's
   // writer streams into that engine, so rekeying the handle after a refused
@@ -312,15 +317,19 @@ export function peekXtermHostGrid(
  * still cached under the old instance id and knows the session's real grid.
  * Seeding the reopen's `terminal.create`/`subscribe` from it keeps the live
  * PTY from being dragged through the 80x24 defaults (the shrink-then-grow
- * whose stale cells the CLI's inline renderer never repaints away). With two
- * cached engines for one session (split view) any of them serves: the host's
- * `min()` recompute settles the grid either way.
+ * whose stale cells the CLI's inline renderer never repaints away). Lookup is
+ * `(hostId, sessionId)` so a same-id engine on another host cannot seed this
+ * subscribe. With two cached engines for one owner session (split view) any
+ * of them serves: the host's `min()` recompute settles the grid either way.
  */
 export function peekXtermHostGridForSession(
-  sessionId: string,
+  identity: TerminalWarmSessionIdentity,
 ): { readonly cols: number; readonly rows: number } | null {
   for (const entry of entries.values()) {
-    if (entry.sessionId === sessionId) {
+    if (
+      entry.sessionId === identity.sessionId &&
+      entry.hostId === identity.hostId
+    ) {
       return { cols: entry.term.cols, rows: entry.term.rows };
     }
   }
@@ -356,12 +365,17 @@ export function reconcileXtermHostAfterLayoutTransition(
  * built.
  */
 export function hasPeerXtermHostForSession(
-  sessionId: string,
+  identity: TerminalWarmSessionIdentity,
   selfContainerEl: HTMLElement,
 ): boolean {
   for (const entry of entries.values()) {
     if (entry.containerEl === selfContainerEl) continue;
-    if (entry.sessionId === sessionId) return true;
+    if (
+      entry.sessionId === identity.sessionId &&
+      entry.hostId === identity.hostId
+    ) {
+      return true;
+    }
   }
   return false;
 }

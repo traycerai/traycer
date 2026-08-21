@@ -1,8 +1,8 @@
-/** Snapshot-first collection stream for durable plain terminals. */
+/** Replacement-state collection stream for durable plain terminals. */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
-  plainTerminalProjectionSchema,
+  plainTerminalListStateSchema,
   plainTerminalScopeSchema,
 } from "@traycer/protocol/host/terminal/plain-schemas";
 
@@ -17,31 +17,19 @@ export type TerminalPlainSubscribeListOpenRequest = z.infer<
   typeof terminalPlainSubscribeListOpenRequestSchema
 >;
 
+/**
+ * Server frames are replacement `state` plus the transport keepalive.
+ * Each accepted `state` frame replaces the collection described by its
+ * coverage. There is no upsert/delete tombstone interpretation: host
+ * withdrawal is absence from the next complete replacement state.
+ */
 export const terminalPlainSubscribeListServerFrameSchema = z.discriminatedUnion(
   "kind",
   [
     z.strictObject({
-      kind: z.literal("snapshot"),
+      kind: z.literal("state"),
       ...textFrameFields,
-      terminals: z.array(plainTerminalProjectionSchema),
-    }),
-    z.strictObject({
-      // Marks the ordered boundary after the snapshot and every mutation
-      // buffered while that snapshot was being constructed.
-      kind: z.literal("initialized"),
-      ...textFrameFields,
-    }),
-    z.strictObject({
-      kind: z.literal("upsert"),
-      ...textFrameFields,
-      terminal: plainTerminalProjectionSchema,
-    }),
-    z.strictObject({
-      kind: z.literal("deleted"),
-      ...textFrameFields,
-      terminalId: z.string().min(1),
-      // A stale upsert with a lower revision cannot resurrect this id.
-      revision: z.number().int().nonnegative(),
+      state: plainTerminalListStateSchema,
     }),
     z.strictObject({
       kind: z.literal("pong"),
@@ -66,9 +54,9 @@ export type TerminalPlainSubscribeListClientFrame = z.infer<
   typeof terminalPlainSubscribeListClientFrameSchema
 >;
 
-export const terminalPlainSubscribeListV10 = defineStreamRpcContract({
+export const terminalPlainSubscribeListV21 = defineStreamRpcContract({
   method: "terminal.plain.subscribeList",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 1 } as const,
   openRequestSchema: terminalPlainSubscribeListOpenRequestSchema,
   serverFrameSchema: terminalPlainSubscribeListServerFrameSchema,
   clientFrameSchema: terminalPlainSubscribeListClientFrameSchema,

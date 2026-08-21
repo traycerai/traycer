@@ -1,3 +1,4 @@
+import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
 import type {
   DropPosition,
   EpicTerminalRef,
@@ -376,8 +377,11 @@ export function getActiveAgentDragId(occurrenceKey: string): string {
   return `active-agent:${occurrenceKey}`;
 }
 
-export function getTerminalTileDragId(sessionId: string): string {
-  return `terminal-tile:${sessionId}`;
+export function getTerminalTileDragId(
+  sessionId: string,
+  hostId: string,
+): string {
+  return `terminal-tile:${plainTerminalFleetIdentityKey({ hostId, terminalId: sessionId })}`;
 }
 
 export function getGitDiffTileDragId(tileId: string): string {

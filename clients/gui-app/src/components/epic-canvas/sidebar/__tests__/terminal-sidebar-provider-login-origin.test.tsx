@@ -65,6 +65,12 @@ vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
   }),
 }));
 
+vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
+  useResolvePlainTerminalOwnerHostClient: () => () => ({
+    request: vi.fn(),
+  }),
+}));
+
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: (props: { readonly children: ReactNode }) => props.children,
   DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>

@@ -173,6 +173,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@typescript-eslint/eslint-plugin": "catalog:",
     "@typescript-eslint/parser": "catalog:",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "concurrently": "^10.0.5",
     "esbuild": "catalog:",
     "eslint": "catalog:",

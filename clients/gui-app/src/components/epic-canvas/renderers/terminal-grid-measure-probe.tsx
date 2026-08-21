@@ -28,6 +28,7 @@ const ignoreWriter = (): void => {};
  */
 export function TerminalGridMeasureProbe(props: {
   readonly sessionId: string;
+  readonly hostId: string | null;
   readonly instanceId: string;
   readonly tileKind: TerminalTileFindKind;
   readonly chrome: "padded" | "flush";
@@ -37,6 +38,7 @@ export function TerminalGridMeasureProbe(props: {
     <Suspense fallback={null}>
       <TerminalXtermHost
         sessionId={props.sessionId}
+        hostId={props.hostId}
         tileKind={props.tileKind}
         chrome={props.chrome}
         instanceId={props.instanceId}

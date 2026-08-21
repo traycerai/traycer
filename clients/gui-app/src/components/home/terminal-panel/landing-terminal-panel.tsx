@@ -31,6 +31,7 @@ import {
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
+  getPlainTerminal,
   selectPlainTerminalViewModel,
   type PlainTerminalViewModel,
 } from "@/lib/terminals/plain-terminal-authority";
@@ -763,7 +764,10 @@ export function LandingTerminalPanel(): ReactNode {
       if (closed === null) return;
       if (authorityEntry.authority.capability.status === "capable") {
         void authorityEntry.mutations.close
-          .mutateAsync({ terminalId: closed.sessionId })
+          .mutateAsync({
+            hostId: closed.hostId,
+            terminalId: closed.sessionId,
+          })
           .then(() => {
             useLandingTerminalStore
               .getState()
@@ -875,10 +879,11 @@ export function LandingTerminalPanel(): ReactNode {
   >(() => {
     const viewModels: Partial<Record<string, PlainTerminalViewModel>> = {};
     for (const tab of tabs) {
-      const projection =
-        authorityEntries[tab.hostId]?.authority.collection?.terminalsById[
-          tab.sessionId
-        ];
+      const projection = getPlainTerminal(
+        authorityEntries[tab.hostId]?.authority.collection,
+        tab.hostId,
+        tab.sessionId,
+      );
       if (projection !== undefined) {
         viewModels[tab.instanceId] = selectPlainTerminalViewModel(projection);
       }
@@ -907,6 +912,7 @@ export function LandingTerminalPanel(): ReactNode {
       return;
     }
     entry.mutations.rename.mutate({
+      hostId: tab.hostId,
       terminalId: tab.sessionId,
       manualTitle: name.trim(),
     });
