@@ -499,10 +499,8 @@ describe("LinkPhonePanel", () => {
     });
     expect(screen.getByTestId("link-phone-decided-elsewhere")).toBeTruthy();
 
-    // The re-mint lands and the claim is gone with the spent code.
-    mocks.useAuthLinkLoginStatus.mockReturnValue(
-      statusResult({ status: "unclaimed", claimant: null }),
-    );
+    // The re-mint lands, but the SPENT claim is still in the status cache -
+    // polls are two seconds apart, so this is the ordinary case, not a corner.
     mocks.useAuthLinkLoginCode.mockReturnValue({
       ...queryResultWithCode(Date.now()),
       data: {
@@ -519,7 +517,21 @@ describe("LinkPhonePanel", () => {
       vi.advanceTimersByTime(2_100);
     });
 
+    // The terminal card is gone, and the dead claim did NOT come back with it:
+    // resurrecting it would put live Approve/Reject controls on a decision the
+    // server has already settled.
     expect(screen.queryByTestId("link-phone-decided-elsewhere")).toBeNull();
+    expect(screen.queryByTestId("link-phone-confirm")).toBeNull();
+
+    // The stale status finally clears, and the replacement is what shows.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({ status: "unclaimed", claimant: null }),
+    );
+    act(() => {
+      view.rerender(<LinkPhonePanel />);
+      vi.advanceTimersByTime(2_100);
+    });
+
     expect(screen.getByTestId("link-phone-qr-tile")).toBeTruthy();
     expect(screen.getByText("22222-33333")).toBeTruthy();
   });

@@ -551,16 +551,21 @@ export function LinkPhonePanel() {
   /**
    * "Show a new code", from every terminal card.
    *
-   * Every piece of state that made a terminal card render is cleared BEFORE
-   * the re-mint. `restartCode()` alone only evicts the mint query, and the
-   * cards that gate on local state replaced the controls that could have
-   * cleared it - so a terminal card would sit on screen over a code that had
-   * already been replaced behind it, with no way back except unmounting the
-   * panel.
+   * Clears the PRESENTATION state that made a terminal card render, before
+   * the re-mint. `restartCode()` alone only evicts the mint query, and these
+   * cards replaced the controls that would otherwise have cleared it - so a
+   * terminal card would sit on screen over a code already replaced behind it,
+   * with no way back except unmounting the panel.
+   *
+   * `decidedCode` is deliberately NOT cleared. It is not presentation state:
+   * it is what keeps the answered claim suppressed while the status cache
+   * still holds it, and the polls are two seconds apart. Clearing it here
+   * would resurrect the spent claim with live Approve/Reject controls for
+   * that window. It needs no clearing anyway - it names a code, so it retires
+   * itself the moment a different one is watched.
    */
   const showNewCode = () => {
     setDecidedElsewhere(null);
-    setDecidedCode(null);
     setRespondFailedCode(null);
     restartCode();
   };
