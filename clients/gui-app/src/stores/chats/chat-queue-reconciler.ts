@@ -256,9 +256,18 @@ interface CountedLossClause {
  */
 function worktreeClause(intent: WorktreeIntent | null): string {
   if (intent === null) return "";
+  // `WorktreeIntent` permits one entry per workspace folder, so a multi-repo
+  // staging read as "branch a, branch b" with no way to tell which repo each
+  // belonged to - unre-pickable. Qualified only when there is more than one:
+  // with a single workspace the association is unambiguous and naming it would
+  // be noise in the common case.
+  const qualify = intent.entries.length > 1;
   const labels = intent.entries.flatMap((entry) => {
     const label = worktreeEntryLabel(entry);
-    return label === null ? [] : [label];
+    if (label === null) return [];
+    return qualify && entry.workspacePath.length > 0
+      ? [`${label} in ${entry.workspacePath}`]
+      : [label];
   });
   if (labels.length === 0) return "";
   return ` It was staged to run in ${labels.join(", ")} - re-pick that before resending, or it runs against this chat's current worktree.`;

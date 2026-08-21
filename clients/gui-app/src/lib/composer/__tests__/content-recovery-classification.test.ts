@@ -297,7 +297,9 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toBe("graph TD;\n  A-->B;");
+    // Fenced with the serializer's own label, so the reader can tell what the
+    // block was and the text round-trips closer to what the agent received.
+    expect(text).toBe("```mermaid\ngraph TD;\n  A-->B;\n```");
   });
 
   it("carries a UI preview block's source into the recovery text", () => {
@@ -311,7 +313,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toBe("<section>hello</section>");
+    expect(text).toBe("```wireframe\n<section>hello</section>\n```");
   });
 
   // The recovery text is quoted back verbatim for the user to copy. Trimming
@@ -442,6 +444,18 @@ describe("content recovery classification", () => {
   // R10 `-AdAI`: content ending in a newline plus the join's own newline made
   // a blank code line the user never wrote. The serializer strips exactly one
   // terminal newline; match it byte for byte.
+  it("does not double an atom block's terminal newline either", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [{ type: "mermaidBlock", attrs: { code: "graph TD;\n" } }],
+    });
+
+    // The serializer does NOT strip here (only its code-block arm does), and
+    // that divergence is deliberate: this text is for a human to copy, and
+    // reproducing a blank line they never wrote is the defect `-AdAI` fixed.
+    expect(text).toBe("```mermaid\ngraph TD;\n```");
+  });
+
   it("does not double a code block's terminal newline", () => {
     const text = recoveryTextFromContent({
       type: "doc",

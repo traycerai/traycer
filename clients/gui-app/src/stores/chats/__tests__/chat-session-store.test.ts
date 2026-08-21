@@ -1841,6 +1841,48 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(1);
   });
 
+  // R11 `-ApT-`: a multi-workspace intent labelled as "branch a, branch b"
+  // with no workspace association, so a multi-repo staging could not actually
+  // be re-picked. A SINGLE-workspace intent stays unqualified - the workspace
+  // is unambiguous there and naming it would be noise.
+  it("associates each staged branch with its workspace when several are staged", () => {
+    const notice = statedNoticeWithIntent({
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo/frontend",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat/fe",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo/backend",
+          repoIdentifier: null,
+          isPrimary: false,
+          branch: { type: "existing", name: "feat/be" },
+        },
+      ],
+    });
+
+    expect(notice.message).toContain("/repo/frontend");
+    expect(notice.message).toContain("/repo/backend");
+  });
+
+  it("leaves a single staged workspace unqualified", () => {
+    const notice = statedNoticeWithIntent(worktreeIntentFor("feat/only"));
+
+    expect(notice.message).toContain("feat/only");
+    expect(notice.message).not.toContain(" in /repo");
+  });
+
   // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
   // WHICH one. With a dead edit and a dead send both wanting their intent
   // back, the sweep runs first and the older EDIT claimed the mark - so the

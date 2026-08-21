@@ -244,7 +244,14 @@ function prepareForProjection(
     }
     const source = atomSource(node);
     if (source !== null) {
-      return [{ type: "paragraph", content: [{ type: "text", text: source }] }];
+      return [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: fenced(atomFenceLabel(node), source) },
+          ],
+        },
+      ];
     }
     // A code block's fence and `language` live in the serializer's output and
     // in `attrs`, never in the child text - so copy-back dropped the language
@@ -309,8 +316,29 @@ function fencedCodeBlock(node: JsonContent): string {
   // Exactly the serializer's rule (`json-content-serializer`): ONE terminal
   // newline is dropped before the closing fence. Without it the join's own
   // newline doubles, producing a blank code line the user never wrote.
-  const inner = projected.endsWith("\n") ? projected.slice(0, -1) : projected;
-  return ["```" + info, inner, "```"].join("\n");
+  return fenced(info, projected);
+}
+
+/**
+ * One fence, one newline rule, for code blocks and atoms alike.
+ *
+ * The label matches `json-content-serializer`'s own (`mermaid`, `wireframe`,
+ * or a code block's `language`), so the recovered text says what the block was
+ * - raw HTML with no fence reads as pasted prose - and round-trips closer to
+ * what the agent received.
+ *
+ * ONE terminal newline is dropped. The serializer does that only in its
+ * code-block arm, and diverging from it for atoms is deliberate: this text is
+ * handed to a person to copy, and reproducing a blank line they never wrote is
+ * the same defect the code-block arm already avoids.
+ */
+function fenced(label: string, body: string): string {
+  const inner = body.endsWith("\n") ? body.slice(0, -1) : body;
+  return ["```" + label, inner, "```"].join("\n");
+}
+
+function atomFenceLabel(node: JsonContent): string {
+  return node.type === "mermaidBlock" ? "mermaid" : "wireframe";
 }
 
 /**
