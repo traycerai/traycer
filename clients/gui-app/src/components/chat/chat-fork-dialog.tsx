@@ -463,6 +463,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     client: appWideClient,
     epicId,
     chatId: activeWorkspaceTarget?.sourceChatId ?? null,
+    // The tab this dialog forks FROM is bound to the source chat's host for
+    // life, so it disambiguates a host-minted id two hosts both minted.
+    sourceOwnerHostId: tabHostId,
   });
   // Cross-host, the workspace section resets to the target's own folder catalog
   // with NO seed: the source chat's paths name directories on another machine,

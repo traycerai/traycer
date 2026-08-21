@@ -391,23 +391,41 @@ export interface ChatDeadTileBannerProps {
   readonly testId: string;
 }
 
+/**
+ * A reason's copy, keyed on whether it ends in an action the reader can take.
+ *
+ * Four of the five do: the transcript is readable (as a published copy or from
+ * the owner host) and cloning carries it onto a live host. `revoked` does not -
+ * the clone would have to read bytes the server just stopped serving this
+ * viewer, so offering the button would be an invitation to a failure. Same
+ * reasoning `ChatHostStartingBanner` withholds it under.
+ *
+ * A clone-offering reason must supply `messageWithoutClone` as well, and the
+ * union is what forces it: every one of those four sentences ENDS in the clone
+ * promise ("continuing here creates a new agent", "cloning creates a new agent
+ * from it"), so a viewer who cannot clone must be told the fact WITHOUT that
+ * promise rather than be handed it and have it taken back a sentence later.
+ * Adding a fifth clone-offering reason cannot silently skip the variant.
+ */
+type ChatDeadTileBannerCopy =
+  | {
+      readonly message: (hostLabel: string) => ReactNode;
+      readonly reportTitle: string;
+      readonly reportMessage: string;
+      readonly offersClone: false;
+    }
+  | {
+      readonly message: (hostLabel: string) => ReactNode;
+      /** The same fact, stated without the clone promise. */
+      readonly messageWithoutClone: (hostLabel: string) => ReactNode;
+      readonly reportTitle: string;
+      readonly reportMessage: string;
+      readonly offersClone: true;
+    };
+
 const CHAT_DEAD_TILE_BANNER_COPY: Record<
   ChatDeadTileBannerReason,
-  {
-    readonly message: (hostLabel: string) => ReactNode;
-    readonly reportTitle: string;
-    readonly reportMessage: string;
-    /**
-     * Whether this reason ends in an action the reader can actually take.
-     *
-     * Four of the five do: the transcript is readable (as a published copy or
-     * from the owner host) and cloning carries it onto a live host. `revoked`
-     * does not - the clone would have to read bytes the server just stopped
-     * serving this viewer, so offering the button would be an invitation to a
-     * failure. Same reasoning `ChatHostStartingBanner` withholds it under.
-     */
-    readonly offersClone: boolean;
-  }
+  ChatDeadTileBannerCopy
 > = {
   "host-offline": {
     message: (hostLabel) => (
@@ -415,6 +433,13 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
         Bound host &quot;{hostLabel}&quot; is offline. Continuing here creates a
         new agent on the active host; this one stays bound to &quot;
         {hostLabel}&quot;.
+      </>
+    ),
+    messageWithoutClone: (hostLabel) => (
+      <>
+        Bound host &quot;{hostLabel}&quot; is offline, so this agent isn&apos;t
+        available right now. You have view-only access to this task, so it
+        can&apos;t be cloned onto another host.
       </>
     ),
     reportTitle: "Agent host is offline",
@@ -427,6 +452,13 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
         Bound host &quot;{hostLabel}&quot; is local only on your current plan,
         so it can&apos;t be reached from here. Upgrade to use it remotely, or
         continue here to create a new agent on the active host.
+      </>
+    ),
+    messageWithoutClone: (hostLabel) => (
+      <>
+        Bound host &quot;{hostLabel}&quot; is local only on your current plan,
+        so it can&apos;t be reached from here. You have view-only access to this
+        task, so it can&apos;t be cloned onto another host.
       </>
     ),
     reportTitle: "Agent host is not reachable on this plan",
@@ -442,6 +474,13 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
         stays bound to &quot;{hostLabel}&quot;.
       </>
     ),
+    messageWithoutClone: (hostLabel) => (
+      <>
+        This agent&apos;s history isn&apos;t available on &quot;{hostLabel}
+        &quot;. You have view-only access to this task, so it can&apos;t be
+        cloned onto another host.
+      </>
+    ),
     reportTitle: "Agent history unavailable",
     reportMessage: "The agent's history could not be found on its bound host.",
     offersClone: true,
@@ -455,6 +494,15 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
       <>
         This agent&apos;s history is no longer on this host. Showing the last
         published copy; cloning creates a new agent from it.
+      </>
+    ),
+    // Drops the published-copy clause rather than restating it: this variant
+    // is reachable from mounts that do not show one, and the base sentence
+    // only gets away with the claim because it is paired with the offer.
+    messageWithoutClone: () => (
+      <>
+        This agent&apos;s history is no longer on this host. You have view-only
+        access to this task, so it can&apos;t be cloned onto another host.
       </>
     ),
     reportTitle: "Agent history missing on this host",
@@ -501,16 +549,30 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
  *   promise does not extend to this reader instead of dangling a button the
  *   host's editor gate would refuse.
  */
+/**
+ * Whether a reachable host ANSWERED for this reason.
+ *
+ * Both are selected only after a host replied (`tab-group-view` picks them off
+ * a live response), so nothing downstream may describe them as a connectivity
+ * failure - that would invert the evidence of a host that just spoke.
+ *
+ * Shared by the foreign-owner sentence and its report metadata deliberately:
+ * they were split before, and the report went on claiming a disconnected host
+ * under a sentence that said the opposite (CodeRabbit's finding on this PR).
+ * One predicate means the two cannot disagree again.
+ */
+function hostAnsweredForReason(reason: ChatDeadTileBannerReason): boolean {
+  return reason === "chat-not-visible" || reason === "chat-not-on-this-host";
+}
+
 function foreignOwnerMessage(input: {
   readonly reason: ChatDeadTileBannerReason;
   readonly showsPublishedCopy: boolean;
   readonly cloneAllowed: boolean;
 }): string {
-  const fact =
-    input.reason === "chat-not-visible" ||
-    input.reason === "chat-not-on-this-host"
-      ? "This agent belongs to another collaborator, and its history isn't available here."
-      : "This agent belongs to another collaborator and lives on their machine, which isn't connected here.";
+  const fact = hostAnsweredForReason(input.reason)
+    ? "This agent belongs to another collaborator, and its history isn't available here."
+    : "This agent belongs to another collaborator and lives on their machine, which isn't connected here.";
   const copyClause = input.showsPublishedCopy
     ? " Showing the last published copy."
     : "";
@@ -520,11 +582,42 @@ function foreignOwnerMessage(input: {
   return `${fact}${copyClause}${cloneClause}`;
 }
 
-const FOREIGN_OWNER_REPORT = {
+const FOREIGN_OWNER_UNREACHABLE_REPORT = {
   reportTitle: "Shared agent isn't available live",
   reportMessage:
     "The agent belongs to another collaborator and its host isn't connected here.",
 };
+
+const FOREIGN_OWNER_HISTORY_REPORT = {
+  reportTitle: "Shared agent history unavailable",
+  reportMessage:
+    "The agent belongs to another collaborator and its history could not be read here.",
+};
+
+/** The report a support ticket carries, matched to the sentence on screen. */
+function foreignOwnerReport(reason: ChatDeadTileBannerReason): {
+  readonly reportTitle: string;
+  readonly reportMessage: string;
+} {
+  return hostAnsweredForReason(reason)
+    ? FOREIGN_OWNER_HISTORY_REPORT
+    : FOREIGN_OWNER_UNREACHABLE_REPORT;
+}
+
+/**
+ * The own-chat sentence, which drops the clone promise for a viewer who
+ * cannot act on it (a creator downgraded to `viewer` after opening the chat).
+ */
+function ownChatMessage(
+  copy: ChatDeadTileBannerCopy,
+  hostLabel: string,
+  cloneAllowed: boolean,
+): ReactNode {
+  if (copy.offersClone && !cloneAllowed) {
+    return copy.messageWithoutClone(hostLabel);
+  }
+  return copy.message(hostLabel);
+}
 
 export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
   const copy = CHAT_DEAD_TILE_BANNER_COPY[props.reason];
@@ -532,7 +625,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
   // about this viewer's entitlement, not about any host.
   const foreignOwned =
     !props.ownedByViewer && props.reason !== "chat-no-longer-shared";
-  const report = foreignOwned ? FOREIGN_OWNER_REPORT : copy;
+  const report = foreignOwned ? foreignOwnerReport(props.reason) : copy;
   return (
     // A live region, like the other two chat banners: which of the three
     // truths above is on screen is carried ONLY by this sentence, and the
@@ -556,17 +649,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
               showsPublishedCopy: props.showsPublishedCopy,
               cloneAllowed: props.cloneAllowed,
             })
-          : copy.message(props.hostLabel)}
-        {/* The own-chat viewer edge (role downgraded after creating the
-            chat): the reason copy still ends in "clone it and carry on", so
-            withholding the button silently would read as broken. */}
-        {!foreignOwned && copy.offersClone && !props.cloneAllowed ? (
-          <>
-            {" "}
-            You have view-only access to this task, so cloning isn&apos;t
-            available.
-          </>
-        ) : null}
+          : ownChatMessage(copy, props.hostLabel, props.cloneAllowed)}
       </span>
       {copy.offersClone && props.cloneAllowed ? (
         <Button

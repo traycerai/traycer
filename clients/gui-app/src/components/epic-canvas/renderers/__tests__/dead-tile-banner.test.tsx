@@ -6,8 +6,23 @@ import {
   TerminalDeadTileBanner,
 } from "../dead-tile-banner";
 
+// Surfaced rather than stubbed to null: the report context is what a support
+// ticket carries, and it is the one part of this banner a reader never sees on
+// screen - so nothing but a test can catch it contradicting the sentence it
+// sits beside.
 vi.mock("@/components/report-issue/report-issue-action", () => ({
-  ReportIssueAction: () => null,
+  ReportIssueAction: (props: {
+    readonly context: {
+      readonly title: string;
+      readonly message: string | null;
+    };
+  }) => (
+    <span
+      data-testid="report-context"
+      data-title={props.context.title}
+      data-message={props.context.message ?? ""}
+    />
+  ),
 }));
 
 afterEach(cleanup);
@@ -386,5 +401,90 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).toContain("is offline");
     expect(text).toContain("view-only access");
     expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+  });
+
+  // Every clone-offering sentence ENDS in the promise ("continuing here creates
+  // a new agent", "cloning creates a new agent from it"). Appending the denial
+  // to one of those produced a banner that offered and refused the same action
+  // in consecutive sentences, so the no-clone variant must not carry it at all.
+  it("never promises cloning in the same breath as refusing it", () => {
+    for (const reason of [
+      "host-offline",
+      "host-plan-restricted",
+      "chat-not-visible",
+      "chat-not-on-this-host",
+    ] as const) {
+      const { unmount } = render(
+        <ChatDeadTileBanner
+          hostLabel="mac-mini"
+          reason={reason}
+          ownedByViewer
+          cloneAllowed={false}
+          showsPublishedCopy={false}
+          cloning={false}
+          onClone={() => undefined}
+          testId={`chat-dead-no-clone-${reason}`}
+          className={undefined}
+        />,
+      );
+
+      const text = screen.getByTestId(
+        `chat-dead-no-clone-${reason}`,
+      ).textContent;
+      expect(text).toContain("view-only access");
+      expect(text).not.toContain("creates a new agent");
+      expect(text).not.toContain("cloning creates");
+      expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+      unmount();
+    }
+  });
+
+  // The report rides along invisibly, so it can drift from the sentence
+  // without anyone noticing. For the two reasons a host ANSWERED on, claiming
+  // a disconnected host would file a ticket contradicting the screen.
+  it("files a foreign-owner report that matches the reason on screen", () => {
+    for (const reason of [
+      "chat-not-visible",
+      "chat-not-on-this-host",
+    ] as const) {
+      const { unmount } = render(
+        <ChatDeadTileBanner
+          hostLabel="mac-mini"
+          reason={reason}
+          ownedByViewer={false}
+          cloneAllowed
+          showsPublishedCopy
+          cloning={false}
+          onClone={() => undefined}
+          testId={`chat-dead-report-${reason}`}
+          className={undefined}
+        />,
+      );
+
+      const report = screen.getByTestId("report-context");
+      expect(report.getAttribute("data-message")).not.toContain(
+        "isn't connected",
+      );
+      expect(report.getAttribute("data-message")).toContain("history");
+      unmount();
+    }
+
+    // The unreachable arm keeps the connectivity claim, which is true there.
+    render(
+      <ChatDeadTileBanner
+        hostLabel="mac-mini"
+        reason="host-offline"
+        ownedByViewer={false}
+        cloneAllowed
+        showsPublishedCopy
+        cloning={false}
+        onClone={() => undefined}
+        testId="chat-dead-report-offline"
+        className={undefined}
+      />,
+    );
+    expect(
+      screen.getByTestId("report-context").getAttribute("data-message"),
+    ).toContain("isn't connected here");
   });
 });

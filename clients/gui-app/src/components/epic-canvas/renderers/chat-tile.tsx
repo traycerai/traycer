@@ -556,6 +556,7 @@ export function ChatDeadTileBannerContainer(
     client: bannerAppHostClient,
     epicId: props.epicId,
     chatId: providedOwnerUserId === null ? props.chatId : null,
+    sourceOwnerHostId: props.sourceHostId,
   });
   const sourceOwnerUserId = providedOwnerUserId ?? lookedUpOwnerUserId;
   // The two facts the banner's copy and Clone offer vary on (shared-chat
