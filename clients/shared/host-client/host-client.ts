@@ -39,6 +39,9 @@ export interface HostQueryInvalidationOptions {
   readonly refetchActive: boolean;
 }
 
+/** One host-wide recovery sweep per window, with one trailing delivery. */
+export const HOST_AVAILABILITY_SWEEP_WINDOW_MS = 10_000;
+
 /** Unsubscribe handle returned by `HostClient` event subscriptions. */
 export type HostClientUnsubscribe = () => void;
 
@@ -353,13 +356,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * nothing failing anywhere. Naming the host is what makes the recovery
    * expressible at all now.
    *
-   * Delivery is coalesced per host per microtask tick (see
-   * {@link deliverHostScopeSweep}): one shared remote session's ready
-   * boundary fans out to every consumer wiring, each of which reports it here
-   * in the same tick with its own cooldown state.
+   * Delivery is coalesced per host both in the current microtask and across a
+   * short time window. Independent consumer wirings have independent recovery
+   * cooldowns, so their reports can otherwise arrive as a staggered burst.
    */
   notifyHostAvailabilityRecovered(hostId: string): void {
+    const gate = this.hostAvailabilitySweepGates.get(hostId);
+    if (gate !== undefined) {
+      if (!gate.leadingPending) gate.trailing = true;
+      return;
+    }
+    const opened = { leadingPending: true, trailing: false };
+    this.hostAvailabilitySweepGates.set(hostId, opened);
     this.deliverHostScopeSweep(hostId, true);
+    queueMicrotask(() => {
+      if (this.hostAvailabilitySweepGates.get(hostId) === opened) {
+        opened.leadingPending = false;
+      }
+    });
+    this.armHostAvailabilitySweepGate(hostId, opened);
   }
 
   /**
@@ -392,6 +407,33 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    */
   invalidateHostScopeUnannounced(hostId: string): void {
     this.deliverHostScopeSweep(hostId, false);
+  }
+
+  private readonly hostAvailabilitySweepGates = new Map<
+    string,
+    { leadingPending: boolean; trailing: boolean }
+  >();
+
+  private armHostAvailabilitySweepGate(
+    hostId: string,
+    gate: { leadingPending: boolean; trailing: boolean },
+  ): void {
+    setTimeout(() => {
+      if (this.hostAvailabilitySweepGates.get(hostId) !== gate) return;
+      if (!gate.trailing) {
+        this.hostAvailabilitySweepGates.delete(hostId);
+        return;
+      }
+      gate.trailing = false;
+      gate.leadingPending = true;
+      this.deliverHostScopeSweep(hostId, true);
+      queueMicrotask(() => {
+        if (this.hostAvailabilitySweepGates.get(hostId) === gate) {
+          gate.leadingPending = false;
+        }
+      });
+      this.armHostAvailabilitySweepGate(hostId, gate);
+    }, HOST_AVAILABILITY_SWEEP_WINDOW_MS);
   }
 
   /**
