@@ -1,5 +1,13 @@
-import { deflateSync } from "fflate";
-import { describe, expect, it } from "vitest";
+import { deflateSync, Inflate, inflateSync } from "fflate";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("fflate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fflate")>();
+  return {
+    ...actual,
+    inflateSync: vi.fn(actual.inflateSync),
+  };
+});
 import {
   decodeMuxFrame,
   encodeMuxFrame,
@@ -428,6 +436,50 @@ describe("body compression round-trip (T5)", () => {
   });
 
   describe("decompression bomb guard", () => {
+    it("rejects an under-declared compressed bomb before entering fflate's full synchronous inflater", () => {
+      // The header is peer-controlled, so it must not be the only output
+      // bound. `inflateSync(..., { out })` truncates writes but still walks the
+      // entire DEFLATE stream first; a small fixture proves we reject before
+      // paying that unbounded work without putting a gigabyte-scale bomb in CI.
+      const actualPlainLength = 4 * 1024 * 1024;
+      const declaredPlainLength = 1;
+      const deflated = deflateSync(new Uint8Array(actualPlainLength), {
+        level: 6,
+      });
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, declaredPlainLength);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 6,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, deflated),
+        }),
+      );
+      const reassembler = new ChunkReassembler(undefined);
+
+      vi.mocked(inflateSync).mockClear();
+      const push = vi.spyOn(Inflate.prototype, "push");
+      try {
+        expect(() => reassembler.accept(frame)).toThrow(MuxFrameDecodeError);
+        expect(inflateSync).not.toHaveBeenCalled();
+        // An unbounded `Inflate.push(deflated, true)` calls its callback only
+        // after all 4 MiB of output; the forged one-byte declaration permits
+        // only one compressed byte per push before that callback is checked.
+        expect(Math.max(...push.mock.calls.map((args) => args[0].length))).toBe(
+          1,
+        );
+      } finally {
+        push.mockRestore();
+      }
+    });
+
     it("throws MuxFrameDecodeError for a GENUINELY oversized declared plaintext length - a real, validly-deflated payload that would successfully inflate past BULK_CHUNK_SIZE_BYTES if the bound were not checked first", () => {
       // A real decompression bomb: highly compressible content that deflates
       // small but declares (and would genuinely inflate to) well over the

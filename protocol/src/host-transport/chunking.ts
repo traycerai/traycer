@@ -7,7 +7,7 @@
 // turning a healthy channel into `ChunkSequenceMismatchError`s. fflate is here
 // specifically because it is sync and isomorphic; native zlib is faster but
 // Node-only, and this module runs in the browser too.
-import { deflateSync, inflateSync } from "fflate";
+import { deflateSync, Inflate } from "fflate";
 import {
   MAX_MUX_MESSAGE_BYTES,
   MUX_FRAME_HEADER_LEN,
@@ -118,6 +118,11 @@ export const COMPRESSION_MIN_PAYLOAD_BYTES = 4096;
  * waits behind.
  */
 const COMPRESSION_LEVEL = 1;
+
+// A DEFLATE stream can expand by roughly this factor. It sizes each input push
+// so `Inflate`'s synchronous callback can reject a lie about the plaintext
+// length before one push performs material work beyond the receive bound.
+const DEFLATE_MAX_EXPANSION_RATIO = 1032;
 
 /**
  * A compressed payload is `[plainLen:u32 BE][deflate bytes]`. The length
@@ -289,20 +294,13 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
  * which is the outcome the per-stream routing exists to prevent.
  *
  * The output buffer is deliberately allocated ONE BYTE LARGER than the
- * declared length, and that byte is what makes the length check a check at all.
- * `inflateSync` reports the bytes it wrote by returning `out.subarray(0, n)` —
- * but a write past the end of a `Uint8Array` is silently dropped and
- * `subarray`'s end index is CLAMPED to the buffer, so sizing `out` at exactly
- * `plainLength` makes an over-expanding payload report exactly `plainLength`
- * and pass. That is the bad direction: the tail is gone, nothing complains, and
- * a truncated body still decodes, so the dispatcher is handed silently
- * corrupted data. With the spare byte the three cases separate cleanly —
- * `plainLength` is the only accepted result, a short expansion returns fewer,
- * and an over-expansion returns `plainLength + 1`.
- *
- * The spare byte also means a future `fflate` that returned the whole buffer
- * instead of a written-length view would reject every compressed frame rather
- * than silently stop checking — loud, and caught by the tests either way.
+ * declared length. The synchronous `Inflate` callback is fed bounded slices
+ * of the compressed source and stops the decoder as soon as its actual output
+ * would pass the declared length. That preserves the old three-way sentinel
+ * post-condition without letting `inflateSync(..., { out })` walk an attacker
+ * supplied gigabyte of output merely to discover the extra byte: exact output
+ * is accepted, a short expansion reports its count, and an over-expansion is
+ * represented by the spare byte as `more than plainLength`.
  */
 function inflateFramePayload(payload: Uint8Array): Uint8Array {
   if (payload.length < COMPRESSED_PAYLOAD_HEADER_LEN) {
@@ -321,29 +319,52 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
     );
   }
   const out = new Uint8Array(plainLength + 1);
-  let inflated: Uint8Array;
+  let written = 0;
+  const outputLimitExceeded = new Error("compressed frame output limit exceeded");
+  const inflater = new Inflate((chunk) => {
+    if (chunk.length > plainLength - written) {
+      throw outputLimitExceeded;
+    }
+    out.set(chunk, written);
+    written += chunk.length;
+  });
+  const compressed = payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN);
   try {
-    inflated = inflateSync(payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN), {
-      out,
-    });
+    for (let offset = 0; offset < compressed.length; ) {
+      // `Inflate` calls ondata after each push, not each decoded symbol. Keep
+      // one push's possible expansion inside the remaining output budget so a
+      // forged small prefix cannot turn into a renderer-thread-sized inflate.
+      const inputLength = Math.max(
+        1,
+        Math.floor((plainLength - written) / DEFLATE_MAX_EXPANSION_RATIO),
+      );
+      const end = Math.min(offset + inputLength, compressed.length);
+      inflater.push(compressed.subarray(offset, end), end === compressed.length);
+      offset = end;
+    }
   } catch (error) {
-    throw new MuxFrameDecodeError(
-      `compressed frame payload failed to inflate: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    if (error === outputLimitExceeded) {
+      // The spare byte is the old, deliberate representation for an output
+      // that exceeded the declared length. The post-condition below keeps its
+      // wording and accepted exact-length case unchanged.
+      written = plainLength + 1;
+    } else {
+      throw new MuxFrameDecodeError(
+        `compressed frame payload failed to inflate: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
-  if (inflated.length !== plainLength) {
+  if (written !== plainLength) {
     // "more than" rather than a count: the spare byte proves the payload
     // over-expanded without measuring by how much, and inventing a figure the
     // buffer never held would be worse than naming the direction.
     const actual =
-      inflated.length > plainLength
-        ? `more than ${plainLength}`
-        : `${inflated.length}`;
+      written > plainLength ? `more than ${plainLength}` : `${written}`;
     throw new MuxFrameDecodeError(
       `compressed frame inflated to ${actual} bytes, declared ${plainLength}`,
     );
   }
-  return inflated;
+  return out.subarray(0, written);
 }
 
 /**
