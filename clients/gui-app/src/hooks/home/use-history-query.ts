@@ -17,6 +17,7 @@ import {
   withHistoryItemWorktreeMetadata,
 } from "@/components/home/data/home-page.data";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
@@ -123,6 +124,8 @@ export function useHistoryQuery(
     isFetchingNextPage,
   } = useCloudEpicTasksQuery(request, { enabled: true });
   const tasksQueryRefetch = tasksQuery.refetch;
+  const chatHostFilterActive = params.search.chatHosts.length > 0;
+  const hostChatHostSupport = useChatHostFilterSupport(hostId);
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
   const shouldProjectLocally =
     isQueryDebouncing || tasksQuery.isFetching || tasksQuery.isPlaceholderData;
@@ -196,6 +199,34 @@ export function useHistoryQuery(
       facets.workspaces.length > 0
         ? facets.workspaces.map((workspace) => workspace.workspace)
         : collectHistoryWorkspaces(allItems);
+    // Fail closed on BOTH skew directions. The host arm is the negotiated
+    // minor; the cloud arm is a first page that came back without the
+    // `chatHosts` group at all, which is how an old cloud tier - it has no
+    // version negotiation, it simply drops request keys it does not know -
+    // reveals that it never applied the filter. In either case the rows in
+    // hand are UNFILTERED, and showing them under an active host filter is
+    // the exact failure this whole gate exists to prevent. Withhold them and
+    // let the panel say why.
+    //
+    // A MISSING `facets` object counts too, and deliberately has no exemption:
+    // this query never carries a cursor ("Show more" pages append through a
+    // separate mutation and store), so its response is always a first page,
+    // and a first page without facets is a server that never computed them.
+    const chatHostFilterUnsupported =
+      chatHostFilterActive &&
+      (hostChatHostSupport === "unsupported" ||
+        (canUseServerFacets && facets.chatHosts === null));
+    if (chatHostFilterUnsupported) {
+      return {
+        items: [],
+        availableRepos: EMPTY_REPOS,
+        availableWorkspaces: EMPTY_WORKSPACE_REFS,
+        totalCount: 0,
+        facets: EMPTY_FACETS,
+        worktreesByEpicId,
+        chatHostFilterUnsupported: true,
+      };
+    }
     return {
       items,
       availableRepos:
@@ -206,10 +237,13 @@ export function useHistoryQuery(
       totalCount: items.length,
       facets,
       worktreesByEpicId,
+      chatHostFilterUnsupported: false,
     };
   }, [
     allItems,
+    chatHostFilterActive,
     contextExtrasCount,
+    hostChatHostSupport,
     debouncedQuery,
     isQueryDebouncing,
     params.search,
@@ -246,6 +280,9 @@ export function useHistoryQuery(
   };
 }
 
+const EMPTY_REPOS: ReadonlyArray<string> = [];
+const EMPTY_WORKSPACE_REFS: ReadonlyArray<HistoryWorkspaceRef> = [];
+
 export interface HistoryFetchResult {
   items: ReadonlyArray<HistoryItem>;
   availableRepos: ReadonlyArray<string>;
@@ -253,12 +290,25 @@ export interface HistoryFetchResult {
   totalCount: number;
   facets: HistoryFacets;
   worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>;
+  /**
+   * The chat-host filter is active but the serving peer cannot apply it, so
+   * `items` is deliberately EMPTY rather than unfiltered. Render an
+   * explanation, never an empty-history message.
+   */
+  chatHostFilterUnsupported: boolean;
 }
 
 export interface HistoryFacets {
   readonly repos: ReadonlyArray<HistoryRepoFacet>;
   readonly workspaces: ReadonlyArray<HistoryWorkspaceFacet>;
+  /** `null` when the peer did not report the group at all. */
+  readonly chatHosts: ReadonlyArray<HistoryChatHostFacet> | null;
   readonly ownershipScopes: ReadonlyArray<HistoryOwnershipFacet>;
+}
+
+export interface HistoryChatHostFacet {
+  readonly hostId: string;
+  readonly count: number;
 }
 
 export interface HistoryRepoFacet {
@@ -279,6 +329,7 @@ export interface HistoryOwnershipFacet {
 const EMPTY_FACETS: HistoryFacets = {
   repos: [],
   workspaces: [],
+  chatHosts: null,
   ownershipScopes: [],
 };
 
@@ -295,6 +346,12 @@ function mapHistoryFacets(
       workspace: facet.workspaceIdentifier,
       count: facet.count,
     })),
+    // Absence is preserved as `null` rather than flattened to `[]`. It is the
+    // only signal that the CLOUD tier (which has no version negotiation of its
+    // own - an old server's body schema just drops unknown request keys)
+    // could not evaluate the filter, and `[]` would read as a truthful
+    // "no host owns any chat".
+    chatHosts: facets.chatHosts ?? null,
     ownershipScopes: facets.ownershipScopes,
   };
 }
@@ -335,6 +392,12 @@ function filterHistoryItemsLocally(
     repoMatchMode: search.repoMode,
     workspaces: search.workspaces,
     workspaceMatchMode: search.workspaceMode,
+    // Rows carry the caller's own chat hosts, so the host filter is
+    // re-applied locally: to id-fetched worktree/PR matches, which never went
+    // through the server's filter, and to cached rows while a request for a
+    // newly-toggled host is still in flight.
+    chatHosts: search.chatHosts,
+    chatHostMatchMode: search.chatHostMode,
     ownershipScopes: search.ownershipScopes,
   });
 }

@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/popover";
 import { MatchModeToggle } from "@/components/home/toolbar/match-mode-toggle";
 import type {
+  HistoryMatchMode,
   HistoryOwnershipScope,
   HistoryWorkspaceRef,
 } from "@/components/home/data/home-page.data";
@@ -14,6 +15,8 @@ import {
   dedupSortWorkspaces,
   workspaceKey,
 } from "@/components/home/data/home-page.data";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { EpicsFilterTrigger } from "@/components/epics/epics-filter-trigger";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
@@ -30,6 +33,18 @@ interface EpicsFilterPopoverProps {
   readonly search: HistorySearchState;
   readonly onSearchChange: (patch: HistorySearchPatch) => void;
   readonly facets: HistoryFacets | undefined;
+  /**
+   * `false` when the serving host negotiated `epic.listTasks` below @1.3 and
+   * would silently discard a host filter. The section still renders any
+   * ALREADY-selected host so a deep link can be undone, but offers no new
+   * ones - an affordance that cannot do what it says is worse than none.
+   */
+  readonly chatHostFilterSupported: boolean;
+}
+
+interface ChatHostOption {
+  readonly hostId: string;
+  readonly label: string;
 }
 
 const OWNERSHIP_OPTIONS: ReadonlyArray<{
@@ -44,7 +59,8 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
   const activeCount =
     props.search.ownershipScopes.length +
     props.search.repos.length +
-    props.search.workspaces.length;
+    props.search.workspaces.length +
+    props.search.chatHosts.length;
   const ownershipCounts = new Map(
     props.facets?.ownershipScopes.map((facet) => [facet.value, facet.count]) ??
       [],
@@ -136,6 +152,13 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
             ))
           )}
         </FilterSection>
+        <ChatHostFilterSection
+          facets={props.facets}
+          selected={props.search.chatHosts}
+          matchMode={props.search.chatHostMode}
+          supported={props.chatHostFilterSupported}
+          onSearchChange={props.onSearchChange}
+        />
         <FilterSection
           label="Workspaces"
           trailing={
@@ -185,6 +208,85 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
         </FilterSection>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function ChatHostFilterSection(props: {
+  readonly facets: HistoryFacets | undefined;
+  readonly selected: ReadonlyArray<string>;
+  readonly matchMode: HistoryMatchMode;
+  readonly supported: boolean;
+  readonly onSearchChange: (patch: HistorySearchPatch) => void;
+}): ReactNode {
+  const hostDirectory = useHostDirectoryList();
+  const counts = new Map(
+    props.facets?.chatHosts?.map((facet) => [facet.hostId, facet.count]) ?? [],
+  );
+  // A host the peer cannot filter by is not offered, so an unsupported peer
+  // contributes no options and only an already-selected host survives - see
+  // `buildChatHostOptions`.
+  const options = buildChatHostOptions(
+    props.supported
+      ? (props.facets?.chatHosts?.map((facet) => facet.hostId) ?? [])
+      : [],
+    props.selected,
+    hostDirectory.data ?? [],
+  );
+  return (
+    <FilterSection
+      label="Hosts"
+      trailing={
+        props.selected.length > 1 ? (
+          <MatchModeToggle
+            value={props.matchMode}
+            selectedLabel="hosts"
+            onChange={(chatHostMode) => {
+              props.onSearchChange({ chatHostMode });
+            }}
+          />
+        ) : null
+      }
+    >
+      <ChatHostFilterOptions
+        options={options}
+        counts={counts}
+        selected={props.selected}
+        supported={props.supported}
+        onSearchChange={props.onSearchChange}
+      />
+    </FilterSection>
+  );
+}
+
+function ChatHostFilterOptions(props: {
+  readonly options: ReadonlyArray<ChatHostOption>;
+  readonly counts: ReadonlyMap<string, number>;
+  readonly selected: ReadonlyArray<string>;
+  readonly supported: boolean;
+  readonly onSearchChange: (patch: HistorySearchPatch) => void;
+}): ReactNode {
+  if (props.options.length > 0) {
+    return props.options.map((option) => (
+      <FilterOption
+        key={option.hostId}
+        label={option.label}
+        truncateLabelFromStart={false}
+        count={props.counts.get(option.hostId)}
+        checked={props.selected.includes(option.hostId)}
+        onToggle={() => {
+          props.onSearchChange({
+            chatHosts: withToggledValue(props.selected, option.hostId),
+          });
+        }}
+      />
+    ));
+  }
+  return (
+    <p className="px-1 py-1.5 text-ui-xs text-muted-foreground">
+      {props.supported
+        ? "No hosts yet"
+        : "This host is too old to filter by host"}
+    </p>
   );
 }
 
@@ -273,6 +375,41 @@ function withToggledWorkspace(
   return values.some((current) => workspaceKey(current) === valueKey)
     ? values.filter((current) => workspaceKey(current) !== valueKey)
     : [...values, value];
+}
+
+/**
+ * The host rows, ordered by display name.
+ *
+ * The facet is the source of WHICH hosts to offer - only hosts that actually
+ * own chats in the caller's tasks - and the directory supplies the name. The
+ * two sets deliberately do not have to agree: a host the directory no longer
+ * knows (deregistered, or another machine of the user's that this one has
+ * never seen) still owns chats in past tasks, so it stays selectable under its
+ * raw id rather than vanishing from a filter that would still match rows.
+ *
+ * Selected ids are unioned in for the same reason a repo/workspace selection
+ * is: a filter narrow enough to zero out its own facet must still render its
+ * checkbox, or it cannot be unchecked.
+ */
+function buildChatHostOptions(
+  facetHostIds: ReadonlyArray<string>,
+  selectedHostIds: ReadonlyArray<string>,
+  directory: ReadonlyArray<HostDirectoryEntry>,
+): ReadonlyArray<ChatHostOption> {
+  const labelsByHostId = new Map(
+    directory.map((entry) => [entry.hostId, entry.label]),
+  );
+  const hostIds = new Set([...facetHostIds, ...selectedHostIds]);
+  return Array.from(hostIds)
+    .map((hostId) => ({
+      hostId,
+      label: labelsByHostId.get(hostId) ?? hostId,
+    }))
+    .sort(
+      (left, right) =>
+        left.label.localeCompare(right.label) ||
+        left.hostId.localeCompare(right.hostId),
+    );
 }
 
 function countWorkspacePaths(

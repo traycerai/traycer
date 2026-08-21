@@ -1,22 +1,58 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { tabNavigationController } from "@/lib/tab-navigation";
+import { isStartupNavigationIntent } from "@/lib/host/startup-navigation-intent";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import {
   consumeDesktopRestoredRoute,
   updateDesktopTabsActiveRoute,
 } from "@/stores/tabs/desktop-tabs-persistence";
 
+export interface TabNavigationHistoryEvent {
+  readonly location: {
+    readonly pathname: string;
+    readonly state: unknown;
+    // `HistoryLocation.search` is the raw query string, never a parsed
+    // object. Declaring the wider union invited a lossy re-serializer that
+    // dropped every non-string param (`focusedAt` and friends), while the
+    // hydration writer below persisted `searchStr` intact - so the stored
+    // route depended on which writer ran last.
+    readonly search: string;
+  };
+  readonly action: {
+    readonly type: "PUSH" | "REPLACE" | "BACK" | "FORWARD" | "GO";
+  };
+}
+
 /**
- * Observes committed history entries once at the signed-in root. The
+ * Observes committed history entries for the whole app lifetime. The
  * controller, rather than route render effects, distinguishes an internal
  * activation envelope from an external route (including Back and Forward).
+ *
+ * IT DOES NOT SEE THE WHOLE LAUNCH, and must not be "fixed" by mounting it
+ * earlier. It mounts in `RootComponent`, inside `RouterProvider`, so it does
+ * not exist during the first boot surface (`HostRuntimeBootFallback` renders
+ * as `HostRuntimeProvider`'s fallback, above the router). A navigation made
+ * there - the boot card's `Open settings` escape hatch is the only one a user
+ * can make - is therefore never observed, and the restored-route replay below
+ * used to overwrite it: measured, an explicit `/settings/host` replaced by
+ * `/epics/<id>/<tab>` on every warm launch, so the escape hatch appeared to do
+ * nothing.
+ *
+ * The fix is NOT earlier mounting. That navigation DECLARES itself in history
+ * state (`startup-navigation-intent.ts`) and the hydration effect reads the
+ * marker off the CURRENT location, so it survives whether or not this bridge
+ * was subscribed when the commit landed. Mounting above `HostRuntimeProvider`
+ * was tried and reverted: from up there this observer also sees the transient
+ * `/` a cold launch redirects ITSELF to - `requireSignedIn` fires while stored
+ * tokens are still validating - and treating that as user intent vetoes the
+ * restore, stranding the window on the landing page.
  */
 export function TabNavigationRouteBridge(): null {
   const router = useRouter();
   const hydrationReady = useWindowsBridgeHydrated();
   const hydrationReadyRef = useRef(hydrationReady);
-  const observedBeforeHydrationRef = useRef(false);
+  const startupIntentBeforeHydrationRef = useRef(false);
   const skipRestoredRouteObservationRef = useRef(false);
 
   useEffect(() => {
@@ -30,24 +66,20 @@ export function TabNavigationRouteBridge(): null {
       state: router.state.location.state,
       search: router.state.location.search,
     }));
-    const observe = (input: {
-      readonly location: {
-        readonly pathname: string;
-        readonly state: unknown;
-        // `HistoryLocation.search` is the raw query string, never a parsed
-        // object. Declaring the wider union invited a lossy re-serializer that
-        // dropped every non-string param (`focusedAt` and friends), while the
-        // hydration writer below persisted `searchStr` intact - so the stored
-        // route depended on which writer ran last.
-        readonly search: string;
-      };
-      readonly action: {
-        readonly type: "PUSH" | "REPLACE" | "BACK" | "FORWARD" | "GO";
-      };
-    }): void => {
+    const observe = (input: TabNavigationHistoryEvent): void => {
       if (skipRestoredRouteObservationRef.current) return;
-      if (!hydrationReadyRef.current) {
-        observedBeforeHydrationRef.current = true;
+      // ONLY a DECLARED escape-hatch navigation counts as user intent here.
+      // This used to latch on any pre-hydration commit, which was safe only
+      // while this bridge mounted too late to see startup traffic: a cold
+      // launch REPLACES to `/` on its own, because every protected route runs
+      // `requireSignedIn` while stored tokens are still validating. Latching on
+      // that would veto the restore below and strand the window on the landing
+      // page instead of the tab it was showing at shutdown.
+      if (
+        !hydrationReadyRef.current &&
+        isStartupNavigationIntent(input.location.state)
+      ) {
+        startupIntentBeforeHydrationRef.current = true;
       }
       // Same serialization as the hydration writer below: the raw query string
       // straight through, including its leading `?`.
@@ -79,9 +111,23 @@ export function TabNavigationRouteBridge(): null {
 
   useEffect(() => {
     if (!hydrationReady) return;
-    const restoredRoute = observedBeforeHydrationRef.current
-      ? null
-      : consumeDesktopRestoredRoute();
+    // SPEND the launch's restored route unconditionally, then decide whether to
+    // apply it. It is a one-shot for THIS launch, and leaving it pending when
+    // the user's intent wins is not inert: only `WindowsBridgeProvider`'s
+    // cleanup clears it, and that provider outlives auth changes, while THIS
+    // bridge is unmounted and remounted by `RootComponent` on sign-out/sign-in.
+    // A later mount - by which point the current location no longer carries the
+    // marker - would then spend the stale token and replace whatever the user
+    // was looking at with an epic from the previous session.
+    const pendingRestoredRoute = consumeDesktopRestoredRoute();
+    // Read the marker off the CURRENT location as well as the observed commit,
+    // so this does not depend on the subscription having been live when the
+    // commit landed. The marker rides in history state, so a press taken in the
+    // gap between first paint and this bridge's passive effects is honoured.
+    const startupIntent =
+      startupIntentBeforeHydrationRef.current ||
+      isStartupNavigationIntent(router.state.location.state);
+    const restoredRoute = startupIntent ? null : pendingRestoredRoute;
     if (restoredRoute !== null) {
       // Replace the current persisted entry BEFORE T3's first startup
       // synchronization. The subscription deliberately ignores this one

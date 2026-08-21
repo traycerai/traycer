@@ -12,10 +12,14 @@ import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-ow
  * fabricated owner is worse than an absent one.
  */
 
-function cloudRow(chatId: string, ownerUserId: string): CloudChatSummary {
+function cloudRow(
+  chatId: string,
+  ownerUserId: string,
+  ownerHostId: string,
+): CloudChatSummary {
   return {
     identity: { taskId: "epic-1", chatId, ownerUserId },
-    ownerHostId: "owner-host",
+    ownerHostId,
     createdAt: 1,
     visibility: "task",
     title: null,
@@ -38,9 +42,10 @@ describe("resolveCloneSourceOwnerUserId", () => {
         chatId: "chat-1",
         localRecordOwnerUserId: null,
         cloudChats: [
-          cloudRow("chat-other", "owner-other"),
-          cloudRow("chat-1", "owner-9"),
+          cloudRow("chat-other", "owner-other", "owner-host"),
+          cloudRow("chat-1", "owner-9", "owner-host"),
         ],
+        sourceOwnerHostId: null,
       }),
     ).toBe("owner-9");
   });
@@ -50,7 +55,8 @@ describe("resolveCloneSourceOwnerUserId", () => {
       resolveCloneSourceOwnerUserId({
         chatId: "chat-1",
         localRecordOwnerUserId: "owner-local",
-        cloudChats: [cloudRow("chat-1", "owner-9")],
+        cloudChats: [cloudRow("chat-1", "owner-9", "owner-host")],
+        sourceOwnerHostId: null,
       }),
     ).toBe("owner-local");
   });
@@ -60,7 +66,8 @@ describe("resolveCloneSourceOwnerUserId", () => {
       resolveCloneSourceOwnerUserId({
         chatId: "chat-1",
         localRecordOwnerUserId: "",
-        cloudChats: [cloudRow("chat-1", "owner-9")],
+        cloudChats: [cloudRow("chat-1", "owner-9", "owner-host")],
+        sourceOwnerHostId: null,
       }),
     ).toBe("owner-9");
     expect(
@@ -68,6 +75,7 @@ describe("resolveCloneSourceOwnerUserId", () => {
         chatId: "chat-1",
         localRecordOwnerUserId: "",
         cloudChats: null,
+        sourceOwnerHostId: null,
       }),
     ).toBeNull();
   });
@@ -77,7 +85,8 @@ describe("resolveCloneSourceOwnerUserId", () => {
       resolveCloneSourceOwnerUserId({
         chatId: "chat-1",
         localRecordOwnerUserId: null,
-        cloudChats: [cloudRow("chat-other", "owner-other")],
+        cloudChats: [cloudRow("chat-other", "owner-other", "owner-host")],
+        sourceOwnerHostId: null,
       }),
     ).toBeNull();
   });
@@ -88,14 +97,104 @@ describe("resolveCloneSourceOwnerUserId", () => {
         chatId: "chat-1",
         localRecordOwnerUserId: null,
         cloudChats: null,
+        sourceOwnerHostId: null,
       }),
     ).toBeNull();
     expect(
       resolveCloneSourceOwnerUserId({
         chatId: null,
         localRecordOwnerUserId: "owner-local",
-        cloudChats: [cloudRow("chat-1", "owner-9")],
+        cloudChats: [cloudRow("chat-1", "owner-9", "owner-host")],
+        sourceOwnerHostId: null,
       }),
     ).toBeNull();
+  });
+
+  // `chatId` is host-minted and NOT unique under a task (`cloud-chat.ts`:
+  // identity is the triple), so a listing can carry two rows for one id. The
+  // owner drives the host's anti-squat expectation AND, since the shared-chat
+  // banner, whether the UI calls a chat the viewer's own - both are wrong to
+  // guess at.
+  it("disambiguates a colliding chat id by the source's bound host", () => {
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: [
+          cloudRow("chat-1", "owner-a", "host-a"),
+          cloudRow("chat-1", "owner-b", "host-b"),
+        ],
+        sourceOwnerHostId: "host-b",
+      }),
+    ).toBe("owner-b");
+  });
+
+  it("answers null for a colliding chat id it cannot disambiguate, rather than taking the first row", () => {
+    const colliding = [
+      cloudRow("chat-1", "owner-a", "host-a"),
+      cloudRow("chat-1", "owner-b", "host-b"),
+    ];
+    // No host in hand.
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: colliding,
+        sourceOwnerHostId: null,
+      }),
+    ).toBeNull();
+    // A host that names neither row.
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: colliding,
+        sourceOwnerHostId: "host-c",
+      }),
+    ).toBeNull();
+  });
+
+  // The trap the fork dialog fell into: a published copy is read through the
+  // host SERVING it, generally the viewer's own machine. Handed that host as
+  // the tie-breaker, a colliding id resolves to the viewer's own unrelated row
+  // - a wrong owner, which the host TRUSTS, rather than an absent one. Callers
+  // that cannot name the OWNING host must pass `null` and take the degrade.
+  it("resolves a collision to the viewer's own row when handed a serving host - why callers must pass the owning host or null", () => {
+    const colliding = [
+      cloudRow("chat-1", "viewer-user", "viewer-own-host"),
+      cloudRow("chat-1", "collaborator-user", "collaborator-host"),
+    ];
+    // The serving host IS the viewer's own, so this picks the wrong owner...
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: colliding,
+        sourceOwnerHostId: "viewer-own-host",
+      }),
+    ).toBe("viewer-user");
+    // ...whereas declining to name a host degrades honestly.
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: colliding,
+        sourceOwnerHostId: null,
+      }),
+    ).toBeNull();
+  });
+
+  // The tie-breaker must not become a filter: one row is already unambiguous,
+  // and a caller whose bound host disagrees for a reason this function cannot
+  // see must not lose the owner it used to resolve.
+  it("keeps the single matching row even when the caller's host disagrees", () => {
+    expect(
+      resolveCloneSourceOwnerUserId({
+        chatId: "chat-1",
+        localRecordOwnerUserId: null,
+        cloudChats: [cloudRow("chat-1", "owner-9", "owner-host")],
+        sourceOwnerHostId: "some-other-host",
+      }),
+    ).toBe("owner-9");
   });
 });

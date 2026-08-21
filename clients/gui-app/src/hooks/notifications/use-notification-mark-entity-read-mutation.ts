@@ -1,8 +1,9 @@
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { toastFromBackgroundHostError } from "@/lib/host-error-toast";
 import { invalidateNotificationIndicatorsForEntities } from "@/lib/notifications/notification-indicator-cache";
@@ -12,13 +13,14 @@ interface HostNotificationEntityReadContext {
   readonly hostId: string | null;
 }
 
-export function useNotificationMarkEntityRead(): UseMutationResult<
+export function useNotificationMarkEntityRead(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "host.notifications.markRead">,
   HostRpcError,
   HostNotificationsEntityRef,
   HostNotificationEntityReadContext
 > {
-  const client = useHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -31,9 +33,9 @@ export function useNotificationMarkEntityRead(): UseMutationResult<
     mapVariables: (entity) => ({ kind: "entity", entity }),
     options: {
       mutationKey: notificationsMutationKeys.markEntityRead(),
-      onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, entity, context) => {
-        if (context.hostId === null) return;
+        if (context.hostId === null || client === null) return;
         if ((client.getActiveHostId() ?? null) !== context.hostId) return;
         invalidateNotificationIndicatorsForEntities(
           queryClient,

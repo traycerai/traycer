@@ -147,6 +147,7 @@ describe("<NotificationIndicatorIcon />", () => {
         runningTitle="Task activity in progress"
         defaultIcon={<span data-testid="default-icon" />}
         statusPresentation="message"
+        agentSurface="gui"
       />,
     );
     expect(screen.getByTestId("default-icon")).toBeDefined();
@@ -187,6 +188,23 @@ describe("<NotificationIndicatorIcon />", () => {
     expect(screen.queryByTestId("indicator-failure-subject-1")).toBeNull();
   });
 
+  it("shows a running turn above a historical terminal failure", () => {
+    renderIcon(
+      {
+        unreadFailure: true,
+        unreadTerminalFailure: true,
+        pendingFork: false,
+        pendingApproval: false,
+        pendingInterview: false,
+        unreadDone: false,
+      },
+      "turn",
+    );
+
+    expect(screen.getByTestId("indicator-activity-subject-1")).toBeDefined();
+    expect(screen.queryByTestId("indicator-failure-subject-1")).toBeNull();
+  });
+
   it("shows a chat failure above a coexisting terminal failure", () => {
     renderIcon(
       {
@@ -207,7 +225,7 @@ describe("<NotificationIndicatorIcon />", () => {
     expect(screen.queryByTestId("indicator-done-subject-1")).toBeNull();
   });
 
-  it("shows the terminal glyph when no higher-priority state exists", () => {
+  it("keeps the chat glyph for a latest failure on a GUI surface", () => {
     renderIcon(
       {
         unreadFailure: true,
@@ -220,9 +238,41 @@ describe("<NotificationIndicatorIcon />", () => {
       false,
     );
 
-    expect(
-      screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
-    ).toContain("lucide-square-terminal");
+    const failure = screen.getByTestId("indicator-failure-subject-1");
+    expect(failure.getAttribute("class")).toContain("lucide-message-square-x");
+    expect(failure.getAttribute("class")).not.toContain(
+      "lucide-square-terminal",
+    );
+  });
+
+  it("uses the terminal glyph for the same latest failure on a TUI surface", () => {
+    render(
+      <NotificationIndicatorIcon
+        state={{
+          unreadFailure: true,
+          unreadTerminalFailure: true,
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadDone: false,
+        }}
+        running={false}
+        subjectId="subject-1"
+        testIdPrefix="indicator"
+        className={undefined}
+        style={undefined}
+        runningTitle="Task activity in progress"
+        defaultIcon={<span data-testid="default-icon" />}
+        statusPresentation="message"
+        agentSurface="tui"
+      />,
+    );
+
+    const failure = screen.getByTestId("indicator-failure-subject-1");
+    expect(failure.getAttribute("class")).toContain("lucide-square-terminal");
+    expect(failure.getAttribute("class")).not.toContain(
+      "lucide-message-square-x",
+    );
   });
 
   it("renders the background tier as a muted waiting chat distinct from the turn spinner", () => {
@@ -315,6 +365,7 @@ function renderIconContent(
       runningTitle="Task activity in progress"
       defaultIcon={<span data-testid="default-icon" />}
       statusPresentation="message"
+      agentSurface="gui"
     />
   );
 }

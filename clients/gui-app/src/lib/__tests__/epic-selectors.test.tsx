@@ -19,7 +19,7 @@ import {
   useEpicAgentReference,
   useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
-  useRegisteredEpicLiveArtifactTitles,
+  useRegisteredEpicLiveAgents,
 } from "@/lib/epic-selectors";
 
 const featureSettings = vi.hoisted(() => ({ enabled: true }));
@@ -53,12 +53,12 @@ afterEach(() => {
   handles.length = 0;
 });
 
-describe("useRegisteredEpicLiveArtifactTitles", () => {
+describe("useRegisteredEpicLiveAgents", () => {
   it("subscribes when a registered handle initially has no title", () => {
     const registry = __getOpenEpicRegistryForTests();
     const { result } = renderHook(() =>
-      useRegisteredEpicLiveArtifactTitles([
-        { epicId: "epic-late-handle", artifactId: "chat-1" },
+      useRegisteredEpicLiveAgents([
+        { epicId: "epic-late-handle", agentId: "chat-1" },
       ]),
     );
     expect(result.current).toEqual([null]);
@@ -78,7 +78,9 @@ describe("useRegisteredEpicLiveArtifactTitles", () => {
     act(() => {
       registry.acquire("epic-late-handle", () => handle);
     });
-    expect(result.current).toEqual([null]);
+    expect(result.current).toEqual([
+      { kind: "chat", title: null, hostId: "host-a" },
+    ]);
 
     act(() => {
       handle.store.setState({
@@ -91,17 +93,19 @@ describe("useRegisteredEpicLiveArtifactTitles", () => {
       });
     });
 
-    expect(result.current).toEqual(["Generated title"]);
+    expect(result.current).toEqual([
+      { kind: "chat", title: "Generated title", hostId: "host-a" },
+    ]);
   });
 
   it("subscribes to a late handle when the refs identity is stable", () => {
     const registry = __getOpenEpicRegistryForTests();
     const { result } = renderHook(() => {
       const refs = useMemo(
-        () => [{ epicId: "epic-stable-refs", artifactId: "chat-1" }],
+        () => [{ epicId: "epic-stable-refs", agentId: "chat-1" }],
         [],
       );
-      return useRegisteredEpicLiveArtifactTitles(refs);
+      return useRegisteredEpicLiveAgents(refs);
     });
     expect(result.current).toEqual([null]);
 
@@ -120,7 +124,9 @@ describe("useRegisteredEpicLiveArtifactTitles", () => {
     act(() => {
       registry.acquire("epic-stable-refs", () => handle);
     });
-    expect(result.current).toEqual([null]);
+    expect(result.current).toEqual([
+      { kind: "chat", title: null, hostId: "host-a" },
+    ]);
 
     act(() => {
       handle.store.setState({
@@ -133,7 +139,38 @@ describe("useRegisteredEpicLiveArtifactTitles", () => {
       });
     });
 
-    expect(result.current).toEqual(["Stable refs title"]);
+    expect(result.current).toEqual([
+      { kind: "chat", title: "Stable refs title", hostId: "host-a" },
+    ]);
+  });
+
+  it("resolves a tuiAgents entry to a terminal-agent live agent", () => {
+    const registry = __getOpenEpicRegistryForTests();
+    const handle = createOpenEpicStore({
+      epicId: "epic-terminal-agent",
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
+    handle.store.setState({
+      tuiAgents: {
+        allIds: ["agent-1"],
+        byId: { "agent-1": tuiAgent("agent-1", "codex") },
+      },
+    });
+    act(() => {
+      registry.acquire("epic-terminal-agent", () => handle);
+    });
+
+    const { result } = renderHook(() =>
+      useRegisteredEpicLiveAgents([
+        { epicId: "epic-terminal-agent", agentId: "agent-1" },
+      ]),
+    );
+
+    expect(result.current).toEqual([
+      { kind: "terminal-agent", title: "Codex", hostId: "host-a" },
+    ]);
   });
 });
 

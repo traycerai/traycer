@@ -70,8 +70,10 @@ import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-co
 import {
   useChatById,
   useEpicLiveArtifactTitle,
+  useEpicPermissionRole,
   useOpenEpicId,
 } from "@/lib/epic-selectors";
+import { isEditableRole } from "@/lib/epic-permissions";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
@@ -89,7 +91,11 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import {
+  chatTranscriptEventRowId,
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
@@ -97,6 +103,7 @@ import {
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -399,7 +406,10 @@ export function ChatTile(props: ChatTileProps) {
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
-  // costs no extra host RPC.
+  // costs no extra host RPC. The provider is handed `tabHostId` alongside it
+  // because this list is evidence about a profile only for anchors minted on
+  // THIS host - an anchor a fork carried from another machine names a
+  // profile id that is host-local there and can never match here.
   const providersList = useTabProvidersList({
     enabled: true,
     subscribed: false,
@@ -427,6 +437,9 @@ export function ChatTile(props: ChatTileProps) {
               ? "host-plan-restricted"
               : "host-offline"
           }
+          // This mount's body is a load state or a cached live session -
+          // never a published copy the banner could truthfully point at.
+          showsPublishedCopy={false}
           testId={`chat-dead-tile-${node.id}`}
         />
       );
@@ -476,6 +489,7 @@ export function ChatTile(props: ChatTileProps) {
       {deadTileBanner}
       <TombstonedProfileProvider
         providers={providersList.data?.providers ?? []}
+        hostId={tabHostId}
       >
         <ChatTileSessionView
           handle={handle}
@@ -498,6 +512,13 @@ interface ChatDeadTileBannerContainerProps {
   readonly hostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
   readonly testId: string;
+  /**
+   * Whether the mounting surface renders a readable copy under this banner.
+   * The published tile and the canvas substitution do; this live tile does
+   * not (the body below it is a load state or a cached live session). See
+   * `ChatDeadTileBannerProps.showsPublishedCopy`.
+   */
+  readonly showsPublishedCopy: boolean;
   /**
    * The source chat's owner, when the mounting surface already carries it
    * (the published tile's ref does). Bypasses the cloud-list lookup below,
@@ -535,8 +556,22 @@ export function ChatDeadTileBannerContainer(
     client: bannerAppHostClient,
     epicId: props.epicId,
     chatId: providedOwnerUserId === null ? props.chatId : null,
+    sourceOwnerHostId: props.sourceHostId,
   });
   const sourceOwnerUserId = providedOwnerUserId ?? lookedUpOwnerUserId;
+  // The two facts the banner's copy and Clone offer vary on (shared-chat
+  // support). Ownership: only a POSITIVE mismatch against the signed-in user
+  // flips the foreign-owner copy - an unknown owner or identity stays on the
+  // own-chat sentences, which were this banner's whole vocabulary before
+  // collaborators existed. Role: `epic.createChat` is editor-gated host-side,
+  // so a known viewer gets the reason in the banner instead of a Clone button
+  // that dies on a bare "You don't have permission" toast; an unresolved role
+  // (`null`) keeps the offer - the host gate is the backstop, and withholding
+  // the way out of a dead tile needs evidence.
+  const permissionRole = useEpicPermissionRole();
+  const ownedByViewer = useOwnedByViewer(sourceOwnerUserId);
+  const cloneAllowed =
+    permissionRole === null || isEditableRole(permissionRole);
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
@@ -552,6 +587,9 @@ export function ChatDeadTileBannerContainer(
     <ChatDeadTileBanner
       hostLabel={props.hostLabel}
       reason={props.reason}
+      ownedByViewer={ownedByViewer}
+      cloneAllowed={cloneAllowed}
+      showsPublishedCopy={props.showsPublishedCopy}
       onClone={offer.clone}
       cloning={offer.cloning}
       className={undefined}
@@ -626,6 +664,34 @@ function messageIdForBlock(
     ),
   );
   return owner?.id ?? null;
+}
+
+/**
+ * Resolve a durable protocol message id to the row id used by the rendered
+ * transcript. User rows keep their protocol id, while assistant records are
+ * projected into turn-keyed rows (`assistant:<turnId>`) and retain the
+ * protocol id only as `persistentMessageId`. Terminal notifications point at
+ * that durable id, so an id-only lookup silently waits forever for a row that
+ * can never exist.
+ *
+ * Prefer an exact rendered id. When projection split one assistant turn into
+ * several rows, choose the trailing matching slice: completion and failure
+ * notifications describe the terminal edge of that persisted assistant
+ * record, and the completion marker is stamped on the final assistant slice
+ * in the current transcript projection.
+ */
+function messageIdForTranscriptTarget(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+): string | null {
+  const exact = messages.find((message) => message.id === messageId);
+  if (exact !== undefined) return exact.id;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.persistentMessageId === messageId) return message.id;
+  }
+  return null;
 }
 
 /**
@@ -813,6 +879,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       }
       backgroundScrollRequestIdRef.current += 1;
       setBackgroundScrollRequest({
+        kind: "message",
         messageId,
         blockId,
         requestId: backgroundScrollRequestIdRef.current,
@@ -836,8 +903,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const scrollToMessage = useCallback((messageId: string): void => {
     backgroundScrollRequestIdRef.current += 1;
     setBackgroundScrollRequest({
+      kind: "message",
       messageId,
       blockId: null,
+      requestId: backgroundScrollRequestIdRef.current,
+    });
+  }, []);
+  const scrollToTranscriptEnd = useCallback((): void => {
+    backgroundScrollRequestIdRef.current += 1;
+    setBackgroundScrollRequest({
+      kind: "end",
       requestId: backgroundScrollRequestIdRef.current,
     });
   }, []);
@@ -846,7 +921,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // from another tile, possibly before this one exists - `openTileInEpic`
   // mounts it and the request is waiting here when it renders.
   const transcriptJump = useChatTranscriptJumpStore(
-    (s) => s.requestsByChatId[props.node.id],
+    (s) => s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
   );
   const consumeTranscriptJump = useChatTranscriptJumpStore(
     (s) => s.consumeJump,
@@ -863,11 +938,19 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (transcriptJump === undefined) return;
     if (!view.snapshotLoaded) return;
     const target = transcriptJump.target;
+    if (target.kind === "end") {
+      scrollToTranscriptEnd();
+      consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+      return;
+    }
     const resolveTargetMessageId = (): string | null => {
       if (target.kind === "message") {
+        return messageIdForTranscriptTarget(view.messages, target.messageId);
+      }
+      if (target.kind === "event") {
+        const eventRowId = chatTranscriptEventRowId(target.eventId);
         return (
-          view.messages.find((message) => message.id === target.messageId)
-            ?.id ?? null
+          view.messages.find((message) => message.id === eventRowId)?.id ?? null
         );
       }
       if (target.kind === "sent-message") {
@@ -893,12 +976,14 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       // land the same way: scroll to the owning row, no card to expand.
       scrollToMessage(messageId);
     }
-    consumeTranscriptJump(props.node.id, transcriptJump.requestId);
+    consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
   }, [
     consumeTranscriptJump,
+    hostId,
     props.node.id,
     scrollToBlock,
     scrollToMessage,
+    scrollToTranscriptEnd,
     transcriptJump,
     view.lower.backgroundItems,
     view.messages,
@@ -915,12 +1000,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (pendingTranscriptJumpId === null) return;
     const chatId = props.node.id;
     const timer = setTimeout(() => {
-      consumeTranscriptJump(chatId, pendingTranscriptJumpId);
+      consumeTranscriptJump(hostId, chatId, pendingTranscriptJumpId);
     }, TRANSCRIPT_JUMP_TTL_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [consumeTranscriptJump, pendingTranscriptJumpId, props.node.id]);
+  }, [consumeTranscriptJump, hostId, pendingTranscriptJumpId, props.node.id]);
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.

@@ -54,19 +54,54 @@ export interface ResolveCloneSourceOwnerArgs {
   readonly localRecordOwnerUserId: string | null;
   /** `epic.listCloudChats`' rows, or `null` when the list has not answered. */
   readonly cloudChats: readonly CloudChatSummary[] | null;
+  /**
+   * The host that OWNS the source chat, when the surface genuinely knows it -
+   * the dead tile's `sourceHostId`, which every mount resolves from the chat's
+   * own binding or its cloud row. Used ONLY to break a tie, never to filter:
+   * see below.
+   *
+   * NOT the host a surface happens to be reading through. A published copy is
+   * served by whatever host the DEVICE runs, which is generally not the
+   * owner's, so a serving host here would resolve a colliding id to the
+   * viewer's own row. Pass `null` unless the value is the owner's host.
+   */
+  readonly sourceOwnerHostId: string | null;
 }
 
-/** The decision itself, kept pure so both surfaces and its tests share it. */
+/**
+ * The decision itself, kept pure so both surfaces and its tests share it.
+ *
+ * `chatId` alone is NOT an identity. `cloud-chat.ts` is explicit that the id is
+ * host-minted and that two hosts can mint the same one under a single task, so
+ * identity is the triple `(taskId, chatId, ownerUserId)` - and `ownerUserId` is
+ * precisely what this function is trying to learn, which is why the list is
+ * scanned by the other two. When that scan is ambiguous the honest answer is
+ * `null`, exactly as the header says: a fabricated owner is TRUSTED by the host
+ * where an absent one merely degrades to settings-only, and (since this PR) it
+ * also decides whether the dead-tile banner calls a chat the viewer's own.
+ *
+ * `sourceOwnerHostId` breaks the tie rather than pre-filtering, so the ordinary
+ * single-row case is untouched by a caller whose bound host disagrees with the
+ * row's `ownerHostId` for any reason this function cannot see.
+ */
 export function resolveCloneSourceOwnerUserId(
   args: ResolveCloneSourceOwnerArgs,
 ): string | null {
   if (args.chatId === null) return null;
   const localOwnerUserId = usableOwnerUserId(args.localRecordOwnerUserId);
   if (localOwnerUserId !== null) return localOwnerUserId;
-  const row =
-    args.cloudChats?.find((chat) => chat.identity.chatId === args.chatId) ??
-    null;
-  return row?.identity.ownerUserId ?? null;
+  const rows = (args.cloudChats ?? []).filter(
+    (chat) => chat.identity.chatId === args.chatId,
+  );
+  if (rows.length === 1) {
+    return usableOwnerUserId(rows[0].identity.ownerUserId);
+  }
+  if (rows.length === 0 || args.sourceOwnerHostId === null) return null;
+  const onSourceHost = rows.filter(
+    (chat) => chat.ownerHostId === args.sourceOwnerHostId,
+  );
+  if (onSourceHost.length !== 1) return null;
+  return usableOwnerUserId(onSourceHost[0].identity.ownerUserId);
 }
 
 export interface UseCloneSourceOwnerUserIdArgs {
@@ -78,6 +113,8 @@ export interface UseCloneSourceOwnerUserIdArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatId: string | null;
+  /** The source chat's bound host, when the surface knows it. */
+  readonly sourceOwnerHostId: string | null;
 }
 
 export function useCloneSourceOwnerUserId(
@@ -98,5 +135,6 @@ export function useCloneSourceOwnerUserId(
     chatId: args.chatId,
     localRecordOwnerUserId,
     cloudChats: cloudChats.data?.chats ?? null,
+    sourceOwnerHostId: args.sourceOwnerHostId,
   });
 }

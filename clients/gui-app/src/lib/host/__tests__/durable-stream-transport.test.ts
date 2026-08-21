@@ -244,7 +244,11 @@ describe("openDurableStreamTransport", () => {
     websocketUrl = "ws://host-a/rpc-2";
     fireDirectoryChange();
     expect(reconnectAll).toHaveBeenCalledTimes(1);
-    expect(reconnectAll).toHaveBeenCalledWith("host-endpoint-change");
+    // Forced, not probed: the old socket addresses a url that no longer serves
+    // this host, so an answer from it would not mean it is still the right one.
+    expect(reconnectAll).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+    });
 
     // Endpoint goes away (host down), then returns on a new url: re-dial again -
     // a null gap is recorded but not nudged, the next non-null move fires it.

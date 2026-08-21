@@ -117,6 +117,8 @@ import type {
   SetChatArchivedRequest,
   SetChatArchivedResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -159,6 +161,7 @@ beforeEach(() => {
   for (const method of Object.keys(capturedMutations)) {
     delete capturedMutations[method];
   }
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
 describe("useEpicCreateChatForHostClient", () => {
@@ -244,6 +247,24 @@ describe("useEpicRenameChat", () => {
 
 describe("useEpicDeleteChat", () => {
   it("force-releases the deleted chat session on success", () => {
+    const store = useEpicCanvasStore.getState();
+    const targetTabId = store.openEpicTab("epic-1", "Target");
+    const peerTabId = store.openEpicTab("epic-1", "Peer");
+    const target: EpicCanvasTileRef = {
+      id: "chat-1",
+      instanceId: "target-chat-instance",
+      type: "chat",
+      name: "Target chat",
+      hostId: "host-test",
+    };
+    const sameIdOtherHost: EpicCanvasTileRef = {
+      ...target,
+      instanceId: "peer-chat-instance",
+      hostId: "peer-host",
+    };
+    store.openTileInTab(targetTabId, target);
+    store.openTileInTab(peerTabId, sameIdOtherHost);
+
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat")
       .options as DeleteChatMutationOptions;
@@ -269,9 +290,29 @@ describe("useEpicDeleteChat", () => {
       "chat-1",
       "host-test",
     );
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[targetTabId]
+        ?.tilesByInstanceId[target.instanceId],
+    ).toBeUndefined();
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[peerTabId]?.tilesByInstanceId[
+        sameIdOtherHost.instanceId
+      ],
+    ).toEqual(sameIdOtherHost);
   });
 
   it("does not force-release anything when no host was active at mutate time", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-1", "Target");
+    const target: EpicCanvasTileRef = {
+      id: "chat-1",
+      instanceId: "target-chat-instance",
+      type: "chat",
+      name: "Target chat",
+      hostId: "host-test",
+    };
+    store.openTileInTab(tabId, target);
+
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat")
       .options as DeleteChatMutationOptions;
@@ -290,14 +331,29 @@ describe("useEpicDeleteChat", () => {
     // whichever machine happened to be active - the exact cross-host teardown
     // this scoping exists to prevent.
     expect(forceReleaseChatSession).not.toHaveBeenCalled();
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        target.instanceId
+      ],
+    ).toEqual(target);
   });
 
   it("shows fallback on error", () => {
+    useEpicCanvasStore.getState().markArtifactSelfDeleted("chat-1");
     renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.deleteChat").options as {
-      onError: (e: HostRpcError) => void;
+      onError: (
+        e: HostRpcError,
+        variables: { readonly epicId: string; readonly chatId: string },
+      ) => void;
     };
-    opts.onError(makeError("RPC_ERROR"));
+    opts.onError(makeError("RPC_ERROR"), {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    expect(
+      useEpicCanvasStore.getState().selfDeletedArtifactIds.has("chat-1"),
+    ).toBe(false);
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
   });
 

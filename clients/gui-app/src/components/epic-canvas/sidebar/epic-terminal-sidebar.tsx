@@ -460,6 +460,11 @@ interface TerminalSidebarBodyProps {
 
 type TerminalSidebarRenameMode = "disabled" | "legacy" | "capable";
 
+/**
+ * Which lifetime authority owns a row's rename. `capability` and `canMutate`
+ * are host-wide, but the sidebar merges durable projection rows with
+ * manager-owned compatibility rows from `terminal.list`.
+ */
 function resolveTerminalSidebarRenameMode(args: {
   readonly capability: "unknown" | "legacy" | "capable";
   readonly canMutate: boolean;
@@ -468,9 +473,8 @@ function resolveTerminalSidebarRenameMode(args: {
   if (args.capability === "legacy") return "legacy";
   if (args.capability !== "capable") return "disabled";
   if (!args.canMutate) return "disabled";
-  // A row with no durable projection is a `terminal.list` compatibility row
-  // (setup / provider-login shell). The host still serves `terminal.rename`
-  // for it, so keep the legacy path instead of disabling rename.
+  // A row with no durable projection is a manager-owned compatibility row.
+  // The host still serves `terminal.rename` for it.
   if (!args.hasProjection) return "legacy";
   return "capable";
 }
@@ -747,7 +751,6 @@ function TerminalRow(props: TerminalRowProps) {
   if (renameMode === "capable") renamePending = durableRenamePending;
   if (renameMode === "legacy") renamePending = legacyRename.isPending;
   const canRename = renameMode !== "disabled" && !renamePending;
-
   const label = terminalSessionLabel(session);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");

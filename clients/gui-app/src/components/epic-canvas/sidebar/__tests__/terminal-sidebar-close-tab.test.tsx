@@ -42,12 +42,14 @@ const durableAuthority = vi.hoisted<{
   capability: "unknown" | "legacy" | "capable";
   canMutate: boolean;
   closePending: boolean;
+  killPending: boolean;
   renamePending: boolean;
   collectionIncludesSession: boolean;
 }>(() => ({
   capability: "legacy",
   canMutate: false,
   closePending: false,
+  killPending: false,
   renamePending: false,
   collectionIncludesSession: false,
 }));
@@ -124,7 +126,10 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
-  useTerminalKillFor: () => ({ mutate: killMutate, isPending: false }),
+  useTerminalKillFor: () => ({
+    mutate: killMutate,
+    isPending: durableAuthority.killPending,
+  }),
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
@@ -279,13 +284,40 @@ function resolveCloseRequest(vars: { readonly terminalId: string }): {
   return { terminalId: vars.terminalId, revision: 2 };
 }
 
-function seedOpenTerminalTab(authority: "legacy" | "host" | "future"): void {
+function seedEmptyTab(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.setState({
     tabsById: {
       [TAB_ID]: { tabId: TAB_ID, epicId: "epic-1", name: "Epic 1" },
     },
   });
+}
+
+/**
+ * Setup and provider-login shells are host-created `terminal.list`
+ * compatibility rows: import-exempt, so their canvas ref stays legacy-shaped
+ * even against a capable host, and absent from the durable collection.
+ */
+function seedOpenCompatibilityTab(origin: "setup" | "provider-login"): void {
+  seedEmptyTab();
+  const base = {
+    id: SESSION_ID,
+    instanceId: "inst-term-1",
+    type: "terminal" as const,
+    name: "New Terminal",
+    titleSource: "default" as const,
+    hostId: "host-1",
+    cwd: "/tmp/work",
+  };
+  const ref: EpicTerminalRef =
+    origin === "setup"
+      ? { ...base, origin: "setup" }
+      : { ...base, origin: "provider-login", originProviderId: "claude-code" };
+  useEpicCanvasStore.getState().openTileInTab(TAB_ID, ref);
+}
+
+function seedOpenTerminalTab(authority: "legacy" | "host" | "future"): void {
+  seedEmptyTab();
   let ref: EpicTerminalRef = {
     id: SESSION_ID,
     instanceId: "inst-term-1",
@@ -359,6 +391,7 @@ describe("terminal sidebar Close", () => {
     durableAuthority.capability = "legacy";
     durableAuthority.canMutate = false;
     durableAuthority.closePending = false;
+    durableAuthority.killPending = false;
     durableAuthority.renamePending = false;
     durableAuthority.collectionIncludesSession = false;
     terminalSessions.value = [RUNNING_SESSION];
@@ -527,6 +560,75 @@ describe("terminal sidebar Close", () => {
     expect(killMutate).not.toHaveBeenCalled();
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
   });
+
+  it.each([
+    {
+      name: "stale durable authority",
+      canMutate: false,
+      includesSession: true,
+      closePending: false,
+      killPending: false,
+      compatibilityRow: false,
+    },
+    {
+      name: "pending durable close",
+      canMutate: true,
+      includesSession: true,
+      closePending: true,
+      killPending: false,
+      compatibilityRow: false,
+    },
+    {
+      name: "pending compatibility kill",
+      canMutate: true,
+      includesSession: false,
+      closePending: false,
+      killPending: true,
+      compatibilityRow: true,
+    },
+  ] as const)(
+    "disables close for $name",
+    ({
+      canMutate,
+      includesSession,
+      closePending,
+      killPending,
+      compatibilityRow,
+    }) => {
+      durableAuthority.capability = "capable";
+      durableAuthority.canMutate = canMutate;
+      durableAuthority.collectionIncludesSession = includesSession;
+      durableAuthority.closePending = closePending;
+      durableAuthority.killPending = killPending;
+      if (compatibilityRow) {
+        terminalSessions.value = [
+          { ...RUNNING_SESSION, lifecycleOwner: "manager" },
+        ];
+        seedOpenCompatibilityTab("setup");
+      } else {
+        seedOpenTerminalTab("host");
+      }
+      const { getByRole, getByTestId } = render(
+        wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+      );
+
+      const dropdownClose = getByRole("button", { name: "Close" });
+      expect(dropdownClose.getAttribute("disabled")).not.toBeNull();
+      fireEvent.click(dropdownClose);
+
+      fireEvent.contextMenu(
+        getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+      );
+      const contextClose = getByRole("menuitem", { name: "Close" });
+      expect(contextClose.getAttribute("data-disabled")).not.toBeNull();
+      fireEvent.keyDown(contextClose, { key: "Enter" });
+      fireEvent.click(contextClose);
+
+      expect(durableCloseMutateAsync).not.toHaveBeenCalled();
+      expect(killMutate).not.toHaveBeenCalled();
+      expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
+    },
+  );
 
   it.each([
     { capability: "capable", canMutate: true },

@@ -1,5 +1,11 @@
 import { isValidElement, useRef, useState } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -59,6 +65,18 @@ const STAGED_INTENT: WorktreeIntent = {
 function stagedIntent(): WorktreeIntent | undefined {
   return useWorktreeIntentStagingStore.getState().intentByKey[STAGING_KEY_ID];
 }
+
+// The G4 toast, mocked so these tests assert the modal's decision to fire it
+// (and with what label) rather than sonner's internals. The staging store
+// itself stays REAL below (unlike the landing composer's wiring suite) - the
+// modal's `readStagedWorktreeIntent`/`clearForAllHosts` calls are exercised
+// against it directly.
+const toastMocks = vi.hoisted(() => ({
+  toastRepointedStagingReset: vi.fn<(hostLabel: string) => void>(),
+}));
+vi.mock("@/lib/composer/repointed-staging-toast", () => ({
+  toastRepointedStagingReset: toastMocks.toastRepointedStagingReset,
+}));
 
 interface PlacementTargetShape {
   readonly resolvedHostId: string | null;
@@ -381,11 +399,12 @@ function workspaceControlsHostScope(element: unknown): unknown {
   return element.props.hostScope;
 }
 
-function renderModal(): void {
-  render(<Harness />);
+function renderModal(): RenderResult {
+  const view = render(<Harness />);
   act(() => {
     testState.installEditor?.();
   });
+  return view;
 }
 
 function noticeText(): string {
@@ -427,6 +446,7 @@ afterEach(() => {
   testState.bodySubmit = null;
   testState.bodyStartTerminal = null;
   useNewConversationModalStore.getState().resetForTests();
+  toastMocks.toastRepointedStagingReset.mockReset();
 });
 
 describe("new-conversation modal shares the composer's placement semantics", () => {
@@ -508,6 +528,83 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(noticeText()).toContain("Build Box");
   });
 
+  // Codex review finding: a §54 refusal names the placement it refused, so
+  // ANY change of the RESOLVED host retires it - a derivation move or the
+  // picker writing a new pin. A surviving alert would keep naming a placement
+  // this modal has already left.
+  it("clears a refused notice when the resolved host changes", () => {
+    testState.placement.current = {
+      resolvedHostId: "host-b",
+      // The chip renders host-b; this client would send to host-a - refused.
+      client: { getActiveHostId: () => "host-a" },
+      hostLabel: "Build Box",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    const view = renderModal();
+    act(() => {
+      testState.bodySubmit?.();
+    });
+
+    expect(noticeText()).toContain("Build Box");
+
+    // The resolved host moves - to a placement that would itself be usable,
+    // which is the point: the notice must clear on the move alone, not on
+    // whether the new placement also refuses.
+    testState.placement.current = {
+      resolvedHostId: "host-c",
+      client: { getActiveHostId: () => "host-c" },
+      hostLabel: "Home Mac",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    act(() => {
+      view.rerender(<Harness />);
+    });
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+
+  it("P2 FIX - and keeps it retired across a round trip back to the refused host", () => {
+    // The per-Epic pin is as sticky as the landing composer's, so B -> C -> B
+    // happens on its own. Retiring the refusal on the FIRST move is what makes
+    // the return quiet; comparing it against the host it was raised for would
+    // bring the alert back with no submit behind it.
+    const resolveTo = (hostId: string, hostLabel: string): void => {
+      testState.placement.current = {
+        resolvedHostId: hostId,
+        client: { getActiveHostId: () => hostId },
+        hostLabel,
+        isPinned: true,
+        namedHostDead: false,
+      };
+    };
+    testState.placement.current = {
+      resolvedHostId: "host-b",
+      client: { getActiveHostId: () => "host-a" },
+      hostLabel: "Build Box",
+      isPinned: true,
+      namedHostDead: false,
+    };
+    const view = renderModal();
+    act(() => {
+      testState.bodySubmit?.();
+    });
+    expect(noticeText()).toContain("Build Box");
+
+    resolveTo("host-c", "Home Mac");
+    act(() => {
+      view.rerender(<Harness />);
+    });
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+
+    resolveTo("host-b", "Build Box");
+    act(() => {
+      view.rerender(<Harness />);
+    });
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+
   it("refuses the TERMINAL path on the same verdict, creating nothing", () => {
     useNewConversationModalStore
       .getState()
@@ -535,7 +632,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(testState.onSubmitted).not.toHaveBeenCalled();
   });
 
-  it("G4: a FOLLOWING modal clears its staged intent and says so when effective moves", () => {
+  it("G4: a FOLLOWING modal clears its staged intent and toasts when something was staged", () => {
     useWorktreeIntentStagingStore
       .getState()
       .setIntent(STAGING_KEY, STAGED_INTENT);
@@ -546,10 +643,34 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
 
     expect(stagedIntent()).toBeUndefined();
-    expect(noticeText()).toContain("now run on");
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledTimes(1);
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledWith(
+      testState.placement.current.hostLabel,
+    );
+    // The inline notice slot is `refused`-only now; a re-point is a toast.
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
 
-  it("G4: a PINNED modal keeps its staged intent (D6)", () => {
+  it("G4: a FOLLOWING modal clears anyway but does not toast when nothing was staged", () => {
+    const clearForAllHostsSpy = vi.spyOn(
+      useWorktreeIntentStagingStore.getState(),
+      "clearForAllHosts",
+    );
+    renderModal();
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    expect(clearForAllHostsSpy).toHaveBeenCalledWith(STAGING_KEY);
+    expect(stagedIntent()).toBeUndefined();
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+
+    clearForAllHostsSpy.mockRestore();
+  });
+
+  it("G4: a PINNED modal keeps its staged intent and does not toast (D6)", () => {
     testState.pinIsPinned.current = true;
     testState.followsEffective.current = false;
     testState.placement.current = {
@@ -566,6 +687,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
 
     expect(stagedIntent()).toBeDefined();
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
   });
 
   it("G4: a modal resting on the EPIC's host (default tier, unpinned) keeps its staged intent", () => {
@@ -592,6 +714,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
 
     expect(stagedIntent()).toBeDefined();
+    expect(toastMocks.toastRepointedStagingReset).not.toHaveBeenCalled();
     // And no move narrated: there is no notice at all.
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
   });
@@ -652,6 +775,37 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
     expect(testState.createChat).toHaveBeenCalledTimes(1);
     expect(testState.recordPlacement).toHaveBeenCalledWith("host-a");
+  });
+
+  // Codex review finding: `clearForAllHosts` reaches every host's copy of the
+  // slot, so the "was anything staged" check that decides whether to toast
+  // must reach just as far. The narrower `readStagedWorktreeIntent` (scoped to
+  // the RESOLVED bucket) reported "nothing staged" here even though the clear
+  // below deleted the host-b copy - silently dropping the toast.
+  it("G4: toasts when the staged intent lives under a DIFFERENT host bucket than the resolved one", () => {
+    const otherHostKey = newConversationModalStagingKey(
+      "host-b",
+      "epic-1",
+      null,
+    );
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(otherHostKey, STAGED_INTENT);
+    renderModal();
+
+    act(() => {
+      notifyEffectiveHostChanged("host-a", "host-b");
+    });
+
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledTimes(1);
+    expect(toastMocks.toastRepointedStagingReset).toHaveBeenCalledWith(
+      testState.placement.current.hostLabel,
+    );
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(otherHostKey)
+      ],
+    ).toBeUndefined();
   });
 
   it("does NOT record a placement on a refused submit - nothing was created", () => {

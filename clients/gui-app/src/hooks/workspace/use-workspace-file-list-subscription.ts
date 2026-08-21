@@ -1,5 +1,11 @@
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import { useEffect, useMemo, useReducer, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type {
@@ -55,9 +61,9 @@ interface ActiveSubscriptionArgs {
 }
 
 interface SharedSubscription {
+  /** This entry's slot in `subscriptions`; the `entryListeners` channel key. */
+  readonly key: string;
   refCount: number;
-  /** Re-render channel for state that never reaches the query cache. */
-  consumers: Map<symbol, () => void>;
   /** Per-consumer requested coverage; the stream watches their union. */
   watchRequests: Map<symbol, ReadonlySet<string>>;
   /** Per-consumer prune sink, so each panel collapses its own expansion. */
@@ -91,6 +97,48 @@ function subscriptionKeyFor(
   return `${client.instanceId}|${args.hostId}|${args.workspacePath}`;
 }
 
+/**
+ * Change channel for the entry-scoped state a consumer reads during render
+ * (`hasListing`, `error`). Keyed by subscription key rather than held on the
+ * entry so a consumer can subscribe BEFORE its entry exists - the lifecycle
+ * effect creates the entry after the first commit - and survive its teardown.
+ *
+ * Why a channel at all: the desktop renderer runs the React Compiler, which
+ * memoizes an imperative `subscriptions.get(key)` performed during render on
+ * the identity of its inputs. Those inputs (client, host, workspace) do not
+ * change when the entry is created or when its first listing lands, so a
+ * plain render-time read froze at "no entry yet" and the file tree spun
+ * forever over rows it was already showing. `useSyncExternalStore` owns the
+ * value, so the compiler caching its callbacks is harmless.
+ */
+const entryListeners = new Map<string, Set<() => void>>();
+
+function subscribeToEntry(
+  key: string | null,
+): (listener: () => void) => () => void {
+  return (onStoreChange) => {
+    if (key === null) return () => undefined;
+    let listeners = entryListeners.get(key);
+    if (listeners === undefined) {
+      listeners = new Set();
+      entryListeners.set(key, listeners);
+    }
+    listeners.add(onStoreChange);
+    return () => {
+      const current = entryListeners.get(key);
+      if (current === undefined) return;
+      current.delete(onStoreChange);
+      if (current.size === 0) entryListeners.delete(key);
+    };
+  };
+}
+
+function notifyEntryChanged(key: string): void {
+  const listeners = entryListeners.get(key);
+  if (listeners === undefined) return;
+  for (const listener of [...listeners]) listener();
+}
+
 /** Test helper to reset module state. */
 export function __resetWorkspaceFileListSubscriptionsForTesting(): void {
   for (const shared of subscriptions.values()) shared.unsubscribeFromStream();
@@ -121,12 +169,6 @@ export function useWorkspaceFileListSubscription(args: {
     args.hostId,
     args.workspacePath,
   );
-  // Events that do not write the query cache (terminal errors) still have to
-  // re-render their consumers; a disabled query is not reliably notified by
-  // invalidation, so they ride this channel instead.
-  const [, forceRender] = useReducer((renderCount: number) => {
-    return renderCount + 1;
-  }, 0);
   const [consumerId] = useState(() => Symbol("workspace-file-list-consumer"));
 
   const { epicId, hostId, workspacePath, enabled } = args;
@@ -156,6 +198,7 @@ export function useWorkspaceFileListSubscription(args: {
     let shared = subscriptions.get(key);
     if (shared === undefined) {
       shared = createSharedSubscription(
+        key,
         wsStreamClient,
         queryClient,
         activeArgs,
@@ -164,7 +207,6 @@ export function useWorkspaceFileListSubscription(args: {
     }
 
     shared.refCount += 1;
-    shared.consumers.set(consumerId, forceRender);
     shared.pruneListeners.set(consumerId, (directoryPaths) => {
       pruneExpandedPaths(epicId, hostId, workspacePath, directoryPaths);
     });
@@ -172,16 +214,19 @@ export function useWorkspaceFileListSubscription(args: {
     // themselves live on the shared entry, and an idle workspace produces no
     // later frame to refill it), so republish on join.
     publishListings(shared, queryClient, activeArgs);
+    // The render that scheduled this effect read the entry-scoped snapshot
+    // before the entry existed (or with a stale one); re-read it now.
+    notifyEntryChanged(key);
 
     return () => {
       shared.refCount -= 1;
-      shared.consumers.delete(consumerId);
       shared.pruneListeners.delete(consumerId);
       shared.watchRequests.delete(consumerId);
       // No grace period (ADR-0003): tear down as soon as the last consumer goes.
       if (shared.refCount === 0) {
         shared.unsubscribeFromStream();
         subscriptions.delete(key);
+        notifyEntryChanged(key);
         return;
       }
       syncCoverage(shared);
@@ -245,12 +290,28 @@ export function useWorkspaceFileListSubscription(args: {
     enabled: false,
   });
 
-  const shared =
+  // Entry-scoped state is read through the store, never imperatively - see
+  // `entryListeners`. The subscriber is memoized on `key` because
+  // `useSyncExternalStore` compares it by reference: a fresh closure per
+  // render would tear the listener down and re-add it every time.
+  const key =
     wsStreamClient === null || hostId === null || workspacePath === null
-      ? undefined
-      : subscriptions.get(
-          subscriptionKeyFor(wsStreamClient, { hostId, workspacePath }),
-        );
+      ? null
+      : subscriptionKeyFor(wsStreamClient, { hostId, workspacePath });
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => subscribeToEntry(key)(onStoreChange),
+    [key],
+  );
+  const hasListing = useSyncExternalStore(
+    subscribe,
+    () => key !== null && subscriptions.get(key)?.hasListing === true,
+    () => false,
+  );
+  const error = useSyncExternalStore(
+    subscribe,
+    () => (key === null ? null : (subscriptions.get(key)?.error ?? null)),
+    () => null,
+  );
 
   const projection = useMemo(
     () =>
@@ -261,22 +322,22 @@ export function useWorkspaceFileListSubscription(args: {
     [directories, requestedWatchPaths],
   );
 
-  const error = shared?.error ?? null;
   return {
     ...projection,
-    isPending: shared?.hasListing !== true && error === null,
+    isPending: !hasListing && error === null,
     error,
   };
 }
 
 function createSharedSubscription(
+  key: string,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   queryClient: QueryClient,
   args: ActiveSubscriptionArgs,
 ): SharedSubscription {
   const shared: SharedSubscription = {
+    key,
     refCount: 0,
-    consumers: new Map(),
     watchRequests: new Map(),
     pruneListeners: new Map(),
     listings: new Map(),
@@ -336,7 +397,7 @@ function openStreamSession(
       shared.appliedWatchPaths = new Set();
       shared.error = null;
       syncCoverage(shared);
-      notifyConsumers(shared);
+      notifyEntryChanged(shared.key);
       return;
     }
     if (status !== "closed") return;
@@ -345,7 +406,7 @@ function openStreamSession(
     // would sit pending forever.
     shared.session = null;
     shared.error = describeStreamClose(reason);
-    notifyConsumers(shared);
+    notifyEntryChanged(shared.key);
   });
 }
 
@@ -363,8 +424,12 @@ function handleServerFrame(
       entries: frame.entries,
       truncated: frame.truncated,
     });
+    const isFirstListing = !shared.hasListing;
     shared.hasListing = true;
     publishListings(shared, queryClient, args);
+    // Only the flip is render-relevant; every later listing reaches consumers
+    // through the query cache.
+    if (isFirstListing) notifyEntryChanged(shared.key);
     return;
   }
   // `pruned`: the host stopped serving these directories. Their covered
@@ -461,11 +526,20 @@ function publishListings(
   );
 }
 
-function notifyConsumers(shared: SharedSubscription): void {
-  for (const consumer of shared.consumers.values()) consumer();
-}
-
-function describeStreamClose(reason: StreamCloseReason | null): string {
+function describeStreamClose(reason: StreamCloseReason | null): string | null {
+  // A RETRYABLE close is the transport reconnecting, not a failure the user
+  // has to see: the client re-subscribes on its own backoff and the next
+  // snapshot repopulates this surface. Returning `null` keeps the panel in
+  // its pending state - "visibly retrying" - instead of flashing an error
+  // that resolves itself, which is what an overnight sleep used to do to
+  // every open panel at once.
+  if (
+    reason !== null &&
+    reason.kind === "fatalError" &&
+    reason.details.retryable === true
+  ) {
+    return null;
+  }
   if (reason === null || reason.kind === "caller") {
     return "The workspace files stream closed unexpectedly.";
   }

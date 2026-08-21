@@ -11,6 +11,8 @@ import type { ManagedCommandOutputStreamCallbacks } from "@traycer-clients/share
 import {
   createManagedCommandOutputStore,
   MANAGED_COMMAND_OLDER_PAGE_LINES,
+  MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES,
+  MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES,
   type ManagedCommandOutputStoreHandle,
 } from "@/stores/managed-commands/managed-command-output-store";
 
@@ -57,6 +59,7 @@ interface Harness {
   readonly handle: ManagedCommandOutputStoreHandle;
   readonly emit: () => ManagedCommandOutputStreamCallbacks;
   readonly sent: ManagedCommandSubscribeOutputClientFrame[];
+  readonly resnapshotCalls: () => number;
 }
 
 /** The one client frame the viewer sends; narrowed for the assertions below. */
@@ -72,6 +75,7 @@ function loadOlderFrame(
 function harness(): Harness {
   let captured: ManagedCommandOutputStreamCallbacks | null = null;
   const sent: ManagedCommandSubscribeOutputClientFrame[] = [];
+  let resnapshotCalls = 0;
   const handle = createManagedCommandOutputStore({
     epicId: "epic-1",
     commandId: "cmd-1",
@@ -80,6 +84,9 @@ function harness(): Harness {
       return {
         loadOlder: (frame) => {
           sent.push(frame);
+        },
+        resnapshot: () => {
+          resnapshotCalls += 1;
         },
         close: () => undefined,
         streamMethodSupport: null,
@@ -93,6 +100,7 @@ function harness(): Harness {
       return captured;
     },
     sent,
+    resnapshotCalls: () => resnapshotCalls,
   };
 }
 
@@ -114,10 +122,125 @@ describe("managed-command output store", () => {
     const h = harness();
 
     openAtTail(h);
-    h.emit().onOutput([line("live-1"), line("live-2")]);
+    h.emit().onOutput({
+      lines: [line("live-1"), line("live-2")],
+      start: position("seg-2", 80),
+    });
 
     expect(texts(h.handle)).toEqual(["tail-1", "tail-2", "live-1", "live-2"]);
     expect(h.handle.store.getState().command).toEqual(COMMAND);
+  });
+
+  it("trims a following timeline only at a positioned frame boundary and pages the discarded gap back", () => {
+    const h = harness();
+    openAtTail(h);
+    const frameSize = 1_000;
+    const frameCount = Math.ceil(
+      (MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES + frameSize) / frameSize,
+    );
+
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      h.emit().onOutput({
+        start: position("seg-live", frame * frameSize),
+        lines: Array.from({ length: frameSize }, (_, index) =>
+          line(`live-${frame}-${index}`),
+        ),
+      });
+    }
+
+    const retained = h.handle.store.getState();
+    expect(retained.lines.length).toBeLessThanOrEqual(
+      MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES + frameSize,
+    );
+    expect(retained.start).toEqual(position("seg-live", 5_000));
+    expect(retained.lines[0].text).toBe("live-5-0");
+    expect(retained.reachedStart).toBe(false);
+
+    retained.loadOlder();
+    const request = loadOlderFrame(h.sent[0]);
+    expect(request.before).toEqual(position("seg-live", 5_000));
+    h.emit().onOlder({
+      requestId: request.requestId,
+      start: position("seg-live", 4_000),
+      lines: [line("recovered-before-boundary")],
+      reachedStart: false,
+    });
+    expect(texts(h.handle).slice(0, 2)).toEqual([
+      "recovered-before-boundary",
+      "live-5-0",
+    ]);
+  });
+
+  it("abandons a stalled older page before trimming a following timeline", () => {
+    const h = harness();
+    openAtTail(h);
+    h.handle.store.getState().loadOlder();
+    const stalledRequest = loadOlderFrame(h.sent[0]);
+
+    const frameSize = MANAGED_COMMAND_MAX_WINDOW_LINES;
+    const frameCount =
+      Math.ceil(MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES / frameSize) + 1;
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      h.emit().onOutput({
+        start: position("seg-live", frame * frameSize),
+        lines: Array.from({ length: frameSize }, (_, index) =>
+          line(`live-${frame}-${index}`),
+        ),
+      });
+    }
+
+    const trimmed = h.handle.store.getState();
+    expect(trimmed.loadingOlder).toBe(false);
+    expect(trimmed.lines.length).toBeLessThanOrEqual(
+      MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES + frameSize,
+    );
+
+    const textsBeforeStaleReply = texts(h.handle);
+    h.emit().onOlder({
+      requestId: stalledRequest.requestId,
+      lines: [line("stale-older-page")],
+      start: position("seg-1", 0),
+      reachedStart: false,
+    });
+    expect(texts(h.handle)).toEqual(textsBeforeStaleReply);
+  });
+
+  it("does not append while the reader is scrolled back, then resnapshots when follow resumes", () => {
+    // Superseded design: a scrolled-back reader used to keep accumulating
+    // every live frame in the backing array, unbounded by scroll duration or
+    // output rate. It now detaches instead - live output is discarded and
+    // only counted, so the held history the reader is looking at never grows
+    // behind their back; resuming follow re-bases from a fresh tail rather
+    // than replaying everything that was withheld.
+    const h = harness();
+    openAtTail(h);
+    h.handle.store.getState().setFollowing(false);
+
+    for (let frame = 0; frame < 22; frame += 1) {
+      h.emit().onOutput({
+        start: position("seg-live", frame * 1_000),
+        lines: Array.from({ length: 1_000 }, (_, index) =>
+          line(`live-${frame}-${index}`),
+        ),
+      });
+    }
+
+    expect(h.handle.store.getState().lines).toHaveLength(2);
+    expect(h.handle.store.getState().start).toEqual(position("seg-2", 40));
+    expect(h.handle.store.getState().detached).toBe(true);
+    expect(h.handle.store.getState().newOutputAvailable).toBe(true);
+
+    h.handle.store.getState().setFollowing(true);
+    expect(h.resnapshotCalls()).toBe(1);
+
+    h.emit().onSnapshot({
+      command: COMMAND,
+      lines: [line("fresh-tail")],
+      start: position("seg-live", 22_000),
+      reachedStart: false,
+    });
+
+    expect(texts(h.handle)).toEqual(["fresh-tail"]);
   });
 
   it("pages backwards from the position it was handed, oldest lines in front", () => {
@@ -255,5 +378,145 @@ describe("managed-command output store", () => {
       signal: null,
       exitedAtMs: 90,
     });
+  });
+
+  it("scrolling up and back down without missing any output never resnapshots", () => {
+    const h = harness();
+    openAtTail(h);
+
+    h.handle.store.getState().setFollowing(false);
+    h.handle.store.getState().setFollowing(true);
+
+    // Nothing arrived while the reader was scrolled back, so there is nothing
+    // to re-base: a resnapshot round-trip here would be pure waste.
+    expect(h.resnapshotCalls()).toBe(0);
+    expect(h.handle.store.getState().detached).toBe(false);
+    expect(h.handle.store.getState().resyncPending).toBe(false);
+    expect(texts(h.handle)).toEqual(["tail-1", "tail-2"]);
+  });
+
+  it("discards live output while detached and flags that output was missed", () => {
+    const h = harness();
+    openAtTail(h);
+    h.handle.store.getState().setFollowing(false);
+
+    h.emit().onOutput({
+      lines: [line("missed-1")],
+      start: position("seg-2", 80),
+    });
+
+    expect(texts(h.handle)).toEqual(["tail-1", "tail-2"]);
+    expect(h.handle.store.getState().detached).toBe(true);
+    expect(h.handle.store.getState().newOutputAvailable).toBe(true);
+
+    // Further frames while still detached are discarded the same way; the
+    // reader's held history is never disturbed by output it cannot see yet.
+    h.emit().onOutput({
+      lines: [line("missed-2")],
+      start: position("seg-2", 90),
+    });
+    expect(texts(h.handle)).toEqual(["tail-1", "tail-2"]);
+  });
+
+  it("resuming from a detach sends exactly one resnapshot, discards output until it lands, and never resends while it is in flight", () => {
+    const h = harness();
+    openAtTail(h);
+    h.handle.store.getState().setFollowing(false);
+    h.emit().onOutput({
+      lines: [line("missed-1")],
+      start: position("seg-2", 80),
+    });
+
+    h.handle.store.getState().setFollowing(true);
+
+    expect(h.resnapshotCalls()).toBe(1);
+    expect(h.handle.store.getState().resyncPending).toBe(true);
+    // Still `detached` until the fresh snapshot actually lands - a viewer
+    // must keep showing "resyncing", not silently jump back to "live".
+    expect(h.handle.store.getState().detached).toBe(true);
+
+    // Jump-to-live pressed again mid-resync (or the latch flipping again from
+    // scroll momentum): must not fire a second resnapshot.
+    h.handle.store.getState().setFollowing(true);
+    expect(h.resnapshotCalls()).toBe(1);
+
+    // A page request while a resync is in flight would race the replacement
+    // snapshot; it must be refused rather than queued against a start the
+    // snapshot is about to invalidate.
+    h.handle.store.getState().loadOlder();
+    expect(h.sent).toHaveLength(0);
+
+    // Output racing the resnapshot request is discarded, not appended ahead
+    // of the replacement snapshot that is about to arrive.
+    h.emit().onOutput({
+      lines: [line("still-missed")],
+      start: position("seg-2", 90),
+    });
+    expect(texts(h.handle)).toEqual(["tail-1", "tail-2"]);
+
+    const lastSeqBeforeResync = h.handle.store.getState().lines.at(-1)?.seq;
+    const generationBeforeResync = h.handle.store.getState().timelineGeneration;
+
+    h.emit().onSnapshot({
+      command: COMMAND,
+      lines: [line("tail-3"), line("tail-4")],
+      start: position("seg-3", 0),
+      reachedStart: false,
+    });
+
+    const resynced = h.handle.store.getState();
+    expect(texts(h.handle)).toEqual(["tail-3", "tail-4"]);
+    expect(resynced.detached).toBe(false);
+    expect(resynced.resyncPending).toBe(false);
+    expect(resynced.newOutputAvailable).toBe(false);
+    expect(resynced.timelineGeneration).toBe(generationBeforeResync + 1);
+    // Row identities are never reset by a snapshot: the tile keys its
+    // virtualized rows on `seq`, so a reused id here would misfire its
+    // prepend-anchor correction as if the new tail had been scrolled to.
+    expect(resynced.lines[0].seq).toBeGreaterThan(lastSeqBeforeResync ?? -1);
+
+    // Following resumed, so ordinary live output appends again.
+    h.emit().onOutput({
+      lines: [line("live-after-resync")],
+      start: position("seg-3", 40),
+    });
+    expect(texts(h.handle)).toEqual(["tail-3", "tail-4", "live-after-resync"]);
+  });
+
+  it("resnapshots after backward paging evicts a quiet command's live tail", () => {
+    const h = harness();
+    openAtTail(h);
+    h.handle.store.getState().setFollowing(false);
+
+    // Every response respects the wire's 500-line page size. No live output
+    // arrives: tail eviction alone must still make the window require a fresh
+    // snapshot, or Jump to live would land on stale history forever.
+    for (let page = 0; page < 41; page += 1) {
+      h.handle.store.getState().loadOlder();
+      const request = loadOlderFrame(h.sent[page]);
+      h.emit().onOlder({
+        requestId: request.requestId,
+        lines: Array.from({ length: 500 }, (_, index) =>
+          line(`older-${page}-${index}`),
+        ),
+        start: position(`seg-history-${page}`, 0),
+        reachedStart: false,
+      });
+    }
+
+    const state = h.handle.store.getState();
+    // The reader asked for older history, so that side is kept; the stale
+    // pre-detach tail is what gets evicted to hold the cap.
+    expect(state.lines.length).toBeLessThanOrEqual(
+      MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES,
+    );
+    expect(state.lines[0].text).toBe("older-40-0");
+    expect(texts(h.handle)).not.toContain("tail-1");
+    expect(state.detached).toBe(true);
+    expect(state.newOutputAvailable).toBe(false);
+
+    state.setFollowing(true);
+    expect(h.resnapshotCalls()).toBe(1);
+    expect(h.handle.store.getState().resyncPending).toBe(true);
   });
 });

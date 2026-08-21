@@ -41,9 +41,17 @@ export function formatHostNotificationPresentation(
       const context = notificationContext(agentName, title);
       const reason = known === null ? null : knownStoppedReason(known);
       const providerId = known === null ? null : knownProviderId(known);
+      const backgroundWorkRunning =
+        known === null ? false : knownBackgroundWorkRunning(known);
+      const status = agentStoppedStatus(
+        entry.outcome,
+        reason,
+        providerId,
+        backgroundWorkRunning,
+      );
       return {
         title,
-        body: `${context} • ${agentStoppedStatus(entry.outcome, reason, providerId)}`,
+        body: `${context} • ${status}`,
       };
     }
     case "agent.stalled":
@@ -281,12 +289,30 @@ function agentStoppedStatus(
   outcome: HostNotificationOutcome,
   reason: string | null,
   providerId: ProviderId | null,
+  backgroundWorkRunning: boolean,
 ): string {
   if (outcome === "errored") {
     return agentStoppedFailureStatus(reason, providerId);
   }
   if (outcome === "stopped") return "Stopped";
+  if (backgroundWorkRunning) return "Background work running";
   return "Done";
+}
+
+function knownBackgroundWorkRunning(
+  payload: HostNotificationKnownPayload,
+): boolean {
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+      return payload.backgroundWorkRunning === true;
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+    case "workspace_operation_failed":
+    case "worktree_deletion":
+      return false;
+  }
 }
 
 function agentStoppedFailureStatus(

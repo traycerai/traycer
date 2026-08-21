@@ -292,7 +292,17 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
   ChatDeadTileBannerContainer: (props: {
     readonly testId: string;
     readonly reason: string;
-  }) => <div data-testid={props.testId} data-reason={props.reason} />,
+    readonly sourceOwnerUserId?: string;
+  }) => (
+    <div
+      data-testid={props.testId}
+      data-reason={props.reason}
+      // Surfaced so the substitution arm's owner threading is assertable:
+      // the banner must receive the owner the OPENING ROW resolved, not be
+      // left to re-derive it from a second cloud lookup.
+      data-source-owner={props.sourceOwnerUserId}
+    />
+  ),
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
@@ -1333,6 +1343,10 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     // one state of the three that is allowed to tell the reader to go wake a
     // machine (ticket 47/48's copy split).
     expect(banner?.getAttribute("data-reason")).toBe("host-offline");
+    // The owner the opening row resolved rides into the banner - the ref in
+    // PUBLISHED_COPY_TILE_ID names user-1, and the banner's ownership
+    // verdict must come from that same row rather than a second lookup.
+    expect(banner?.getAttribute("data-source-owner")).toBe("user-1");
     // The live chat body must NOT render alongside the copy.
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),

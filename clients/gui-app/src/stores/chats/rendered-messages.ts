@@ -63,6 +63,7 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
+import { chatTranscriptEventRowId } from "@/stores/chats/chat-transcript-jump-store";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -1005,6 +1006,10 @@ export function useRenderedMessages(
     () => buildForkedChatLinkMessages(input.events, viewTabId),
     [input.events, viewTabId],
   );
+  const notificationAnchorMessages = useMemo(
+    () => buildNotificationAnchorMessages(input.events),
+    [input.events],
+  );
 
   // The live row's blocks merge INTO a persisted turn only when a persisted
   // assistant message already shares its `turnId` (multi-record / post-snapshot
@@ -1282,6 +1287,7 @@ export function useRenderedMessages(
       ...live,
       ...stoppedWithoutAssistantRecords,
       ...forkedChatLinkMessages,
+      ...notificationAnchorMessages,
       ...trailing,
     ];
 
@@ -1356,6 +1362,7 @@ export function useRenderedMessages(
     live,
     stoppedWithoutAssistantRecords,
     forkedChatLinkMessages,
+    notificationAnchorMessages,
     setupCardRows,
     setupCardEntries,
     activeRunState,
@@ -1467,6 +1474,58 @@ function buildForkedChatLinkMessages(
             sourceChatId,
             sourceChatTitle,
             sourceHostId,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
+ * Some failures happen before a queued message is accepted, so no message row
+ * can own the error. The durable `send.failed` event is still part of chat
+ * history; project only explicitly marked occurrences into an assistant error
+ * row so notification activation has an exact, stable transcript destination.
+ */
+function buildNotificationAnchorMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    if (
+      event.type !== "send.failed" ||
+      event.message === null ||
+      event.metadata?.notificationAnchor !== true
+    ) {
+      return [];
+    }
+    const id = chatTranscriptEventRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "assistant",
+        content: event.message,
+        segments: [
+          {
+            id: `${id}:error`,
+            kind: "error",
+            message: event.message,
+            recoverable: false,
+            code: metadataString(event.metadata, "code"),
           },
         ],
         structuredContent: null,

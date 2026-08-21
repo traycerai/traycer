@@ -106,6 +106,13 @@ import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+/**
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
+ * stamps it onto every entry at projection time. These fixtures describe an
+ * entitled account unless a case says otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
+
 /** Matches `createRequestContextFixture`'s default identity. */
 const FIXTURE_USER_ID = "user-fixture-1";
 const RELAY_URL = "wss://relay.test/attach";
@@ -124,6 +131,8 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
+    recentHostCheckIn: false,
+    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -325,7 +334,7 @@ describe("a live chat session survives a degraded liveness read", () => {
         lastSeenAt: "2026-08-01T00:00:00.000Z",
       },
     };
-    return hostListItemToDirectoryEntry(item, RELAY_URL);
+    return hostListItemToDirectoryEntry(item, RELAY_URL, PLAN_ALLOWS_REMOTE);
   }
 
   it("keeps the same handle and never closes the transport when connectivity goes `unknown`", async () => {

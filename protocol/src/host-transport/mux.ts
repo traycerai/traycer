@@ -144,6 +144,23 @@ export const MuxFlags = {
    * accumulator and surface later as an undiagnosable body-decode failure.
    */
   CHUNK_FIRST: 0b0001_0000,
+  /**
+   * This frame's payload is DEFLATE-compressed and must be inflated before it
+   * is appended to its stream's reassembly buffer (`chunking.ts`). Set
+   * PER FRAME, not per message: each frame is compressed independently, so a
+   * sequence may mix compressed and uncompressed frames freely (the sender
+   * drops the flag whenever deflate fails to shrink that particular payload,
+   * which is what keeps already-compressed content — assets, images — from
+   * paying for a second pass).
+   *
+   * Only ever set when the session negotiated
+   * {@link SESSION_CAPABILITY_BODY_COMPRESSION}. That gate is mandatory, not
+   * defensive: {@link decodeMuxFrame} ignores flag bits it does not know, so a
+   * peer predating this bit would append DEFLATE bytes straight into its
+   * accumulator and fail later, at `decodeMuxMessageBody`, as an
+   * undiagnosable body-decode error on a healthy channel.
+   */
+  COMPRESSED: 0b0010_0000,
 } as const;
 
 /** The stream id reserved for session-level control frames. */
@@ -157,6 +174,8 @@ export interface MuxFrame {
   readonly chunked: boolean;
   readonly chunkFirst: boolean;
   readonly chunkLast: boolean;
+  /** This frame's payload is DEFLATE-compressed ({@link MuxFlags.COMPRESSED}). */
+  readonly compressed: boolean;
   readonly json: Record<string, unknown> | null;
   readonly binary: Uint8Array | null;
 }
@@ -169,6 +188,8 @@ export interface EncodeMuxFrameInput {
   readonly chunked: boolean;
   readonly chunkFirst: boolean;
   readonly chunkLast: boolean;
+  /** Set only by a sender whose session negotiated body compression. */
+  readonly compressed: boolean;
   readonly json: Record<string, unknown> | null;
   readonly binary: Uint8Array | null;
 }
@@ -191,6 +212,32 @@ export interface SessionOpenPayload {
   readonly authz: ReservedAuthzSlot;
   /** Reserved resume descriptor (R4-E3). Always null in v1. */
   readonly resume: null;
+  /**
+   * Additive transport capabilities the CLIENT can honour, mirroring the
+   * host's existing {@link SessionOpenAckPayload.capabilities} in the other
+   * direction. `undefined` means a peer predating the field — never "none by
+   * accident", because every capability here is a thing the HOST would
+   * otherwise do TO a client that cannot handle it.
+   *
+   * Deliberately `.optional()` rather than required, unlike `optionalRpc`
+   * above, and the difference is not inconsistency. Tolerating a missing
+   * `optionalRpc` would have moved a failure rather than removed one (a
+   * pre-split peer sends a MERGED manifest, so the floor check fails either
+   * way, just less honestly). Here absence is a complete, correct, and
+   * permanently-supported state: it is exactly the rc.1 client, and the host's
+   * whole response to it is to keep doing what it does today. There is no
+   * downstream check that a missing value would corrupt.
+   *
+   * An OPTIONAL PROPERTY rather than a required one holding `undefined`, and
+   * that distinction is load-bearing rather than stylistic. Zod's only shape
+   * that tolerates an ABSENT key is `.optional()`: a required key declared
+   * `z.array(z.string()).or(z.undefined())` still rejects `{}` outright
+   * (`expected nonoptional`), which would make every rc.1 client's `open` fail
+   * schema validation and take `UNAUTHORIZED: Malformed OPEN frame` — turning
+   * a purely additive capability into a fleet-wide break. Verified against
+   * zod 4 rather than assumed.
+   */
+  readonly capabilities?: readonly string[];
 }
 
 /**
@@ -311,6 +358,7 @@ export const sessionOpenPayloadSchema: z.ZodType<SessionOpenPayload> = z.object(
     manifest: sessionManifestsSchema,
     authz: reservedAuthzSlotSchema,
     resume: z.null(),
+    capabilities: z.array(z.string()).optional(),
   },
 );
 
@@ -373,6 +421,105 @@ export const credentialUpdatePayloadSchema: z.ZodType<CredentialUpdatePayload> =
 
 /** Capability tag advertised in `openAck.capabilities` for bearer rotation. */
 export const SESSION_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
+
+/**
+ * Advertised by a peer that can INFLATE {@link MuxFlags.COMPRESSED} frames.
+ * Direction-independent: a client advertises it in `open.capabilities`, a host
+ * in `openAck.capabilities`, and each side compresses only towards a peer that
+ * advertised it. Absence is the rc.1 peer and is permanently supported.
+ */
+export const SESSION_CAPABILITY_BODY_COMPRESSION = "bodyCompression.deflate";
+
+/**
+ * Advertised by a peer whose inbound credit tracker grants back every
+ * {@link FINE_INBOUND_CREDIT_GRANT_BATCH} bulk frames rather than the legacy
+ * 256. It licenses the PEER to shrink its initial send window to
+ * {@link FINE_INITIAL_BULK_SEND_CREDITS}, and it exists because that shrink is
+ * the one direction of this change that can deadlock.
+ */
+export const SESSION_CAPABILITY_FINE_CREDITS = "flowControl.fineCredits";
+
+/**
+ * The negotiated credit window, single-sourced here so the two peers cannot
+ * drift by hand (the same reason `BULK_CHUNK_SIZE_BYTES` lives in
+ * `chunking.ts` rather than in two hand-mirrored configs).
+ *
+ * WHY THE LEGACY WINDOW HAD TO GO. `sendData` on both peers is synchronous and
+ * non-blocking and nothing anywhere reads `bufferedAmount`, so these credits
+ * are the ONLY end-to-end backpressure in the whole path. At the legacy
+ * 512 frames × 64 KiB the window is 32 MiB — larger than an entire epic
+ * bootstrap — so the sender emits the whole body at its pacer rate with the
+ * receiver's drain rate having no influence at all, and the bytes pile up in
+ * the relay's client-bound socket buffer where NEITHER endpoint can see them.
+ * 64 frames (4 MiB) is ~9× the bandwidth-delay product of the target bad link
+ * (6 Mbps × 600 ms RTT ≈ 450 KB), so a healthy transfer is never throttled by
+ * the window while a slow one is finally paced by the peer that is actually
+ * slow.
+ *
+ * THE FLOOR, AND WHY THE SHRINK IS CAPABILITY-GATED. A sender that runs out of
+ * credits waits for a grant, and a receiver only grants once it has consumed a
+ * whole batch — so a send window BELOW the peer's grant batch deadlocks the
+ * first transfer outright, with no timeout and no recovery. Hence the split
+ * that makes every skew combination safe:
+ *
+ *  - Granting MORE OFTEN is unilaterally safe (it can only ever un-stall a
+ *    sender), so both peers adopt {@link FINE_INBOUND_CREDIT_GRANT_BATCH}
+ *    unconditionally, with no negotiation.
+ *  - Shrinking the SEND WINDOW is only safe against a peer that grants finely,
+ *    so it happens only when that peer advertised
+ *    {@link SESSION_CAPABILITY_FINE_CREDITS}.
+ *
+ * | sender | receiver | window | grants at | deadlock |
+ * | ------ | -------- | ------ | --------- | -------- |
+ * | legacy | legacy   | 32 MiB | 256       | no (today) |
+ * | legacy | new      | 32 MiB | 32        | no — grants merely arrive sooner |
+ * | new    | legacy   | 32 MiB | 256       | no — no advert, so no shrink |
+ * | new    | new      | 4 MiB  | 32        | no — window is 2× the batch |
+ *
+ * HOW COMPRESSION INTERACTS, because it is obvious today and invisible later.
+ * Credits meter FRAMES, not bytes, so a compressed frame still costs exactly
+ * one credit while carrying ~3.6× fewer wire bytes (measured). Every byte
+ * figure above is therefore a PLAINTEXT ceiling, and the wire window is
+ * whatever compression makes of it:
+ *
+ * - Uncompressed session: 64 frames ≈ 4 MiB in flight ≈ 5.3 s of a 6 Mbps
+ *   link; a 32-frame grant arrives every ≈ 2.7 s.
+ * - Compressed session: 64 frames ≈ 1.1 MiB in flight ≈ 1.5 s; a grant
+ *   arrives every ≈ 0.73 s.
+ *
+ * Both stay comfortably above the bandwidth-delay product that bounds
+ * throughput (6 Mbps × 600 ms ≈ 450 KB), so neither configuration throttles a
+ * healthy transfer — but the margin is ~2.5× compressed, not the ~9× the
+ * plaintext arithmetic suggests, so this is the number to re-check before
+ * anyone shrinks the window further.
+ *
+ * The DEADLOCK floor is untouched by any of this, and that is the reassuring
+ * part: it compares a frame count against a frame count, so compression
+ * cannot move it in either direction.
+ */
+export const FINE_INITIAL_BULK_SEND_CREDITS = 64;
+
+/**
+ * Inbound bulk frames consumed before granting a fresh batch back. Half the
+ * negotiated window ({@link FINE_INITIAL_BULK_SEND_CREDITS}), so a grant is
+ * always in flight before the sender can exhaust its credits and the pipe
+ * never stops for a round trip. Adopted unconditionally by both peers — see
+ * the skew table above for why this direction needs no negotiation.
+ */
+export const FINE_INBOUND_CREDIT_GRANT_BATCH = 32;
+
+/**
+ * What a peer that predates {@link SESSION_CAPABILITY_FINE_CREDITS} grants at,
+ * and therefore the floor every LEGACY send window must clear.
+ *
+ * Kept as a named constant after both peers stopped using it, because it is
+ * not dead: it is the batch every rc.1 client in the field still runs and will
+ * keep running until its user updates - which for the tester who filed the
+ * report that produced this work may be never. The negotiated window is not a
+ * replacement for that population, only for peers that opt in, so the legacy
+ * pairing has to stay auditable rather than becoming a number nobody can name.
+ */
+export const LEGACY_INBOUND_CREDIT_GRANT_BATCH = 256;
 
 /** Current mux protocol version. */
 export const CURRENT_MUX_VERSION = MUX_PROTOCOL_VERSION;
@@ -454,6 +601,9 @@ export function encodeMuxFrame(input: EncodeMuxFrameInput): Uint8Array {
   if (input.chunkLast) {
     flags |= MuxFlags.CHUNK_LAST;
   }
+  if (input.compressed) {
+    flags |= MuxFlags.COMPRESSED;
+  }
 
   const out = new Uint8Array(byteLength);
   const view = new DataView(out.buffer);
@@ -523,6 +673,7 @@ export function decodeMuxFrame(bytes: Uint8Array): MuxFrame {
     chunked: (flags & MuxFlags.CHUNKED) !== 0,
     chunkFirst: (flags & MuxFlags.CHUNK_FIRST) !== 0,
     chunkLast: (flags & MuxFlags.CHUNK_LAST) !== 0,
+    compressed: (flags & MuxFlags.COMPRESSED) !== 0,
     json,
     binary,
   };

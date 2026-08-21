@@ -463,6 +463,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     client: appWideClient,
     epicId,
     chatId: activeWorkspaceTarget?.sourceChatId ?? null,
+    // No tie-breaker from here, deliberately. The resolver wants the chat's
+    // OWNING host, and `tabHostId` is not reliably that: a `PublishedChatTile`
+    // renders through the host SERVING the copy, which is generally the
+    // viewer's own machine rather than the owner's (`published-chat-tile.tsx`
+    // keeps the two apart for exactly this reason). Handing it over would let
+    // a colliding `chatId` resolve to the viewer's own unrelated row - a wrong
+    // owner is worse than none, because the host TRUSTS the expectation it is
+    // given. Unambiguous lookups are unaffected; an ambiguous one degrades to
+    // settings-only, which is what it did before any tie-breaker existed.
+    sourceOwnerHostId: null,
   });
   // Cross-host, the workspace section resets to the target's own folder catalog
   // with NO seed: the source chat's paths name directories on another machine,
