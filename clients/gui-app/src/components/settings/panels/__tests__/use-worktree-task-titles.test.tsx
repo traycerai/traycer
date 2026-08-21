@@ -337,6 +337,51 @@ describe("useWorktreeTaskTitles", () => {
     expect(batchCalls[0]?.[0]).toBe("epic-000");
   });
 
+  it("reuses the tier-2 batch when the panel is reopened inside the stale window", async () => {
+    // The Settings panel unmounts on close and remounts on open. With the
+    // default zero stale time every reopen re-fanned the batch into one
+    // `POST /tasks/context` per unresolved owner.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    let batchCalls = 0;
+    mockHostClient.request.mockImplementation((method: string) => {
+      if (method === "epic.listTasks") {
+        return Promise.resolve({ tasks: [], hasMore: false });
+      }
+      if (method === "epic.getTaskContexts") {
+        batchCalls += 1;
+        return Promise.resolve({
+          tasks: {
+            "epic-x": { status: "found", task: listTaskLight("epic-x", "X") },
+          },
+        } satisfies GetTaskContextsResponse);
+      }
+      return Promise.reject(new Error(`unexpected method: ${method}`));
+    });
+
+    const worktrees = [worktreeWithOwners("/wt/a", ["epic-x"])];
+    const first = renderHook(
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(first.result.current.get("epic-x")).toBe("X");
+    });
+    expect(batchCalls).toBe(1);
+
+    first.unmount();
+    const second = renderHook(
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(second.result.current.get("epic-x")).toBe("X");
+    });
+
+    expect(batchCalls).toBe(1);
+  });
+
   it("uses the hostEpicTaskContexts key shape for the batch query", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

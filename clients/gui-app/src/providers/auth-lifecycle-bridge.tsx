@@ -11,6 +11,7 @@ import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import { useResourceMonitorStore } from "@/stores/resources/resource-monitor-store";
+import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -90,6 +91,13 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
+      // A last-copy draft toast is minted with NO duration, and the app-level
+      // `<Toaster />` is mounted outside this tree - so it is the one piece of
+      // renderer state that survives everything disposed above and keeps the
+      // outgoing account's message on screen for whoever signs in next. Scoped
+      // to this boundary only: a chat or epic closing must NOT take it down,
+      // because the text it holds is still the user's only copy.
+      dismissRetainedDraftToasts();
     }
   }, []);
 
