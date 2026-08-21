@@ -13,8 +13,14 @@ const MAX_TEST_WORKERS = Math.min(
   2,
   Math.max(1, Math.floor(availableParallelism / 2)),
 );
+// `use-workspace-file-list-subscription` is here for the same reason: its
+// pending flag used to be a render-time read of a module-level registry, which
+// the compiler cached at "no entry yet" forever (the file tree's permanent
+// spinner). Only the compiled hook can regress that way, so only the compiled
+// hook can prove the fix. The `pr.*` shared-subscription trio had the same
+// shape (`registry.get(key)` and `entry.lastEvent` read at render).
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-pr-(?:list|detail)-subscription)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop
