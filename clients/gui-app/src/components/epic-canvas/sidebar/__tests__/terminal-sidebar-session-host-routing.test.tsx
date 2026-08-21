@@ -106,6 +106,12 @@ vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
   }),
 }));
 
+vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
+  useResolvePlainTerminalOwnerHostClient: () => () => ({
+    request: vi.fn(),
+  }),
+}));
+
 import { TerminalsPanelBody } from "../epic-terminal-sidebar";
 import {
   findOpenArtifactInTab,

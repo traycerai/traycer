@@ -35,17 +35,12 @@ import {
 } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
+import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
-import { existingSessionOriginFields } from "@/stores/epics/canvas/types";
-import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
-import { isSetupTerminal } from "@/stores/worktree/setup-terminals";
-import {
-  deriveTitleSourceFromSessionTitle,
-  terminalSessionTitle,
-} from "@/lib/terminals/terminal-title";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   openerActionLeaf,
   openerExistingLeaf,
@@ -86,11 +81,13 @@ function terminalWorkspaceLeaf(
         );
         return;
       }
+      const epicId = ctx.activeEpicId;
+      if (epicId === null) return;
       hasLaunched = true;
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,
         groupId: ctx.targetGroupId,
-        ref: mintNewEpicTerminalTile(target),
+        ref: mintNewEpicTerminalTile({ ...target, epicId }),
         navigateNestedFocus: ctx.router.navigateNestedFocus,
       });
     },
@@ -422,33 +419,22 @@ export function useTerminalsOpenerItems(
       subpage: NEW_TERMINAL_WORKSPACE_SUBPAGE,
     });
     const existing = sessions.map((session) => {
-      // A host-created sign-in terminal must carry its origin here too, or the
-      // eviction-recreate below - correct for an ordinary shell - spawns a bare
-      // prompt under the sign-in session's id and label. `terminal.list` cannot
-      // tell us; the renderer's record of host-created sign-in terminals can.
-      const signInProviderId = providerLoginTerminalProviderId(
-        defaultHostId,
-        session.sessionId,
-      );
-      const setupSession = isSetupTerminal(defaultHostId, session.sessionId);
+      const ref = makeListedEpicTerminalRef({
+        session,
+        hostId: defaultHostId,
+        instanceId: uuidv4(),
+        durable: false,
+      });
       return openerExistingLeaf(
         "terminals",
         ctx,
         {
-          id: session.sessionId,
-          instanceId: uuidv4(),
-          type: "terminal",
+          ...ref,
           name: terminalSessionTitle({
             title: session.title,
             activeProcessName: session.activeProcessName,
             currentCwd: session.currentCwd,
           }),
-          titleSource: deriveTitleSourceFromSessionTitle(session.title),
-          hostId: defaultHostId,
-          // Recorded so an eviction-recreate lands back in the session's
-          // directory - same as the sidebar's open-existing path.
-          cwd: session.cwd,
-          ...existingSessionOriginFields(signInProviderId, setupSession),
         },
         // `terminal.list` is issued against the epic's host client
         // (`hostClient` above) - there is no cross-host terminal listing

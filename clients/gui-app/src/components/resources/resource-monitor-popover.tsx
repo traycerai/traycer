@@ -2535,6 +2535,7 @@ function buildRowActionTargetIndex(input: RowActionTargetIndexInput): {
       owner.owner.epicId,
       owner.owner.kind,
       owner.owner.ownerId,
+      owner.owner.hostId,
     );
     if (input.visibleKillKeys.has(key)) live.add(key);
     const ownerTarget = ownerSnapshotActionTarget(owner, key);
@@ -3243,6 +3244,7 @@ function buildOwnerRow(
     snapshot.owner.epicId,
     snapshot.owner.kind,
     snapshot.owner.ownerId,
+    snapshot.owner.hostId,
   );
   const location = input.canvasIndex.locationByOwner.get(key) ?? null;
   const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
@@ -3361,7 +3363,7 @@ function buildSyntheticAgentRow(
   if (creatorId.length === 0) return null;
   const epicId = shell.snapshot.owner.epicId;
   for (const kind of AGENT_OWNER_KINDS) {
-    const key = ownerKey(epicId, kind, creatorId);
+    const key = ownerKey(epicId, kind, creatorId, shell.snapshot.owner.hostId);
     const location = input.canvasIndex.locationByOwner.get(key) ?? null;
     const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
     const record = input.recordByOwner.get(key) ?? null;
@@ -3965,12 +3967,13 @@ function plainTerminalTombstoneEvidence(): string {
     predicate: (query) => query.queryKey[2] === "terminal.plain.list",
   })) {
     if (collection === undefined) continue;
-    for (const [terminalId, revision] of Object.entries(
-      collection.deletedRevisionById,
+    for (const [identityKey, revision] of Object.entries(
+      collection.deletedRevisionByIdentity,
     )) {
-      const live = collection.terminalsById[terminalId]?.record.revision ?? -1;
+      const live =
+        collection.terminalsByIdentity[identityKey]?.record.revision ?? -1;
       parts.push(
-        `${String(queryKey[1])}:${terminalId}:${String(revision)}:${String(live)}`,
+        `${String(queryKey[1])}:${identityKey}:${String(revision)}:${String(live)}`,
       );
     }
   }
@@ -4018,7 +4021,7 @@ function buildCanvasResourceIndex(
         const ownerKind =
           ref === undefined ? null : resourceOwnerKindForRef(ref);
         if (ref === undefined || ownerKind === null) return [];
-        const key = ownerKey(tab.epicId, ownerKind, ref.id);
+        const key = ownerKey(tab.epicId, ownerKind, ref.id, ref.hostId);
         return [
           {
             key,
@@ -4070,7 +4073,7 @@ function buildCanvasResourceIndex(
       }
       const ownerKind = resourceOwnerKindForRef(node);
       if (ownerKind === null) continue;
-      const key = ownerKey(tab.epicId, ownerKind, node.id);
+      const key = ownerKey(tab.epicId, ownerKind, node.id, node.hostId);
       if (!closedTileByOwner.has(key)) {
         closedTileByOwner.set(key, { tabId, node });
       }
@@ -4089,7 +4092,7 @@ function buildRecordByOwner(
         (epicRecords ?? []).flatMap((record): [string, EpicNodeRecord][] => {
           const kind = resourceOwnerKindForNodeType(record.type);
           if (kind === null) return [];
-          return [[ownerKey(epicId, kind, record.id), record]];
+          return [[ownerKey(epicId, kind, record.id, record.hostId), record]];
         }),
     ),
   );
@@ -4408,7 +4411,11 @@ function ownerKey(
   epicId: string,
   kind: ResourceOwnerKindWireV14,
   ownerId: string,
+  hostId: string,
 ): string {
+  if (kind === "terminal") {
+    return JSON.stringify([epicId, kind, hostId, ownerId]);
+  }
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
 }
 
@@ -4417,6 +4424,7 @@ function ownerRowKey(row: OwnerDisplayRow): string {
     row.snapshot.owner.epicId,
     row.snapshot.owner.kind,
     row.snapshot.owner.ownerId,
+    row.snapshot.owner.hostId,
   );
 }
 

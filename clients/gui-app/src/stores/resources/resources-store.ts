@@ -52,11 +52,20 @@ export interface TaskResourceSummary {
   readonly trackedProcessCount: number;
 }
 
-/** Stable map key for one owner within an epic's projection. */
+/**
+ * Stable map key for one owner within an epic's projection.
+ * Terminal owners are keyed by `(kind, hostId, ownerId)` so two hosts can
+ * report the same terminal id without collapsing. Chat/agent owners stay
+ * the historical 2-part key.
+ */
 export function resourceOwnerKey(
   kind: ResourceOwnerKindWireV14,
   ownerId: string,
+  hostId: string | null,
 ): string {
+  if (kind === "terminal") {
+    return JSON.stringify([kind, hostId ?? "", ownerId]);
+  }
   return `${kind}\x1f${ownerId}`;
 }
 
@@ -64,7 +73,11 @@ export function globalResourceOwnerKey(
   epicId: string,
   kind: ResourceOwnerKindWireV14,
   ownerId: string,
+  hostId: string | null,
 ): string {
+  if (kind === "terminal") {
+    return JSON.stringify([epicId, kind, hostId ?? "", ownerId]);
+  }
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
 }
 
@@ -241,8 +254,13 @@ function mergeOwners(
             owner.owner.epicId,
             owner.owner.kind,
             owner.owner.ownerId,
+            owner.owner.hostId,
           )
-        : resourceOwnerKey(owner.owner.kind, owner.owner.ownerId);
+        : resourceOwnerKey(
+            owner.owner.kind,
+            owner.owner.ownerId,
+            owner.owner.hostId,
+          );
     const existing = previous.get(key);
     next.set(
       key,

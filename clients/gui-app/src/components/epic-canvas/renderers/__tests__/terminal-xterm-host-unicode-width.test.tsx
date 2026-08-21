@@ -50,6 +50,7 @@ function renderHost(): void {
   render(
     <TerminalXtermHost
       sessionId="unicode-width-session"
+      hostId="host-1"
       tileKind="terminal"
       instanceId={INSTANCE_ID}
       effectiveCols={40}

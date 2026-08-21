@@ -109,6 +109,11 @@ export interface TerminalXtermHostProps {
    * tile and session store report into.
    */
   readonly sessionId: string;
+  /**
+   * Bound owner host for warm-session identity. Terminal tiles pass the tab's
+   * lifetime `hostId`. `null` is the explicit hostless/non-terminal path.
+   */
+  readonly hostId: string | null;
   readonly tileKind: TerminalTileFindKind;
   /**
    * Per-tab instance id this host's persistent xterm engine is cached under in
@@ -211,6 +216,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // `props.instanceId` as dependencies. `sessionId` tags perf marks and builds
   // the engine; `instanceId` is the registry cache key.
   const sessionIdRef = useRef(props.sessionId);
+  const hostIdRef = useRef(props.hostId);
   const instanceIdRef = useRef(props.instanceId);
 
   // Theme + font tokens are read synchronously during render so the first call
@@ -343,15 +349,18 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     const mount = mountRef.current;
     if (mount === null) return;
     const sessionId = sessionIdRef.current;
+    const hostId = hostIdRef.current;
     const instanceId = instanceIdRef.current;
     // Adopt a closed tab's warm handle + engine for this session BEFORE the
     // acquire below can build a fresh engine under the new instance id. This
     // host is the earliest toucher of the engine registry (child layout
     // effects run before any parent bootstrap effect), so adoption must
     // happen here to keep the reopened tab's scrollback. Idempotent.
-    adoptWarmSessionInstance(sessionId, instanceId);
+    // Identity is `(hostId, sessionId)` so a same-id terminal on another host
+    // cannot steal this engine or its retained stream.
+    adoptWarmSessionInstance({ hostId, sessionId }, instanceId);
     const entry = acquireXtermHost(instanceId, () =>
-      createXtermEntry(sessionId, initialOptionsRef.current),
+      createXtermEntry(sessionId, hostId, initialOptionsRef.current),
     );
     // Point the engine's live callbacks at this host's current refs. On a
     // reattach this overwrites the previous host's wiring; the refs themselves
@@ -607,6 +616,7 @@ function prependResetEscape(chunk: string | Uint8Array): string | Uint8Array {
  */
 function createXtermEntry(
   sessionId: string,
+  hostId: string | null,
   initialOptions: XtermInitialOptions,
 ): XtermHostEntry {
   const live: XtermHostLiveCallbacks = {
@@ -854,7 +864,7 @@ function createXtermEntry(
         // pane wins"), the host grid legitimately differs from this pane's
         // natural size - still re-report (the host recompute no-ops), but
         // don't log it as a heal.
-        if (!hasPeerXtermHostForSession(sessionId, containerEl)) {
+        if (!hasPeerXtermHostForSession({ hostId, sessionId }, containerEl)) {
           appLogger.warn(
             "[terminal] deferred grid reconcile healed a stale grid",
             {
@@ -887,7 +897,7 @@ function createXtermEntry(
         latchSkipStreak += 1;
         if (
           latchSkipStreak >= GRID_LATCH_WARN_STREAK &&
-          !hasPeerXtermHostForSession(sessionId, containerEl)
+          !hasPeerXtermHostForSession({ hostId, sessionId }, containerEl)
         ) {
           if (!latchWarned) {
             latchWarned = true;
@@ -981,6 +991,7 @@ function createXtermEntry(
 
   return {
     sessionId,
+    hostId,
     containerEl,
     term,
     fitAddon,

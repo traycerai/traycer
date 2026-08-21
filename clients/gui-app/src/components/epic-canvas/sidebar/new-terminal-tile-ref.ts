@@ -1,11 +1,20 @@
 import { v4 as uuidv4 } from "uuid";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
+import {
+  acceptEpicTerminalDurableCreate,
+  EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_COLS,
+  EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_ROWS,
+} from "@/lib/terminals/epic-terminal-durable-create-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 
 export interface TerminalLaunchTarget {
   readonly hostId: string;
   readonly cwd: string;
+}
+
+export interface MintNewEpicTerminalTileTarget extends TerminalLaunchTarget {
+  readonly epicId: string;
 }
 
 /**
@@ -34,12 +43,22 @@ export function buildTerminalTileRef(
 
 /**
  * New epic terminals must dispatch `terminal.plain.create`, not
- * `importLegacy`. The pending-create mark is the create-vs-attach gate.
+ * `importLegacy`. The pending-create mark is the create-vs-attach gate, and
+ * the session-level create coordinator owns the job so tab unmount cannot
+ * cancel it.
  */
 export function mintNewEpicTerminalTile(
-  target: TerminalLaunchTarget,
+  target: MintNewEpicTerminalTileTarget,
 ): EpicTerminalRef {
   const ref = buildTerminalTileRef(target);
-  useEpicCanvasStore.getState().markArtifactPendingCreate(ref.id);
+  useEpicCanvasStore.getState().markTerminalPendingCreate(ref.hostId, ref.id);
+  acceptEpicTerminalDurableCreate({
+    hostId: ref.hostId,
+    terminalId: ref.id,
+    epicId: target.epicId,
+    cwd: target.cwd,
+    cols: EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_COLS,
+    rows: EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_ROWS,
+  });
   return ref;
 }

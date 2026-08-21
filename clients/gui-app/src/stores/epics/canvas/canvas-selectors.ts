@@ -297,28 +297,36 @@ export function useIsActiveEpicArtifact(
  * (derived from host + coordinates), so matching on the tile id directly is
  * safe here in a way that persisting it would not be.
  *
- * `null` means "this row has no tile" (an unknown-base PR) and is never active.
- * Selects a per-row BOOLEAN for the same reason the artifact variant does:
- * threading the active id to every row re-renders the whole list on every
- * selection change.
+ * `null` tileId means "this row has no tile" (an unknown-base PR) and is never
+ * active. When `hostId` is provided, the active ref must match both id and
+ * owner host so two fleet terminals that share a terminalId do not highlight
+ * together. `hostId: null` preserves id-only matching for PR/published-chat
+ * rows. Selects a per-row BOOLEAN for the same reason the artifact variant
+ * does: threading the active id to every row re-renders the whole list on
+ * every selection change.
  */
 export function makeSelectIsActiveTile(
   tabId: string | undefined,
   tileId: string | null,
+  hostId: string | null,
 ) {
   return (state: EpicCanvasStore): boolean => {
     if (tileId === null) return false;
-    return activeTileRef(state, tabId)?.id === tileId;
+    const active = activeTileRef(state, tabId);
+    if (active === null || active.id !== tileId) return false;
+    if (hostId === null) return true;
+    return active.hostId === hostId;
   };
 }
 
 export function useIsActiveTile(
   tabId: string | undefined,
   tileId: string | null,
+  hostId: string | null,
 ): boolean {
   const selector = useMemo(
-    () => makeSelectIsActiveTile(tabId, tileId),
-    [tabId, tileId],
+    () => makeSelectIsActiveTile(tabId, tileId, hostId),
+    [tabId, tileId, hostId],
   );
   return useEpicCanvasStore(selector);
 }

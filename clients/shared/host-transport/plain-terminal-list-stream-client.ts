@@ -13,23 +13,10 @@ import type {
 import type { IHostStreamClient } from "./host-stream-client";
 
 export interface PlainTerminalListStreamCallbacks {
-  readonly onSnapshot: (
+  readonly onState: (
     frame: Extract<
       TerminalPlainSubscribeListServerFrame,
-      { readonly kind: "snapshot" }
-    >,
-  ) => void;
-  readonly onInitialized: () => void;
-  readonly onUpsert: (
-    frame: Extract<
-      TerminalPlainSubscribeListServerFrame,
-      { readonly kind: "upsert" }
-    >,
-  ) => void;
-  readonly onDeleted: (
-    frame: Extract<
-      TerminalPlainSubscribeListServerFrame,
-      { readonly kind: "deleted" }
+      { readonly kind: "state" }
     >,
   ) => void;
   readonly onConnectionStatus: (
@@ -44,7 +31,7 @@ export interface PlainTerminalListStreamClientOptions {
   readonly callbacks: PlainTerminalListStreamCallbacks;
 }
 
-/** Typed client surface for the snapshot-first durable terminal collection. */
+/** Typed client surface for replacement-state durable terminal collection. */
 export class PlainTerminalListStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: PlainTerminalListStreamCallbacks;
@@ -91,20 +78,8 @@ export class PlainTerminalListStreamClient {
 
     const frame = parsed.data;
     switch (frame.kind) {
-      case "snapshot": {
-        this.callbacks.onSnapshot(frame);
-        return;
-      }
-      case "initialized": {
-        this.callbacks.onInitialized();
-        return;
-      }
-      case "upsert": {
-        this.callbacks.onUpsert(frame);
-        return;
-      }
-      case "deleted": {
-        this.callbacks.onDeleted(frame);
+      case "state": {
+        this.callbacks.onState(frame);
         return;
       }
       case "pong": {

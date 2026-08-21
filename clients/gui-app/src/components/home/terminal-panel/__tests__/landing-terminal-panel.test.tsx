@@ -374,7 +374,7 @@ function listWith(
 function plainTerminal(input: {
   readonly terminalId: string;
   readonly manualTitle: string | null;
-  readonly runtime: "running" | "dormant";
+  readonly runtime: "running" | "dormant" | "unknown";
 }): PlainTerminalProjection {
   return {
     record: {
@@ -392,29 +392,35 @@ function plainTerminal(input: {
       updatedAt: "2026-08-16T10:01:00.000Z",
     },
     runtime:
-      input.runtime === "dormant"
-        ? { status: "dormant" }
-        : {
+      input.runtime === "running"
+        ? {
             status: "running",
             sessionId: input.terminalId,
             currentCwd: "/host/live",
             activeProcessName: "vitest",
             cols: 100,
             rows: 30,
-          },
+          }
+        : { status: input.runtime },
   };
 }
 
 function freshPlainCollection(terminals: readonly PlainTerminalProjection[]) {
   return {
-    terminalsById: Object.fromEntries(
-      terminals.map((terminal) => [terminal.record.terminalId, terminal]),
+    terminalsByIdentity: Object.fromEntries(
+      terminals.map((terminal) => [
+        JSON.stringify([terminal.record.hostId, terminal.record.terminalId]),
+        terminal,
+      ]),
     ),
-    deletedRevisionById: {},
-    pendingPresentationDeletionRevisionById: {},
+    deletedRevisionByIdentity: {},
+    pendingPresentationDeletionRevisionByIdentity: {},
+    coverage: "complete-local" as const,
+    scope: { kind: "independent" as const },
+    servingHostId: null,
     projectionSequence: 1,
     snapshotEpoch: 1,
-    lastStreamSequenceById: {},
+    lastStreamSequenceByIdentity: {},
     streamStatus: "open" as const,
     streamCompatibility: "compatible" as const,
     streamSnapshotFresh: true,
@@ -1048,6 +1054,43 @@ describe("<LandingTerminalPanel />", () => {
     ).toBeTruthy();
   });
 
+  it("renders unknown runtime state as unavailable, not dormant", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    mocks.plainCollection = freshPlainCollection([
+      plainTerminal({
+        terminalId: "terminal-unknown",
+        manualTitle: null,
+        runtime: "unknown",
+      }),
+    ]);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "unknown-instance",
+      sessionId: "terminal-unknown",
+      hostId: "host-a",
+      cwd: "/stale",
+      name: "Unknown runtime",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    expect(
+      await screen.findByTestId(
+        "landing-terminal-unavailable-unknown-instance",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("landing-terminal-dormant-unknown-instance"),
+    ).toBeNull();
+  });
+
   it("routes capable rename and close through shared mutations", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -1086,6 +1129,7 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(mocks.plainRename).toHaveBeenCalledWith({
+      hostId: "host-a",
       terminalId: "terminal-shared",
       manualTitle: "Renamed everywhere",
     });
@@ -1096,6 +1140,7 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close Shared title" }));
     await waitFor(() => {
       expect(mocks.plainCloseAsync).toHaveBeenCalledWith({
+        hostId: "host-a",
         terminalId: "terminal-shared",
       });
       expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);

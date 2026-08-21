@@ -113,29 +113,20 @@ const running = projection({
 function harness() {
   const session = new StubSession();
   const wsStreamClient = makeWsStreamClient(session);
-  const onSnapshot = vi.fn();
-  const onInitialized = vi.fn();
-  const onUpsert = vi.fn();
-  const onDeleted = vi.fn();
+  const onState = vi.fn();
   const onConnectionStatus = vi.fn();
   const client = new PlainTerminalListStreamClient({
     wsStreamClient,
     scope: { kind: "epic", epicId: "epic-1" },
     callbacks: {
-      onSnapshot,
-      onInitialized,
-      onUpsert,
-      onDeleted,
+      onState,
       onConnectionStatus,
     },
   });
   return {
     session,
     wsStreamClient,
-    onSnapshot,
-    onInitialized,
-    onUpsert,
-    onDeleted,
+    onState,
     onConnectionStatus,
     client,
   };
@@ -151,38 +142,35 @@ describe("PlainTerminalListStreamClient", () => {
     h.client.close();
   });
 
-  it("routes snapshot, initialization, upsert, and deleted frames while treating pong as inert", () => {
+  it("routes replacement state frames while treating pong as inert", () => {
     const h = harness();
-    const snapshot = {
-      kind: "snapshot" as const,
+    const complete = {
+      kind: "state" as const,
       hasBinaryPayload: false as const,
-      terminals: [dormant],
+      state: {
+        coverage: "complete-fleet" as const,
+        scope: { kind: "epic" as const, epicId: "epic-1" },
+        terminals: [dormant],
+      },
     };
-    const upsert = {
-      kind: "upsert" as const,
+    const partial = {
+      kind: "state" as const,
       hasBinaryPayload: false as const,
-      terminal: running,
-    };
-    const deleted = {
-      kind: "deleted" as const,
-      hasBinaryPayload: false as const,
-      terminalId: "terminal-1",
-      revision: 8,
+      state: {
+        coverage: "partial-serving-host" as const,
+        scope: { kind: "epic" as const, epicId: "epic-1" },
+        servingHostId: "host-1",
+        terminals: [running],
+      },
     };
 
-    h.session.emitFrame(snapshot);
-    h.session.emitFrame({ kind: "initialized", hasBinaryPayload: false });
-    h.session.emitFrame(upsert);
-    h.session.emitFrame(deleted);
+    h.session.emitFrame(complete);
+    h.session.emitFrame(partial);
     h.session.emitFrame({ kind: "pong", hasBinaryPayload: false });
 
-    expect(h.onSnapshot).toHaveBeenCalledOnce();
-    expect(h.onSnapshot).toHaveBeenCalledWith(snapshot);
-    expect(h.onInitialized).toHaveBeenCalledOnce();
-    expect(h.onUpsert).toHaveBeenCalledOnce();
-    expect(h.onUpsert).toHaveBeenCalledWith(upsert);
-    expect(h.onDeleted).toHaveBeenCalledOnce();
-    expect(h.onDeleted).toHaveBeenCalledWith(deleted);
+    expect(h.onState).toHaveBeenCalledTimes(2);
+    expect(h.onState).toHaveBeenNthCalledWith(1, complete);
+    expect(h.onState).toHaveBeenNthCalledWith(2, partial);
     h.client.close();
   });
 
@@ -191,14 +179,15 @@ describe("PlainTerminalListStreamClient", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       for (const frame of [
-        { kind: "snapshot", hasBinaryPayload: false },
-        { kind: "upsert", hasBinaryPayload: false },
-        { kind: "initialized", hasBinaryPayload: false, extra: true },
+        { kind: "state", hasBinaryPayload: false },
+        { kind: "snapshot", hasBinaryPayload: false, terminals: [] },
+        { kind: "upsert", hasBinaryPayload: false, terminal: running },
+        { kind: "initialized", hasBinaryPayload: false },
         {
           kind: "deleted",
           hasBinaryPayload: false,
           terminalId: "terminal-1",
-          revision: -1,
+          revision: 1,
         },
         { kind: "pong", hasBinaryPayload: false, extra: true },
         { kind: "reset", hasBinaryPayload: false },
@@ -206,11 +195,8 @@ describe("PlainTerminalListStreamClient", () => {
         h.session.emitFrame(frame);
       }
 
-      expect(h.onSnapshot).not.toHaveBeenCalled();
-      expect(h.onInitialized).not.toHaveBeenCalled();
-      expect(h.onUpsert).not.toHaveBeenCalled();
-      expect(h.onDeleted).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledTimes(6);
+      expect(h.onState).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(7);
     } finally {
       warn.mockRestore();
       h.client.close();

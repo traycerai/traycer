@@ -49,7 +49,14 @@ vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
     scope,
     capability: { status: authorityState.capability },
     collection: {
-      terminalsById: authorityState.terminalsById,
+      terminalsByIdentity: Object.fromEntries(
+        Object.entries(authorityState.terminalsById).flatMap(
+          ([terminalId, value]) =>
+            value === undefined
+              ? []
+              : [[JSON.stringify(["host-1", terminalId]), value]],
+        ),
+      ),
       streamStatus: "open",
       streamCompatibility: "compatible",
       streamSnapshotFresh: true,
@@ -357,6 +364,45 @@ describe("useEpicTerminalAuthority", () => {
     ).toEqual(ref);
     const controller = rendered.getByTestId(`authority-${ref.instanceId}`);
     expect(controller.dataset.capability).toBe("legacy");
+  });
+
+  it("does not import a manager-owned listed ref without origin enrichment", async () => {
+    const ref: EpicTerminalRef = {
+      ...legacyRef("terminal-manager", "instance-manager"),
+      lifecycleOwner: "manager",
+    };
+    const viewTabId = openRef(ref);
+    const rendered = render(<HookHarness instanceId={ref.instanceId} />);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(authorityState.importLegacy).not.toHaveBeenCalled();
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[viewTabId]?.tilesByInstanceId[
+        ref.instanceId
+      ],
+    ).toEqual(ref);
+    expect(
+      rendered.getByTestId(`authority-${ref.instanceId}`).dataset.capability,
+    ).toBe("legacy");
+  });
+
+  it("still imports a registry-owned listed ref even if origin cache says setup", async () => {
+    const ref: EpicTerminalRef = {
+      ...legacyRef("terminal-registry-shadow", "instance-registry-shadow"),
+      lifecycleOwner: "registry",
+      origin: "setup",
+    };
+    const winner = projection({ terminalId: ref.id });
+    authorityState.importLegacy.mockResolvedValue({
+      status: "existing",
+      terminal: winner,
+    });
+    openRef(ref);
+    render(<HookHarness instanceId={ref.instanceId} />);
+    await waitFor(() =>
+      expect(authorityState.importLegacy).toHaveBeenCalledTimes(1),
+    );
   });
 
   it("does not import a setup ref against a capable host", async () => {

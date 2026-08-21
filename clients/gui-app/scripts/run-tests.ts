@@ -118,6 +118,10 @@ if (runsFirstShard) {
     "vitest.react-compiler.config.ts",
     "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
   );
+  runVitest(
+    "vitest.react-compiler.config.ts",
+    "src/hooks/terminal/__tests__/use-epic-terminal-durable-create.test.tsx",
+  );
   if (runsBrowserRegressions) {
     runBrowserRegression("scripts/diff-edit-browser-regression.mjs");
     // Same gate, same reason: the claim is "after Cancel the window is usable

@@ -1,3 +1,4 @@
+import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 export interface EpicTerminalLifetimeCloseAuthority {
@@ -8,20 +9,15 @@ export interface EpicTerminalLifetimeCloseAuthority {
   readonly close: () => Promise<void>;
 }
 
-export interface EpicTerminalCloseAuthority extends EpicTerminalLifetimeCloseAuthority {
-  readonly instanceId: string;
-}
-
 export interface EpicTerminalCloseRequest {
   readonly localInstanceIds: readonly string[];
   readonly retainedInstanceIds: readonly string[];
 }
 
-const authorityByInstanceId = new Map<string, EpicTerminalCloseAuthority>();
 const pendingByLifetimeKey = new Map<string, Promise<void>>();
 
 function lifetimeKey(hostId: string, terminalId: string): string {
-  return `${hostId}\u0000${terminalId}`;
+  return plainTerminalFleetIdentityKey({ hostId, terminalId });
 }
 
 /**
@@ -50,61 +46,17 @@ export function requestEpicTerminalLifetimeClose(
   return pending;
 }
 
-export function registerEpicTerminalCloseAuthority(
-  authority: EpicTerminalCloseAuthority,
-): () => void {
-  authorityByInstanceId.set(authority.instanceId, authority);
-  return () => {
-    if (authorityByInstanceId.get(authority.instanceId) === authority) {
-      authorityByInstanceId.delete(authority.instanceId);
-    }
-  };
-}
-
 /**
- * Splits a close gesture into presentation-local removals and host-owned
- * semantic closures. Unknown, stale, unreachable, or unregistered terminal
- * authority fails closed. A batch addresses each lifetime terminal once.
+ * Canvas tab-close gestures remove local presentations only. They never
+ * invoke a terminal-lifetime mutation, including for durable terminals that
+ * are still starting or already running. Explicit sidebar/overlay delete uses
+ * `requestEpicTerminalLifetimeClose` instead.
  */
 export function requestEpicTerminalClose(
   refs: readonly EpicCanvasTileRef[],
 ): EpicTerminalCloseRequest {
-  const localInstanceIds: string[] = [];
-  const retainedInstanceIds: string[] = [];
-  const requestedLifetimeKeys = new Set<string>();
-
-  for (const ref of refs) {
-    if (ref.type !== "terminal") {
-      localInstanceIds.push(ref.instanceId);
-      continue;
-    }
-    const authority = authorityByInstanceId.get(ref.instanceId);
-    if (
-      authority === undefined ||
-      authority.hostId !== ref.hostId ||
-      authority.terminalId !== ref.id
-    ) {
-      retainedInstanceIds.push(ref.instanceId);
-      continue;
-    }
-    if (authority.capability === "legacy") {
-      localInstanceIds.push(ref.instanceId);
-      continue;
-    }
-    if (authority.capability !== "capable" || !authority.canMutate) {
-      retainedInstanceIds.push(ref.instanceId);
-      continue;
-    }
-
-    retainedInstanceIds.push(ref.instanceId);
-    const key = lifetimeKey(authority.hostId, authority.terminalId);
-    if (requestedLifetimeKeys.has(key)) {
-      continue;
-    }
-    requestedLifetimeKeys.add(key);
-    const pending = requestEpicTerminalLifetimeClose(authority);
-    if (pending !== null) void pending.catch(() => undefined);
-  }
-
-  return { localInstanceIds, retainedInstanceIds };
+  return {
+    localInstanceIds: refs.map((ref) => ref.instanceId),
+    retainedInstanceIds: [],
+  };
 }
