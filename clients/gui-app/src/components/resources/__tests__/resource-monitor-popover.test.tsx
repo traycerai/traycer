@@ -2706,6 +2706,98 @@ describe("ResourceMonitorPopover", () => {
     expect(input.preparation.node.hostId).toBe("host-1");
   });
 
+  it("ignores a live agent whose projection names a different host than the process", async () => {
+    // An epic's projection spans hosts and agent ids are host-minted, so a
+    // same-id entry from another host must not enable this row - opening it
+    // would bind the tile to a machine the process is not running on.
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    liveAgentsMock.byAgentId["chat-live"] = {
+      kind: "chat",
+      title: "Live Agent",
+      hostId: "host-other",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-live",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.queryByText("Live Agent")).toBeNull();
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Untitled agent/,
+    });
+    expect(row.disabled).toBe(true);
+    fireEvent.click(row);
+
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+  });
+
+  it("links a live agent whose projection host matches the process host", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    liveAgentsMock.byAgentId["chat-live"] = {
+      kind: "chat",
+      title: "Live Agent",
+      hostId: "host-1",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-live",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Live Agent/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
+    if (!isRecord(input)) throw new Error("expected resource intent input");
+    if (!isRecord(input.preparation)) {
+      throw new Error("expected resource preparation");
+    }
+    if (!isRecord(input.preparation.node)) {
+      throw new Error("expected resource tile node");
+    }
+    expect(input.preparation.node.hostId).toBe("host-1");
+  });
+
   it("cannot open an agent row when the epic is not mounted in this window (no live projection, no tile, no canvas record)", async () => {
     routerMock.pathname = "/epics/epic-1/tab-1";
     const stub = installStubFactory();

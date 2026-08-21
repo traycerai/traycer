@@ -4119,10 +4119,7 @@ function liveAgentIdForSnapshot(
 
 interface LiveAgentRef extends RegisteredEpicAgentRef {
   readonly agentId: string;
-  /**
-   * The host running the agent's process - the agent's host by construction,
-   * and the fallback for a legacy chat projection that recorded none.
-   */
+  /** The host whose resource stream reported this agent's process. */
   readonly processHostId: string;
 }
 
@@ -4133,7 +4130,17 @@ interface LiveOwnerAgent {
   readonly hostId: string;
 }
 
-/** Live agents keyed by owner key, the kind coming from the projection slice. */
+/**
+ * Live agents keyed by owner key, the kind coming from the projection slice.
+ *
+ * An epic's projection spans hosts, and an agent id is host-minted rather than
+ * globally unique, so a projection entry only describes THIS row when it names
+ * the same host the process was reported from. A disagreement is dropped rather
+ * than reconciled: enabling the row on the projection's host would open a tile
+ * bound to a machine the process is not running on. A `null` projection host is
+ * the legacy pre-`hostId` chat record, which names no host to disagree with, so
+ * it keeps the wire owner's.
+ */
 function indexLiveAgentsByOwner(
   refs: readonly LiveAgentRef[],
   agents: readonly (RegisteredEpicLiveAgent | null)[],
@@ -4142,11 +4149,12 @@ function indexLiveAgentsByOwner(
   refs.forEach((ref, index) => {
     const agent = agents[index] ?? null;
     if (agent === null) return;
+    if (agent.hostId !== null && agent.hostId !== ref.processHostId) return;
     byOwner.set(ownerKey(ref.epicId, agent.kind, ref.agentId), {
       epicId: ref.epicId,
       agentId: ref.agentId,
       agent,
-      hostId: agent.hostId ?? ref.processHostId,
+      hostId: ref.processHostId,
     });
   });
   return byOwner;
