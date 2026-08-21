@@ -36,6 +36,7 @@ import {
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentAwaitsDispatchOutcome,
+  stagedWorktreeIntentWasPurgedMidDispatch,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
@@ -928,16 +929,25 @@ function restoreOneWorktreeIntent(
   restoredPrompt: StagedWorktreeIntentSource | null,
   sweptClaimants: ReadonlyArray<StagedWorktreeIntentSource | undefined>,
   stagingKey: WorktreeStagingKey,
-): void {
+): boolean {
   if (restoredPrompt !== null) {
     restoreStagedWorktreeIntent(restoredPrompt, stagingKey);
-    return;
+    // A prompt that HAD a binding and did not get it back because a sweep ran
+    // mid-flight comes back unbound through no decision of the user's - the
+    // one refusal worth saying out loud. A refusal caused by their own newer
+    // pick is not: they chose it, and claiming their worktree was deleted
+    // would be a lie.
+    return (
+      restoredPrompt.restoreWorktreeIntent !== null &&
+      stagedWorktreeIntentWasPurgedMidDispatch(stagingKey)
+    );
   }
   const owed = sweptClaimants.find(
     (claimant) =>
       claimant !== undefined && claimant.restoreWorktreeIntent !== null,
   );
   restoreStagedWorktreeIntent(owed ?? null, stagingKey);
+  return false;
 }
 
 function restoreStagedWorktreeIntent(
@@ -1455,7 +1465,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // prompt is being handed back, which is the case the sweep's own
         // reasoning was written for (an edit dropped before its ack never runs
         // the rejection path, so nothing else would restore it).
-        restoreOneWorktreeIntent(
+        const worktreeGoneForSnapshot = restoreOneWorktreeIntent(
           restoredWorktreeIntentForSnapshot,
           sweptWorktreeIntents,
           {
@@ -1470,6 +1480,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         // accepted before the connection dropped) may never see another
         // turn-state frame - the turn could have settled while offline - so
         // advance it against the snapshot state directly.
+        // Say it, rather than letting the prompt return silently unbound. The
+        // reason is an existing surface the composer already shows, so this
+        // needs no new affordance - only honesty about WHY the worktree the
+        // send was staged for is not coming back with it.
+        if (worktreeGoneForSnapshot) {
+          set((state) =>
+            state.failedSendRestoration === null
+              ? {}
+              : {
+                  failedSendRestoration: {
+                    ...state.failedSendRestoration,
+                    reason: `${state.failedSendRestoration.reason} Its staged worktree no longer exists, so it was not restored.`,
+                  },
+                },
+          );
+        }
         maybeDispatchPendingBackgroundSessionStop(set, get);
         // This snapshot is authoritative for which interviews are still
         // pending, so any stored draft whose block has left the set is an

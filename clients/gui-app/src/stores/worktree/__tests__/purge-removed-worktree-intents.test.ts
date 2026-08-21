@@ -10,6 +10,8 @@ import {
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import {
+  stagedWorktreeIntentAwaitsDispatchOutcome,
+  stagedWorktreeIntentWasPurgedMidDispatch,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
@@ -425,5 +427,53 @@ describe("withoutResolvedMissingRows", () => {
         runningDir: "/wt/shared-path",
       }),
     ).toEqual([selectedHostRow]);
+  });
+});
+
+describe("purge and an in-flight dispatch", () => {
+  const key = {
+    surface: "owner" as const,
+    hostId: SWEPT_HOST,
+    epicId: "epic-1",
+    ownerKind: "chat" as const,
+    ownerId: "chat-1",
+  };
+
+  it("stops a consumed slot from handing back a swept worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+    // The send takes the pick; the slot now holds no intent to filter, which
+    // is exactly why the purge loop could not see it.
+    useWorktreeIntentStagingStore.getState().consumeForDispatch(key);
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    // The hand-back refuses rather than staging a worktree that is gone...
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(false);
+    // ...and the refusal is distinguishable from the user's own newer pick,
+    // so the composer can say why instead of coming back silently unbound.
+    expect(stagedWorktreeIntentWasPurgedMidDispatch(key)).toBe(true);
+  });
+
+  it("leaves another host's consumed slot alone", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const otherKey = { ...key, hostId: OTHER_HOST };
+    useWorktreeIntentStagingStore.getState().setIntent(otherKey, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+    useWorktreeIntentStagingStore.getState().consumeForDispatch(otherKey);
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    // A sweep is one machine's filesystem event.
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(otherKey)).toBe(true);
+    expect(stagedWorktreeIntentWasPurgedMidDispatch(otherKey)).toBe(false);
   });
 });

@@ -322,7 +322,9 @@ interface WorktreeIntentStagingStore {
    * must be respected. Every user mutation below clears this flag; only
    * {@link WorktreeIntentStagingState.consumeForDispatch} sets it.
    */
-  readonly consumedForDispatchByKey: Readonly<Record<string, true | undefined>>;
+  readonly consumedForDispatchByKey: Readonly<
+    Record<string, DispatchConsumptionMark | undefined>
+  >;
   /** Take the staged intent for a dispatch, marking the slot as consumed. */
   readonly consumeForDispatch: (key: WorktreeStagingKey) => void;
   /** Merge one folder's intent into the staged intent for `key`. */
@@ -429,10 +431,21 @@ interface WorktreeIntentStagingStore {
   readonly resetForTests: () => void;
 }
 
+/**
+ * Why a consumed slot is in the state it is in.
+ *
+ * `"awaiting"` - a dispatch took the pick and may hand it back.
+ * `"purged"` - a worktree sweep ran while that dispatch was in flight, so the
+ * pick may name a worktree that no longer exists. The hand-back refuses, and
+ * unlike a user's own newer choice this one is worth SAYING: the prompt comes
+ * back unbound through no decision of theirs.
+ */
+export type DispatchConsumptionMark = "awaiting" | "purged";
+
 function withoutDispatchMark(
-  marks: Readonly<Record<string, true | undefined>>,
+  marks: Readonly<Record<string, DispatchConsumptionMark | undefined>>,
   id: string,
-): Readonly<Record<string, true | undefined>> {
+): Readonly<Record<string, DispatchConsumptionMark | undefined>> {
   if (marks[id] === undefined) return marks;
   const next = { ...marks };
   delete next[id];
@@ -457,7 +470,23 @@ export function stagedWorktreeIntentAwaitsDispatchOutcome(
   const state = useWorktreeIntentStagingStore.getState();
   return (
     state.intentByKey[id] === undefined &&
-    state.consumedForDispatchByKey[id] === true
+    state.consumedForDispatchByKey[id] === "awaiting"
+  );
+}
+
+/**
+ * Whether a hand-back is being refused because a sweep removed worktrees while
+ * the dispatch was in flight, rather than because the user made a newer
+ * choice. Only the former is worth stating - telling someone their worktree
+ * was deleted when they simply re-picked would be a lie.
+ */
+export function stagedWorktreeIntentWasPurgedMidDispatch(
+  key: WorktreeStagingKey,
+): boolean {
+  const id = worktreeStagingKeyString(key);
+  return (
+    useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[id] ===
+    "purged"
   );
 }
 
@@ -722,7 +751,7 @@ export const useWorktreeIntentStagingStore =
               // NOT a user choice - the send took it, and may hand it back.
               consumedForDispatchByKey: {
                 ...state.consumedForDispatchByKey,
-                [id]: true,
+                [id]: "awaiting",
               },
             };
           }),
@@ -798,8 +827,32 @@ export const useWorktreeIntentStagingStore =
               // action can't restore the just-purged selection.
               revisionByKey = incrementStagingRevision(revisionByKey, id);
             }
+            // Slots CONSUMED by an in-flight dispatch are invisible to the
+            // loop above - they hold no intent to filter, because the dispatch
+            // took it. Their pick lives on the pending action, so this store
+            // cannot tell whether it names a removed worktree; what it CAN
+            // tell is that a sweep happened while that dispatch was out. Mark
+            // those `purged` so the hand-back refuses rather than staging a
+            // worktree that may be gone, and so the refusal can be STATED
+            // instead of the prompt coming back silently unbound.
+            const consumedForDispatchByKey: Record<
+              string,
+              DispatchConsumptionMark | undefined
+            > = { ...state.consumedForDispatchByKey };
+            for (const [id, mark] of Object.entries(consumedForDispatchByKey)) {
+              if (mark !== "awaiting") continue;
+              const slotSegment = serializedStagingKeyHostSegment(id);
+              if (slotSegment !== "" && slotSegment !== sweptSegment) continue;
+              consumedForDispatchByKey[id] = "purged";
+              changed = true;
+            }
             return changed
-              ? { intentByKey, suspendedWorkspacePathsByKey, revisionByKey }
+              ? {
+                  intentByKey,
+                  suspendedWorkspacePathsByKey,
+                  revisionByKey,
+                  consumedForDispatchByKey,
+                }
               : state;
           }),
         resetForTests: () =>
