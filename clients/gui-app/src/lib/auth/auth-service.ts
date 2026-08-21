@@ -2818,7 +2818,7 @@ export class AuthService {
     }
     if (claimed.kind !== "claimed") {
       this.clearActiveAttempt();
-      this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
+      this.applyLinkLoginFailure();
       if (claimed.kind === "invalid-code" || claimed.kind === "rate-limited") {
         return { kind: claimed.kind };
       }
@@ -2849,7 +2849,7 @@ export class AuthService {
     ): LinkLoginSignInResult => {
       this.clearActiveAttempt();
       this.setLinkLoginProgress(null);
-      this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
+      this.applyLinkLoginFailure();
       return result;
     };
     const deadline = Date.now() + LINK_LOGIN_APPROVAL_TIMEOUT_MS;
@@ -3361,6 +3361,29 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    this.setLastError(error);
+    this.applyInteractiveFailure(error);
+  }
+
+  /**
+   * A link-login claim's terminal failure: the same transition as
+   * `applyFailure`, minus the durable `lastError`.
+   *
+   * The result kind is already returned to the caller, and both link surfaces
+   * render it precisely ("that code is invalid, expired, or already used").
+   * Setting `lastError` too would put the generic "Sign-in failed - please try
+   * again" beside it on the same screen, saying something weaker and, for an
+   * expired code, actively wrong - trying again with a dead code cannot work.
+   * One failure gets one explanation, and the specific one wins.
+   */
+  private applyLinkLoginFailure(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.applyInteractiveFailure(AUTH_ERROR_SIGN_IN_FAILED);
+  }
+
+  private applyInteractiveFailure(error: string): void {
     appLogger.warn("[auth] applying auth failure", {
       errorCode: classifyAuthFailureForLog(error),
     });
@@ -3370,7 +3393,6 @@ export class AuthService {
     Analytics.getInstance().track(AnalyticsEvent.SignInFailed, {
       blocker: SIGN_IN_FAILURE_BLOCKERS[error] ?? "unknown",
     });
-    this.setLastError(error);
     this.applySignedOut();
     // A failed interactive attempt says nothing about the SHARED file - a
     // recoverable stored session may still be sitting there (the entry to

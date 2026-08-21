@@ -9,6 +9,7 @@ import { useLinkCodeSignInMutation } from "@/hooks/auth/use-link-code-sign-in-mu
 import { useAuthService } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
 import { LinkCodeWaitStatus } from "./link-code-wait-status";
 
@@ -64,15 +65,25 @@ function useEntryNotice(local: EntryNotice): EntryNotice {
 }
 
 /**
- * Whether a link-login claim is running at all — this surface's own redeem, or
+ * Whether a sign-in attempt is running at all — this surface's own redeem, or
  * one `LinkLoginDeepLinkBridge` started for a QR the SYSTEM camera scanned,
  * possibly before this surface was mounted. The user waiting on an approval is
- * the same user either way, so the wait block's condition is "a claim is
- * running", not "I started one".
+ * the same user either way, so the condition is "an attempt is running", not
+ * "I started one".
+ *
+ * The global `signing-in` status is what covers the CLAIM leg. Poll progress
+ * only appears once the claim has already succeeded and the loop begins, so
+ * gating on it alone leaves the scan and submit controls live through the
+ * device-description and claim round trips — long enough for a tap to start a
+ * second attempt that supersedes the camera-launched one, which then reports
+ * ITS failure under the replacement's wait. It also correctly disables the
+ * link path while a browser device sign-in is running, which is the same
+ * mutual exclusion from the other direction.
  */
 function useLinkLoginClaimInFlight(isRedeeming: boolean): boolean {
   const progress = useAuthLinkLoginProgress(useAuthService());
-  return isRedeeming || progress !== null;
+  const status = useAuthStore((state) => state.status);
+  return isRedeeming || status === "signing-in" || progress !== null;
 }
 
 /**

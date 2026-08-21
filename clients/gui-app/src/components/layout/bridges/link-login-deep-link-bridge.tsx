@@ -86,5 +86,16 @@ export function LinkLoginDeepLinkBridge(): null {
     });
   }, [auth, clearOutcome, pendingCode, reportOutcome, status]);
 
+  // The verdict belongs to ONE attempt. Any newer attempt starting, and the
+  // identity transition when one succeeds, both retire it — otherwise a notice
+  // from a camera scan outlives its own flow and reappears on a later sign-in
+  // screen, describing something the user has since moved on from.
+  useEffect(() => {
+    if (status === "signed-out") {
+      return;
+    }
+    clearOutcome();
+  }, [clearOutcome, status]);
+
   return null;
 }

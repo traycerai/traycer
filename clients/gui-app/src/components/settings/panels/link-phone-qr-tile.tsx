@@ -239,18 +239,22 @@ export function LinkPhoneQrTile(props: {
   /**
    * Origin the encoded universal link points at, from the panel's active
    * deploy. Passed in rather than derived here so the tile stays a pure
-   * renderer and a dev build's QR can never address production.
+   * renderer and a dev build's QR can never address production. `null` — no
+   * known deployment — draws the placeholder instead of a symbol, because a
+   * QR pointed at a guess would hand a live claim code to the wrong host.
    */
-  readonly platformBaseUrl: string;
+  readonly platformBaseUrl: string | null;
   /** Share of the displayed code's life still left, 0..1. */
   readonly remainingFraction: number;
 }) {
+  const platformBaseUrl = props.platformBaseUrl;
+  const code = props.code;
   const symbol = useMemo(
     () =>
-      props.code === null
+      code === null || platformBaseUrl === null
         ? null
-        : encodeQrSymbol(props.platformBaseUrl, props.code),
-    [props.code, props.platformBaseUrl],
+        : encodeQrSymbol(platformBaseUrl, code),
+    [code, platformBaseUrl],
   );
   if (symbol === null) {
     return (

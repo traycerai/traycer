@@ -82,7 +82,7 @@ export function MobileNavDrawer(): ReactNode {
   const handleManageSubscription = () => {
     close();
     void runnerHost
-      .openExternalLink(resolvePlatformBaseUrl(runnerHost.authnBaseUrl))
+      .openExternalLink(resolvePlatformBaseUrl(runnerHost.signInUrl))
       .then(() => {
         Analytics.getInstance().track(
           AnalyticsEvent.SubscriptionManagementOpened,

@@ -75,7 +75,12 @@ export function LinkCodeWaitStatus() {
           className="text-center text-ui-xs text-muted-foreground tabular-nums"
           data-testid="link-code-signin-poll-status"
         >
-          <WaitStatusLine progress={progress} />
+          {/* Keyed on the poll target: `useRemainingSeconds` samples the
+              clock at mount, so a new target has to arrive as a new
+              component or its first render counts down from a stale
+              instant and can show one second more than the server
+              advertised. */}
+          <WaitStatusLine key={progress.nextPollAtMs} progress={progress} />
         </p>
       ) : null}
     </div>

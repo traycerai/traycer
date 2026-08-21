@@ -38,9 +38,7 @@ export function PlanRestrictedUpgradeAction(): ReactNode {
       size="sm"
       disabled={openExternalLink.isPending}
       onClick={() => {
-        openExternalLink.mutate(
-          resolvePlatformBaseUrl(runnerHost.authnBaseUrl),
-        );
+        openExternalLink.mutate(resolvePlatformBaseUrl(runnerHost.signInUrl));
       }}
       data-testid="host-scope-plan-upgrade"
     >

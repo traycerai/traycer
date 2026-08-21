@@ -41,7 +41,7 @@ export function UserMenu(props: UserMenuProps) {
   const settingsChord = useBindingForAction("app.settings.open");
   useTitleBarDragSuppression("user-menu", open);
   const initials = computeInitials(props.userName, props.email);
-  const manageSubscriptionUrl = resolvePlatformBaseUrl(runnerHost.authnBaseUrl);
+  const manageSubscriptionUrl = resolvePlatformBaseUrl(runnerHost.signInUrl);
   return (
     <>
       {/* Outside the menu, which Radix unmounts on select - the confirm has to

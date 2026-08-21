@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LINK_LOGIN_REMINT_MS } from "@/hooks/auth/use-link-login-code-query";
 import { LinkLoginMintError } from "@/lib/auth/link-login-mint-error";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { platformOriginFromSignInUrl } from "@/lib/auth/platform-base-url";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -300,9 +300,14 @@ function CodeSurface(props: {
  * The origin the QR's universal link addresses, from the SAME deploy this
  * panel is minting against — so a dev build prints a dev link and a phone
  * that follows it reaches the deploy that issued the code.
+ *
+ * `null` when the shell reports no usable origin, and the tile then draws no
+ * symbol at all. A QR is not a page the user can back out of: whoever scans it
+ * sends a LIVE claim code to whatever host it names, so "no QR, use the code
+ * printed below it" is the only safe answer to not knowing the deployment.
  */
-function usePlatformBaseUrl(): string {
-  return resolvePlatformBaseUrl(useRunnerHost().authnBaseUrl);
+function usePlatformBaseUrl(): string | null {
+  return platformOriginFromSignInUrl(useRunnerHost().signInUrl);
 }
 
 function ShowingCard(props: { readonly minted: MintLinkLoginCodeResponse }) {

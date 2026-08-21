@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useEffect } from "react";
 
 vi.mock("sonner", () => ({
@@ -31,6 +32,8 @@ import {
 import type { AuthService } from "@/lib/auth/auth-service";
 import { setMobileApp } from "@/lib/mobile-app";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
+import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { decideDeepLinkRouting } from "@/lib/auth/link-login-deep-link-routing";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -132,17 +135,17 @@ function okWithProfile(): Promise<Response> {
   );
 }
 
-interface MountResult {
-  readonly host: MockRunnerHost;
+interface MountResult<H extends IRunnerHost> {
+  readonly host: H;
   readonly cleanupClient: () => void;
   readonly getAuthService: () => AuthService;
   readonly waitForAuthService: () => Promise<AuthService>;
 }
 
-function mountSignInButton(
-  host: MockRunnerHost,
+function mountSignInButton<H extends IRunnerHost>(
+  host: H,
   layout: "compact" | "hero",
-): MountResult {
+): MountResult<H> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -160,6 +163,7 @@ function mountSignInButton(
           fallback={<div data-testid="runtime-fallback">…</div>}
         >
           <AuthSessionExpiredToastBridge />
+          <LinkLoginDeepLinkBridge />
           <CaptureAuthService
             onCapture={(auth) => {
               authService = auth;
@@ -293,6 +297,115 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     useAuthStore.getState().setSignedOut();
     useLinkLoginDeepLinkOutcomeStore.getState().clear();
     restoreFetch();
+  });
+
+  /**
+   * A code the SYSTEM camera delivered, with the claim under this test's
+   * control. `emitCode` is the OS handing the app a scanned QR.
+   */
+  function deepLinkHost(): {
+    readonly host: IRunnerHost;
+    readonly emitCode: (code: string) => void;
+  } {
+    // A holder, not a bare `let`: the assignment happens inside a callback,
+    // where narrowing would otherwise keep the binding at its initial `null`.
+    const sink: { subscriber: ((code: string) => void) | null } = {
+      subscriber: null,
+    };
+    const host = createFakeRunnerHost({
+      authnBaseUrl: "http://localhost:5005",
+      linkLoginDeepLinks: {
+        onLinkLoginCode: (handler) => {
+          sink.subscriber = handler;
+          return { dispose: () => undefined };
+        },
+      },
+    });
+    return {
+      host,
+      emitCode: (code: string) => {
+        const subscriber = sink.subscriber;
+        if (subscriber === null) {
+          throw new Error("the bridge never subscribed");
+        }
+        subscriber(code);
+      },
+    };
+  }
+
+  it("locks the in-app scan while a camera-launched claim is still outstanding", async () => {
+    // The race the gate closes: the claim POST is in flight, so nothing has
+    // published poll progress yet. A tap on the still-live Scan button would
+    // start a second attempt that SUPERSEDES the camera-launched one, whose
+    // failure then lands under the replacement's wait.
+    setMobileApp(true);
+    const outstanding = installFetch(
+      () => new Promise<Response>(() => undefined),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+    expect(
+      screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
+    ).toBe(false);
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
+    outstanding();
+    mobile.cleanupClient();
+  });
+
+  it("explains a failed camera claim once, not twice", async () => {
+    // The precise reason and the generic "Sign-in failed - please try again"
+    // used to render together on the same screen; for an expired code the
+    // generic one is advice that cannot work.
+    setMobileApp(true);
+    const rejected = installFetch(() =>
+      Promise.resolve(new Response(null, { status: 401 })),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("link-code-signin-notice").textContent,
+      ).toContain("invalid, expired, or already used");
+    });
+    expect(screen.queryByTestId("signin-error")).toBeNull();
+    rejected();
+    mobile.cleanupClient();
+  });
+
+  it("retires a camera-scan notice when a newer attempt starts", async () => {
+    // Otherwise the verdict outlives its own flow and reappears on a later
+    // sign-in screen, describing something the user has moved on from.
+    setMobileApp(true);
+    useLinkLoginDeepLinkOutcomeStore.getState().report("invalid-code");
+    const mobile = mountSignInButton(buildHost(), "hero");
+    await mobile.waitForAuthService();
+    expect(screen.getByTestId("link-code-signin-notice")).toBeTruthy();
+
+    act(() => {
+      useAuthStore.getState().setSigningIn();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("link-code-signin-notice")).toBeNull();
+    });
+    mobile.cleanupClient();
   });
 
   it("speaks the real reason a camera-scanned code failed", async () => {

@@ -53,7 +53,7 @@ export function TraycerSubscriptionSection() {
   const resolved = resolveAccountContext(stored, teamIds);
   const subscription = selectSubscription(user, resolved, teams);
 
-  const manageUrl = resolvePlatformBaseUrl(runnerHost.authnBaseUrl);
+  const manageUrl = resolvePlatformBaseUrl(runnerHost.signInUrl);
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">

@@ -146,6 +146,32 @@ describe("MobileLinkLoginDeepLinks", () => {
     expect(received).toEqual(["2222233333"]);
   });
 
+  it("delivers a deliberate rescan once the delivery burst has passed", async () => {
+    // The dedupe exists for one arrival announced twice, milliseconds apart.
+    // It must not outlive that: scanning while signed in is discarded upstream
+    // with a notice, and the user's answer to that notice is to sign out and
+    // scan the same still-live QR again. A lifetime memory swallows exactly
+    // that second, deliberate scan.
+    vi.useFakeTimers();
+    try {
+      const app = fakeApp(undefined);
+      const deepLinks = new MobileLinkLoginDeepLinks(app.plugin);
+      deepLinks.start();
+      await flush();
+      const received: string[] = [];
+      deepLinks.onLinkLoginCode((code) => received.push(code));
+
+      app.open(PAYLOAD);
+      // Long enough to be a person deciding, not the OS repeating itself.
+      vi.advanceTimersByTime(6_000);
+      app.open(PAYLOAD);
+
+      expect(received).toEqual([NORMALIZED, NORMALIZED]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops delivering to a disposed subscriber", async () => {
     const app = fakeApp(undefined);
     const deepLinks = new MobileLinkLoginDeepLinks(app.plugin);

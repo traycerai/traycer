@@ -42,21 +42,23 @@ export interface AppPluginSlice {
   ): Promise<PluginListenerHandle>;
 }
 
+/**
+ * How close together two deliveries of one code have to be to read as the OS
+ * double-announcing a single arrival. Generous next to the milliseconds that
+ * actually separate the cold-launch pair, and far short of the ~60s a code
+ * lives, so it cannot eat a deliberate rescan.
+ */
+const DUPLICATE_DELIVERY_WINDOW_MS = 5_000;
+
 export class MobileLinkLoginDeepLinks implements ILinkLoginDeepLinkSource {
   private started = false;
   private handler: ((code: string) => void) | null = null;
   private pendingCode: string | null = null;
-  /**
-   * The last code taken off a URL, kept for the lifetime of the launch rather
-   * than only while one is pending.
-   *
-   * A cold start can deliver the SAME url twice: `getLaunchUrl()` resolves it,
-   * and iOS may also raise `appUrlOpen` for the launch that is already under
-   * way. Two claims on one code is not a duplicate no-op — first claim wins
-   * and the second gets a 401, which would surface to the user as "that code
-   * is invalid" on a sign-in that was working.
-   */
-  private lastCode: string | null = null;
+  /** The last code taken off a URL, with when it arrived. */
+  private lastDelivery: {
+    readonly code: string;
+    readonly atMs: number;
+  } | null = null;
 
   constructor(private readonly plugin: AppPluginSlice) {}
 
@@ -107,12 +109,37 @@ export class MobileLinkLoginDeepLinks implements ILinkLoginDeepLinkSource {
     };
   }
 
+  /**
+   * Whether this is the OS announcing one arrival twice rather than the user
+   * scanning twice.
+   *
+   * A cold start can deliver the same URL through both paths: `getLaunchUrl()`
+   * resolves it, and iOS may also raise `appUrlOpen` for the launch already
+   * under way. Two claims on one code is not a harmless repeat — first claim
+   * wins and the second gets a 401, which reads to the user as "that code is
+   * invalid" on a sign-in that was working.
+   *
+   * Bounded by a WINDOW, not by the process lifetime. The pair arrives within
+   * milliseconds of each other, whereas a genuine rescan of the same still-live
+   * QR is a deliberate second act by a person — scanning while signed in,
+   * getting the "already signed in" notice, signing out and scanning again is
+   * the case that a lifetime memory would silently swallow, leaving the app
+   * looking like it ignored them.
+   */
+  private isBurstDuplicate(code: string): boolean {
+    const previous = this.lastDelivery;
+    if (previous === null || previous.code !== code) {
+      return false;
+    }
+    return Date.now() - previous.atMs < DUPLICATE_DELIVERY_WINDOW_MS;
+  }
+
   private offer(url: string): void {
     const code = parseLinkLoginInput(url);
-    if (code === null || code === this.lastCode) {
+    if (code === null || this.isBurstDuplicate(code)) {
       return;
     }
-    this.lastCode = code;
+    this.lastDelivery = { code, atMs: Date.now() };
     if (this.handler !== null) {
       this.handler(code);
       return;

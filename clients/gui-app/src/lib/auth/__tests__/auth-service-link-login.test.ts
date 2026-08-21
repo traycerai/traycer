@@ -624,7 +624,7 @@ describe("link-login attempt fence", () => {
     }
   });
 
-  it("terminal denial of the CURRENT attempt projects the ordinary failure", async () => {
+  it("terminal denial of the CURRENT attempt signs out WITHOUT the generic message", async () => {
     const { service } = makeService();
     const { script, restore } = installLinkFetch();
     try {
@@ -634,7 +634,11 @@ describe("link-login attempt fence", () => {
       const result = await resultPromise;
       expect(result.kind).toBe("denied");
       expect(useAuthStore.getState().status).toBe("signed-out");
-      expect(service.getLastError()).not.toBeNull();
+      // The returned kind is what the surfaces render ("the sign-in was
+      // rejected on your computer"). A generic `lastError` beside it would put
+      // two explanations of one failure on the same screen, the weaker one
+      // telling the user to try again.
+      expect(service.getLastError()).toBeNull();
     } finally {
       restore();
     }
