@@ -69,28 +69,17 @@ export type CommGraphAgentFlowNode = Node<
   typeof COMM_GRAPH_AGENT_NODE_TYPE
 >;
 
-function hostStatusNotice(status: CommGraphNodeHostStatus): string | null {
-  // An older host simply does not advertise the optional stream method, so its
-  // agents have no edges to show - say so rather than implying silence.
-  if (status === "unsupported") return "No edge data";
-  if (status === "unreachable") return "Host unreachable";
-  // The transport could not be BUILT, so this is not the host being away - the
-  // client could not open the connection at all and has stopped retrying.
-  if (status === "failed") return "Connection failed";
-  if (status === "host-unknown") return "Host unknown";
-  if (status === "reconnecting") return "Reconnecting…";
-  return null;
-}
-
 export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
   props: NodeProps<CommGraphAgentFlowNode>,
 ) {
   const { data } = props;
-  const notice = hostStatusNotice(data.hostStatus);
-  const degraded =
-    data.hostStatus === "unreachable" ||
-    data.hostStatus === "failed" ||
-    data.hostStatus === "host-unknown";
+  // The host's FEED status is deliberately not painted on the node. It is a
+  // fact about a subscription, not about this agent: the cloud relay stamps one
+  // relay status onto every origin host, so a single wobbly socket used to
+  // caption every node "Reconnecting…" at once. It is exposed as
+  // `data-host-status` for tests and tooling, and the user-facing report lives
+  // in the Epic header's status dot (`useCommGraphFeedHealth`), amber with the
+  // detail in its tooltip.
   // Read from the epic selectors, exactly as the sidebar row does - the node's
   // own `data` carries only what the CANVAS needs, and duplicating hover facts
   // into it is how the two surfaces would drift apart.
@@ -114,7 +103,6 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
       className={cn(
         "flex w-full flex-col gap-1 rounded-lg border bg-card px-3 py-2 text-left text-ui-xs shadow-sm hover:border-primary/50",
         data.archived && "border-dashed opacity-50",
-        degraded && "opacity-60",
         data.activityTier === "turn" && "border-primary ring-2 ring-primary/30",
         data.activityTier === "background" && "border-primary/50",
         data.pulsing && "animate-pulse border-primary ring-2 ring-primary/60",
@@ -147,17 +135,11 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
         />
         <span className="min-w-0 flex-1 truncate font-medium">{data.name}</span>
       </div>
-      <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
-        {data.archived ? <span>Archived</span> : null}
-        {notice === null ? null : (
-          <span
-            className="truncate"
-            data-testid={`comm-graph-node-notice-${data.agentId}`}
-          >
-            {notice}
-          </span>
-        )}
-      </div>
+      {data.archived ? (
+        <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+          <span>Archived</span>
+        </div>
+      ) : null}
       <Handle
         type="source"
         position={Position.Bottom}

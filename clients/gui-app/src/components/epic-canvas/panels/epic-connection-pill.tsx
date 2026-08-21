@@ -12,12 +12,17 @@ import {
   useEpicChatBackupStatus,
   type EpicChatBackupStatus,
 } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import {
+  useCommGraphFeedHealth,
+  type CommGraphFeedHealth,
+} from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
 import { cn } from "@/lib/utils";
 
 /**
  * Small inline status pill that the active Epic header renders. It selects the
- * highest-severity signal across artifact/Yjs durability and chat publication,
- * keeping chat backup on the dot + tooltip instead of a permanent sidebar row.
+ * highest-severity signal across artifact/Yjs durability, chat publication and
+ * the communication-graph feed, keeping chat backup and the feed on the dot +
+ * tooltip instead of a permanent sidebar row or a caption on every graph node.
  *
  * It is deliberately NOT a connection indicator. It used to be one - it read
  * the renderer↔host stream status alone - and that is why it read "All changes
@@ -49,15 +54,18 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // `hostDirtyState` off `unknown`) and the label alone cannot end an outage.
   const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
+  const commGraphFeedHealth = useCommGraphFeedHealth(props.epicId);
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
   const selected = highestSeverityIndicator(
     indicatorFor(state, linkDownTooLong),
     chatBackupStatus,
+    commGraphFeedHealth,
   );
   const rawSelected = highestSeverityIndicator(
     indicatorFor(derived, linkDownTooLong),
     chatBackupStatus,
+    commGraphFeedHealth,
   );
   const { indicator } = selected;
 
@@ -182,7 +190,7 @@ interface PillIndicator {
 }
 
 interface SelectedIndicator {
-  readonly source: "artifact" | "chat-backup";
+  readonly source: "artifact" | "chat-backup" | "comm-graph";
   readonly indicator: PillIndicator;
 }
 
@@ -282,18 +290,40 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
 function highestSeverityIndicator(
   artifactIndicator: PillIndicator,
   chatBackupStatus: EpicChatBackupStatus | null,
+  commGraphFeedHealth: CommGraphFeedHealth | null,
 ): SelectedIndicator {
-  if (chatBackupStatus === null) {
-    return { source: "artifact", indicator: artifactIndicator };
+  let selected: SelectedIndicator = {
+    source: "artifact",
+    indicator: artifactIndicator,
+  };
+  const secondary: SelectedIndicator[] = [];
+  if (chatBackupStatus !== null) {
+    secondary.push({
+      source: "chat-backup",
+      indicator: indicatorForChatBackup(chatBackupStatus),
+    });
   }
-  const chatIndicator = indicatorForChatBackup(chatBackupStatus);
-  // A tie stays with artifact/Yjs sync: those warnings can mean the newest
-  // bytes exist only in this renderer, while chat backup always starts from a
-  // durable local chat. Chat backup still wins over steady/activity sync.
-  return SEVERITY_RANK[chatIndicator.severity] >
-    SEVERITY_RANK[artifactIndicator.severity]
-    ? { source: "chat-backup", indicator: chatIndicator }
-    : { source: "artifact", indicator: artifactIndicator };
+  if (commGraphFeedHealth !== null) {
+    secondary.push({
+      source: "comm-graph",
+      indicator: indicatorForCommGraphFeed(commGraphFeedHealth),
+    });
+  }
+  // STRICTLY greater wins, so a tie stays with the earlier source. Artifact/Yjs
+  // sync comes first: those warnings can mean the newest bytes exist only in
+  // this renderer, while chat backup always starts from a durable local chat
+  // and the graph feed is read-only. Chat backup precedes the feed because it
+  // is about the user's own data surviving; the feed is about what the canvas
+  // can currently show. Both still win over steady/activity sync.
+  for (const candidate of secondary) {
+    if (
+      SEVERITY_RANK[candidate.indicator.severity] >
+      SEVERITY_RANK[selected.indicator.severity]
+    ) {
+      selected = candidate;
+    }
+  }
+  return selected;
 }
 
 function indicatorForChatBackup(status: EpicChatBackupStatus): PillIndicator {
@@ -307,6 +337,24 @@ function indicatorForChatBackup(status: EpicChatBackupStatus): PillIndicator {
     pulse: null,
     tooltip: status.tooltip,
     ariaLabel: status.ariaLabel,
+  };
+}
+
+/**
+ * Dot-only, like chat backup: the feed degrading is worth an amber light and a
+ * sentence on hover, not a permanent label in the status row - the canvas is
+ * still fully usable on the rows it already holds.
+ */
+function indicatorForCommGraphFeed(health: CommGraphFeedHealth): PillIndicator {
+  return {
+    severity: health.severity,
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: "bg-amber-500",
+    label: null,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: health.tooltip,
+    ariaLabel: health.ariaLabel,
   };
 }
 

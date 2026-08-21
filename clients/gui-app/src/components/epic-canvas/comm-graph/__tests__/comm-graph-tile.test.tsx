@@ -236,7 +236,7 @@ describe("CommGraphTile", () => {
     expect(archived.className).toContain("opacity-50");
   });
 
-  it("leaves a legacy chat's host unresolved instead of borrowing the active host", async () => {
+  it("keeps a legacy chat's host unresolved without captioning the node", async () => {
     await renderTile();
 
     await waitFor(() => {
@@ -246,21 +246,23 @@ describe("CommGraphTile", () => {
     });
     // Rendered, marked, and NOT attributed to the app's active host - which
     // would otherwise move the node (and reset that host's subscription,
-    // events and cursor) every time the user switched hosts elsewhere.
-    expect(
-      screen.getByTestId(`comm-graph-node-notice-${LEGACY_CHAT_ID}`)
-        .textContent,
-    ).toBe("Host unknown");
+    // events and cursor) every time the user switched hosts elsewhere. The
+    // fact is exposed only through `data-host-status` for tests/tooling; the
+    // node itself no longer captions it (that read now rolls up into the
+    // Epic header's feed-health dot instead).
     expect(
       screen
         .getByTestId(`comm-graph-node-${LEGACY_CHAT_ID}`)
         .getAttribute("data-host-status"),
     ).toBe("host-unknown");
+    expect(
+      screen.queryByTestId(`comm-graph-node-notice-${LEGACY_CHAT_ID}`),
+    ).toBeNull();
     // No third subscription: an unresolved host is not a host to dial.
     expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
   });
 
-  it("shows a no-edge-data affordance for a host that lacks the stream method", async () => {
+  it("marks agents on a host with no stream method via data-host-status, without captioning the node", async () => {
     await renderTile();
     await waitFor(() => {
       expect(openedByHost.has(HOST_B)).toBe(true);
@@ -273,16 +275,21 @@ describe("CommGraphTile", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId(`comm-graph-node-notice-${TUI_ID}`).textContent,
-      ).toBe("No edge data");
+        screen
+          .getByTestId(`comm-graph-node-${TUI_ID}`)
+          .getAttribute("data-host-status"),
+      ).toBe("unsupported");
     });
+    expect(screen.queryByTestId(`comm-graph-node-notice-${TUI_ID}`)).toBeNull();
     // The other host is unaffected - degrade is per subscription.
     expect(
-      screen.queryByTestId(`comm-graph-node-notice-${CHAT_ID}`),
-    ).toBeNull();
+      screen
+        .getByTestId(`comm-graph-node-${CHAT_ID}`)
+        .getAttribute("data-host-status"),
+    ).not.toBe("unsupported");
   });
 
-  it("badges agents on an unreachable host", async () => {
+  it("marks agents on an unreachable host via data-host-status, without captioning the node", async () => {
     await renderTile();
     await waitFor(() => {
       expect(openedByHost.has(HOST_B)).toBe(true);
@@ -294,13 +301,11 @@ describe("CommGraphTile", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId(`comm-graph-node-notice-${TUI_ID}`).textContent,
-      ).toBe("Host unreachable");
+        screen
+          .getByTestId(`comm-graph-node-${TUI_ID}`)
+          .getAttribute("data-host-status"),
+      ).toBe("unreachable");
     });
-    expect(
-      screen
-        .getByTestId(`comm-graph-node-${TUI_ID}`)
-        .getAttribute("data-host-status"),
-    ).toBe("unreachable");
+    expect(screen.queryByTestId(`comm-graph-node-notice-${TUI_ID}`)).toBeNull();
   });
 });
