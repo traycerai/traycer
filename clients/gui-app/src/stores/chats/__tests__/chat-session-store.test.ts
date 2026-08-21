@@ -2298,6 +2298,107 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("staged worktree no longer exists");
   });
 
+  // R13 `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
+  // on its pendings while the frame carried the real context - so a
+  // Team-billed first message that stranded would report it was going to bill
+  // personal. A drift statement lying about the very thing it warns about.
+  it("keeps a seeded send's real billing context", () => {
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-7" },
+    });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    // Occupy the restoration slot so the seeded send is STATED, not restored.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store.getState().sendSeededUserMessage({
+      messageId: "seeded-1",
+      clientActionId: "seeded-action-1",
+      content: SECOND_CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+    });
+
+    // Billing moves; the seeded send's own context must be what is reported.
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    const notice = noticeFor(harness, "seeded-action-1");
+    expect(notice.message).toContain("billing team team-7");
+  });
+
+  // R13 `-BmQJ`: delivery is dispatched per send and dies with the action, so
+  // a resend takes whatever the submit gesture implies then - a message queued
+  // to land after a safe point can come back and interrupt instead.
+  it("states a non-default delivery the send was queued with", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "after_safe_point",
+      );
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("reached a safe point");
+  });
+
+  it("says nothing about a default delivery", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+
+    // Naming `auto` every time would bury the case that matters.
+    expect(noticeFor(harness, second.clientActionId).message).not.toContain(
+      "queued to be delivered",
+    );
+  });
+
   // R12 `-A8bF`: billing context is stamped at dispatch and dies with the
   // action, so a resend bills whatever the picker holds now. Unlike a model
   // change it leaves no trace in the conversation.

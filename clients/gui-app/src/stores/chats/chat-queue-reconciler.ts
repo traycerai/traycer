@@ -1,5 +1,6 @@
 import type {
   ChatErrorNotice,
+  ChatQueueDeliveryPolicy,
   ChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
@@ -162,6 +163,7 @@ interface UnrecoverableSend {
   readonly sentSettings: ChatRunSettings | null;
   readonly currentSettings: ChatRunSettings | null;
   readonly sentAccountContext: AccountContext | null;
+  readonly sentDeliveryPolicy: ChatQueueDeliveryPolicy | null;
   readonly currentAccountContext: AccountContext | null;
 }
 
@@ -206,6 +208,7 @@ function unrecoverableSendNotice(send: UnrecoverableSend): ChatErrorNotice {
         ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
         : "",
       worktreeClause(worktreeIntent),
+      deliveryClause(send.sentDeliveryPolicy),
       settingsDriftClause(
         send.sentSettings,
         send.currentSettings,
@@ -264,6 +267,25 @@ interface CountedLossClause {
  * actionable: re-picking blind is how the resubmit silently runs somewhere
  * else, which is exactly what the restore path exists to prevent.
  */
+/**
+ * What the send was queued to WAIT for, when it was not the default.
+ *
+ * Delivery is dispatched per send and dies with the action, so a resend takes
+ * whatever the composer's submit gesture implies now: a message deliberately
+ * queued to land after the running turn's safe point can come back and
+ * interrupt instead. Stated only when non-default, on the same rule the
+ * settings drift follows - naming `auto` every time would bury the case that
+ * matters.
+ */
+function deliveryClause(policy: ChatQueueDeliveryPolicy | null): string {
+  if (policy === null || policy === "auto") return "";
+  const described =
+    policy === "after_safe_point"
+      ? "after the running turn reached a safe point"
+      : "after the running turn finished";
+  return ` It was queued to be delivered ${described}; a resend goes by whatever you choose then.`;
+}
+
 function worktreeClause(intent: WorktreeIntent | null): string {
   if (intent === null) return "";
   // `WorktreeIntent` permits one entry per workspace folder, so a multi-repo
@@ -578,6 +600,7 @@ export function reconcileSnapshotChange(
               sentSettings: pending.settings,
               currentSettings: input.currentSettings,
               sentAccountContext: pending.accountContext,
+              sentDeliveryPolicy: pending.deliveryPolicy,
               currentAccountContext: input.currentAccountContext,
             }),
           ],
@@ -757,6 +780,7 @@ export function reconcileTurnSettled(
           sentSettings: message.settings,
           currentSettings: input.currentSettings,
           sentAccountContext: message.accountContext,
+          sentDeliveryPolicy: message.deliveryPolicy,
           currentAccountContext: input.currentAccountContext,
         }),
       ),
@@ -881,6 +905,7 @@ function pendingUserMessageFromPendingAction(
     sender: action.sender,
     settings: action.settings,
     accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
     timestamp: action.createdAt,
     restoreWorktreeIntent: action.restoreWorktreeIntent,
   };

@@ -733,6 +733,7 @@ describe("canModifyChatMessages", () => {
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
     timestamp: 0,
     restoreWorktreeIntent: null,
   };

@@ -60,6 +60,7 @@ function createPendingAction(
     settings: isSendOrEdit ? SETTINGS : null,
     restoreWorktreeIntent: null,
     accountContext: null,
+    deliveryPolicy: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -91,6 +92,7 @@ function createPendingUserMessage(
     sender: SENDER,
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
     timestamp: 1000,
     restoreWorktreeIntent: null,
   };
@@ -191,6 +193,7 @@ describe("chat-queue-reconciler", () => {
         settings: SETTINGS,
         restoreWorktreeIntent: null,
         accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -202,6 +205,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         accountContext: { type: "PERSONAL" },
+        deliveryPolicy: null,
         timestamp: 1000,
         restoreWorktreeIntent: null,
       };
@@ -251,6 +255,7 @@ describe("chat-queue-reconciler", () => {
         settings: SETTINGS,
         restoreWorktreeIntent: null,
         accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -270,6 +275,7 @@ describe("chat-queue-reconciler", () => {
             sender: SENDER,
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" },
+            deliveryPolicy: null,
             timestamp: 1000,
             restoreWorktreeIntent: null,
           },
@@ -514,6 +520,7 @@ describe("chat-queue-reconciler", () => {
         settings: SETTINGS,
         restoreWorktreeIntent: null,
         accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -539,6 +546,7 @@ describe("chat-queue-reconciler", () => {
             sender: SENDER,
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" },
+            deliveryPolicy: null,
             timestamp: 1000,
             restoreWorktreeIntent: null,
           },
@@ -607,6 +615,7 @@ describe("chat-queue-reconciler", () => {
         settings: SETTINGS,
         restoreWorktreeIntent: null,
         accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -978,6 +987,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         accountContext: { type: "PERSONAL" },
+        deliveryPolicy: null,
         timestamp: 1000,
         restoreWorktreeIntent: null,
       };

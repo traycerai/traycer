@@ -150,6 +150,13 @@ export interface PendingUserMessage {
    */
   readonly accountContext: AccountContext;
   /**
+   * The delivery the send was dispatched with. Retained for the same reason
+   * `settings` and `accountContext` are: it dies with the action, and a resend
+   * takes whatever the composer's submit gesture implies now - so a message
+   * queued to land after a safe point can come back and interrupt instead.
+   */
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
+  /**
    * The staged worktree choice this send consumed at dispatch, carried here so
    * it OUTLIVES the accepted ack. `acceptedActions` deliberately keeps only
    * what action bookkeeping needs, so once the ack lands the pending action -
@@ -175,6 +182,8 @@ export interface PendingChatAction {
   readonly settings: ChatRunSettings | null;
   /** See {@link PendingUserMessage.accountContext}. */
   readonly accountContext: AccountContext | null;
+  /** See {@link PendingUserMessage.deliveryPolicy}. */
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
   /**
    * Workspace selection consumed when a send goes on the wire. A rejected
    * send restores it to the owner's staging slot together with the composer
@@ -2437,6 +2446,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings,
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
+            deliveryPolicy: frame.deliveryPolicy,
             createdAt: Date.now(),
           },
           // Echo the user message optimistically so it paints INSTANTLY on send -
@@ -2458,6 +2468,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 settings,
                 timestamp: Date.now(),
                 accountContext: frame.accountContext,
+                deliveryPolicy: frame.deliveryPolicy,
                 restoreWorktreeIntent: worktreeIntent,
               }
             : null,
@@ -2548,7 +2559,12 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
-            accountContext: null,
+            // The DISPATCHED context, not a default. A Team-billed first
+            // message that strands would otherwise report that it was going
+            // to bill personal - a drift statement lying about the very thing
+            // it exists to warn about.
+            accountContext: frame.accountContext,
+            deliveryPolicy: frame.deliveryPolicy,
             createdAt: Date.now(),
           },
           pendingUserMessage: {
@@ -2557,7 +2573,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             content: input.content,
             sender: input.sender,
             settings: input.settings,
-            accountContext: { type: "PERSONAL" },
+            accountContext: frame.accountContext,
+            deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
             // The landing handoff's worktree rides `epic.create`, not this
             // send, so there is no staged slot for it to give back.
@@ -2643,6 +2660,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
             accountContext: null,
+            deliveryPolicy: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -2710,6 +2728,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: null,
             restoreWorktreeIntent: null,
             accountContext: null,
+            deliveryPolicy: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -3326,6 +3345,7 @@ function basicPending(
     settings: null,
     restoreWorktreeIntent: null,
     accountContext: null,
+    deliveryPolicy: null,
     createdAt: Date.now(),
   };
 }
