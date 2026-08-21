@@ -34,6 +34,15 @@ vi.mock("@/stores/auth/auth-store", () => ({
     selector({ status: "signed-in" }),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  // The panel encodes the QR against the shell's own platform origin, taken
+  // from `signInUrl`. Without one the tile draws a placeholder instead of a
+  // symbol - deliberately, so a build that cannot name its deployment never
+  // puts a live code in front of a camera - which is not the state these
+  // tests are about.
+  useRunnerHost: () => ({ signInUrl: "https://platform.test/sign-in" }),
+}));
+
 import { LinkPhonePanel } from "../link-phone-panel";
 
 const REMINT_SECONDS = 50;

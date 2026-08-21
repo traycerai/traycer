@@ -35,6 +35,15 @@ vi.mock("@/hooks/auth/use-respond-link-login-mutation", () => ({
   useRespondLinkLoginMutation: () => ({ isPending: false, mutate: vi.fn() }),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  // The panel encodes the QR against the shell's own platform origin, taken
+  // from `signInUrl`. Without one the tile draws a placeholder instead of a
+  // symbol - deliberately, so a build that cannot name its deployment never
+  // puts a live code in front of a camera - which is not the state these
+  // tests are about.
+  useRunnerHost: () => ({ signInUrl: "https://platform.test/sign-in" }),
+}));
+
 import { LinkPhonePanel } from "../link-phone-panel";
 
 describe("LinkPhonePanel against a real query cache", () => {
