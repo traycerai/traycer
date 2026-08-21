@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { QrCode, Smartphone } from "lucide-react";
 import type { MintLinkLoginCodeResponse } from "@traycer/protocol/auth/link-login";
+import { claimantDeviceLabel } from "@traycer-clients/shared/auth/link-login";
 import { LinkPhoneQrTile } from "@/components/settings/panels/link-phone-qr-tile";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -53,37 +54,6 @@ function useRotationCountdown(props: {
   return { secondsLeft, remainingFraction: secondsLeft / windowSeconds };
 }
 
-/**
- * Best-effort device line for the confirmation prompt. Derived from the
- * claimant's User-Agent — descriptive, not authenticated; the copy labels it
- * approximate and the real trust anchor is "you minted this code and someone
- * just scanned it".
- */
-function claimantDeviceLabel(claim: LiveClaim): string {
-  const ua = claim.userAgent ?? "";
-  // A self-reported marketing name ("iPhone 16 Pro") is not a UA string —
-  // use it verbatim; UA-shaped values fall back to family buckets.
-  if (
-    ua.length > 0 &&
-    ua.length <= 40 &&
-    !ua.includes("Mozilla/") &&
-    !ua.includes("CFNetwork") &&
-    !ua.includes("(")
-  ) {
-    return ua;
-  }
-  if (ua.includes("iPhone")) {
-    return "an iPhone";
-  }
-  if (ua.includes("iPad")) {
-    return "an iPad";
-  }
-  if (ua.includes("Android")) {
-    return "an Android device";
-  }
-  return "a device";
-}
-
 /** The verdict whose respond round-trip is in flight, if any. */
 type PendingVerdict = "approve" | "reject" | null;
 
@@ -121,7 +91,7 @@ function ConfirmClaimCard(props: {
       <QrCode aria-hidden="true" className="text-muted-foreground" />
       <div className="flex flex-col items-center gap-1 text-center">
         <p className="text-ui-sm font-medium text-foreground">
-          Approve sign-in from {claimantDeviceLabel(props.claim)}?
+          Approve sign-in from {claimantDeviceLabel(props.claim.userAgent)}?
         </p>
         <p
           className="text-ui-xs text-muted-foreground"

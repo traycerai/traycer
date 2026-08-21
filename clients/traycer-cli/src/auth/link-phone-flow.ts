@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import QRCode from "qrcode";
 import {
   buildLinkLoginQrPayload,
+  claimantDeviceLabel,
   linkLoginStatusViaHttp,
   mintLinkLoginCodeViaHttp,
   respondLinkLoginViaHttp,
@@ -90,21 +91,6 @@ function startExpiryCountdown(expiresAtEpochSeconds: number): () => void {
     // Blank the line so the next block starts clean.
     process.stderr.write(`\r${" ".repeat(40)}\r`);
   };
-}
-
-/** Best-effort device label from the claimant's User-Agent. Descriptive only. */
-function claimantDeviceLabel(userAgent: string | null): string {
-  const value = userAgent ?? "";
-  if (value.includes("iPhone")) {
-    return "an iPhone";
-  }
-  if (value.includes("iPad")) {
-    return "an iPad";
-  }
-  if (value.includes("Android")) {
-    return "an Android device";
-  }
-  return "a device";
 }
 
 /**
