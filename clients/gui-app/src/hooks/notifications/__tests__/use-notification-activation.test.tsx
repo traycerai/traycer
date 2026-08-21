@@ -691,6 +691,33 @@ describe("useNotificationActivation", () => {
     ).toEqual({ kind: "message", messageId: "assistant-message-1" });
   });
 
+  it("parks an explicit end jump for a final Done notification", () => {
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-final-done",
+          chatId: "chat-final-done",
+          scrollToEnd: true,
+        },
+        originHostId: "stub-host",
+        receivedAt: 906,
+        feedId: "host:final-done",
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-final-done")
+      ]?.target,
+    ).toEqual({ kind: "end" });
+  });
+
   it("routes TUI agent notifications to the exact open terminal-agent tile", () => {
     const store = useEpicCanvasStore.getState();
     const notifiedTabId = store.openEpicTab("epic-tui", "TUI task");
@@ -1081,5 +1108,45 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       focusTileInstanceId: "host-b-shared-chat",
     });
     expect(onResult).toHaveBeenCalledWith("success");
+  });
+
+  it("routes a failure to the chat host when the feed row was written by another host", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-origin", "Retained chat");
+    store.openTileInTab(tabId, {
+      id: "chat-shared",
+      instanceId: "host-a-shared-chat",
+      type: "chat",
+      name: "Host A chat",
+      hostId: hostA.hostId,
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-origin",
+          chatId: "chat-shared",
+          hostId: hostA.hostId,
+          messageId: "provider-error-message",
+        },
+        receivedAt: 106,
+        feedId: "cloud:failure-written-by-host-b",
+        originHostId: hostB.hostId,
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(hostA.hostId, "chat-shared")
+      ]?.target,
+    ).toEqual({
+      kind: "message",
+      messageId: "provider-error-message",
+    });
   });
 });

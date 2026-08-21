@@ -1565,14 +1565,24 @@ function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   switch (known.kind) {
-    case "chat":
+    case "chat": {
+      // A final, unqualified Done describes the current end-state, so it
+      // always opens at the end of the transcript. Failures and qualified
+      // Done rows retain their occurrence anchor.
+      const includeTranscriptAnchor =
+        known.outcome === "errored" || known.backgroundWorkRunning === true;
+      const scrollToEnd =
+        known.outcome === "completed" && known.backgroundWorkRunning !== true;
       return {
         kind: "chat",
         epicId: known.epicId,
         chatId: known.chatId ?? undefined,
-        messageId: known.messageId,
-        eventId: known.eventId,
+        ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
+        messageId: includeTranscriptAnchor ? known.messageId : undefined,
+        eventId: includeTranscriptAnchor ? known.eventId : undefined,
+        ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
       };
+    }
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "workspace_operation_failed":

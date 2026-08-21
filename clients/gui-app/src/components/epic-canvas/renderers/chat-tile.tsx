@@ -849,6 +849,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       }
       backgroundScrollRequestIdRef.current += 1;
       setBackgroundScrollRequest({
+        kind: "message",
         messageId,
         blockId,
         requestId: backgroundScrollRequestIdRef.current,
@@ -872,8 +873,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const scrollToMessage = useCallback((messageId: string): void => {
     backgroundScrollRequestIdRef.current += 1;
     setBackgroundScrollRequest({
+      kind: "message",
       messageId,
       blockId: null,
+      requestId: backgroundScrollRequestIdRef.current,
+    });
+  }, []);
+  const scrollToTranscriptEnd = useCallback((): void => {
+    backgroundScrollRequestIdRef.current += 1;
+    setBackgroundScrollRequest({
+      kind: "end",
       requestId: backgroundScrollRequestIdRef.current,
     });
   }, []);
@@ -899,6 +908,11 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (transcriptJump === undefined) return;
     if (!view.snapshotLoaded) return;
     const target = transcriptJump.target;
+    if (target.kind === "end") {
+      scrollToTranscriptEnd();
+      consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+      return;
+    }
     const resolveTargetMessageId = (): string | null => {
       if (target.kind === "message") {
         return messageIdForTranscriptTarget(view.messages, target.messageId);
@@ -939,6 +953,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     props.node.id,
     scrollToBlock,
     scrollToMessage,
+    scrollToTranscriptEnd,
     transcriptJump,
     view.lower.backgroundItems,
     view.messages,

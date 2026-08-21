@@ -18,6 +18,8 @@
 import { create } from "zustand";
 
 export type ChatTranscriptJumpTarget =
+  /** The current end of the transcript. */
+  | { readonly kind: "end" }
   /** A tool / sub-agent card inside the transcript. */
   | { readonly kind: "block"; readonly blockId: string }
   /** A delivered message row. */

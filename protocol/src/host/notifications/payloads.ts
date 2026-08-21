@@ -104,6 +104,7 @@ export const hostNotificationChatStoppedPayloadSchema = z
     kind: z.literal("chat"),
     epicId: idSchema,
     chatId: idSchema.nullable(),
+    hostId: idSchema.optional(),
     agentName: z.string(),
     taskTitle: z.string(),
     outcome: hostNotificationOutcomeSchema,

@@ -2986,6 +2986,25 @@ describe("<ChatTile />", () => {
     });
   });
 
+  it("consumes an end jump without waiting for a transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, { kind: "end" });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+  });
+
   it("resolves a durable assistant message id to its projected transcript row", async () => {
     renderChatTile();
     await waitForChatTileLoaded();

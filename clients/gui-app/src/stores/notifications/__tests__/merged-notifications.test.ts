@@ -147,6 +147,7 @@ describe("merged notifications feed", () => {
         kind: "chat",
         epicId: "epic-1",
         chatId: "chat-1",
+        hostId: "chat-host",
         agentName: "Agent",
         taskTitle: "Task",
         outcome: "completed",
@@ -160,6 +161,7 @@ describe("merged notifications feed", () => {
       kind: "chat",
       epicId: "epic-1",
       chatId: "chat-1",
+      hostId: "chat-host",
       messageId: "assistant-message-1",
       eventId: undefined,
     });
@@ -182,8 +184,27 @@ describe("merged notifications feed", () => {
       kind: "chat",
       epicId: "epic-1",
       chatId: "chat-1",
+      hostId: "chat-host",
       messageId: undefined,
       eventId: "send-failed-event-1",
+    });
+
+    expect(
+      rowFromHostEntry({
+        ...base,
+        payload: {
+          ...base.payload,
+          backgroundWorkRunning: false,
+        },
+      }).payload,
+    ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "chat-host",
+      messageId: undefined,
+      eventId: undefined,
+      scrollToEnd: true,
     });
   });
 

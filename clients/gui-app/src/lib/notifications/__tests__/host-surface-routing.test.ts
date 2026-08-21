@@ -170,6 +170,42 @@ describe("host surface notification routing", () => {
     });
   });
 
+  it("turns only an unqualified completed chat payload into an end jump", () => {
+    expect(
+      parseNotificationPayload({
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        outcome: "completed",
+        backgroundWorkRunning: false,
+        messageId: "qualified-done-anchor",
+      }),
+    ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: undefined,
+      eventId: undefined,
+      scrollToEnd: true,
+    });
+    expect(
+      parseNotificationPayload({
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        outcome: "completed",
+        backgroundWorkRunning: true,
+        messageId: "qualified-done-anchor",
+      }),
+    ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: "qualified-done-anchor",
+      eventId: undefined,
+    });
+  });
+
   it("isolates same-id transcript jumps by origin host", () => {
     const store = useChatTranscriptJumpStore.getState();
     store.requestJump("host-a", "chat-1", {

@@ -145,12 +145,18 @@ interface ChatMessagesProps {
   composerOverlayHeight: number;
 }
 
-export interface ChatMessageScrollRequest {
-  readonly messageId: string;
-  /** Card to open within the target row, or `null` for a row-level jump. */
-  readonly blockId: string | null;
-  readonly requestId: number;
-}
+export type ChatMessageScrollRequest =
+  | {
+      readonly kind: "message";
+      readonly messageId: string;
+      /** Card to open within the target row, or `null` for a row-level jump. */
+      readonly blockId: string | null;
+      readonly requestId: number;
+    }
+  | {
+      readonly kind: "end";
+      readonly requestId: number;
+    };
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
@@ -2371,6 +2377,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
+    if (request.kind === "end") {
+      scrollToEnd(true);
+      scrollRequestRef.current = null;
+      return;
+    }
     const activityGroupId =
       request.blockId === null
         ? null
@@ -2402,7 +2413,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // a cross-tile jump is a real navigation the reader triggered elsewhere.
     navigateToMessage(request.messageId, true, true);
     scrollRequestRef.current = null;
-  }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
+  }, [
+    activityGroupOpenStore,
+    navigateToMessage,
+    scrollRequest?.requestId,
+    scrollToEnd,
+  ]);
 
   // --- Accessibility (decision #24): polite turn-completion announcement ----
 
