@@ -12,9 +12,11 @@ import {
   useEpicChatBackupStatus,
   type EpicChatBackupStatus,
 } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { cn } from "@/lib/utils";
-import { useTabPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
 import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
  * Small inline status pill that the active Epic header renders. It selects the
@@ -52,9 +54,10 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // `hostDirtyState` off `unknown`) and the label alone cannot end an outage.
   const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
-  const terminalAuthority = useTabPlainTerminalAuthority({
-    kind: "epic",
-    epicId: props.epicId,
+  const canvasHostId = useCanvasHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const terminalAuthority = useHostPlainTerminalAuthority({
+    hostId: canvasHostId,
+    scope: { kind: "epic", epicId: props.epicId },
   });
   const terminalCatalogUnavailable = useDelayedTerminalFleetWarning(
     terminalAuthority.coverage === "partial-serving-host",

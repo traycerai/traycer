@@ -39,8 +39,11 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
   useEpicChatBackupStatus: () => mocks.chatBackupStatus,
 }));
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => "host-a",
+}));
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
-  useTabPlainTerminalAuthority: () => ({
+  useHostPlainTerminalAuthority: () => ({
     hostId: "host-a",
     coverage: mocks.terminalCoverage,
   }),
