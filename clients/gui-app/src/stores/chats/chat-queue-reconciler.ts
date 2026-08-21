@@ -1,6 +1,7 @@
 import type {
   ChatErrorNotice,
   ChatQueueState,
+  ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -86,6 +87,8 @@ export type ReconcileSnapshotInput = {
    * {@link reconcileSnapshotChange}.
    */
   readonly connectionEpoch: number;
+  /** The chat's settings as of this snapshot - see {@link settingsDriftClause}. */
+  readonly currentSettings: ChatRunSettings | null;
   readonly nowMs: number;
 };
 
@@ -147,12 +150,18 @@ export type ReconcileSnapshotPatch = {
  * sourced quotes - because each was fixed as itself; driving the clauses off
  * one classification is what makes a fourth a test failure instead.
  */
-function unrecoverableSendNotice(
-  clientActionId: string,
-  content: JsonContent,
-  circumstance: string,
-  worktreeIntent: WorktreeIntent | null,
-): ChatErrorNotice {
+interface UnrecoverableSend {
+  readonly clientActionId: string;
+  readonly content: JsonContent;
+  /** How this send died, phrased to open the statement. */
+  readonly circumstance: string;
+  readonly worktreeIntent: WorktreeIntent | null;
+  readonly sentSettings: ChatRunSettings | null;
+  readonly currentSettings: ChatRunSettings | null;
+}
+
+function unrecoverableSendNotice(send: UnrecoverableSend): ChatErrorNotice {
+  const { clientActionId, content, circumstance, worktreeIntent } = send;
   // The quote is VERBATIM; only the branch decision is trimmed. A message of
   // pure whitespace has nothing to hand back, but a code block whose first
   // line is indented very much does - and trimming the quote itself is what
@@ -192,6 +201,7 @@ function unrecoverableSendNotice(
         ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
         : "",
       worktreeClause(worktreeIntent),
+      settingsDriftClause(send.sentSettings, send.currentSettings),
     ].join(""),
     severity: "warning",
     clientActionId,
@@ -267,17 +277,98 @@ function worktreeClause(intent: WorktreeIntent | null): string {
 function worktreeEntryLabel(
   entry: WorktreeIntent["entries"][number],
 ): string | null {
-  if (entry.kind === "worktree") {
-    return entry.branch.name.length > 0 ? `branch ${entry.branch.name}` : null;
+  switch (entry.kind) {
+    case "worktree":
+      return worktreeBranchLabel(entry.branch, entry.scripts !== null);
+    case "import":
+      return entry.worktreePath.length > 0
+        ? `the existing worktree ${entry.worktreePath}`
+        : null;
+    case "local":
+      return entry.workspacePath.length > 0
+        ? `the workspace checkout ${entry.workspacePath}`
+        : null;
+    default:
+      // A new entry kind must be NAMED here, not absorbed by an else-branch
+      // that labels it "the workspace checkout" and quietly misdescribes what
+      // the send was staged to do. Same fail-closed rule the content
+      // classification follows, enforced at compile time.
+      return assertNeverEntry(entry);
   }
-  if (entry.kind === "import") {
-    return entry.worktreePath.length > 0
-      ? `the existing worktree ${entry.worktreePath}`
-      : null;
-  }
-  return entry.workspacePath.length > 0
-    ? `the workspace checkout ${entry.workspacePath}`
-    : null;
+}
+
+/**
+ * What the send was going to RUN under, when that differs from what a resend
+ * would use now.
+ *
+ * The dead send's `settings` die with it, so resending picks up the chat's
+ * current pick - a different model, profile or permission mode changes what
+ * the agent does, silently. Only the DIFFERING fields are named: stating the
+ * full tuple every time is noise that buries the one field that moved, and a
+ * send whose settings still match needs no clause at all.
+ */
+function settingsDriftClause(
+  sent: ChatRunSettings | null,
+  current: ChatRunSettings | null,
+): string {
+  if (sent === null || current === null) return "";
+  const drifted = {
+    harness: sent.harnessId === current.harnessId ? null : sent.harnessId,
+    model: sent.model === current.model ? null : sent.model,
+    "permission mode":
+      sent.permissionMode === current.permissionMode
+        ? null
+        : sent.permissionMode,
+    "reasoning effort":
+      sent.reasoningEffort === current.reasoningEffort
+        ? null
+        : sent.reasoningEffort,
+    "service tier":
+      sent.serviceTier === current.serviceTier ? null : sent.serviceTier,
+    "agent mode": sent.agentMode === current.agentMode ? null : sent.agentMode,
+    profile:
+      (sent.profileId ?? null) === (current.profileId ?? null)
+        ? null
+        : sent.profileId,
+  } satisfies Record<string, string | null>;
+  const named = Object.entries(drifted).flatMap(([label, value]) =>
+    value === null ? [] : [`${label} ${value}`],
+  );
+  if (named.length === 0) return "";
+  return ` It was going to run with ${named.join(", ")}; the chat uses different settings now, so a resend will not match unless you set them back.`;
+}
+
+type StagedBranchSelection = Extract<
+  WorktreeIntent["entries"][number],
+  { kind: "worktree" }
+>["branch"];
+
+/**
+ * A `worktree` entry is more than its branch name - a fork source, carried
+ * uncommitted changes, setup/teardown overrides. The label cannot carry all of
+ * that legibly, and the obligation is HONESTY rather than completeness: name
+ * what is compactly nameable, and say plainly when the rest has to be
+ * re-configured. Naming only the branch invites a re-pick that behaves
+ * differently from what the send was actually staged to do.
+ */
+function worktreeBranchLabel(
+  branch: StagedBranchSelection,
+  hasScripts: boolean,
+): string | null {
+  if (branch.name.length === 0) return null;
+  const carried = branch.type === "new" && branch.carryUncommittedChanges;
+  const base =
+    branch.type === "new"
+      ? `a new branch ${branch.name} from ${branch.source}${carried ? " carrying your uncommitted changes" : ""}`
+      : `branch ${branch.name}`;
+  return hasScripts
+    ? `${base} (its setup/teardown overrides cannot be restated - re-configure before resending)`
+    : base;
+}
+
+function assertNeverEntry(entry: never): null {
+  void entry;
+  return null;
 }
 
 function countedClause(clause: CountedLossClause): string {
@@ -428,12 +519,14 @@ export function reconcileSnapshotChange(
           ),
           appendedErrorNotices: [
             ...next.appendedErrorNotices,
-            unrecoverableSendNotice(
-              pending.clientActionId,
-              pending.restoreContent,
-              "A message was not confirmed after reconnect",
-              pending.restoreWorktreeIntent,
-            ),
+            unrecoverableSendNotice({
+              clientActionId: pending.clientActionId,
+              content: pending.restoreContent,
+              circumstance: "A message was not confirmed after reconnect",
+              worktreeIntent: pending.restoreWorktreeIntent,
+              sentSettings: pending.settings,
+              currentSettings: input.currentSettings,
+            }),
           ],
         };
       }
@@ -470,6 +563,8 @@ export type ReconcileTurnSettledInput = {
   readonly messages: ReadonlyArray<Message>;
   readonly queue: ChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
+  /** See {@link ReconcileSnapshotInput.currentSettings}. */
+  readonly currentSettings: ChatRunSettings | null;
 };
 
 export type ReconcileTurnSettledPatch = {
@@ -599,12 +694,14 @@ export function reconcileTurnSettled(
           message.clientActionId !== slotClaimantActionId,
       )
       .map((message) =>
-        unrecoverableSendNotice(
-          message.clientActionId,
-          message.content,
-          "A message was not recorded before the turn stopped",
-          message.restoreWorktreeIntent,
-        ),
+        unrecoverableSendNotice({
+          clientActionId: message.clientActionId,
+          content: message.content,
+          circumstance: "A message was not recorded before the turn stopped",
+          worktreeIntent: message.restoreWorktreeIntent,
+          sentSettings: message.settings,
+          currentSettings: input.currentSettings,
+        }),
       ),
   };
 }

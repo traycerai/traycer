@@ -121,21 +121,55 @@ function visit(
   node: JsonContent,
   counts: Map<ContentRecoveryLoss, number>,
 ): void {
-  const loss = lossForNodeType(node.type);
-  if (loss !== null) {
-    counts.set(loss, (counts.get(loss) ?? 0) + 1);
-  }
-  for (const mark of node.marks ?? []) {
-    const markLoss = lossForMark(mark, node.text ?? "");
-    if (markLoss !== null) {
-      counts.set(markLoss, (counts.get(markLoss) ?? 0) + 1);
+  visitSiblings([node], counts);
+}
+
+/**
+ * Walk one parent's children together, so a link split across several `text`
+ * nodes counts ONCE.
+ *
+ * Tiptap breaks a marked run wherever another mark, a `hardBreak` or an inline
+ * node interrupts it, so a single link across a bold word arrives as three
+ * text nodes carrying the same `link` mark - and counting per node reported
+ * "Its 3 links". The rule: CONSECUTIVE siblings carrying the same `href` are
+ * one link. A non-adjacent occurrence counts again even with an identical
+ * href, because a second link somewhere else is a second thing to re-add.
+ */
+function visitSiblings(
+  nodes: ReadonlyArray<JsonContent>,
+  counts: Map<ContentRecoveryLoss, number>,
+): void {
+  let previousLinkHref: string | null = null;
+  for (const node of nodes) {
+    const loss = lossForNodeType(node.type);
+    if (loss !== null) {
+      counts.set(loss, (counts.get(loss) ?? 0) + 1);
     }
+    const linkHref = lostLinkHref(node);
+    if (linkHref !== null && linkHref !== previousLinkHref) {
+      counts.set("link", (counts.get("link") ?? 0) + 1);
+    }
+    previousLinkHref = linkHref;
+    for (const mark of node.marks ?? []) {
+      if (mark.type === "link") continue;
+      if (TEXT_COMPLETE_MARK_TYPES.has(mark.type)) continue;
+      counts.set("unknown", (counts.get("unknown") ?? 0) + 1);
+    }
+    // Recurse regardless: a sourced quote can wrap a mention, and both losses
+    // are real. Only the node's OWN kind decides its own classification.
+    visitSiblings(node.content ?? [], counts);
   }
-  // Recurse regardless: a sourced quote can wrap a mention, and both losses
-  // are real. Only the node's OWN kind decides its own classification.
-  for (const child of node.content ?? []) {
-    visit(child, counts);
+}
+
+/** The `href` this node loses, or `null` when it loses none. */
+function lostLinkHref(node: JsonContent): string | null {
+  for (const mark of node.marks ?? []) {
+    if (mark.type !== "link") continue;
+    const href = mark.attrs?.href;
+    if (typeof href !== "string" || href.length === 0) return null;
+    return href === (node.text ?? "") ? null : href;
   }
+  return null;
 }
 
 function lossForNodeType(type: string | undefined): ContentRecoveryLoss | null {
@@ -143,17 +177,6 @@ function lossForNodeType(type: string | undefined): ContentRecoveryLoss | null {
   if (TEXT_COMPLETE_NODE_TYPES.has(type)) return null;
   if (TRANSPARENT_NODE_TYPES.has(type)) return null;
   return LOSSY_NODE_TYPES.get(type) ?? "unknown";
-}
-
-function lossForMark(
-  mark: { readonly type: string; readonly attrs?: Record<string, unknown> },
-  text: string,
-): ContentRecoveryLoss | null {
-  if (TEXT_COMPLETE_MARK_TYPES.has(mark.type)) return null;
-  if (mark.type !== "link") return "unknown";
-  const href = mark.attrs?.href;
-  if (typeof href !== "string" || href.length === 0) return null;
-  return href === text ? null : "link";
 }
 
 /**
@@ -187,29 +210,19 @@ export const CLASSIFIED_LABELS_FOR_TESTS: ReadonlySet<string> = new Set([
  * are visible in their absence and retypeable; the corruption is the bug.
  */
 export function recoveryTextFromContent(content: JsonContent): string {
-  const projected = extractPlainTextFromComposerJSONContent({
+  // NO post-projection line stripping. The strip this replaced could not tell
+  // an editor-contributed blank line from one the user typed - a shell script
+  // starting with a blank line above `#!/bin/sh` lost it - because by then
+  // both are just a newline.
+  //
+  // Nothing replaces it, and that is the point: `plainTextFromNodes` already
+  // drops nodes that project to nothing, so empty wrapper paragraphs never
+  // reach the output. Re-stripping at the node level would have been a no-op
+  // dressed as a safeguard.
+  return extractPlainTextFromComposerJSONContent({
     ...content,
     content: [...prepareForProjection(content.content ?? [])],
   });
-  return stripEmptyEdgeLines(projected);
-}
-
-/**
- * Drop blank lines the EDITOR contributed at the edges - a trailing empty
- * paragraph, a leading one - without touching a line's own whitespace.
- *
- * A bare `.trim()` cannot tell the two apart: it also eats the leading
- * indentation of a code block's first line, so the user is told to copy a
- * snippet that is subtly not theirs (a Python block comes back invalid). The
- * text is quoted back verbatim, so it has to BE verbatim.
- */
-function stripEmptyEdgeLines(text: string): string {
-  const lines = text.split("\n");
-  let start = 0;
-  let end = lines.length;
-  while (start < end && lines[start].length === 0) start += 1;
-  while (end > start && lines[end - 1].length === 0) end -= 1;
-  return lines.slice(start, end).join("\n");
 }
 
 /**
@@ -230,6 +243,20 @@ function prepareForProjection(
     if (source !== null) {
       return [{ type: "paragraph", content: [{ type: "text", text: source }] }];
     }
+    // A code block's fence and `language` live in the serializer's output and
+    // in `attrs`, never in the child text - so copy-back dropped the language
+    // entirely. Emitted here instead. RESIDUAL: the composer's paste path does
+    // not re-promote fences (`FencePromotionExtension` is in the ARTIFACT
+    // bundle only), so this restores the code and its language as readable
+    // markdown, not the code-block node itself. That is the honest best.
+    if (node.type === "codeBlock") {
+      return [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: fencedCodeBlock(node) }],
+        },
+      ];
+    }
     // Rebuild ANY other container around processed children. Hoisting only at
     // the top level left a list nested in a blockquote untouched, so it still
     // joined as `foobar` - the round-5 fix reached one level and stopped.
@@ -243,6 +270,16 @@ const LIST_CONTAINER_TYPES: ReadonlySet<string> = new Set([
   "orderedList",
   "listItem",
 ]);
+
+function fencedCodeBlock(node: JsonContent): string {
+  const language = node.attrs?.language;
+  const info = typeof language === "string" ? language : "";
+  const inner = extractPlainTextFromComposerJSONContent({
+    type: "doc",
+    content: [...(node.content ?? [])],
+  });
+  return ["```" + info, inner, "```"].join("\n");
+}
 
 /**
  * The text an ATOM node carries in its attrs. These blocks have no children,

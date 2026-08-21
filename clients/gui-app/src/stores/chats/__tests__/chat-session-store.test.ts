@@ -1841,6 +1841,70 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(1);
   });
 
+  // R8 `-6Te`: the dead send's run settings die with it, so a resend picks up
+  // whatever the chat uses NOW. A different model changes what the agent does,
+  // silently - same statement-obligation class as the worktree.
+  it("names run settings that moved between dispatch and settle", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    // The chat's settings change while both sends are in flight.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: UPDATED_SETTINGS,
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).toContain("gpt-5-codex");
+    expect(notice.message).toContain("model");
+  });
+
+  it("says nothing about settings that did not move", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    // Stating the full tuple every time would bury the one field that moved.
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.message).not.toContain("different settings now");
+  });
+
   // R7 `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
   // to switch to a LOCAL checkout or to IMPORT an existing worktree settles
   // with no statement at all today, so the resend runs against the previous

@@ -157,6 +157,67 @@ describe("content recovery classification", () => {
     expect(report.get("link")).toBe(1);
   });
 
+  it("counts a link split across text nodes once", () => {
+    const href = "https://example.test/rb";
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "the ",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+            {
+              type: "text",
+              text: "bold",
+              marks: [{ type: "bold" }, { type: "link", attrs: { href } }],
+            },
+            {
+              type: "text",
+              text: " runbook",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    // Tiptap split ONE link into three text nodes; it is still one thing to
+    // re-add, and "Its 3 links" would be a lie about the user's message.
+    expect(report.get("link")).toBe(1);
+  });
+
+  it("counts two separated links to the same target separately", () => {
+    const href = "https://example.test/rb";
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "see here",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+            { type: "text", text: " and also " },
+            {
+              type: "text",
+              text: "over here",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    // Not adjacent, so they are two separate things the user has to re-add.
+    expect(report.get("link")).toBe(2);
+  });
+
   it("reports nothing for a link whose label IS its target", () => {
     const report = classifyContentRecovery({
       type: "doc",
@@ -236,8 +297,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toContain("graph TD;");
-    expect(text).toContain("A-->B;");
+    expect(text).toBe("graph TD;\n  A-->B;");
   });
 
   it("carries a UI preview block's source into the recovery text", () => {
@@ -251,7 +311,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toContain("<section>hello</section>");
+    expect(text).toBe("<section>hello</section>");
   });
 
   // The recovery text is quoted back verbatim for the user to copy. Trimming
@@ -294,9 +354,9 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).not.toContain("foobar");
-    expect(text).toContain("foo");
-    expect(text).toContain("bar");
+    // Exact, so a wrong separator or ordering cannot pass: the blockquote
+    // prefix is applied per line by `quotePrefixLines`.
+    expect(text).toBe("> foo\n> bar");
   });
 
   it("preserves a code block's leading indentation", () => {
@@ -310,7 +370,42 @@ describe("content recovery classification", () => {
       ],
     });
 
-    expect(text).toBe("    if True:\n        pass");
+    // Fenced now (`-6Ta`), and the indentation inside is byte-identical.
+    expect(text).toBe("```\n    if True:\n        pass\n```");
+  });
+
+  it("carries a code block's language into the fence", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          attrs: { language: "python" },
+          content: [{ type: "text", text: "print(1)" }],
+        },
+      ],
+    });
+
+    // The language lives in `attrs` and nowhere in the child text, so without
+    // the fence a copy-back submitted prose with the language gone.
+    expect(text).toBe("```python\nprint(1)\n```");
+  });
+
+  it("keeps a blank first line the USER typed", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          attrs: { language: "sh" },
+          content: [{ type: "text", text: "\n#!/bin/sh" }],
+        },
+      ],
+    });
+
+    // Stripping at the LINE level could not tell this newline from an editor
+    // wrapper; stripping at the node level never sees it.
+    expect(text).toBe("```sh\n\n#!/bin/sh\n```");
   });
 
   it("still drops editor-generated blank lines at the edges", () => {
@@ -323,7 +418,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    // The empty wrapper paragraphs go; the content line keeps its own spaces.
+    // The empty wrapper PARAGRAPHS go; the content line keeps its own spaces.
     expect(text).toBe("  real");
   });
 });

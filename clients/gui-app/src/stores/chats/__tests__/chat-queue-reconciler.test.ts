@@ -304,6 +304,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -326,6 +327,7 @@ describe("chat-queue-reconciler", () => {
           items: [createQueueItem("msg-1", CONTENT)],
         },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -345,6 +347,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -370,6 +373,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: existingRestore,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -400,6 +404,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -421,6 +426,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 0,
         nowMs: 5000,
       };
@@ -451,6 +457,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 0,
         nowMs: 5000,
       };
@@ -470,6 +477,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -522,6 +530,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -558,6 +567,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -587,6 +597,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -617,6 +628,7 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -680,6 +692,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "running", items: [managedItem] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -869,6 +882,7 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
         ...overrides,
       };
     }

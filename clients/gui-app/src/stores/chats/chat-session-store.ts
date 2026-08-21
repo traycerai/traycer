@@ -875,6 +875,30 @@ export interface StagedWorktreeIntentSource {
  * slot empty, and that IS a choice to send without one. The store's marker
  * separates the two - only a dispatch sets it, every user mutation drops it.
  */
+/**
+ * Keep the background-stop slices in lockstep with the running-only list: a
+ * task that has left it has settled, so its Stop is no longer in flight.
+ * Extracted so the turn-state updater stays under the complexity budget.
+ */
+function backgroundStopSlices(
+  state: ChatSessionState,
+  nextBackgroundItems: ChatSessionState["backgroundItems"],
+): Pick<
+  ChatSessionState,
+  "pendingBackgroundStops" | "pendingBackgroundStopAll"
+> {
+  return {
+    pendingBackgroundStops: reconcileBackgroundStops(
+      state.pendingBackgroundStops,
+      nextBackgroundItems,
+    ),
+    pendingBackgroundStopAll: reconcileBackgroundStopAll(
+      state.pendingBackgroundStopAll,
+      nextBackgroundItems,
+    ),
+  };
+}
+
 function restoreStagedWorktreeIntent(
   source: StagedWorktreeIntentSource | null,
   stagingKey: WorktreeStagingKey,
@@ -1239,6 +1263,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             queue: frame.snapshot.queue,
             failedSendRestoration: state.failedSendRestoration,
             connectionEpoch,
+            currentSettings: frame.snapshot.chat.settings,
             nowMs: now,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their
@@ -1259,6 +1284,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               messages,
               queue: frame.snapshot.queue,
               failedSendRestoration: pending.failedSendRestoration,
+              currentSettings: frame.snapshot.chat.settings,
             },
           );
           // A changed persisted tuple is an authoritative host-side update
@@ -1602,25 +1628,28 @@ export function createChatSessionStoreWithNotificationDependencies(
         // final buffered deltas are captured before it freezes.
         flushBlockDeltas();
         set((state) => {
+          // Resolved ONCE and reused: the same two ids drove four separate
+          // `?.turnId ?? null` reads, which is both noise and four extra
+          // branches in an updater already at the complexity budget.
+          const previousTurnId = state.activeTurn?.turnId ?? null;
+          const nextTurnId = frame.activeTurn?.turnId ?? null;
           const baseMessages = messagesWithMaterializedLiveAssistant(
             state.messages,
             state.liveAssistantMessage,
             {
-              previousActiveTurnId: state.activeTurn?.turnId ?? null,
-              nextActiveTurnId: frame.activeTurn?.turnId ?? null,
+              previousActiveTurnId: previousTurnId,
+              nextActiveTurnId: nextTurnId,
             },
           );
           const nextMessages = messagesForTurnStateChange(baseMessages, {
-            previousTurnId: state.activeTurn?.turnId ?? null,
-            nextTurnId: frame.activeTurn?.turnId ?? null,
+            previousTurnId,
+            nextTurnId,
           });
           // Clear liveTurnUsage on any turn transition (turnId changes or
           // activeTurn settles to null). The new turn hasn't emitted its
           // own usage.updated yet, and keeping the previous turn's value
           // would briefly attribute the wrong number to the new turn.
           // Chip falls back to messages[last].usage during the gap.
-          const previousTurnId = state.activeTurn?.turnId ?? null;
-          const nextTurnId = frame.activeTurn?.turnId ?? null;
           const turnIdChanged = previousTurnId !== nextTurnId;
           const nextBackgroundItems =
             frame.backgroundItems ?? state.backgroundItems;
@@ -1638,6 +1667,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               messages: nextMessages,
               queue: state.queue,
               failedSendRestoration: state.failedSendRestoration,
+              currentSettings: state.chat?.settings ?? null,
             },
           );
           restoredWorktreeIntentForTurnState =
@@ -1663,14 +1693,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // Keep background-stop pending state in lockstep with the
             // running-only list: a task that has left the list settled, so its
             // Stop is no longer in flight.
-            pendingBackgroundStops: reconcileBackgroundStops(
-              state.pendingBackgroundStops,
-              nextBackgroundItems,
-            ),
-            pendingBackgroundStopAll: reconcileBackgroundStopAll(
-              state.pendingBackgroundStopAll,
-              nextBackgroundItems,
-            ),
+            ...backgroundStopSlices(state, nextBackgroundItems),
             liveAssistantMessage: liveAssistantForTurnStateFrame({
               current: state.liveAssistantMessage,
               previousTurnId,

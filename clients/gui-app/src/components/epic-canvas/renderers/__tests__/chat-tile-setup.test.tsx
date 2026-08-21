@@ -979,10 +979,14 @@ describe("<ChatTileErrorNoticeToasts />", () => {
       });
     });
 
-    const rendered = sonnerToastWarning.mock.lastCall?.[0];
-    // Not a bare string: a bare string is what collapses.
-    expect(typeof rendered).not.toBe("string");
-    expect(JSON.stringify(rendered)).toContain("whitespace-pre-wrap");
+    const rendered = sonnerToastWarning.mock.lastCall?.[0] as {
+      readonly props: { readonly className: string; readonly children: string };
+    };
+    // Exact: a bare string is what collapses, and the class IS the guarantee.
+    expect(rendered.props.className).toBe("whitespace-pre-wrap break-words");
+    expect(rendered.props.children).toBe(
+      "Copy it from here to resend:\n    if True:\n        pass",
+    );
   });
 
   // R4-3: a retained record's DELIVERY state has to be as durable as the
