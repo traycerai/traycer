@@ -206,12 +206,24 @@ stream never splits across the two queues):
   bulk frame; the interactive queue is re-checked between every bulk frame, so a
   keystroke preempts the next bulk chunk — a keystroke never queues behind a
   megabyte frame.
-- **Credits:** both peers start with `INITIAL_BULK_SEND_CREDITS` (512) bulk
-  **send** credits; each bulk frame (each chunk) consumes one. As a peer consumes
-  inbound bulk frames it grants a fresh batch back via `CREDIT` (streamId 0)
-  every `INBOUND_CREDIT_GRANT_BATCH` (256) frames. **⚠️ reconcile:** the host's
-  initial receive window MUST be ≥ 512 and it MUST honor client `CREDIT` grants /
-  send its own.
+- **Credits:** each bulk frame (each chunk) consumes one **send** credit, and a
+  peer grants a fresh batch back via `CREDIT` (streamId 0) as it consumes
+  inbound bulk frames. The window is negotiated, so there are two pairings:
+  - **Both peers announce `SESSION_CAPABILITY_FINE_CREDITS`** (current):
+    `FINE_INITIAL_BULK_SEND_CREDITS` (64) send credits, granting every
+    `FINE_INBOUND_CREDIT_GRANT_BATCH` (32) frames — a batch that is half the
+    window, so a grant is always in flight before the sender can run dry.
+  - **Either peer predates it** (rc.1 clients still in the field): the legacy
+    512-credit window, granting every `LEGACY_INBOUND_CREDIT_GRANT_BATCH` (256)
+    frames.
+
+  **⚠️ reconcile:** a peer's initial receive window MUST be ≥ the batch size the
+  other end grants at for the pairing in force, or the first bootstrap
+  deadlocks — that floor compares a frame count against a frame count, so
+  body compression cannot move it. `INITIAL_BULK_SEND_CREDITS` remains the
+  client's legacy send-window constant; `INBOUND_CREDIT_GRANT_BATCH` was the
+  old batch spelling and is now split into
+  `FINE_INBOUND_CREDIT_GRANT_BATCH` and `LEGACY_INBOUND_CREDIT_GRANT_BATCH`.
 
 ## 8. 64 KiB bulk chunking
 

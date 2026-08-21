@@ -15,7 +15,10 @@ import type {
   IpcHostController,
   IpcHostLifecycle,
 } from "../../ipc/runner-ipc-bridge";
-import type { HostControllerStatus } from "../../host/host-controller-types";
+import type {
+  HostControllerStatus,
+  LifecycleAdmissionBlock,
+} from "../../host/host-controller-types";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
@@ -1540,6 +1543,7 @@ class FakeHostController implements IpcHostController {
     value: { running: true, version: "1.0.0" },
   };
 
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
   async getStatus(): Promise<HostControllerStatus> {
     return buildControllerStatus(null);
   }

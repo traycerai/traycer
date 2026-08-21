@@ -312,16 +312,16 @@ describe("<SwitcherAgentsList />", () => {
       epics: {},
       chats: {
         "chat-1": {
-          unreadFailure: true,
+          unreadFailure: false,
           pendingFork: false,
-          pendingApproval: false,
+          pendingApproval: true,
           pendingInterview: false,
           unreadDone: false,
         },
       },
     };
     render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("switcher-agent-failure-chat-1")).toBeTruthy();
+    expect(screen.getByTestId("switcher-agent-approval-chat-1")).toBeTruthy();
     expect(screen.queryByTestId("switcher-agent-activity-chat-1")).toBeNull();
   });
 

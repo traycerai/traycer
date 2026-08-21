@@ -84,6 +84,8 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
+    recentHostCheckIn: false,
+    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

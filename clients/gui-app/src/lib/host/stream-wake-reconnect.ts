@@ -123,7 +123,11 @@ export function subscribeStreamWakeReconnect(
   try {
     const dispose = subscribeWakeSignals(runnerHost, (reason) => {
       appLogger.debug("[stream] wake reconnect requested", { reason });
-      client.reconnectAll(reason);
+      // Probe before dropping. A lid-open on the same network leaves most
+      // sockets - certainly a localhost one to a local host - intact, and
+      // re-dialing them re-runs every stream's open while the machine's
+      // network is still coming back. Sessions that answer a ping are kept.
+      client.reconnectAll(reason, { probeFirst: true });
     });
     // After the caller's own subscription, never before: a shell whose resume
     // wiring throws should fail this call once, cleanly, rather than have a

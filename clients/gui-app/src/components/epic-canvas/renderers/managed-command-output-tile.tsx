@@ -16,10 +16,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { useStore } from "zustand";
 import { ArrowDownToLine, Info } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -80,6 +82,8 @@ import {
 const FOLLOW_SLACK_PX = 24;
 /** Distance from the top that asks for the next page of older lines. */
 const LOAD_OLDER_THRESHOLD_PX = 48;
+const OUTPUT_VIRTUAL_OVERSCAN = 12;
+const OUTPUT_VIRTUAL_INITIAL_RECT = { width: 0, height: 600 } as const;
 /**
  * One test id for whatever the window has to say instead of (or over) the log;
  * the notice's `data-availability` carries WHICH state it is.
@@ -256,7 +260,18 @@ function ManagedCommandOutputTileBody(props: {
   const connectionStatus = useStore(store, (state) => state.connectionStatus);
   const reachedStart = useStore(store, (state) => state.reachedStart);
   const loadingOlder = useStore(store, (state) => state.loadingOlder);
+  const detached = useStore(store, (state) => state.detached);
+  const resyncPending = useStore(store, (state) => state.resyncPending);
+  const newOutputAvailable = useStore(
+    store,
+    (state) => state.newOutputAvailable,
+  );
+  const timelineGeneration = useStore(
+    store,
+    (state) => state.timelineGeneration,
+  );
   const loadOlder = useStore(store, (state) => state.loadOlder);
+  const setOutputFollowing = useStore(store, (state) => state.setFollowing);
   // Asked of the client this window's own subscription rides on. The app-wide
   // reader answers for the DEFAULT host, and a tab is bound to its own host for
   // life - when the two differ, the default host's answer is about the wrong
@@ -286,6 +301,7 @@ function ManagedCommandOutputTileBody(props: {
     [readingIdentity],
   );
   const viewRef = useRef<HTMLDivElement>(null);
+  const outputListRef = useRef<HTMLDivElement>(null);
   const lastReadingAnchorRef = useRef<ManagedCommandReadingAnchor | null>(
     restoredReadingAnchor,
   );
@@ -293,20 +309,72 @@ function ManagedCommandOutputTileBody(props: {
   const [following, setFollowing] = useState(() =>
     initialManagedCommandFollowing(restoredReadingAnchor),
   );
+  const getScrollElement = useCallback(() => viewRef.current, []);
+  const estimateOutputRowSize = useCallback(
+    () => Math.ceil(terminalFont.fontSize * 1.5),
+    [terminalFont.fontSize],
+  );
+  const getOutputRowKey = useCallback(
+    (index: number) => lines[index]?.seq ?? index,
+    [lines],
+  );
+  // `useVirtualizer` returns fresh function identities each render; the React
+  // Compiler already treats the hook as incompatible, while this component's
+  // own inputs and derived callbacks remain memoized.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const outputVirtualizer = useVirtualizer({
+    count: lines.length,
+    getScrollElement,
+    estimateSize: estimateOutputRowSize,
+    getItemKey: getOutputRowKey,
+    overscan: OUTPUT_VIRTUAL_OVERSCAN,
+    initialRect: OUTPUT_VIRTUAL_INITIAL_RECT,
+    // Row measurement can land while the follow/prepend layout effects are
+    // committing. TanStack's synchronous default calls React `flushSync` from
+    // that ResizeObserver path, which React rejects and which turns a burst of
+    // output into repeated main-thread stalls. A normal scheduled rerender is
+    // sufficient: the estimate is already the exact height for ordinary rows.
+    useFlushSync: false,
+  });
+  const virtualRows = outputVirtualizer.getVirtualItems();
   // What the timeline looked like at the last moment we could measure it:
   // the oldest row's identity, and how tall the document was. A page of older
   // lines prepends content ABOVE the viewport, which slides everything the
   // human is reading down by exactly the height added.
   const anchorRef = useRef<{
     readonly firstSeq: number | null;
+    readonly lastSeq: number | null;
     readonly scrollHeight: number;
-  }>({ firstSeq: null, scrollHeight: 0 });
+    readonly scrollTop: number;
+    readonly listOffsetTop: number;
+  }>({
+    firstSeq: null,
+    lastSeq: null,
+    scrollHeight: 0,
+    scrollTop: 0,
+    listOffsetTop: 0,
+  });
+  const lastTimelineGenerationRef = useRef(timelineGeneration);
 
   const scrollToNewest = useCallback(() => {
     const view = viewRef.current;
     if (view === null) return;
     view.scrollTop = view.scrollHeight;
   }, []);
+
+  const setFollowMode = useCallback(
+    (nextFollowing: boolean) => {
+      setFollowing(nextFollowing);
+      setOutputFollowing(nextFollowing);
+    },
+    [setOutputFollowing],
+  );
+
+  // Seed the store before any user scroll. A restored, scrolled-back reader
+  // must keep their held history even if output lands immediately after mount.
+  useLayoutEffect(() => {
+    setOutputFollowing(following);
+  }, [following, setOutputFollowing]);
 
   const captureReadingPosition = useCallback((): void => {
     const view = viewRef.current;
@@ -372,23 +440,64 @@ function ManagedCommandOutputTileBody(props: {
     const view = viewRef.current;
     if (view === null) return;
     const firstSeq = lines.length > 0 ? lines[0].seq : null;
+    const lastSeq = lines.length > 0 ? lines[lines.length - 1].seq : null;
     const previous = anchorRef.current;
+    const listOffsetTop = outputListRef.current?.offsetTop ?? 0;
     const prepended =
       previous.firstSeq !== null &&
       firstSeq !== null &&
       firstSeq < previous.firstSeq;
     if (prepended) {
-      view.scrollTop += view.scrollHeight - previous.scrollHeight;
+      const tailWasEvicted =
+        previous.lastSeq !== null && lastSeq !== previous.lastSeq;
+      const previousFirstIndex = lines.findIndex(
+        (line) => line.seq === previous.firstSeq,
+      );
+      const previousFirstOffset =
+        previousFirstIndex < 0
+          ? undefined
+          : outputVirtualizer.getOffsetForIndex(
+              previousFirstIndex,
+              "start",
+            )?.[0];
+      // Paging while detached can prepend old rows and evict stale tail rows
+      // in the same update, so total scroll-height delta is not the prepend
+      // height. Anchor to the row that used to begin the document instead.
+      view.scrollTop =
+        !tailWasEvicted || previousFirstOffset === undefined
+          ? view.scrollTop + view.scrollHeight - previous.scrollHeight
+          : previousFirstOffset +
+            previous.scrollTop +
+            listOffsetTop -
+            previous.listOffsetTop;
     }
-    anchorRef.current = { firstSeq, scrollHeight: view.scrollHeight };
-  }, [lines]);
+    anchorRef.current = {
+      firstSeq,
+      lastSeq,
+      scrollHeight: view.scrollHeight,
+      scrollTop: view.scrollTop,
+      listOffsetTop,
+    };
+  }, [lines, outputVirtualizer]);
+
+  // The first snapshot participates in reading-position restore. Every later
+  // snapshot is a deliberate rebase (resnapshot or reconnect), so it restores
+  // the live latch and pins the replacement tail before paint.
+  useLayoutEffect(() => {
+    const previousGeneration = lastTimelineGenerationRef.current;
+    if (timelineGeneration === previousGeneration) return;
+    lastTimelineGenerationRef.current = timelineGeneration;
+    if (previousGeneration === 0) return;
+    setFollowMode(true);
+    scrollToNewest();
+  }, [scrollToNewest, setFollowMode, timelineGeneration]);
 
   // Following is a scroll effect, not render state: new lines land, then the
   // view is pinned back to the bottom.
   useEffect(() => {
-    if (!following) return;
+    if (!following || resyncPending) return;
     scrollToNewest();
-  }, [following, lines, scrollToNewest]);
+  }, [following, lines, resyncPending, scrollToNewest]);
 
   // A Terminal typography change resizes every row at once, so the geometry
   // both the follow latch and the prepend correction were measured against is
@@ -398,12 +507,20 @@ function ManagedCommandOutputTileBody(props: {
   useLayoutEffect(() => {
     const view = viewRef.current;
     if (view === null) return;
-    if (following) view.scrollTop = view.scrollHeight;
+    if (following && !resyncPending) view.scrollTop = view.scrollHeight;
     anchorRef.current = {
       firstSeq: anchorRef.current.firstSeq,
+      lastSeq: anchorRef.current.lastSeq,
       scrollHeight: view.scrollHeight,
+      scrollTop: view.scrollTop,
+      listOffsetTop: outputListRef.current?.offsetTop ?? 0,
     };
-  }, [following, terminalFont.fontFamily, terminalFont.fontSize]);
+  }, [
+    following,
+    resyncPending,
+    terminalFont.fontFamily,
+    terminalFont.fontSize,
+  ]);
 
   const onScroll = useCallback(() => {
     const view = viewRef.current;
@@ -412,13 +529,18 @@ function ManagedCommandOutputTileBody(props: {
     // way the measurable geometry changes.
     anchorRef.current = {
       firstSeq: anchorRef.current.firstSeq,
+      lastSeq: anchorRef.current.lastSeq,
       scrollHeight: view.scrollHeight,
+      scrollTop: view.scrollTop,
+      listOffsetTop: outputListRef.current?.offsetTop ?? 0,
     };
+    if (resyncPending) return;
     const distanceFromBottom =
       view.scrollHeight - view.scrollTop - view.clientHeight;
-    setFollowing(distanceFromBottom <= FOLLOW_SLACK_PX);
+    const nextFollowing = distanceFromBottom <= FOLLOW_SLACK_PX;
+    setFollowMode(nextFollowing);
     const nextAnchor = {
-      following: distanceFromBottom <= FOLLOW_SLACK_PX,
+      following: nextFollowing,
       scrollTop: view.scrollTop,
       scrollHeight: view.scrollHeight,
     };
@@ -427,7 +549,30 @@ function ManagedCommandOutputTileBody(props: {
     if (view.scrollTop <= LOAD_OLDER_THRESHOLD_PX) {
       loadOlder();
     }
-  }, [loadOlder, readingIdentity]);
+  }, [loadOlder, readingIdentity, resyncPending, setFollowMode]);
+
+  const onTimelineKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        (event.key !== "Home" && event.key !== "End")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.currentTarget.scrollTop =
+        event.key === "Home" ? 0 : event.currentTarget.scrollHeight;
+      // Programmatic scrolling emits a browser scroll event, but applying the
+      // latch synchronously keeps Home/End deterministic and makes returning
+      // to a detached live tail request its resnapshot immediately.
+      onScroll();
+    },
+    [onScroll],
+  );
 
   // Derived here, after the scroll machinery above, and read only by the JSX
   // below: what the window shows is a pure function of the store's signals
@@ -440,6 +585,9 @@ function ManagedCommandOutputTileBody(props: {
     deleted,
     fatalClose,
   });
+  let jumpLiveLabel = "Jump to live";
+  if (newOutputAvailable) jumpLiveLabel = "New output available";
+  if (resyncPending) jumpLiveLabel = "Loading live output…";
 
   // A terminal state, or a host that cannot serve the stream: the panel is the
   // sentence, and nothing of the log survives under it. Whatever this window
@@ -488,8 +636,13 @@ function ManagedCommandOutputTileBody(props: {
         <div
           ref={viewRef}
           onScroll={onScroll}
+          onKeyDown={onTimelineKeyDown}
+          tabIndex={0}
           data-testid="managed-command-output-timeline"
-          role="log"
+          role="textbox"
+          aria-readonly="true"
+          aria-multiline="true"
+          aria-live="polite"
           aria-label={
             command === null ? "Output" : MANAGED_COMMAND_OUTPUT_WINDOW_TITLE
           }
@@ -513,7 +666,7 @@ function ManagedCommandOutputTileBody(props: {
           // person opened it to read - so on a narrow pane the lane shrinks
           // and the cluster may overlap the tail of a long line, and on a wide
           // one it never grows past what the cluster actually needs.
-          className="h-full w-full overflow-y-auto py-2 pr-[min(30%,12rem)] pl-3 leading-relaxed"
+          className="h-full w-full overflow-y-auto py-2 pr-[min(30%,12rem)] pl-3 leading-relaxed focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none"
         >
           {loadingOlder ? (
             <div className="flex justify-center py-1">
@@ -542,24 +695,47 @@ function ManagedCommandOutputTileBody(props: {
               testId={AVAILABILITY_NOTICE_TEST_ID}
             />
           ) : null}
-          {lines.map((line) => (
-            <OutputRow key={line.seq} line={line} />
-          ))}
+          {lines.length === 0 ? null : (
+            <div
+              ref={outputListRef}
+              data-testid="managed-command-output-virtual-list"
+              className="relative w-full"
+              style={{ height: `${outputVirtualizer.getTotalSize()}px` }}
+            >
+              {virtualRows.map((virtualRow) => {
+                const line = lines[virtualRow.index];
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={outputVirtualizer.measureElement}
+                    className="absolute top-0 left-0 w-full"
+                    style={{
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    <OutputRow line={line} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-        {following ? null : (
+        {following && !resyncPending ? null : (
           <Button
             type="button"
             variant="secondary"
             size="sm"
             data-testid="managed-command-output-jump-live"
             className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-sm"
+            disabled={resyncPending}
             onClick={() => {
-              setFollowing(true);
-              scrollToNewest();
+              setFollowMode(true);
+              if (!detached) scrollToNewest();
             }}
           >
             <ArrowDownToLine aria-hidden className="size-3.5" />
-            Jump to live
+            {jumpLiveLabel}
           </Button>
         )}
       </div>

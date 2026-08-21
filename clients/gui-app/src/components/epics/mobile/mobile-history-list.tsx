@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, RefreshCwIcon } from "lucide-react";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import {
+  EpicsListChatHostFilterUnsupported,
   EpicsListEmpty,
   EpicsListError,
   EpicsListFilteredEmpty,
@@ -24,6 +25,7 @@ export interface MobileHistoryListProps {
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
+  readonly chatHostFilterUnsupported: boolean;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -64,6 +66,7 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
     isPending,
     isFetching,
     hasActiveFilters,
+    chatHostFilterUnsupported,
     items,
     onRetry,
     selectionMode,
@@ -140,6 +143,7 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
           isPending={isPending}
           isFetching={isFetching}
           hasActiveFilters={hasActiveFilters}
+          chatHostFilterUnsupported={chatHostFilterUnsupported}
           items={items}
           onRetry={onRetry}
           selectionMode={selectionMode}
@@ -211,6 +215,7 @@ interface MobileHistoryListBodyProps {
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
+  readonly chatHostFilterUnsupported: boolean;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -233,6 +238,11 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
   }
   if (props.isPending) {
     return <EpicsListLoading />;
+  }
+  // Ahead of every other empty state: the rows were WITHHELD, not absent, and
+  // "No tasks yet" would be an outright false statement about the account.
+  if (props.chatHostFilterUnsupported) {
+    return <EpicsListChatHostFilterUnsupported />;
   }
   if (props.items.length === 0 && !props.hasActiveFilters) {
     return <EpicsListEmpty />;

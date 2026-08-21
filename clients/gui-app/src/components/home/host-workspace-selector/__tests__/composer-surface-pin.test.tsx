@@ -81,21 +81,24 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: HOST_ENTRIES }),
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({
-    status: "reachable",
-    hostLabel: "Home Mac",
-    unavailability: null,
-  }),
-  useRemoteSessionPollReadiness: () => true,
-}));
-
-vi.mock("@/hooks/host/use-remote-hosts-plan-gate", () => ({
-  useRemoteHostsPlanRestricted: () => false,
-}));
-
 vi.mock("@/hooks/host/use-refresh-host-directory-on-open", () => ({
   useRefreshHostDirectoryOnOpen: () => undefined,
+}));
+
+vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/auth/use-registered-hosts-query")
+  >()),
+  useRegisteredHostsPollLiveness: () => undefined,
+}));
+
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: vi.fn(),
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
 }));
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
@@ -183,15 +186,15 @@ function pinnedHostId(): string | undefined {
 
 function chipLabel(): string {
   const label = screen
-    .getByTestId("composer-host-trigger")
+    .getByRole("button", { name: /^Host:/ })
     .querySelector(".truncate");
   if (label === null) throw new Error("host switcher label is missing");
   return label.textContent;
 }
 
 function pickBuildHost(): void {
-  fireEvent.click(screen.getByTestId("composer-host-trigger"));
-  fireEvent.click(screen.getByRole("option", { name: "Build Box" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Host:/ }));
+  fireEvent.click(screen.getByRole("option", { name: /Build Box/ }));
 }
 
 beforeEach(() => {
@@ -260,10 +263,13 @@ describe("composer host picker writes a surface pin", () => {
       .setSelection(COMPOSER_KEY, "host-retired");
     renderComposerPicker({ kind: "active" });
 
-    // "Local" is the pre-directory default for a FOLLOWING surface. Showing it
-    // for a pin to a machine the directory no longer carries would report a
-    // dead pin as the local host.
-    expect(chipLabel()).toBe("Unavailable (offline)");
+    // "Local" is the pre-directory default for a FOLLOWING surface. The
+    // shared picker keeps identity and status separate, then combines both in
+    // the accessible name.
+    expect(chipLabel()).toBe("Unavailable");
+    expect(
+      screen.getByRole("button", { name: "Host: Unavailable, offline" }),
+    ).toBeTruthy();
   });
 
   it("writes nothing from the FIXED arm (§55: fork dialogs are inert)", () => {
@@ -273,9 +279,9 @@ describe("composer host picker writes a surface pin", () => {
       hostClient: null,
     });
 
-    const trigger = screen.getByTestId("composer-host-trigger");
+    const trigger = screen.getByRole("button", { name: /^Host:/ });
     fireEvent.click(trigger);
-    expect(screen.queryByRole("option", { name: "Build Box" })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Build Box/ })).toBeNull();
 
     expect(pinnedHostId()).toBeUndefined();
     expect(mocks.selectById).not.toHaveBeenCalled();

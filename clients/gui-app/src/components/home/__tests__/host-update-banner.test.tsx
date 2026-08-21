@@ -90,7 +90,26 @@ function makeManagement(overrides: Overrides): IHostManagement {
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
+    freePortAndRestartIfIdle: vi.fn(() =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
+    maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
+    maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),
+    maintenanceInstallationInfo: vi.fn(
+      notImplemented("maintenanceInstallationInfo"),
+    ),
+    maintenanceInstallVersion: vi.fn(
+      notImplemented("maintenanceInstallVersion"),
+    ),
+    restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "test-host",

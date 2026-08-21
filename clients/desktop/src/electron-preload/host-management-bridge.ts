@@ -13,6 +13,7 @@ import type {
   HostAvailableVersionsInput,
   HostControllerStatus,
   HostDoctorReport,
+  HostGetInstallationInfoResponse,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
@@ -21,7 +22,14 @@ import type {
   HostRestartRequestResult,
   HostTrayCommand,
   HostUninstallResult,
+  HostUpdateCheckResponse,
   InstallVersionOk,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  DoctorRepairIntent,
   MutationOutcome,
   ServiceRegistrationOk,
   TraycerUninstallResult,
@@ -60,8 +68,11 @@ export interface HostManagementBridgeSurface {
   restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }): Promise<HostLogsTailResult>;
-  runDoctor(): Promise<HostDoctorReport>;
+  runDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostDoctorReport>;
   availableVersions(
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
@@ -72,9 +83,39 @@ export interface HostManagementBridgeSurface {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
   freePortAndRestart(
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ): Promise<FreePortAndRestartInput>;
+  freePortAndRestartIfIdle(
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ): Promise<DoctorRepairDispatch>;
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  // Maintenance-RPC projections for the GUI's local fallback — protocol
+  // response shapes, classified in main (see `host-management-ipc.ts`).
+  maintenanceUpdateCheck(
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
+  ): Promise<HostUpdateCheckResponse>;
+  maintenanceDoctor(input: {
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceDoctorProjection>;
+  maintenanceInstallationInfo(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostGetInstallationInfoResponse>;
+  maintenanceInstallVersion(input: {
+    readonly version: string;
+    readonly force: boolean;
+    readonly expectedHostId: string;
+  }): Promise<MaintenanceInstallDispatch>;
+  restartHostIfIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostRestartRequestResult>;
+  runDoctorRepairQueued(input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }): Promise<QueuedDoctorRepairResult>;
+  runDoctorRepairIfIdle(input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }): Promise<DoctorRepairDispatch>;
   getHostName(): Promise<HostNameSettings>;
   setHostName(input: {
     readonly customName: string | null;
@@ -125,13 +166,15 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostRestart,
       ) as Promise<HostRestartRequestResult>,
-    getHostLogs: ({ tailLines }) =>
+    getHostLogs: ({ tailLines, expectedHostId }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostLogs, {
         tailLines,
+        expectedHostId,
       }) as Promise<HostLogsTailResult>,
-    runDoctor: () =>
+    runDoctor: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostDoctor,
+        input,
       ) as Promise<HostDoctorReport>,
     availableVersions: ({ includePreReleases }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostAvailable, {
@@ -158,10 +201,48 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         RunnerHostInvoke.traycerFreePortAndRestart,
         input,
       ) as Promise<FreePortAndRestartInput>,
+    freePortAndRestartIfIdle: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
+        input,
+      ) as Promise<DoctorRepairDispatch>,
     cliManifest: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerCliManifestRead,
       ) as Promise<CliInstallManifestSnapshot | null>,
+    maintenanceUpdateCheck: ({ includePreReleases, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceUpdateCheck, {
+        includePreReleases,
+        expectedHostId,
+      }) as Promise<HostUpdateCheckResponse>,
+    maintenanceDoctor: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceDoctor, {
+        expectedHostId,
+      }) as Promise<MaintenanceDoctorProjection>,
+    maintenanceInstallationInfo: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceInstallationInfo, {
+        expectedHostId,
+      }) as Promise<HostGetInstallationInfoResponse>,
+    maintenanceInstallVersion: ({ version, force, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceInstallVersion, {
+        version,
+        force,
+        expectedHostId,
+      }) as Promise<MaintenanceInstallDispatch>,
+    restartHostIfIdle: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestartIfIdle, {
+        expectedHostId,
+      }) as Promise<HostRestartRequestResult>,
+    runDoctorRepairQueued: ({ repair, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairQueued, {
+        repair,
+        expectedHostId,
+      }) as Promise<QueuedDoctorRepairResult>,
+    runDoctorRepairIfIdle: ({ repair, expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairIfIdle, {
+        repair,
+        expectedHostId,
+      }) as Promise<DoctorRepairDispatch>,
     getHostName: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostNameGet,

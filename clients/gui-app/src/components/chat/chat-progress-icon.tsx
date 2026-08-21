@@ -186,6 +186,7 @@ function ChatProgressPresentation(props: {
       runningTitle="Agent in progress"
       defaultIcon={idleIcon}
       statusPresentation="message"
+      agentSurface="gui"
     />
   );
 }

@@ -18,6 +18,21 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicSyncPillState: mocks.useEpicSyncPillState,
+  // Mirrors the derivation contract instead of a hand-set flag: every state
+  // that REQUIRES a genuine cloud frame this cycle implies the evidence bit,
+  // and `connected`/`syncing` default to the handshake-only (no-evidence)
+  // reading these tests exercise. Keeps each `mockReturnValue(state)` site
+  // self-consistent without threading a second knob through all of them.
+  useEpicHasFreshCloudSyncStatus: (): boolean => {
+    const state = mocks.useEpicSyncPillState() as EpicSyncPillState;
+    return (
+      state === "synced" ||
+      state === "hostPending" ||
+      state === "offlineWithUnsavedChanges" ||
+      state === "offlineWithHostPending" ||
+      state === "offlineChangesSavedLocally"
+    );
+  },
 }));
 vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
   useEpicChatBackupStatus: () => mocks.chatBackupStatus,
@@ -140,6 +155,72 @@ describe("<EpicConnectionPill />", () => {
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("reconnecting");
     await expectTooltip("Reconnecting to server");
+  });
+
+  // A stream failure the host cannot classify now closes RETRYABLE and the
+  // client reconnects forever, so "Reconnecting…" alone no longer implies
+  // "back in a moment". After a minute down the copy escalates to say the
+  // retry is not converging - same amber severity, and the screen-reader
+  // announcement follows the same threshold so a routine reconnect stays
+  // silent.
+  describe("stalled-link escalation (60s)", () => {
+    it("reads Reconnecting… before the escalation threshold, with a silent status region", () => {
+      vi.useFakeTimers();
+      renderPill("reconnecting");
+
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Still reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(59_000);
+      });
+
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Still reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
+
+    it("escalates to Still reconnecting… at 60s and announces it through role=status", () => {
+      vi.useFakeTimers();
+      renderPill("reconnecting");
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(screen.getByText("Still reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Reconnecting…")).toBeNull();
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+      ).toBe(
+        "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+      );
+      expect(screen.getByRole("status").textContent).toBe(
+        "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+      );
+    });
+
+    it("resets the escalation clock once the link recovers, staying silent on a fresh reconnect", () => {
+      vi.useFakeTimers();
+      const { rerender } = renderPill("reconnecting");
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByText("Still reconnecting…")).not.toBeNull();
+
+      // The link recovers, then drops again - a fresh outage must start its
+      // own clock rather than inheriting the earlier escalation.
+      mocks.useEpicSyncPillState.mockReturnValue("synced");
+      rerender(pillTree());
+      mocks.useEpicSyncPillState.mockReturnValue("reconnecting");
+      rerender(pillTree());
+
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Still reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
   });
 
   it("renders the offline state as a red pill with disconnect tooltip text", async () => {

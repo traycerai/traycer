@@ -39,6 +39,12 @@ export type {
   HostTrayCommand,
   HostUninstallResult,
   InstallVersionOk,
+  MaintenanceDoctorProjection,
+  MaintenanceInstallDispatch,
+  DoctorRepairDispatch,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+  DoctorRepairIntent,
   MutationKind,
   MutationLaneStatus,
   MutationOutcome,
@@ -47,3 +53,11 @@ export type {
   TraycerUninstallResult,
   FreePortAndRestartInput,
 } from "@traycer-clients/shared/platform/runner-host";
+
+// The `maintenance:*` handlers resolve protocol response shapes verbatim (see
+// `IHostManagement`'s maintenance members for why); re-exported here so main
+// and the preload keep their single ipc-contracts import path.
+export type {
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponse,
+} from "@traycer/protocol/host/maintenance/index";

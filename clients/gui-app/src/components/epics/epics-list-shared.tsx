@@ -53,6 +53,7 @@ export function HistoryRowLeadingIcon(props: {
         <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
       }
       statusPresentation="message"
+      agentSurface="gui"
     />
   );
 }
@@ -86,6 +87,29 @@ export function EpicsListFilteringLoading(): ReactNode {
         testId={undefined}
       />
       <p className="font-medium text-foreground">Searching tasks</p>
+    </div>
+  );
+}
+
+/**
+ * Shown when a host filter is active but the serving peer cannot apply it, so
+ * the rows were withheld. Deliberately NOT an empty-history message: the
+ * account's tasks exist, this client just declined to show a list it could not
+ * honestly call filtered.
+ */
+export function EpicsListChatHostFilterUnsupported(): ReactNode {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-[min(4rem,12vh)] text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-chat-host-filter-unsupported"
+    >
+      <p className="font-medium text-foreground">
+        Can&apos;t filter by host here
+      </p>
+      <p className="max-w-full">
+        This host is running a version that doesn&apos;t support the host
+        filter. Update it, or clear the host filter to see your tasks.
+      </p>
     </div>
   );
 }

@@ -1,5 +1,3 @@
-import { hostSelectRowRefused } from "./host-select-row-refused";
-import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import {
   useCallback,
   useEffect,
@@ -13,12 +11,14 @@ import {
 import { useIsMutating } from "@tanstack/react-query";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
-import { HostSection } from "./host-section";
+import { HostSection, WorkspaceHostSwitcher } from "./host-section";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
   findHostOption,
   unavailableHostOption,
+  type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { activeRunNoticeFor } from "./active-run-notice";
 import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -32,11 +32,8 @@ import type {
   WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
-import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
-import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -110,19 +107,10 @@ import {
   type WorktreeScriptsTarget,
 } from "@/components/home/worktree/worktree-scripts-dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import {
   hostWorkspaceControlsScopeHostId,
   hostWorkspaceControlsScopeRefusals,
   type HostWorkspaceControlsHostScope,
 } from "./host-workspace-controls-scope";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { computeInEpicFolderMode } from "./compute-in-epic-folder-mode";
 import {
   type AddFolderHandler,
@@ -138,7 +126,6 @@ import {
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-result";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
-import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 import { useRecentWorkspaces } from "./use-recent-workspaces";
@@ -297,7 +284,6 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
       hostLabel={inEpicHostLabel}
       activeHostId={props.surface.hostId}
       hostClient={ownerHostClient}
-      directoryEntries={directoryEntries}
     />
   );
 }
@@ -425,13 +411,17 @@ export function ActiveHostWorkspaceControls(
   // is that host alone. It resolves out of the same merged list, and only falls
   // back to a stand-in row when the list has never heard of it.
   const hostOptions = useHostOptions();
-  const fixedHostOption =
-    props.hostScope.kind === "fixed"
-      ? (findHostOption(hostOptions.hosts, props.hostScope.hostId) ??
-        unavailableHostOption(props.hostScope.hostId, hostLabel))
-      : null;
-  const visibleHostOptions =
-    fixedHostOption === null ? hostOptions.hosts : [fixedHostOption];
+  const listedHostOption = findHostOption(hostOptions.hosts, activeHostId);
+  const selectedHostOption =
+    activeHostId === null
+      ? null
+      : (listedHostOption ?? unavailableHostOption(activeHostId, hostLabel));
+  const visibleHostOptions = hostPickerOptionsForScope(
+    props.hostScope,
+    selectedHostOption,
+    listedHostOption,
+    hostOptions.hosts,
+  );
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
@@ -543,19 +533,19 @@ export function ActiveHostWorkspaceControls(
 
   // Landing rests as host picker + compact summary chip, matching the in-epic
   // composer. Detailed folder rows still live in the popover/modal stack.
-  const hostSelectConfig = hostOnlySelectConfig(
-    props.hostScope,
-    directoryEntries,
-  );
   const deviceSelect = (
-    <HostOnlySelect
-      hostLabel={hostLabel}
-      entries={hostSelectConfig.entries}
+    <WorkspaceHostSwitcher
+      hosts={visibleHostOptions}
       activeHostId={activeHostId}
-      mode={hostSelectConfig.mode}
       onSelect={handleSelectHost}
-      loading={false}
-      disabled={disabled}
+      intent="pin"
+      refusalByHostId={refusalByHostId}
+      inertExceptHostId={unselectableExceptHostId}
+      disabled={disabled || props.hostScope.kind === "fixed"}
+      isLoading={hostOptions.isLoading}
+      listsFailed={hostOptions.listsFailed}
+      onRetryLists={hostOptions.retryLists}
+      surface="inline"
     />
   );
   return (
@@ -575,20 +565,20 @@ export function ActiveHostWorkspaceControls(
   );
 }
 
-function hostOnlySelectConfig(
+function hostPickerOptionsForScope(
   scope: HostWorkspaceControlsHostScope,
-  directoryEntries: ReadonlyArray<HostDirectoryEntry>,
-): {
-  readonly entries: ReadonlyArray<HostDirectoryEntry>;
-  readonly mode: "editable" | "locked";
-} {
-  if (scope.kind !== "fixed") {
-    return { entries: directoryEntries, mode: "editable" };
+  selectedHostOption: HostScopeOption | null,
+  listedHostOption: HostScopeOption | null,
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  if (scope.kind === "fixed") {
+    if (selectedHostOption === null) return [];
+    return [selectedHostOption];
   }
-  return {
-    entries: directoryEntries.filter((entry) => entry.hostId === scope.hostId),
-    mode: "locked",
-  };
+  if (selectedHostOption !== null && listedHostOption === null) {
+    return [selectedHostOption, ...hosts];
+  }
+  return hosts;
 }
 
 function HomeWorkspaceRows(props: {
@@ -1210,11 +1200,11 @@ function HomeWorkspaceSummaryControl(props: {
 }) {
   return (
     <div
-      className="inline-flex max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
+      className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
       data-testid="home-workspace-summary-control"
     >
       {props.hostSlot === null ? null : (
-        <div className="min-w-0 flex-[0_1_10rem] max-w-[min(34%,10rem)] overflow-hidden">
+        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
           {props.hostSlot}
         </div>
       )}
@@ -1242,180 +1232,6 @@ function HomeWorkspaceSummaryControl(props: {
       </div>
     </div>
   );
-}
-
-function HostOnlySelect(props: {
-  readonly hostLabel: string;
-  readonly entries: ReadonlyArray<HostDirectoryEntry>;
-  readonly activeHostId: string | null;
-  readonly mode: "editable" | "fork-on-switch" | "locked";
-  readonly onSelect: (hostId: string) => void;
-  readonly loading: boolean;
-  readonly disabled: boolean;
-}) {
-  const binding = useHostBinding();
-  const directory = binding === null ? null : binding.directory;
-  const [open, setOpen] = useState<boolean>(false);
-  const remoteRestricted = useRemoteHostsPlanRestricted();
-  useRefreshHostDirectoryOnOpen(open, directory);
-  const options = hostSelectOptions(
-    props.entries,
-    props.activeHostId,
-    props.hostLabel,
-  );
-  // Two reasons to go inert, but only one of them explains itself: `locked`
-  // means this surface can never switch host, while `props.disabled` is a
-  // transient draft-create settle. Labelling the second "Terminal host is
-  // fixed" would tell an editable composer's user their host is permanent.
-  const lockedToFixedHost = props.mode === "locked";
-  const disabled = lockedToFixedHost || props.disabled;
-  return (
-    <Select
-      open={open}
-      onOpenChange={setOpen}
-      value={props.activeHostId ?? undefined}
-      onValueChange={props.onSelect}
-      disabled={disabled}
-    >
-      <TooltipWrapper
-        label={lockedToFixedHost ? "Terminal host is fixed" : undefined}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        {/* `flex w-full min-w-0`, NOT `inline-flex`: the trigger below is
-            `w-full`, and a shrink-to-fit guard would make that resolve against
-            the guard rather than the selector's cell, collapsing the control. */}
-        <span className="flex w-full min-w-0">
-          <SelectTrigger
-            size="sm"
-            aria-label="Host"
-            data-testid="composer-host-trigger"
-            className="h-7 w-full min-w-0 max-w-full justify-start gap-1.5 overflow-hidden border-transparent bg-transparent px-1.5 text-ui-sm text-muted-foreground opacity-70 transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-70 data-[state=open]:rounded-b-none dark:bg-transparent dark:hover:bg-accent/50 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:overflow-hidden *:data-[slot=select-value]:truncate"
-          >
-            <SelectValue placeholder={props.hostLabel} />
-            {props.loading ? (
-              <AgentSpinningDots
-                className="text-current/70"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-          </SelectTrigger>
-        </span>
-      </TooltipWrapper>
-      <SelectContent
-        data-testid="composer-host-popover"
-        sideOffset={0}
-        className="data-[side=bottom]:translate-y-0 data-[side=bottom]:rounded-t-none data-[side=top]:translate-y-0 data-[side=top]:rounded-b-none"
-      >
-        {options.map((host) => (
-          <HostSelectRow
-            key={host.hostId}
-            host={host}
-            remoteRestricted={remoteRestricted}
-            locked={props.mode === "locked"}
-          />
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function HostSelectRow(props: {
-  readonly host: HostDirectoryEntry;
-  readonly remoteRestricted: boolean;
-  readonly locked: boolean;
-}) {
-  // Subscribed, not read: the refusal predicate is ready-session-aware, and
-  // the session cache is pull-only - a readiness flip changes no directory
-  // value, so a row that read `hasReadyRemoteSession` at render time would
-  // keep its refusal answer until some unrelated directory emit. The poll
-  // subscription is what lets a row grey out when its backing session dies
-  // (and re-enable on the converse) while the popover is open.
-  const hasReadySession = useRemoteSessionPollReadiness(props.host.hostId);
-  return (
-    <SelectItem
-      value={props.host.hostId}
-      disabled={
-        props.locked ||
-        // Not `status === "unavailable"`, and not the raw
-        // `hostUnavailability` verdict either: the refusal is asked
-        // through the SAME ready-session-aware predicate the activation
-        // path dials through, so a fuse-window `offline` (recovery dial
-        // permitted) or an offline verdict this client holds a ready
-        // live session against stays selectable - see
-        // `hostSelectRowRefused` for the full derivation.
-        hostSelectRowRefused(
-          props.host,
-          props.remoteRestricted,
-          hasReadySession,
-        )
-      }
-    >
-      <HostSelectOptionContent
-        host={props.host}
-        remoteRestricted={props.remoteRestricted}
-      />
-    </SelectItem>
-  );
-}
-
-function HostSelectOptionContent(props: {
-  readonly host: HostDirectoryEntry;
-  readonly remoteRestricted: boolean;
-}) {
-  return (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="min-w-0 truncate">
-        {settingsHostOptionLabel(props.host)}
-      </span>
-      {props.host.kind === "local" ? (
-        <Badge
-          variant="outline"
-          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground [[data-slot=select-trigger]_&]:hidden"
-          data-testid={`composer-host-local-chip-${props.host.hostId}`}
-        >
-          Local
-        </Badge>
-      ) : null}
-      {props.remoteRestricted && props.host.kind === "remote" ? (
-        <Badge
-          variant="outline"
-          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground [[data-slot=select-trigger]_&]:hidden"
-          data-testid={`composer-host-paid-plan-chip-${props.host.hostId}`}
-        >
-          Paid plan
-        </Badge>
-      ) : null}
-    </span>
-  );
-}
-
-function hostSelectOptions(
-  entries: ReadonlyArray<HostDirectoryEntry>,
-  activeHostId: string | null,
-  hostLabel: string,
-): ReadonlyArray<HostDirectoryEntry> {
-  if (
-    activeHostId === null ||
-    entries.some((entry) => entry.hostId === activeHostId)
-  ) {
-    return entries;
-  }
-  // Same fabricated-row rule as `fixedUnavailableHostEntry`: no route exists to
-  // ask about, so the coarse bit is written directly rather than derived.
-  return [
-    {
-      hostId: activeHostId,
-      label: hostLabel,
-      kind: "local",
-      websocketUrl: null,
-      version: null,
-      transportDialability: "not-dialable",
-    },
-    ...entries,
-  ];
 }
 
 type UnresolvedWorkspaceFolder = Extract<
@@ -1926,7 +1742,6 @@ interface InEpicSurfaceProps {
   readonly hostLabel: string;
   readonly activeHostId: string | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
 }
 
 // Coordinates host-bound folder metadata, staged worktree edits, add/remove
@@ -1934,6 +1749,15 @@ interface InEpicSurfaceProps {
 // eslint-disable-next-line complexity
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
+  const hostOptions = useHostOptions();
+  const pickerHosts =
+    props.activeHostId === null ||
+    findHostOption(hostOptions.hosts, props.activeHostId) !== null
+      ? hostOptions.hosts
+      : [
+          unavailableHostOption(props.activeHostId, props.hostLabel),
+          ...hostOptions.hosts,
+        ];
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
   });
@@ -2918,20 +2742,42 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // branch edits stage); the explicit "Update" applies the staged set and tells
   // the owning tile to restart the PTY once against the updated binding.
   const readOnly = false;
+  const hostSwitcher = (
+    <WorkspaceHostSwitcher
+      hosts={pickerHosts}
+      activeHostId={props.activeHostId}
+      onSelect={handleSelectHostForChat}
+      intent="pin"
+      refusalByHostId={NO_HOST_OPTION_REFUSALS}
+      inertExceptHostId={null}
+      disabled={surface.kind === "terminal-agent"}
+      isLoading={hostOptions.isLoading}
+      listsFailed={hostOptions.listsFailed}
+      onRetryLists={hostOptions.retryLists}
+      surface="inline"
+      keepFocusableWhenDisabled={surface.kind === "terminal-agent"}
+    />
+  );
+  const hostSwitcherSlot = (
+    <span className="flex w-full min-w-0">{hostSwitcher}</span>
+  );
 
   return (
     <>
-      <div className="inline-flex max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden">
-        <div className="min-w-0 flex-[0_1_10rem] max-w-[min(34%,10rem)] overflow-hidden">
-          <HostOnlySelect
-            hostLabel={props.hostLabel}
-            entries={props.directoryEntries}
-            activeHostId={props.activeHostId}
-            mode={surface.kind === "chat" ? "fork-on-switch" : "locked"}
-            onSelect={handleSelectHostForChat}
-            loading={metadataPending}
-            disabled={false}
-          />
+      <div className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden">
+        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
+          <TooltipWrapper
+            label={
+              surface.kind === "terminal-agent"
+                ? "Terminal host is fixed"
+                : undefined
+            }
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            {hostSwitcherSlot}
+          </TooltipWrapper>
         </div>
         <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
           <WorkspaceFolderSummaryControl

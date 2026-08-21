@@ -130,7 +130,10 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
 
 function renderTombstoned(accentColor: string | null) {
   return render(
-    <TombstonedProfileProvider providers={[claudeStateWithoutProfile()]}>
+    <TombstonedProfileProvider
+      providers={[claudeStateWithoutProfile()]}
+      hostId="host-1"
+    >
       <ChatExpansionTestProviders tileInstanceId="tombstone-accent-tile">
         <TooltipProvider>
           <UserMessageBody

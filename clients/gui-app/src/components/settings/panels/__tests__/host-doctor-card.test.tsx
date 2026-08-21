@@ -14,11 +14,17 @@ import type {
   HostDoctorIssue,
   HostDoctorReport,
   HostRestartRequestResult,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
   FreePortAndRestartInput,
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
+
+const HOST_CHANGED_MESSAGE =
+  "This computer's host changed while that was open. Reopen Settings and try again.";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -29,10 +35,16 @@ vi.mock("sonner", () => ({
 }));
 
 interface ManagementOverrides {
-  readonly runDoctor?: () => Promise<HostDoctorReport>;
+  readonly runDoctor?: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostDoctorReport>;
   readonly restartHost?: () => Promise<HostRestartRequestResult>;
+  readonly runDoctorRepairQueued?: (input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }) => Promise<QueuedDoctorRepairResult>;
   readonly freePortAndRestart?: (
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ) => Promise<FreePortAndRestartInput>;
 }
 
@@ -63,7 +75,26 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     registryCheck: vi.fn(notImplemented("registryCheck")),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued:
+      overrides.runDoctorRepairQueued ??
+      vi.fn(() => Promise.resolve({ kind: "applied" as const })),
+    freePortAndRestartIfIdle: vi.fn((_input) =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
+    maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
+    maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),
+    maintenanceInstallationInfo: vi.fn(
+      notImplemented("maintenanceInstallationInfo"),
+    ),
+    maintenanceInstallVersion: vi.fn(
+      notImplemented("maintenanceInstallVersion"),
+    ),
+    restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "test-host",
@@ -125,7 +156,7 @@ function renderCard(host: IRunnerHost): QueryClient {
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={host}>
-        <HostDoctorCard />
+        <HostDoctorCard expectedHostId="local-host" />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
@@ -156,8 +187,9 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   });
 
   it("opens the Free Port + Restart confirmation when PORT_CONFLICT carries process identity", async () => {
-    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
-      Promise.resolve(input),
+    const freePortAndRestart = vi.fn(
+      (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
+        Promise.resolve(input),
     );
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
@@ -211,16 +243,22 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     await waitFor(() => {
       expect(freePortAndRestart).toHaveBeenCalledTimes(1);
     });
+    // The recovery console keeps the QUEUEING route (it repairs a host that is
+    // already down) but still carries the identity fence: the port and pid it
+    // is about to act on describe the machine as this report saw it.
     expect(freePortAndRestart).toHaveBeenCalledWith({
       port: 7300,
       pid: 4321,
       processName: "node",
+      expectedHostId: "local-host",
     });
+    expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
   });
 
   it("allows Free Port + Restart when PID and process name are unknown", async () => {
-    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
-      Promise.resolve(input),
+    const freePortAndRestart = vi.fn(
+      (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
+        Promise.resolve(input),
     );
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
@@ -263,12 +301,15 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       port: 7300,
       pid: null,
       processName: null,
+      expectedHostId: "local-host",
     });
+    expect(management.freePortAndRestartIfIdle).not.toHaveBeenCalled();
   });
 
   it("never presents Free Port + Restart with port 0", async () => {
-    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
-      Promise.resolve(input),
+    const freePortAndRestart = vi.fn(
+      (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
+        Promise.resolve(input),
     );
     const restartHost = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
@@ -344,9 +385,12 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     expect(screen.getByRole("button", { name: /Restart host/i })).toBeTruthy();
   });
 
-  it("calls management.restartHost() when the fix button is clicked", async () => {
+  it("routes the restart fix through the identity-fenced queued repair, not the unfenced restartHost", async () => {
     const restartHost = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
     );
     const management = makeManagement({
       runDoctor: () =>
@@ -355,6 +399,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
           ranAt: "2026-05-15T00:00:00Z",
         }),
       restartHost,
+      runDoctorRepairQueued,
     });
     renderCard(makeHostWithManagement(management));
 
@@ -364,7 +409,87 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     fireEvent.click(button);
 
     await waitFor(() => {
-      expect(restartHost).toHaveBeenCalledTimes(1);
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "restart",
+        expectedHostId: "local-host",
+      });
     });
+    // The console keeps QUEUEING semantics, but it may no longer reach the
+    // app-wide method that carries no host id: this console can outlive the
+    // host it opened on, and that call would kill whichever host is here now.
+    expect(restartHost).not.toHaveBeenCalled();
+  });
+
+  it("renders an error arm when the report read fails, not no issues detected", async () => {
+    const management = makeManagement({
+      runDoctor: () => Promise.reject(new Error(HOST_CHANGED_MESSAGE)),
+    });
+    renderCard(makeHostWithManagement(management));
+
+    expect(
+      await screen.findByText(`Doctor could not run: ${HOST_CHANGED_MESSAGE}`),
+    ).toBeTruthy();
+    expect(screen.queryByText("Doctor: no issues detected.")).toBeNull();
+  });
+
+  it("hostDoctor query keys discriminate two host ids even when the bridge hashes to {}", () => {
+    const management = {};
+    expect(
+      JSON.stringify(runnerQueryKeys.hostDoctor(management, "host-a")),
+    ).not.toBe(
+      JSON.stringify(runnerQueryKeys.hostDoctor(management, "host-b")),
+    );
+  });
+
+  it("Re-run Doctor on the error arm refetches, swapping the arm for the spinner", async () => {
+    // Held in an object rather than a `let`: TS narrows a captured `let` to
+    // `null` at the call site because it cannot prove the executor ran, and
+    // the `?.()` that placates it then types as `never`.
+    const second: { release: () => void } = { release: () => undefined };
+    const secondGate = new Promise<void>((resolve) => {
+      second.release = resolve;
+    });
+    let calls = 0;
+    const runDoctor = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error(HOST_CHANGED_MESSAGE);
+      }
+      await secondGate;
+      return {
+        issues: [] as const,
+        ranAt: "2026-08-12T00:00:00Z",
+      };
+    });
+    const management = makeManagement({ runDoctor });
+    renderCard(makeHostWithManagement(management));
+
+    expect(
+      await screen.findByText(`Doctor could not run: ${HOST_CHANGED_MESSAGE}`),
+    ).toBeTruthy();
+    const idleRerun = screen.getByTestId("host-doctor-rerun");
+    if (!(idleRerun instanceof HTMLButtonElement)) {
+      throw new Error("expected rerun button");
+    }
+
+    fireEvent.click(idleRerun);
+    await waitFor(() => {
+      expect(runDoctor).toHaveBeenCalledTimes(2);
+    });
+    expect(runDoctor).toHaveBeenLastCalledWith({
+      expectedHostId: "local-host",
+    });
+    // The refetch clears the error, and with no data behind it the query
+    // returns to `pending` — so the error arm and its button are GONE and the
+    // shared spinner owns the in-flight state. Pinned as an equality, not a
+    // tolerance: it is the reason the button carries no `disabled` prop, and
+    // if a later change keeps the arm mounted that prop has to come back.
+    expect(screen.queryByTestId("host-doctor-rerun")).toBeNull();
+    expect(screen.queryByText(/Doctor could not run:/)).toBeNull();
+    expect(screen.getByText("Running Doctor…")).toBeTruthy();
+
+    second.release();
+    expect(await screen.findByText("Doctor: no issues detected.")).toBeTruthy();
+    expect(screen.queryByText(/Doctor could not run:/)).toBeNull();
   });
 });

@@ -88,6 +88,7 @@ function SwitcherTuiAgentIcon(props: {
   readonly nodeId: string;
 }) {
   const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
+  const ownerHostId = useEpicNodeHostId(props.nodeId);
   const FallbackIcon = EPIC_NODE_ICONS["terminal-agent"];
   const idleIcon =
     harnessId === null ? (
@@ -118,9 +119,10 @@ function SwitcherTuiAgentIcon(props: {
     <TerminalAgentProgressIcon
       epicId={props.epicId}
       nodeId={props.nodeId}
-      // `null`, matching the sidebar row: a TUI agent's indicator rows are
-      // filed under the surface's own aggregate, not scoped per origin.
-      originHostId={null}
+      // The row's owner host, matching the sidebar row: agent ids are
+      // host-minted, so a same-id agent on another machine must not light
+      // this glyph.
+      originHostId={ownerHostId}
       className="size-4"
       style={undefined}
       testIdPrefix={SWITCHER_AGENT_TEST_ID_PREFIX}

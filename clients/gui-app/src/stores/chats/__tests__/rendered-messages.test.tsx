@@ -440,6 +440,41 @@ function renderRenderedMessages(patch: Partial<RenderedMessagesInput>) {
 }
 
 describe("useRenderedMessages", () => {
+  it("projects an explicitly anchored send failure into a stable inline error row", () => {
+    const failure = {
+      eventId: "queued-preparation-failure",
+      type: "send.failed",
+      timestamp: 2_000,
+      clientActionId: null,
+      actor: null,
+      message: "The queued prompt could not be prepared.",
+      turnId: null,
+      messageId: null,
+      queueItemId: "queue-item-1",
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: {
+        code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        notificationAnchor: true,
+      },
+    } satisfies ChatEvent;
+    const { result } = renderRenderedMessages({ events: [failure] });
+
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0]).toMatchObject({
+      id: "chat-event:queued-preparation-failure",
+      role: "assistant",
+      segments: [
+        {
+          kind: "error",
+          message: "The queued prompt could not be prepared.",
+          code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        },
+      ],
+    });
+  });
+
   it("projects persisted plan blocks into plan segments", () => {
     const assistant = assistantMessage("turn-plan", 2000);
     const planBlock = {

@@ -3,7 +3,10 @@ import type {
   SchemaVersion,
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { IHostStreamClient } from "../host-stream-client";
+import type {
+  IHostStreamClient,
+  ReconnectAllOptions,
+} from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
 import type { IRemoteSession } from "./remote-session";
@@ -99,7 +102,11 @@ export class RemoteStreamClient<
    * has released inherits that view's ownership guard and this becomes a no-op
    * rather than hurrying a session nobody holds.
    */
-  reconnectAll(reason: string): void {
+  reconnectAll(reason: string, _options: ReconnectAllOptions): void {
+    // `probeFirst` is not consulted: `wake` IS probe-first by construction
+    // (the session pokes the socket's keepalive and re-dials only on a failed
+    // verdict), and the forced flavour has nothing to force here - there is no
+    // endpoint to re-resolve, per the contract note above.
     this.session.wake(reason);
   }
 

@@ -101,6 +101,7 @@ function historyItem(overrides: {
     updatedBucket: "earlier",
     linkedRepos: [],
     linkedWorkspaces: [],
+    chatHostIds: null,
     worktreeBranches: [],
     worktreePaths: [],
     pullRequestNumbers: [],

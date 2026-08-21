@@ -9,6 +9,7 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
@@ -39,6 +40,16 @@ export function useWindowNarration(): WindowNarrationState {
   // `NarratingWindowHostModal`'s doc). Outside a provider - web, harnesses -
   // there is no local host to expect, which is also the correct answer.
   const localHostExpected = useRunnerHostOrNull()?.hasLocalHost ?? false;
+  // WHICH host is this machine's, which `hasLocalHost` cannot answer: it is a
+  // statement about the SHELL and stays true while the target is a remote. The
+  // restarting-target grace needs the identity, or it tells a local boot story
+  // over a remote machine this app has no lifecycle for.
+  //
+  // The DURABLE id, never `useReactiveLocalHostEntry()?.hostId`: the entry is
+  // nulled by `onLocalHostChange(null)`, which is precisely what a restarting
+  // local host looks like, so the entry answers null for exactly the interval
+  // this arm is about and the grace would collapse in the state it exists for.
+  const localHostId = useReactiveLocalHostId();
 
   const servingNow =
     attached && isServingLease(findLease(leases, effectiveHostId));
@@ -68,6 +79,7 @@ export function useWindowNarration(): WindowNarrationState {
         leases,
         hasBeenServed,
         localHostExpected,
+        localHostId,
       }),
     [
       attached,
@@ -75,6 +87,7 @@ export function useWindowNarration(): WindowNarrationState {
       hasBeenServed,
       leases,
       localHostExpected,
+      localHostId,
       targetHostId,
     ],
   );

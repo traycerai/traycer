@@ -212,18 +212,18 @@ describe("cloud notification indicator derivation", () => {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
-  it("uses the newest terminal outcome for a chat", () => {
+  it("uses the origin's durable terminal ordering cursor", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
-          entryId: "failure-unread",
+          entryId: "0001-failure-unread",
           severity: "failure",
           readAt: null,
           updatedAt: 1,
           chatId: "chat-1",
         }),
         stoppedAt({
-          entryId: "done-unread",
+          entryId: "0002-done-unread",
           severity: "done",
           readAt: null,
           updatedAt: 2,
@@ -247,14 +247,14 @@ describe("cloud notification indicator derivation", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
-          entryId: "done-unread",
+          entryId: "0001-done-unread",
           severity: "done",
           readAt: null,
           updatedAt: 1,
           chatId: "chat-1",
         }),
         stoppedAt({
-          entryId: "failure-unread",
+          entryId: "0002-failure-unread",
           severity: "failure",
           readAt: null,
           updatedAt: 2,
@@ -274,16 +274,16 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
-  it("does not let an independent completion hide a failure on the same chat", () => {
+  it("lets a later completion own the glyph while retaining the failure row", () => {
     const failure = stoppedAt({
-      entryId: "workspace-failure",
+      entryId: "0001-workspace-failure",
       severity: "failure",
       readAt: null,
       updatedAt: 1,
       chatId: "chat-1",
     });
     const done = stoppedAt({
-      entryId: "agent-done",
+      entryId: "0002-agent-done",
       severity: "done",
       readAt: null,
       updatedAt: 2,
@@ -299,16 +299,89 @@ describe("cloud notification indicator derivation", () => {
     );
 
     expect(result.epics["epic-1"]).toMatchObject({
-      unreadFailure: true,
+      unreadFailure: false,
       unreadDone: true,
     });
     expect(result.chats["chat-1"]).toMatchObject({
-      unreadFailure: true,
+      unreadFailure: false,
       unreadDone: true,
     });
   });
 
-  it("preserves an unread failure when terminal timestamps tie", () => {
+  it("lets a silent automatic recovery clear Error without replacing it with Done", () => {
+    const failure = stoppedAt({
+      entryId: "0001-agent-failure",
+      severity: "failure",
+      readAt: null,
+      updatedAt: 1,
+      chatId: "chat-1",
+    });
+    const recovery = stoppedAt({
+      entryId: "0002-agent-recovery",
+      severity: "done",
+      readAt: 2,
+      updatedAt: 2,
+      chatId: "chat-1",
+    });
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        failure,
+        {
+          ...recovery,
+          entry: {
+            ...recovery.entry,
+            payload: {
+              outcome: "completed",
+              automaticRecovery: true,
+            },
+          },
+        },
+      ]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result).toEqual({ epics: {}, chats: {} });
+  });
+
+  it("does not let automatic recovery erase an unread Done", () => {
+    const done = stoppedAt({
+      entryId: "0001-agent-done",
+      severity: "done",
+      readAt: null,
+      updatedAt: 1,
+      chatId: "chat-1",
+    });
+    const recovery = stoppedAt({
+      entryId: "0002-agent-recovery",
+      severity: "done",
+      readAt: 2,
+      updatedAt: 2,
+      chatId: "chat-1",
+    });
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        done,
+        {
+          ...recovery,
+          entry: {
+            ...recovery.entry,
+            payload: {
+              outcome: "completed",
+              automaticRecovery: true,
+            },
+          },
+        },
+      ]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result.epics["epic-1"].unreadDone).toBe(true);
+    expect(result.chats["chat-1"].unreadDone).toBe(true);
+  });
+
+  it("uses entry identity to break tied terminal timestamps", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
@@ -334,8 +407,8 @@ describe("cloud notification indicator derivation", () => {
       pendingApproval: false,
       pendingInterview: false,
       pendingFork: false,
-      unreadFailure: true,
-      unreadDone: false,
+      unreadFailure: false,
+      unreadDone: true,
     });
   });
 
@@ -435,7 +508,7 @@ describe("cloud notification indicator derivation", () => {
           chatId: "chat-1",
         }),
         stoppedAt({
-          entryId: "failure-unread",
+          entryId: "0001-failure-unread",
           severity: "failure",
           readAt: null,
           updatedAt: 1,
@@ -451,6 +524,33 @@ describe("cloud notification indicator derivation", () => {
       pendingInterview: false,
       pendingFork: false,
       unreadFailure: true,
+      unreadDone: true,
+    });
+  });
+
+  it("promotes a host terminal failure to attention on an epic aggregate", () => {
+    const result = selectNotificationIndicatorState(
+      { byId: {} },
+      { epicId: "epic-1" },
+      null,
+      {
+        epics: {
+          "epic-1": {
+            pendingApproval: false,
+            pendingInterview: false,
+            pendingFork: false,
+            unreadFailure: true,
+            unreadDone: true,
+          },
+        },
+        chats: {},
+      },
+    );
+
+    expect(result).toMatchObject({
+      unreadFailure: true,
+      unreadNonTerminalFailure: true,
+      unreadTerminalFailure: false,
       unreadDone: true,
     });
   });
@@ -513,14 +613,14 @@ describe("cloud notification indicator derivation", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
-          entryId: "failure-unread",
+          entryId: "0001-failure-unread",
           severity: "failure",
           readAt: null,
           updatedAt: 1,
           chatId: "chat-1",
         }),
         stoppedAt({
-          entryId: "done-read",
+          entryId: "0002-done-read",
           severity: "done",
           readAt: 3,
           updatedAt: 2,

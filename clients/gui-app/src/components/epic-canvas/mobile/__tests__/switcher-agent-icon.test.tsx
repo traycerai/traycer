@@ -213,6 +213,25 @@ describe("<SwitcherAgentIcon /> matches the desktop mapping", () => {
   it("lets an attention tone outrank a running turn, as the desktop row does", () => {
     state.tier = "turn";
     render(
+      renderIcon("terminal-agent", chatIndicators({ pendingApproval: true })),
+    );
+    expect(screen.getByTestId("switcher-agent-approval-n1")).toBeTruthy();
+    expect(screen.queryByTestId("switcher-agent-activity-n1")).toBeNull();
+  });
+
+  it("lets a newer running turn own the glyph over a historical failure, which surfaces once the run ends", () => {
+    // A chat-scoped host failure is terminal chronology: the running turn owns
+    // the glyph while the failure stays in the feed (the desktop mapping since
+    // notification history was split from current agent state).
+    state.tier = "turn";
+    render(
+      renderIcon("terminal-agent", chatIndicators({ unreadFailure: true })),
+    );
+    expect(screen.getByTestId("switcher-agent-activity-n1")).toBeTruthy();
+    expect(screen.queryByTestId("switcher-agent-failure-n1")).toBeNull();
+    cleanup();
+    state.tier = null;
+    render(
       renderIcon("terminal-agent", chatIndicators({ unreadFailure: true })),
     );
     expect(screen.getByTestId("switcher-agent-failure-n1")).toBeTruthy();

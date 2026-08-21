@@ -163,7 +163,10 @@ export function useNotificationActivationWithNavigate(
         navigate,
         input.payload,
         input.receivedAt,
-        originHostId,
+        {
+          originHostId,
+          effectiveHostId: beforeRouteHostId,
+        },
       );
       if (
         requiresOriginHost &&
