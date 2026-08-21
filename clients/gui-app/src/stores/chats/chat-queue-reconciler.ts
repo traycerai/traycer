@@ -277,6 +277,17 @@ export function unrecoverableSendNotice(
         // what does not survive is that it was QUOTED. Both paste paths
         // dissolve a blockquote, so the resend reads as ordinary prose and the
         // agent is no longer told which part was being asked about.
+        // The grid is in the copy below as markdown, so the cells are not
+        // lost - what is lost is the TABLE, which the composer cannot rebuild
+        // from that text because it has no table node at all.
+        countedClause({
+          count: losses.get("table") ?? 0,
+          singular: "table",
+          plural: "tables",
+          verbPhrase:
+            "will paste back as markdown text rather than a grid - rebuild",
+          tail: "if the layout matters",
+        }),
         countedClause({
           count: losses.get("quotedBlock") ?? 0,
           singular: "quoted block",

@@ -225,6 +225,80 @@ describe("content recovery classification", () => {
     expect(text).toBe("```mermaid\n\n```");
   });
 
+  // `-H2a9`: convertibility first, then parity - and the composer settles the
+  // first outright. `buildComposerExtensions` has no table extension
+  // (`@tiptap/extension-table` is in the ARTIFACT bundle only), so the schema
+  // cannot hold a table node and no paste rebuilds one. It is a loss.
+  //
+  // The emission is the worse half: the default container walk joins children
+  // with `""`, so this table projected to `envurlproda.test` - the `foobar`
+  // list mangling one level up, quoting back something nobody wrote.
+  it("emits a table as its markdown grid, and counts the grid as lost", () => {
+    const table: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableHeader",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "env" }],
+                    },
+                  ],
+                },
+                {
+                  type: "tableHeader",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "url" }],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "prod" }],
+                    },
+                  ],
+                },
+                {
+                  type: "tableCell",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "a.test" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    // Byte-identical to `jsonContentToMarkdown` on the same input, checked
+    // against the serializer rather than reasoned about.
+    expect(recoveryTextFromContent(table)).toBe(
+      "| env | url |\n| --- | --- |\n| prod | a.test |",
+    );
+    expect(classifyContentRecovery(table).get("table")).toBe(1);
+  });
+
   it("counts a link whose label hides its target", () => {
     const report = classifyContentRecovery({
       type: "doc",

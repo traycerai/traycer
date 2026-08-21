@@ -27,6 +27,8 @@ export type ContentRecoveryLoss =
    * does not, because neither paste path can rebuild the node.
    */
   | "quotedBlock"
+  /** A table's grid. The cells survive as markdown; the node does not. */
+  | "table"
   /** A node kind nothing has classified - see the fail-closed rule below. */
   | "unknown";
 
@@ -62,9 +64,13 @@ const TEXT_COMPLETE_NODE_TYPES: ReadonlySet<string> = new Set([
   "codeBlock",
   "mermaidBlock",
   "uiPreviewBlock",
-  "table",
-  // `blockquote` is NOT here - see `LOSSY_NODE_TYPES`. Its text survives but
-  // its quote-ness does not, because no paste path can rebuild the node.
+  // Table PARTS are scaffolding for the grid their container emits.
+  "tableRow",
+  "tableHeader",
+  "tableCell",
+  // `blockquote` and `table` are NOT here - see `LOSSY_NODE_TYPES`. Their text
+  // survives but their structure does not, because no paste path can rebuild
+  // either node.
   // `slashCommand` is NOT here: whether it survives depends on its kind and
   // its position, which a type-only set cannot express. See `lostSlashChip`.
 ]);
@@ -102,6 +108,12 @@ const LOSSY_NODE_TYPES: ReadonlyMap<string, ContentRecoveryLoss> = new Map([
   ["mention", "mention"],
   ["sourcedQuote", "quote"],
   ["blockquote", "quotedBlock"],
+  // Same criterion as `blockquote`, and the composer settles it outright:
+  // `buildComposerExtensions` has NO table extension (`@tiptap/extension-table`
+  // is in the ARTIFACT bundle only), so the composer schema cannot hold a
+  // table node and no paste can rebuild one from markdown table text. The
+  // grid comes back as rows of prose.
+  ["table", "table"],
 ]);
 
 /**
@@ -351,6 +363,9 @@ function prepareForProjection(
     if (node.type === "listItem") {
       return prepareForProjection(node.content ?? []);
     }
+    if (node.type === "table") {
+      return tableLines(node);
+    }
     const source = atomSource(node);
     if (source !== null) {
       return [
@@ -449,6 +464,61 @@ function listItemLines(
 
 function isListNode(node: JsonContent): boolean {
   return node.type === "bulletList" || node.type === "orderedList";
+}
+
+/**
+ * A table as the markdown grid its serializer emits, one paragraph per line.
+ *
+ * The default container walk joins children with `""`, so a two-by-two table
+ * projected to `envurlproda.test` - the `foobar` list mangling one level up,
+ * and a quote of something the user never wrote. The grid is what makes the
+ * cells mean anything, so the copy keeps it even though the NODE cannot be
+ * rebuilt by pasting.
+ *
+ * The row shape mirrors `serializeTable`, escaping included, so the copy is
+ * the markdown the agent actually received. Cell CONTENT deliberately routes
+ * back through this module rather than the serializer: a mention inside a cell
+ * has to read the same way as a mention anywhere else in the same quote, and
+ * `jsonContentToMarkdown` would render it under its own `mentionFormat`.
+ */
+function tableLines(table: JsonContent): ReadonlyArray<JsonContent> {
+  const header: string[] = [];
+  const body: string[][] = [];
+  for (const row of table.content ?? []) {
+    if (row.type !== "tableRow") continue;
+    const cells = (row.content ?? []).map((cell) =>
+      extractPlainTextFromComposerJSONContent({
+        type: "doc",
+        content: [...prepareForProjection(cell.content ?? [])],
+      })
+        // A literal trailing `\` would otherwise escape the `\|` below and
+        // merge two cells - the serializer escapes in this order for the same
+        // reason.
+        .replace(/\\/g, "\\\\")
+        .replace(/\|/g, "\\|")
+        .replace(/\n/g, " "),
+    );
+    const isHeader = (row.content ?? []).some(
+      (cell) => cell.type === "tableHeader",
+    );
+    if (isHeader && header.length === 0) {
+      header.push(...cells);
+      continue;
+    }
+    body.push(cells);
+  }
+  const lines =
+    header.length === 0
+      ? []
+      : [
+          `| ${header.join(" | ")} |`,
+          `| ${header.map(() => "---").join(" | ")} |`,
+        ];
+  for (const row of body) lines.push(`| ${row.join(" | ")} |`);
+  return lines.map((line) => ({
+    type: "paragraph",
+    content: [{ type: "text", text: line }],
+  }));
 }
 
 function fencedCodeBlock(node: JsonContent): string {
