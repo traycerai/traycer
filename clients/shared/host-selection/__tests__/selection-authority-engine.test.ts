@@ -5387,6 +5387,103 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
     authority.dispose();
   });
 
+  it("P1 FIX - ONE WINDOW PER EPISODE: after the ceiling lapses onto R, a later ∅ adopts a newly-usable Q at once instead of re-arming a fresh hold on the still-restarting L", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // 1. The ordinary cold start: L cycling, R a usable remote, hold engaged.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 2. The ceiling lapses and R takes over. The LAPSE ITSELF is what the
+    //    rest of this test is about: L has had its window for this episode.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS + 1);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // 3. R dies with nothing else usable, so the authority genuinely reaches ∅
+    //    - the transition that used to destroy the lapse record, because the
+    //    pass that saw R still effective decided no host was being awaited.
+    killHostWithRefusals(engine, "A", incarnation, "R");
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 4. A usable Q appears while L is STILL cycling under the same intent -
+    //    no new restart episode, just a fleet that now has an answer.
+    clock.advance(1_000);
+    fleet.publish(0, "L", [
+      fleetHost("L", "local"),
+      fleetHost("R", "remote"),
+      fleetHost("Q", "remote"),
+    ]);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+
+    // THE REGRESSION: a second full 20s of ∅ - and this one narrates as the
+    // hard "No host is available" card, not as a launch, because the window
+    // has been served since. Q must be adopted on the spot.
+    expect(engine.snapshot().effectiveHostId).toBe("Q");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - NEVER A FIRST WINDOW AFTER SERVICE: a local restart that begins only after the app has been serving gets no ∅ hold at all, so a newly usable Q is adopted at once", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      false,
+      unavailableLocalHostEnsurePort,
+    );
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // The app works: nothing is cycling, and derivation names a host. R,
+    // because this machine's host cannot be provisioned at all. Which host it
+    // is does not matter - what matters is that ∅ has stopped being a launch
+    // story for this process, because the window narrator renders any later ∅
+    // as the hard "No host is available" card.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    // Settle the construction-time ensure: while it is outstanding L reads
+    // `connecting` (usable) and outranks R as the target, so the premise of
+    // this test - a process serving a REMOTE - only holds once it has come
+    // back unavailable.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // The remote dies too. Real ∅, correctly narrated as a verdict.
+    killHostWithRefusals(engine, "A", incarnation, "R");
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // NOW the local host starts cycling - the first restart episode this
+    // process has seen, so there is no lapsed record to stop a hold arming.
+    // The episode guard cannot help here; only "derivation has named a host
+    // before" can.
+    clock.advance(1_000);
+    authority.setOutage(true);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+
+    // A usable machine appears. Holding ∅ for it would put the ∅ modal in
+    // front of a user who was working a moment ago, for the full ceiling,
+    // with a host right there - the hold buying a modal rather than
+    // preventing a flicker.
+    fleet.publish(0, "L", [
+      fleetHost("L", "local"),
+      fleetHost("R", "remote"),
+      fleetHost("Q", "remote"),
+    ]);
+    expect(engine.snapshot().effectiveHostId).toBe("Q");
+
+    authority.dispose();
+  });
+
   it("LANDS ON THE TARGET ONCE: ending the outage before the ceiling adopts L directly, with no intermediate hop onto R", async () => {
     const clock = createFakeAuthorityClock(0);
     const authority = coldBootAuthorityWithOutageSignal(

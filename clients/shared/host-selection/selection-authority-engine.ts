@@ -2136,27 +2136,31 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // only where a local host is expected, so holding ∅ for a cycling REMOTE
     // target would show "no usable host" over a working fallback.
     //
-    // AND ONLY FROM ∅, which is the whole of what the second arm optimizes: a
-    // window that has nothing, deciding whether to grab a fallback it will
-    // hand straight back. Once something IS effective there is no flick left
-    // to prevent, and holding anyway would CAUSE the outage it exists to
-    // avoid - dial refusals move the app to remote R, a restart intent later
-    // flips local L's lease from `dead` to `restarting-expected`, and a
-    // target-side hold would drop a working R to ∅ for the ceiling. The
-    // incumbent arm above is the one that speaks for a serving host, and it
-    // asks about the INCUMBENT's lease precisely so a target that is not
-    // serving anyone cannot answer for it.
-    const awaitedHostId =
-      restartingIncumbentHostId ??
-      (effectiveHostId === null &&
+    // WHO IS BEING WAITED ON is a question about the LEASES, and is answered
+    // first and separately from whether this pass may wait. That split is not
+    // tidiness: `coldStartHold` is the record of a restart EPISODE, so its
+    // lifetime has to follow the episode rather than follow the arm. Deciding
+    // both at once destroyed the record whenever the arm happened not to
+    // apply, and a destroyed record is an ARMABLE one - the same still-cycling
+    // host could then be granted a second full window later in the same
+    // episode (cold start holds L, ceiling lapses, R is adopted and clears the
+    // record, R dies, and ∅ with L still restarting arms a fresh 20s wait
+    // while a usable Q sits in the fleet). The record now dies with the
+    // restart itself, so a lapse is permanent for that episode and the NEXT
+    // restart still gets its own window.
+    const targetAwaitedHostId =
       targetHostId !== null &&
       targetHostId === localHostId &&
       this.leaseFor(targetHostId, leases)?.status === "restarting-expected"
         ? targetHostId
-        : null);
+        : null;
+    const awaitedHostId = restartingIncumbentHostId ?? targetAwaitedHostId;
     if (awaitedHostId === null) {
       this.coldStartHold = null;
-    } else if (this.holdsForColdStart(awaitedHostId, now)) {
+    } else if (
+      this.coldStartArmApplies(restartingIncumbentHostId) &&
+      this.holdsForColdStart(awaitedHostId, now)
+    ) {
       // An incumbent keeps serving as itself; the target arm can only have
       // been reached from ∅, so its null STAYS at ∅ rather than taking
       // anything away, and the startup card narrates the boot.
@@ -2269,6 +2273,43 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    */
   private hasProvedAliveAtLeastOnce(hostId: string): boolean {
     return this.evidence.get(hostId)?.provedAliveAtLeastOnce === true;
+  }
+
+  /**
+   * Whether THIS PASS may wait at all - the policy half, kept apart from the
+   * "who is cycling" half so the hold record can outlive a pass that declines.
+   *
+   * The incumbent arm always applies: it hands a serving host back to itself,
+   * so waiting costs the user nothing.
+   *
+   * The target arm is a COLD-START arm and is held to that literally - only
+   * from ∅, and only before derivation has ever named a host:
+   *
+   *  - from ∅, because the whole thing it buys is skipping a hop the engine
+   *    would immediately undo. With something already effective there is no
+   *    hop to skip, and answering ∅ would take a working host away.
+   *  - never after derivation has named one, because ∅ is not narrated the
+   *    same way twice. The window narrator softens ∅ to "starting" only
+   *    before the window has been served; afterwards ∅ is the hard
+   *    "No host is available" card. A hold that engages later would sit that
+   *    card in front of a user for the ceiling with a usable host in the
+   *    fleet - the hold buying a modal instead of preventing a flicker.
+   *
+   * `mruEffectiveHostIds` is the honest question HERE even though the
+   * unbounded arm above must not read it. There it would mean "has served",
+   * which it does not (derivation records a host the moment it picks one,
+   * including a local host that is merely `connecting` under our own ensure).
+   * Here it means "has derivation ever pointed anywhere", which is exactly
+   * what it is, and it is used only to make this arm fire LESS.
+   */
+  private coldStartArmApplies(
+    restartingIncumbentHostId: string | null,
+  ): boolean {
+    if (restartingIncumbentHostId !== null) return true;
+    return (
+      this.selection.effectiveHostId === null &&
+      this.mruEffectiveHostIds.length === 0
+    );
   }
 
   /**

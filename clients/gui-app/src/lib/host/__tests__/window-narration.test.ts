@@ -53,6 +53,11 @@ function baseInput(
     // a shell that can actually boot a local host, and every case below that
     // does not say otherwise is describing a desktop launch.
     localHostExpected: true,
+    // This machine is `host-local` throughout, so a case whose target is
+    // `host-local` is a LOCAL target and one that names anything else is
+    // remote - the distinction the restarting-target arm turns on, and one no
+    // test can express through `localHostExpected` alone.
+    localHostId: "host-local",
     ...overrides,
   };
 }
@@ -245,6 +250,35 @@ describe("deriveWindowNarration", () => {
           isTargetHost: false,
           detail,
         },
+      });
+    });
+
+    it("P2 FIX - a restarting REMOTE target is not a local launch: the arm needs the target to be this machine, which localHostExpected cannot say", () => {
+      // `localHostExpected` describes the SHELL - "can this app boot some
+      // local host" - and stays true on a desktop whose target is a remote.
+      // The authority's own hold is local-target-only, so with a preferred
+      // remote cycling and the rest of the fleet offline it derives a REAL ∅.
+      // Relabelling that as cold-start put this machine's provisioning card
+      // (Retry, install progress, the bootstrap log) in front of a host this
+      // app has no lifecycle for, and withheld the offline recovery until the
+      // remote's restart episode expired.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-remote",
+          localHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-remote", status: "restarting-expected" }),
+            deadLease("host-local", { reason: "offline" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
       });
     });
 

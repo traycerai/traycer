@@ -117,6 +117,17 @@ export interface WindowNarrationInput {
    * cannot happen.
    */
   readonly localHostExpected: boolean;
+  /**
+   * THIS MACHINE's host id, or null when there is none.
+   *
+   * Carried separately from {@link localHostExpected} because they answer
+   * different questions and one cannot stand in for the other:
+   * `localHostExpected` is "can this shell boot SOME local host", a property
+   * of the shell, and stays true on a desktop whose target is a remote
+   * machine. Only this field can settle whether the host the restarting-target
+   * arm is waiting on is the one this app can actually start.
+   */
+  readonly localHostId: string | null;
 }
 
 /**
@@ -272,17 +283,29 @@ export function deriveWindowNarration(
     // leases. After the window has served once, ∅ is always the verdict arm;
     // the grace is strictly a launch statement.
     //
-    // UNLESS THE TARGET ITSELF IS RESTARTING, which is a start in progress
-    // stated by the authority's own lease rather than inferred from the
-    // absence of conclusions. The authority holds ∅ for a bounded window while
-    // a never-proven local target cycles (its cold-start hold), deliberately
-    // declining a usable fallback so the app does not hop and hop back - so
-    // during that hold ∅ does NOT mean "nothing can serve this window", and
-    // the scan below would say so anyway the moment the account contains one
-    // dead machine (a retired laptop). That is the same reasoning the non-∅
-    // cold-start arm already applies further down: whatever else is wrong out
-    // there belongs to the surface chip or the tile, not to the window's
-    // launch story.
+    // UNLESS THE LOCAL TARGET ITSELF IS RESTARTING, which is a start in
+    // progress stated by the authority's own lease rather than inferred from
+    // the absence of conclusions. The authority holds ∅ for a bounded window
+    // while a never-proven local target cycles (its cold-start hold),
+    // deliberately declining a usable fallback so the app does not hop and hop
+    // back - so during that hold ∅ does NOT mean "nothing can serve this
+    // window", and the scan below would say so anyway the moment the account
+    // contains one dead machine (a retired laptop). That is the same reasoning
+    // the non-∅ cold-start arm already applies further down: whatever else is
+    // wrong out there belongs to the surface chip or the tile, not to the
+    // window's launch story.
+    //
+    // ⚠ THE TARGET MUST BE THIS MACHINE, and `localHostExpected` cannot
+    // establish that - it says the SHELL can boot some local host, which stays
+    // true on a desktop whose target is a remote. Without the identity check,
+    // a preferred REMOTE cycling while the rest of the fleet is offline read
+    // as a launch: the authority skips its (local-only) hold and derives a
+    // real ∅, while this arm relabelled that verdict `cold-start` and put the
+    // local provisioning card - Retry, install progress, the bootstrap log -
+    // in front of a machine this app cannot start, withholding the offline
+    // recovery until the remote's restart episode expired. The narrator's
+    // grace and the authority's hold have to be gated on the SAME premise, or
+    // one of them is narrating a state the other never entered.
     //
     // ⚠ ONLY WHERE THE SCAN WOULD HAVE SAID `offline` ANYWAY, and that gate is
     // the difference between softening a verdict and SUPPRESSING one. This arm
@@ -307,11 +330,15 @@ export function deriveWindowNarration(
     // actionable by default, which is the safe direction to be wrong in.
     const targetLease = findLease(input.leases, input.targetHostId);
     const noHostVariant = deriveNoHostVariant(input.leases, input.targetHostId);
+    const localTargetRestarting =
+      input.targetHostId !== null &&
+      input.targetHostId === input.localHostId &&
+      targetLease?.status === "restarting-expected";
     if (
       !input.hasBeenServed &&
       input.localHostExpected &&
       noHostVariant.kind === "offline" &&
-      (targetLease?.status === "restarting-expected" ||
+      (localTargetRestarting ||
         input.leases.every((lease) => lease.status !== "dead"))
     ) {
       return {
