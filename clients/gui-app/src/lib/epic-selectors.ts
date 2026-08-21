@@ -761,21 +761,41 @@ export function useRegisteredEpicLiveArtifactTitle(
   );
 }
 
-export interface RegisteredEpicArtifactTitleRef {
+export interface RegisteredEpicAgentRef {
   readonly epicId: string;
-  readonly artifactId: string | null;
+  /** Chat or terminal-agent id; `null` for a ref with no agent to resolve. */
+  readonly agentId: string | null;
 }
 
 /**
- * Reactive live titles for a dynamic collection of artifacts. Global list
- * surfaces cannot call the single-artifact hook in a data-dependent loop, so
- * this subscribes once to the registry and every currently referenced epic.
+ * What an epic's live projection knows about one agent: which slice it lives
+ * in (`chats` → `chat`, `tuiAgents` → `terminal-agent`), its Y.Doc title
+ * (`null` while untitled) and its recorded host (`null` for a legacy chat
+ * that predates the field).
  */
-export function useRegisteredEpicLiveArtifactTitles(
-  refs: readonly RegisteredEpicArtifactTitleRef[],
-): readonly (string | null)[] {
+export interface RegisteredEpicLiveAgent {
+  readonly kind: "chat" | "terminal-agent";
+  readonly title: string | null;
+  readonly hostId: string | null;
+}
+
+/**
+ * Reactive live agent projections for a dynamic collection of agent refs.
+ * Global list surfaces (the resource monitor) live outside any
+ * `EpicSessionProvider` and cannot call a per-agent hook in a data-dependent
+ * loop, so this subscribes once to the registry and every currently
+ * referenced epic. `null` for a ref whose epic is not mounted in this window
+ * or whose id names no agent in that epic's projection.
+ *
+ * This is the same Y.Doc-backed source a canvas tab reads, so it is also the
+ * authority on whether an agent EXISTS - a client-local record list cannot be:
+ * an agent created by another window, device or agent never enters one.
+ */
+export function useRegisteredEpicLiveAgents(
+  refs: readonly RegisteredEpicAgentRef[],
+): readonly (RegisteredEpicLiveAgent | null)[] {
   const registry = getOpenEpicRegistry();
-  const encodedTitles = useSyncExternalStore(
+  const encodedAgents = useSyncExternalStore(
     (listener) => {
       const unsubscribeByHandle = new Map<object, () => void>();
       const reconcileHandleSubscriptions = () => {
@@ -804,40 +824,72 @@ export function useRegisteredEpicLiveArtifactTitles(
         for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
       };
     },
-    () => registeredArtifactTitlesSnapshot(registry, refs),
-    () => JSON.stringify(refs.map(() => [0, null])),
+    () => registeredAgentsSnapshot(registry, refs),
+    () => JSON.stringify(refs.map(() => null)),
   );
-  return useMemo(
-    () => decodeRegisteredArtifactTitles(encodedTitles),
-    [encodedTitles],
-  );
+  return useMemo(() => decodeRegisteredAgents(encodedAgents), [encodedAgents]);
 }
 
-function registeredArtifactTitlesSnapshot(
+/**
+ * Encoded per-ref tuples (`[kind, title, hostId]`, or `null`) so
+ * `useSyncExternalStore` compares by value: the registry and every store
+ * notify on unrelated changes, and a fresh array per notification would
+ * re-render the whole list surface each time.
+ */
+function registeredAgentsSnapshot(
   registry: OpenEpicSessionRegistry,
-  refs: readonly RegisteredEpicArtifactTitleRef[],
+  refs: readonly RegisteredEpicAgentRef[],
 ): string {
   return JSON.stringify(
     refs.map((ref) => {
-      const handle = registry.peek(ref.epicId);
-      return [
-        handle === null ? 0 : 1,
-        liveArtifactTitleFromHandle(handle, ref.artifactId),
-      ];
+      const agent = liveAgentFromHandle(registry.peek(ref.epicId), ref.agentId);
+      return agent === null ? null : [agent.kind, agent.title, agent.hostId];
     }),
   );
 }
 
-function decodeRegisteredArtifactTitles(
-  encodedTitles: string,
-): readonly (string | null)[] {
-  const decoded: unknown = JSON.parse(encodedTitles);
+function decodeRegisteredAgents(
+  encodedAgents: string,
+): readonly (RegisteredEpicLiveAgent | null)[] {
+  const decoded: unknown = JSON.parse(encodedAgents);
   if (!Array.isArray(decoded)) return [];
-  return decoded.map((entry) => {
+  return decoded.map((entry): RegisteredEpicLiveAgent | null => {
     if (!Array.isArray(entry)) return null;
+    const kind: unknown = entry[0];
     const title: unknown = entry[1];
-    return typeof title === "string" ? title : null;
+    const hostId: unknown = entry[2];
+    if (kind !== "chat" && kind !== "terminal-agent") return null;
+    return {
+      kind,
+      title: typeof title === "string" ? title : null,
+      hostId: typeof hostId === "string" ? hostId : null,
+    };
   });
+}
+
+function liveAgentFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  agentId: string | null,
+): RegisteredEpicLiveAgent | null {
+  if (handle === null || agentId === null) return null;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    const chat = state.chats.byId[agentId];
+    return {
+      kind: "chat",
+      title: chat.title.length > 0 ? chat.title : null,
+      hostId: chat.hostId,
+    };
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    const agent = state.tuiAgents.byId[agentId];
+    return {
+      kind: "terminal-agent",
+      title: agent.title.length > 0 ? agent.title : null,
+      hostId: agent.hostId,
+    };
+  }
+  return null;
 }
 
 function liveArtifactTitleFromHandle(
