@@ -82,7 +82,35 @@ describe("parseLandingDraft", () => {
       settings: { harnessId: "codex" },
       composerMode: "chat",
       workspace: null,
+      closed: null,
     });
+  });
+
+  it("preserves closed:true and defaults a missing closed to null", () => {
+    const content = { type: "doc" };
+    expect(
+      parseLandingDraft({
+        id: "draft-closed",
+        content,
+        selection: null,
+        lastTouchedAt: 1,
+        settings: null,
+        composerMode: null,
+        workspace: null,
+        closed: true,
+      })?.closed,
+    ).toBe(true);
+    expect(
+      parseLandingDraft({
+        id: "draft-open",
+        content,
+        selection: null,
+        lastTouchedAt: 1,
+        settings: null,
+        composerMode: null,
+        workspace: null,
+      })?.closed,
+    ).toBeNull();
   });
 
   it("preserves a hash-only image node in `content` round-trip", () => {
@@ -135,6 +163,7 @@ describe("parseLandingDraft", () => {
       settings: null,
       composerMode: null,
       workspace: null,
+      closed: null,
     });
   });
 
@@ -169,6 +198,7 @@ describe("parseLandingDrafts", () => {
         settings: null,
         composerMode: null,
         workspace: null,
+        closed: null,
       },
     ]);
   });

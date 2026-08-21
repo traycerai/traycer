@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  HistoryDraftScope,
   HistoryMatchMode,
   HistoryOwnershipScope,
   HistorySortOption,
@@ -10,6 +11,7 @@ import { appLogger, describeLogError } from "@/lib/logger";
 
 const historyMatchModeSchema = z.enum(["any", "all"]);
 const historyOwnershipSchema = z.enum(["mine", "shared"]);
+const historyDraftsSchema = z.enum(["landing"]);
 const historySortSchema = z.enum([
   "recent",
   "last-viewed",
@@ -28,6 +30,9 @@ export const historySearchParamsSchema = z.object({
   historyOwnership: z
     .union([historyOwnershipSchema, z.array(historyOwnershipSchema)])
     .optional(),
+  historyDrafts: z
+    .union([historyDraftsSchema, z.array(historyDraftsSchema)])
+    .optional(),
   historySort: historySortSchema.optional(),
 });
 
@@ -38,6 +43,7 @@ export interface HistorySearchState {
   readonly workspaces: ReadonlyArray<HistoryWorkspaceRef>;
   readonly workspaceMode: HistoryMatchMode;
   readonly ownershipScopes: ReadonlyArray<HistoryOwnershipScope>;
+  readonly drafts: ReadonlyArray<HistoryDraftScope>;
   readonly sort: HistorySortOption;
   readonly sortExplicit: boolean;
 }
@@ -51,6 +57,7 @@ export type HistorySearchPatch = Partial<
     | "workspaces"
     | "workspaceMode"
     | "ownershipScopes"
+    | "drafts"
     | "sort"
   >
 > & {
@@ -64,6 +71,7 @@ export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
   workspaces: [],
   workspaceMode: "any",
   ownershipScopes: [],
+  drafts: [],
   sort: "recent",
   sortExplicit: false,
 };
@@ -83,6 +91,7 @@ export function parseHistorySearch(
     workspaceMode:
       parsed.data.historyWorkspaceMode ?? DEFAULT_HISTORY_SEARCH.workspaceMode,
     ownershipScopes: normalizeArray(parsed.data.historyOwnership),
+    drafts: normalizeArray(parsed.data.historyDrafts),
     sort:
       parsed.data.historySort ??
       (query.trim().length > 0 ? "relevance" : DEFAULT_HISTORY_SEARCH.sort),
@@ -105,6 +114,7 @@ export function patchHistorySearch(
     workspaces: patch.workspaces ?? current.workspaces,
     workspaceMode: patch.workspaceMode ?? current.workspaceMode,
     ownershipScopes: patch.ownershipScopes ?? current.ownershipScopes,
+    drafts: patch.drafts ?? current.drafts,
     sort,
     sortExplicit,
   };
@@ -132,6 +142,7 @@ export function historySearchToParams(
         : undefined,
     historyOwnership:
       state.ownershipScopes.length > 0 ? state.ownershipScopes : undefined,
+    historyDrafts: state.drafts.length > 0 ? state.drafts : undefined,
     historySort:
       state.sortExplicit &&
       (state.sort !== DEFAULT_HISTORY_SEARCH.sort || state.query.length > 0)
@@ -147,6 +158,7 @@ export type HistorySearchParamKey =
   | "historyWorkspaces"
   | "historyWorkspaceMode"
   | "historyOwnership"
+  | "historyDrafts"
   | "historySort";
 
 export type HistorySearchParamsCleared<TPrev> = Omit<
@@ -166,6 +178,7 @@ export function clearHistorySearchParams<
     historyWorkspaces: _historyWorkspaces,
     historyWorkspaceMode: _historyWorkspaceMode,
     historyOwnership: _historyOwnership,
+    historyDrafts: _historyDrafts,
     historySort: _historySort,
     ...rest
   } = prev;
@@ -224,6 +237,50 @@ function parseWorkspaceParam(value: string): HistoryWorkspaceRef[] {
     });
     return [];
   }
+}
+
+export function isHistoryDraftsFacetOn(search: HistorySearchState): boolean {
+  return Array.isArray(search.drafts) && search.drafts.includes("landing");
+}
+
+export function normalizeHistorySearchState(
+  value: unknown,
+): HistorySearchState {
+  if (value === null || typeof value !== "object") {
+    return DEFAULT_HISTORY_SEARCH;
+  }
+  const record = value as Partial<HistorySearchState>;
+  return {
+    query:
+      typeof record.query === "string"
+        ? record.query
+        : DEFAULT_HISTORY_SEARCH.query,
+    repos: Array.isArray(record.repos)
+      ? record.repos
+      : DEFAULT_HISTORY_SEARCH.repos,
+    repoMode: record.repoMode ?? DEFAULT_HISTORY_SEARCH.repoMode,
+    workspaces: Array.isArray(record.workspaces)
+      ? record.workspaces
+      : DEFAULT_HISTORY_SEARCH.workspaces,
+    workspaceMode: record.workspaceMode ?? DEFAULT_HISTORY_SEARCH.workspaceMode,
+    ownershipScopes: Array.isArray(record.ownershipScopes)
+      ? record.ownershipScopes
+      : DEFAULT_HISTORY_SEARCH.ownershipScopes,
+    drafts: normalizeHistoryDrafts(record.drafts),
+    sort: record.sort ?? DEFAULT_HISTORY_SEARCH.sort,
+    sortExplicit: record.sortExplicit === true,
+  };
+}
+
+function normalizeHistoryDrafts(
+  value: ReadonlyArray<HistoryDraftScope> | undefined,
+): ReadonlyArray<HistoryDraftScope> {
+  if (value === undefined || !Array.isArray(value)) {
+    return DEFAULT_HISTORY_SEARCH.drafts;
+  }
+  return normalizeArray(
+    value.filter((scope): scope is HistoryDraftScope => scope === "landing"),
+  );
 }
 
 function implicitHistorySort(

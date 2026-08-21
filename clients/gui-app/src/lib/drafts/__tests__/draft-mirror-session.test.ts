@@ -72,6 +72,7 @@ function landingDocument(input: {
       runSettings: null,
       composerMode: "chat",
       blobHashes: [],
+      closed: false,
     },
   };
 }
@@ -104,6 +105,7 @@ function landingWrite(draftId: string, revision: number): DraftWrite {
       runSettings: null,
       composerMode: "chat",
       blobHashes: [],
+      closed: false,
     },
   };
 }
@@ -642,6 +644,7 @@ describe("DraftMirrorSession", () => {
         runSettings: null,
         composerMode: "chat",
         blobHashes: [],
+        closed: false,
       },
     };
     const sessionA = new DraftMirrorSession({
@@ -816,6 +819,7 @@ describe("DraftMirrorSession", () => {
           runSettings: null,
           composerMode: "chat",
           blobHashes: [],
+          closed: false,
         },
       },
     });
@@ -850,6 +854,7 @@ describe("DraftMirrorSession", () => {
               runSettings: draft.settings,
               composerMode: draft.composerMode,
               workspace: draft.workspace,
+              closed: draft.closed,
             }),
           })),
         ),

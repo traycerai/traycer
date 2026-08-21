@@ -37,10 +37,18 @@ export const draftComposerModeSchema = z.enum(["chat", "terminal"]);
 export type DraftComposerMode = z.infer<typeof draftComposerModeSchema>;
 
 /**
- * Portable composer payload: ProseMirror JSON, caret, run settings, and
- * the landing chat-vs-terminal switch. Images are referenced by sha256
- * (`blobHashes`); bytes live in the existing content-addressed blob store,
- * never inline in this document.
+ * Portable composer payload: ProseMirror JSON, caret, run settings, the
+ * landing chat-vs-terminal switch, and tab-strip membership (`closed`).
+ * Images are referenced by sha256 (`blobHashes`); bytes live in the
+ * existing content-addressed blob store, never inline in this document.
+ *
+ * `closed` is landing-meaningful: a start-task draft put away from the
+ * tab strip stays in the store (and on the host) until an explicit
+ * delete. New-chat and chat-composer writers always send `false` — those
+ * surfaces keep today's buffer lifecycle. Default `false` is the open
+ * state so a 1.0 head written before this field still decodes as open
+ * (the drafts minor is unreleased; this is an in-place dialect edit,
+ * not a SQLite column / schema_version bump).
  *
  * Run settings are the STRICT tuple: every key required, explicit nulls.
  * There are no legacy draft rows to accommodate, so `.default(null)` would
@@ -52,6 +60,7 @@ export const draftComposerPortableSchema = z.object({
   runSettings: chatRunSettingsStrictSchema.nullable(),
   composerMode: draftComposerModeSchema,
   blobHashes: z.array(sha256HexSchema),
+  closed: z.boolean().default(false),
 });
 export type DraftComposerPortable = z.infer<typeof draftComposerPortableSchema>;
 

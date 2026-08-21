@@ -87,6 +87,7 @@ const LANDING_WRITE = {
     runSettings: RUN_SETTINGS,
     composerMode: "chat" as const,
     blobHashes: [] as string[],
+    closed: false,
   },
 };
 

@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DraftDocument } from "@traycer/protocol/host";
+import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
+  acquireDraftMirrorSession,
   adoptUnadoptedLandingDraftsForHost,
   bindLandingAdoptionHost,
   resetDraftMirrorCoordinatorForTests,
@@ -10,12 +12,27 @@ import {
   applyLandingHostDocument,
   collectLandingDirtyWrites,
   collectUnadoptedLandingDrafts,
+  landingDraftRememberSynced,
   freshLandingMirrorState,
   MAX_LOCAL_ADOPTED_LANDING_MIRRORS,
   useLandingDraftStore,
   emptyLandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
+import { tabSourceRefs } from "@/stores/tabs/source-refs";
+
+function fakeStream(): { subscribe: () => IStreamSession } {
+  return {
+    subscribe: () => ({
+      sendClientFrame: () => undefined,
+      onServerFrame: () => undefined,
+      onStatusChange: () => undefined,
+      requestReconnect: () => undefined,
+      close: () => undefined,
+      getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),
+    }),
+  };
+}
 
 describe("landing draft host-mirror bookkeeping", () => {
   beforeEach(() => {
@@ -103,6 +120,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         runSettings: null,
         composerMode: "chat",
         blobHashes: [],
+        closed: false,
       },
     };
     applyLandingHostDocument(incoming, EMPTY_LANDING_DRAFT_CONTENT);
@@ -184,6 +202,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         runSettings: null,
         composerMode: "chat",
         blobHashes: [],
+        closed: false,
       },
     };
     applyLandingHostDocument(incoming, EMPTY_LANDING_DRAFT_CONTENT);
@@ -270,6 +289,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         runSettings: null,
         composerMode: "chat",
         blobHashes: [],
+        closed: false,
       },
     };
     applyLandingHostDocument(incoming, EMPTY_LANDING_DRAFT_CONTENT);
@@ -315,5 +335,99 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(
       collectLandingDirtyWrites("host-a").map((row) => row.draft.id),
     ).toEqual([id]);
+  });
+
+  it("deleteDraft of an adopted landing draft calls drafts.delete before dropping the row", async () => {
+    const deletes: string[] = [];
+    acquireDraftMirrorSession({
+      hostId: "host-a",
+      client: {
+        request: (method: string, params: unknown) => {
+          if (method === "drafts.list") {
+            return Promise.resolve({
+              drafts: [],
+              tombstones: [],
+              snapshotSeq: 0,
+              scopeId: "scp_TESTDRAFTSSCOPEID000001",
+            });
+          }
+          if (method === "drafts.delete") {
+            deletes.push((params as { draftId: string }).draftId);
+            return Promise.resolve({ deleted: true });
+          }
+          return Promise.reject(new Error(`unexpected ${String(method)}`));
+        },
+      } as never,
+      streamClient: fakeStream() as never,
+      timing: undefined,
+    });
+    await Promise.resolve();
+
+    const id = useLandingDraftStore.getState().createDraft(null);
+    adoptLandingDraft(id, "host-a");
+    useLandingDraftStore.getState().deleteDraft(id);
+
+    await vi.waitFor(() => {
+      expect(deletes).toEqual([id]);
+    });
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("inbound closed:true hides the draft locally and clears activeDraftId", () => {
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().setDraftContent(
+      id,
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+        ],
+      },
+      { from: 1, to: 6 },
+    );
+    adoptLandingDraft(id, "host-a");
+    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY);
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(id);
+
+    const incoming: DraftDocument = {
+      draftId: id,
+      kind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      revision: 2,
+      lastTouchedAt: 99,
+      workspace: null,
+      ownerHostId: "host-a",
+      origin: "own",
+      adoption: { state: "adopted", hostId: "host-a" },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: {
+          type: "doc",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+          ],
+        },
+        selection: { from: 1, to: 6 },
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: true,
+      },
+    };
+    applyLandingHostDocument(incoming, incoming.portable.content);
+
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((row) => row.id === id);
+    expect(draft?.closed).toBe(true);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+    expect(
+      tabSourceRefs().some((ref) => ref.kind === "draft" && ref.id === id),
+    ).toBe(false);
   });
 });

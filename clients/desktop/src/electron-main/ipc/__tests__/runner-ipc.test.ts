@@ -2445,6 +2445,7 @@ describe("RunnerIpcBridge", () => {
           settings: null,
           composerMode: null,
           workspace: null,
+          closed: null,
         },
       ],
       activeLandingDraftId: "draft-a",

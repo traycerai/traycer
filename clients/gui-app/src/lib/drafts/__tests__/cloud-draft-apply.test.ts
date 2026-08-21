@@ -48,6 +48,7 @@ describe("draftDocumentFromCloudHead", () => {
         runSettings: null,
         composerMode: "chat",
         blobHashes: [],
+        closed: false,
       },
     };
     const document = draftDocumentFromCloudHead(SUMMARY, record);

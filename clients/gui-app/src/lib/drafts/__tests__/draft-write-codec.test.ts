@@ -43,6 +43,7 @@ describe("draft write codec", () => {
       runSettings: null,
       composerMode: "chat",
       workspace: null,
+      closed: false,
     });
     expect(write.target.chatId).toBe("chat-1");
     expect(write.target.epicId).toBe("epic-1");

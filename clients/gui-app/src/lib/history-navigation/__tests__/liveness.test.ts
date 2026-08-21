@@ -269,6 +269,26 @@ describe("isHistoryEntryDead — conservative liveness", () => {
     expect(isHistoryEntryDead(`/draft/${draftId}`)).toBe(false);
   });
 
+  it("prunes a closed retained draft so Back skips the /draft/:id entry", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().setDraftContent(
+      draftId,
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "kept" }] },
+        ],
+      },
+      null,
+    );
+    useLandingDraftStore.getState().closeDraft(draftId);
+    expect(useLandingDraftStore.getState().drafts[0]?.closed).toBe(true);
+    expect(isHistoryEntryDead(`/draft/${draftId}`)).toBe(true);
+
+    useLandingDraftStore.getState().openDraft(draftId);
+    expect(isHistoryEntryDead(`/draft/${draftId}`)).toBe(false);
+  });
+
   it("prunes a draft href whose id is absent from the store", () => {
     expect(isHistoryEntryDead("/draft/missing-draft-id")).toBe(true);
   });

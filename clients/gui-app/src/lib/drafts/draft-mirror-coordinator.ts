@@ -78,6 +78,7 @@ import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
   setDraftLocalDeleteListener,
   setDraftLocalEditListener,
+  setDraftLocalFlushListener,
 } from "./draft-local-edits";
 import {
   DraftMirrorSession,
@@ -394,6 +395,7 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
         runSettings: draft.settings,
         composerMode: draft.composerMode,
         workspace: draft.workspace,
+        closed: draft.closed,
       }),
     });
   }
@@ -421,6 +423,7 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
         runSettings: null,
         composerMode: "chat",
         workspace: null,
+        closed: false,
       }),
     });
   }
@@ -466,6 +469,7 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
         runSettings: patch.settings,
         composerMode: patch.composerMode,
         workspace: patch.workspace,
+        closed: false,
       }),
     });
   }
@@ -552,8 +556,23 @@ function routeLocalDelete(draftId: string): void {
   void session.deleteOnHost(draftId);
 }
 
+function routeLocalFlush(draftId: string): void {
+  const landing = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === draftId);
+  if (landing !== undefined && landing.adoption.state === "unadopted") {
+    if (landingAdoptionHostId === null) return;
+    const session = sessions.get(landingAdoptionHostId)?.session;
+    if (session === undefined) return;
+    void session.flush([draftId]);
+    return;
+  }
+  void flushDraftMirrorSessions([draftId]);
+}
+
 setDraftLocalEditListener(routeLocalEdit);
 setDraftLocalDeleteListener(routeLocalDelete);
+setDraftLocalFlushListener(routeLocalFlush);
 
 export interface AcquireDraftMirrorArgs {
   readonly hostId: string;
@@ -674,6 +693,11 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   warnedUnboundInterview.clear();
   resetDraftBlobTransportForTests();
   notifyCloudScopeListeners();
+  // Re-bind production listeners. Tests that install their own must not
+  // leave `routeLocalDelete` unbound for later files in the same worker.
+  setDraftLocalEditListener(routeLocalEdit);
+  setDraftLocalDeleteListener(routeLocalDelete);
+  setDraftLocalFlushListener(routeLocalFlush);
 }
 
 export function draftMirrorSessionCountForTests(): number {

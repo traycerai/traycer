@@ -8,7 +8,10 @@ import {
   resolveTabIdForPhaseMigration,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  isOpenLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
@@ -308,7 +311,7 @@ function sourceHasRef(ref: TabRef): boolean {
   if (ref.kind === "draft") {
     return useLandingDraftStore
       .getState()
-      .drafts.some((draft) => draft.id === ref.id);
+      .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
   return currentLayout().systemTabs[ref.kind] !== null;
 }
@@ -1017,7 +1020,9 @@ export class TabCommandCoordinator {
     if (draftId === null) return null;
     const exists = useLandingDraftStore
       .getState()
-      .drafts.some((draft) => draft.id === draftId);
+      .drafts.some(
+        (draft) => draft.id === draftId && isOpenLandingDraft(draft),
+      );
     if (!target.create && !exists) return null;
     const ref: TabRef = { kind: "draft", id: draftId };
     return this.activationForRef(layout, ref, () => {
@@ -1149,7 +1154,9 @@ export class TabCommandCoordinator {
     if (ref.kind === "draft") {
       const exists = useLandingDraftStore
         .getState()
-        .drafts.some((draft) => draft.id === ref.id);
+        .drafts.some(
+          (draft) => draft.id === ref.id && isOpenLandingDraft(draft),
+        );
       if (!exists) return null;
       return this.activationForRef(layout, ref, () => {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
@@ -1201,7 +1208,7 @@ export class TabCommandCoordinator {
       },
       applyRemovals: () => {
         this.applyExpectedSourceMutation(() => {
-          useLandingDraftStore.getState().closeDraft(command.draftId);
+          useLandingDraftStore.getState().deleteDraft(command.draftId);
         });
       },
     });
@@ -1782,12 +1789,18 @@ export class TabCommandCoordinator {
     const currentDrafts = useLandingDraftStore.getState().drafts;
     const activeDraftId =
       selected?.kind === "draft" &&
-      currentDrafts.some((draft) => draft.id === selected.id)
+      currentDrafts.some(
+        (draft) => draft.id === selected.id && isOpenLandingDraft(draft),
+      )
         ? selected.id
         : null;
     if (activeDraftId !== useLandingDraftStore.getState().activeDraftId) {
       this.applyExpectedSourceMutation(() => {
-        useLandingDraftStore.setState({ activeDraftId });
+        if (activeDraftId === null) {
+          useLandingDraftStore.getState().clearActiveDraft();
+        } else {
+          useLandingDraftStore.getState().setActiveDraft(activeDraftId);
+        }
       });
     }
   }

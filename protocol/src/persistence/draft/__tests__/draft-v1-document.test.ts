@@ -74,6 +74,7 @@ const COMPOSER_HEAD: DraftHeadRecord = {
     runSettings: RUN_SETTINGS,
     composerMode: "chat",
     blobHashes: [],
+    closed: false,
   },
   hostLocal: HOST_LOCAL,
 };
@@ -152,6 +153,34 @@ describe("draft/v1 document envelope", () => {
       expect(decoded.record.lastTouchedAt).toBe(head.lastTouchedAt);
       expect(decoded.record.target).toEqual(head.target);
     }
+  });
+
+  it("defaults omitted portable.closed to false and round-trips closed:true", () => {
+    const omitted = draftComposerPortableSchema.parse({
+      content: EMPTY_DOC,
+      selection: null,
+      runSettings: RUN_SETTINGS,
+      composerMode: "chat",
+      blobHashes: [],
+    });
+    expect(omitted.closed).toBe(false);
+
+    const closedHead: DraftHeadRecord = {
+      ...COMPOSER_HEAD,
+      portable: { ...COMPOSER_HEAD.portable, closed: true },
+    };
+    const decoded = decodeDraftHeadDocument(
+      serializeDraftHeadDocument(closedHead),
+    );
+    expect(decoded.status).toBe("ok");
+    if (decoded.status === "ok" && decoded.record.kind === "draft") {
+      expect(decoded.record.portable.closed).toBe(true);
+    }
+
+    const encoded = encodeDraftHead(COMPOSER_HEAD);
+    expect(encoded.portable).toEqual(
+      expect.objectContaining({ closed: false }),
+    );
   });
 
   it("preserves surfaceKind on a composer draft and omits it on the others", () => {

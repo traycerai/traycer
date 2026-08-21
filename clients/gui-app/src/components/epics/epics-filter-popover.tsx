@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/popover";
 import { MatchModeToggle } from "@/components/home/toolbar/match-mode-toggle";
 import type {
+  HistoryDraftScope,
   HistoryOwnershipScope,
   HistoryWorkspaceRef,
 } from "@/components/home/data/home-page.data";
@@ -17,11 +18,13 @@ import {
 import { EpicsFilterTrigger } from "@/components/epics/epics-filter-trigger";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
+import { isHistoryListedLandingDraft } from "@/lib/history-landing-drafts";
 import type {
   HistorySearchPatch,
   HistorySearchState,
 } from "@/lib/history-search";
 import { cn } from "@/lib/utils";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface EpicsFilterPopoverProps {
@@ -30,6 +33,8 @@ interface EpicsFilterPopoverProps {
   readonly search: HistorySearchState;
   readonly onSearchChange: (patch: HistorySearchPatch) => void;
   readonly facets: HistoryFacets | undefined;
+  readonly showDraftsFacet: boolean;
+  readonly hostId: string | null;
 }
 
 const OWNERSHIP_OPTIONS: ReadonlyArray<{
@@ -40,11 +45,22 @@ const OWNERSHIP_OPTIONS: ReadonlyArray<{
   { value: "shared", label: "Shared" },
 ];
 
+const DRAFT_OPTIONS: ReadonlyArray<{
+  readonly value: HistoryDraftScope;
+  readonly label: string;
+}> = [{ value: "landing", label: "Start-task drafts" }];
+
+function historyFilterActiveCount(search: HistorySearchState): number {
+  return (
+    search.ownershipScopes.length +
+    search.repos.length +
+    search.workspaces.length +
+    search.drafts.length
+  );
+}
+
 export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
-  const activeCount =
-    props.search.ownershipScopes.length +
-    props.search.repos.length +
-    props.search.workspaces.length;
+  const activeCount = historyFilterActiveCount(props.search);
   const ownershipCounts = new Map(
     props.facets?.ownershipScopes.map((facet) => [facet.value, facet.count]) ??
       [],
@@ -82,6 +98,13 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
         className="max-h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)] gap-3 overflow-y-auto"
         data-testid="epics-filter-popover"
       >
+        {props.showDraftsFacet ? (
+          <DraftsFilterSection
+            search={props.search}
+            onSearchChange={props.onSearchChange}
+            hostId={props.hostId}
+          />
+        ) : null}
         <FilterSection label="Ownership" trailing={null}>
           {OWNERSHIP_OPTIONS.map((option) => (
             <FilterOption
@@ -185,6 +208,35 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
         </FilterSection>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function DraftsFilterSection(props: {
+  readonly search: HistorySearchState;
+  readonly onSearchChange: (patch: HistorySearchPatch) => void;
+  readonly hostId: string | null;
+}): ReactNode {
+  const drafts = useLandingDraftStore((state) => state.drafts);
+  const count = drafts.filter((draft) =>
+    isHistoryListedLandingDraft(draft, props.hostId),
+  ).length;
+  return (
+    <FilterSection label="Drafts" trailing={null}>
+      {DRAFT_OPTIONS.map((option) => (
+        <FilterOption
+          key={option.value}
+          label={option.label}
+          truncateLabelFromStart={false}
+          count={count}
+          checked={props.search.drafts.includes(option.value)}
+          onToggle={() => {
+            props.onSearchChange({
+              drafts: withToggledValue(props.search.drafts, option.value),
+            });
+          }}
+        />
+      ))}
+    </FilterSection>
   );
 }
 

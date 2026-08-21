@@ -81,6 +81,7 @@ import {
 } from "@/components/home/data/home-page.data";
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
+import { HistoryDraftsList } from "@/components/epics/history-drafts-list";
 import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
@@ -104,9 +105,10 @@ import {
 import { epicDisplayTitle } from "@/lib/display-title";
 import { openEpicFromList as openEpicFromCommand } from "@/lib/commands/actions/open-epic-from-list";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  HistorySearchPatch,
-  HistorySearchState,
+import {
+  isHistoryDraftsFacetOn,
+  type HistorySearchPatch,
+  type HistorySearchState,
 } from "@/lib/history-search";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
@@ -503,7 +505,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
   };
 
+  const { showDraftsFacet, showDrafts } = historyDraftsChrome(variant, search);
   const hasActiveFilters = hasActiveHistoryFilters(search);
+  const searchCopy = historySearchFieldCopy(showDrafts);
+  const allowSelection = selectionEnabled ? !showDrafts : false;
 
   const handleClear = () => {
     clearSearch();
@@ -542,6 +547,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
             placement="page"
+            placeholder={searchCopy.placeholder}
+            ariaLabel={searchCopy.ariaLabel}
           />
         ) : null}
         <PanelChromeBar
@@ -557,11 +564,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                 isFetching={isFetching}
                 focusOnMount={props.autoFocusSearch}
                 placement="toolbar"
+                placeholder={searchCopy.placeholder}
+                ariaLabel={searchCopy.ariaLabel}
               />
             ) : null
           }
           filters={{ active: hasActiveFilters, onClear: handleClear }}
-          showSelection={selectionEnabled}
+          showSelection={allowSelection}
+          showSort={!showDrafts}
           selection={
             selectionMode
               ? {
@@ -602,11 +612,18 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           search={search}
           onSearchChange={updateSearch}
           facets={facets}
+          showDraftsFacet={showDraftsFacet}
+          hostId={hostId}
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <div className="min-h-0 flex-1 overflow-y-auto pb-10">
-            <EpicsListBody
+            <HistoryPanelList
+              showDrafts={showDrafts}
+              query={search.query}
+              hostId={hostId}
+              onSelectEpic={onSelectEpic}
+              onRowKeyDown={keyboardNav.onRowKeyDown}
               error={error}
               isPending={isPending}
               isFetching={isFetching}
@@ -624,14 +641,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               hasNextPage={hasNextPage}
               isFetchingNextPage={isFetchingNextPage}
               onLoadMore={fetchNextPage}
-              onSelectEpic={onSelectEpic}
               onOpenItem={onOpenItem}
               onOpenInNewWindow={openInNewWindowFlow.requestOpen}
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
               worktreesByEpicId={worktreesByEpicId}
               openEpicIds={openEpicIdSet}
               listRef={listRef}
-              onRowKeyDown={keyboardNav.onRowKeyDown}
             />
           </div>
         </NotificationIndicatorsProvider>
@@ -666,11 +681,39 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   );
 }
 
+function historyDraftsChrome(
+  variant: EpicsListPanelVariant,
+  search: HistorySearchState,
+): {
+  readonly showDraftsFacet: boolean;
+  readonly showDrafts: boolean;
+} {
+  const showDraftsFacet = variant !== "picker";
+  return {
+    showDraftsFacet,
+    showDrafts: showDraftsFacet && isHistoryDraftsFacetOn(search),
+  };
+}
+
+function historySearchFieldCopy(showDrafts: boolean): {
+  readonly placeholder: string;
+  readonly ariaLabel: string;
+} {
+  if (showDrafts) {
+    return { placeholder: "Search drafts", ariaLabel: "Search drafts" };
+  }
+  return {
+    placeholder: "Search by title, repo, branch, or PR",
+    ariaLabel: "Search tasks",
+  };
+}
+
 function hasActiveHistoryFilters(search: HistorySearchState): boolean {
   return (
     search.repos.length > 0 ||
     search.workspaces.length > 0 ||
     search.ownershipScopes.length > 0 ||
+    (Array.isArray(search.drafts) && search.drafts.length > 0) ||
     (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
     search.query.trim().length > 0
   );
@@ -685,6 +728,8 @@ interface PanelSearchInputProps {
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
   readonly placement: "page" | "toolbar";
+  readonly placeholder: string;
+  readonly ariaLabel: string;
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
@@ -730,8 +775,8 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
             props.onChange(event.target.value);
           }}
           onKeyDown={props.onKeyDown}
-          placeholder="Search by title, repo, branch, or PR"
-          aria-label="Search tasks"
+          placeholder={props.placeholder}
+          aria-label={props.ariaLabel}
         />
         {props.value.length > 0 ? (
           <InputGroupAddon align="inline-end">
@@ -789,6 +834,7 @@ interface PanelChromeBarProps {
   /** False for the read-only `variant="picker"` embed: hides the entry point
    * into bulk select/sweep/delete rather than merely disabling it. */
   readonly showSelection: boolean;
+  readonly showSort: boolean;
   readonly selection: PanelSelectionControls;
   readonly sort: HistorySortOption;
   readonly onSortChange: (next: HistorySortOption) => void;
@@ -797,6 +843,8 @@ interface PanelChromeBarProps {
   readonly search: HistorySearchState;
   readonly onSearchChange: (patch: HistorySearchPatch) => void;
   readonly facets: HistoryFacets | undefined;
+  readonly showDraftsFacet: boolean;
+  readonly hostId: string | null;
   readonly refresh: PanelRefreshControls;
 }
 
@@ -885,13 +933,17 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
           </>
         ) : (
           <>
-            <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
+            {props.showSort ? (
+              <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
+            ) : null}
             <EpicsFilterPopover
               availableRepos={props.availableRepos}
               availableWorkspaces={props.availableWorkspaces}
               search={props.search}
               onSearchChange={props.onSearchChange}
               facets={props.facets}
+              showDraftsFacet={props.showDraftsFacet}
+              hostId={props.hostId}
             />
             {props.showSelection ? (
               <Button
@@ -946,6 +998,27 @@ function describeDeleteTitle(
           initialUserPrompt: match.initialUserPrompt,
         });
   return `Delete "${matchTitle}"?`;
+}
+
+function HistoryPanelList(
+  props: EpicsListBodyProps & {
+    readonly showDrafts: boolean;
+    readonly query: string;
+    readonly hostId: string | null;
+  },
+): ReactNode {
+  if (props.showDrafts) {
+    return (
+      <HistoryDraftsList
+        query={props.query}
+        hostId={props.hostId}
+        onBeforeOpen={props.onSelectEpic}
+        listRef={props.listRef}
+        onRowKeyDown={props.onRowKeyDown}
+      />
+    );
+  }
+  return <EpicsListBody {...props} />;
 }
 
 interface EpicsListBodyProps {

@@ -814,7 +814,8 @@ describe("<MenuCommandListener />", () => {
       menu.emit("epic.closeTab");
     });
 
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(true);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([tabId]);
     const navigation = latestNavigation();
     expect(navigation.to).toBe("/epics/$epicId/$tabId");

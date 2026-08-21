@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   DEFAULT_HISTORY_SEARCH,
+  normalizeHistorySearchState,
   patchHistorySearch,
   type HistorySearchPatch,
   type HistorySearchState,
@@ -47,6 +48,20 @@ export const useHistorySearchStore = create<HistorySearchStoreState>()(
       storage: createJSONStorage(() => localStorage),
       // Persist only the data; the actions come from the initializer on rehydrate.
       partialize: (state) => ({ search: state.search }),
+      merge: (persisted, current) => {
+        if (
+          persisted === undefined ||
+          typeof persisted !== "object" ||
+          persisted === null ||
+          !("search" in persisted)
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          search: normalizeHistorySearchState(persisted.search),
+        };
+      },
     },
   ),
 );

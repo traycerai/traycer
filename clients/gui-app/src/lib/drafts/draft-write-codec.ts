@@ -54,6 +54,7 @@ export function portableComposerFromLocal(input: {
   readonly selection: DraftSelection | null;
   readonly runSettings: ChatRunSettings | null;
   readonly composerMode: ComposerMode | null;
+  readonly closed: boolean;
 }): DraftComposerPortable {
   return {
     content: input.content,
@@ -64,6 +65,7 @@ export function portableComposerFromLocal(input: {
         ? input.composerMode
         : DEFAULT_COMPOSER_MODE,
     blobHashes: [...blobHashesFromContent(input.content)],
+    closed: input.closed,
   };
 }
 
@@ -97,6 +99,7 @@ export function composerDraftWrite(input: {
   readonly runSettings: ChatRunSettings | null;
   readonly composerMode: ComposerMode | null;
   readonly workspace: LandingDraftWorkspaceSnapshot | null;
+  readonly closed: boolean;
 }): DraftWrite {
   return {
     draftId: input.draftId,
@@ -110,6 +113,7 @@ export function composerDraftWrite(input: {
       selection: input.selection,
       runSettings: input.runSettings,
       composerMode: input.composerMode,
+      closed: input.closed,
     }),
   };
 }

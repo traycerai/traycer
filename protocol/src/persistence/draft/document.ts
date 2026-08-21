@@ -85,6 +85,7 @@ function encodeComposerPortable(portable: DraftComposerPortable): JsonObject {
         : encodeRunSettings(portable.runSettings),
     composerMode: portable.composerMode,
     blobHashes: [...portable.blobHashes],
+    closed: portable.closed,
   };
 }
 

@@ -13,6 +13,7 @@ export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
 export type HistoryItemTaskType = "epic" | "phase";
 export type HistoryMatchMode = "any" | "all";
 export type HistoryOwnershipScope = TaskOwnershipScope;
+export type HistoryDraftScope = "landing";
 export type HistoryWorkspaceRef = TaskWorkspaceIdentifier;
 export type HistorySortOption =
   | "recent"

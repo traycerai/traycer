@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   clearHistorySearchParams,
   historySearchToParams,
+  isHistoryDraftsFacetOn,
+  normalizeHistorySearchState,
   parseHistorySearch,
   patchHistorySearch,
 } from "@/lib/history-search";
@@ -27,9 +29,37 @@ describe("history search params", () => {
       workspaces: [{ hostId: "host-1", workspacePath: "/Users/me/gui-app" }],
       workspaceMode: "all",
       ownershipScopes: ["shared"],
+      drafts: [],
       sort: "relevance",
       sortExplicit: false,
     });
+  });
+
+  it("round-trips the drafts facet through URL params", () => {
+    const search = parseHistorySearch({ historyDrafts: "landing" });
+
+    expect(search.drafts).toEqual(["landing"]);
+    expect(historySearchToParams(search)).toMatchObject({
+      historyDrafts: ["landing"],
+    });
+    expect(
+      historySearchToParams(parseHistorySearch({})).historyDrafts,
+    ).toBeUndefined();
+  });
+
+  it("fills a missing drafts field from pre-facet persisted search state", () => {
+    expect(
+      normalizeHistorySearchState({
+        query: "api",
+        repos: [],
+        repoMode: "any",
+        workspaces: [],
+        workspaceMode: "any",
+        ownershipScopes: [],
+        sort: "recent",
+        sortExplicit: false,
+      }),
+    ).toMatchObject({ query: "api", drafts: [] });
   });
 
   it("preserves an explicit recent sort while a query is active", () => {
@@ -64,8 +94,16 @@ describe("history search params", () => {
         historyWorkspaces: ["host-1:%2FUsers%2Fme%2Fgui-app"],
         historyWorkspaceMode: "all",
         historyOwnership: ["mine"],
+        historyDrafts: ["landing"],
         historySort: "relevance",
       }),
     ).toEqual({ focusedAt: 1 });
+  });
+
+  it("treats an empty drafts facet as off", () => {
+    expect(isHistoryDraftsFacetOn(parseHistorySearch({}))).toBe(false);
+    expect(
+      isHistoryDraftsFacetOn(parseHistorySearch({ historyDrafts: "landing" })),
+    ).toBe(true);
   });
 });

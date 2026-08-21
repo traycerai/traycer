@@ -32,7 +32,10 @@ import {
   resolveTabIdForEpic,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  isOpenLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
 import {
   tabCommandCoordinator,
@@ -372,6 +375,12 @@ function routedTabTarget(pathname: string): RoutedTabTarget | null {
   return null;
 }
 
+function isOpenLandingDraftId(draftId: string): boolean {
+  return useLandingDraftStore
+    .getState()
+    .drafts.some((draft) => draft.id === draftId && isOpenLandingDraft(draft));
+}
+
 function intentForRef(
   ref: TabRef,
   pathname: string,
@@ -394,10 +403,7 @@ function intentForRef(
     });
   }
   if (ref.kind === "draft") {
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === ref.id);
-    return exists ? draftTabIntent(ref.id) : null;
+    return isOpenLandingDraftId(ref.id) ? draftTabIntent(ref.id) : null;
   }
   if (ref.kind === "history") return historyTabIntent();
   return settingsTabIntent(settingsSectionFromPath(pathname));
@@ -434,9 +440,7 @@ function refIsMaterialized(ref: TabRef): boolean {
     return useEpicCanvasStore.getState().tabsById[ref.id] !== undefined;
   }
   if (ref.kind === "draft") {
-    return useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === ref.id);
+    return isOpenLandingDraftId(ref.id);
   }
   return useTabsStore.getState().systemTabs[ref.kind] !== null;
 }
@@ -1472,10 +1476,7 @@ export class TabNavigationController {
     navigate: NavigateFn,
   ): void {
     const ref: TabRef = { kind: "draft", id: draftId };
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === draftId);
-    if (!exists) {
+    if (!isOpenLandingDraftId(draftId)) {
       this.issueLandingCorrection(location, navigate);
       return;
     }
