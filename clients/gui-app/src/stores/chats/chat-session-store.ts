@@ -23,6 +23,7 @@ import type {
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
   chatStreamErrorNotification,
@@ -141,6 +142,13 @@ export interface PendingUserMessage {
   readonly settings: ChatRunSettings;
   readonly timestamp: number;
   /**
+   * The billing context this send was stamped with at dispatch. Retained for
+   * the same reason `settings` is: it dies with the action, so a resend picks
+   * up whatever the account picker holds NOW, and billing a different account
+   * is exactly the surprise the drift statement exists to prevent.
+   */
+  readonly accountContext: AccountContext;
+  /**
    * The staged worktree choice this send consumed at dispatch, carried here so
    * it OUTLIVES the accepted ack. `acceptedActions` deliberately keeps only
    * what action bookkeeping needs, so once the ack lands the pending action -
@@ -164,6 +172,8 @@ export interface PendingChatAction {
   readonly restoreContent: JsonContent | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
+  /** See {@link PendingUserMessage.accountContext}. */
+  readonly accountContext: AccountContext | null;
   /**
    * Workspace selection consumed when a send goes on the wire. A rejected
    * send restores it to the owner's staging slot together with the composer
@@ -1324,6 +1334,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             failedSendRestoration: state.failedSendRestoration,
             connectionEpoch,
             currentSettings: nextComposerSettings,
+            currentAccountContext:
+              useAccountContextStore.getState().accountContext,
             nowMs: now,
           });
           // `reconcileSnapshotChange` only settles sends still awaiting their
@@ -1345,6 +1357,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               queue: frame.snapshot.queue,
               failedSendRestoration: pending.failedSendRestoration,
               currentSettings: nextComposerSettings,
+              currentAccountContext:
+                useAccountContextStore.getState().accountContext,
             },
           );
           restoredWorktreeIntentForSnapshot =
@@ -1749,6 +1763,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               // settle can arrive before any snapshot carries a just-made
               // change - which is precisely when the warning matters.
               currentSettings: state.currentComposerSettings,
+              currentAccountContext:
+                useAccountContextStore.getState().accountContext,
             },
           );
           restoredWorktreeIntentForTurnState =
@@ -2378,6 +2394,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             restoreContent: content,
             sender,
             settings,
+            accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
             createdAt: Date.now(),
           },
@@ -2399,6 +2416,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 sender,
                 settings,
                 timestamp: Date.now(),
+                accountContext: frame.accountContext,
                 restoreWorktreeIntent: worktreeIntent,
               }
             : null,
@@ -2489,6 +2507,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
+            accountContext: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: {
@@ -2497,6 +2516,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             content: input.content,
             sender: input.sender,
             settings: input.settings,
+            accountContext: { type: "PERSONAL" },
             timestamp: Date.now(),
             // The landing handoff's worktree rides `epic.create`, not this
             // send, so there is no staged slot for it to give back.
@@ -2579,6 +2599,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
+            accountContext: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -2645,6 +2666,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
+            accountContext: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -3260,6 +3282,7 @@ function basicPending(
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
+    accountContext: null,
     createdAt: Date.now(),
   };
 }

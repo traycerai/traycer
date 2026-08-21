@@ -7,6 +7,7 @@ import type {
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import {
   classifyContentRecovery,
   recoveryTextFromContent,
@@ -89,6 +90,8 @@ export type ReconcileSnapshotInput = {
   readonly connectionEpoch: number;
   /** The chat's settings as of this snapshot - see {@link settingsDriftClause}. */
   readonly currentSettings: ChatRunSettings | null;
+  /** The account a resend would bill - see {@link accountDriftClause}. */
+  readonly currentAccountContext: AccountContext | null;
   readonly nowMs: number;
 };
 
@@ -158,6 +161,8 @@ interface UnrecoverableSend {
   readonly worktreeIntent: WorktreeIntent | null;
   readonly sentSettings: ChatRunSettings | null;
   readonly currentSettings: ChatRunSettings | null;
+  readonly sentAccountContext: AccountContext | null;
+  readonly currentAccountContext: AccountContext | null;
 }
 
 function unrecoverableSendNotice(send: UnrecoverableSend): ChatErrorNotice {
@@ -201,7 +206,12 @@ function unrecoverableSendNotice(send: UnrecoverableSend): ChatErrorNotice {
         ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
         : "",
       worktreeClause(worktreeIntent),
-      settingsDriftClause(send.sentSettings, send.currentSettings),
+      settingsDriftClause(
+        send.sentSettings,
+        send.currentSettings,
+        send.sentAccountContext,
+        send.currentAccountContext,
+      ),
     ].join(""),
     severity: "warning",
     clientActionId,
@@ -316,31 +326,63 @@ function worktreeEntryLabel(
  * full tuple every time is noise that buries the one field that moved, and a
  * send whose settings still match needs no clause at all.
  */
+const DRIFT_LABELS: Record<keyof ChatRunSettings | "accountContext", string> = {
+  harnessId: "harness",
+  model: "model",
+  permissionMode: "permission mode",
+  reasoningEffort: "reasoning effort",
+  serviceTier: "service tier",
+  agentMode: "agent mode",
+  profileId: "profile",
+  accountContext: "billing",
+};
+
 function settingsDriftClause(
   sent: ChatRunSettings | null,
   current: ChatRunSettings | null,
+  sentAccount: AccountContext | null,
+  currentAccount: AccountContext | null,
 ): string {
   if (sent === null || current === null) return "";
-  // Keyed by every field via `satisfies`, so a new setting forces an entry
-  // here rather than silently never being compared.
-  const fields = {
-    harness: [sent.harnessId, current.harnessId],
+  // Keyed by `keyof ChatRunSettings`, NOT `Record<string, ...>`. The earlier
+  // shape validated value TYPES only - it never required every field - so the
+  // comment claiming a new setting would be forced into the comparison was
+  // false, and a new field would have gone uncompared in silence. This shape
+  // fails to COMPILE when one is missing, which is what that claim was
+  // supposed to buy.
+  const values: Record<
+    keyof ChatRunSettings | "accountContext",
+    readonly [string | null, string | null]
+  > = {
+    harnessId: [sent.harnessId, current.harnessId],
     model: [sent.model, current.model],
-    "permission mode": [sent.permissionMode, current.permissionMode],
-    "reasoning effort": [sent.reasoningEffort, current.reasoningEffort],
-    "service tier": [sent.serviceTier, current.serviceTier],
-    "agent mode": [sent.agentMode, current.agentMode],
-    profile: [sent.profileId ?? null, current.profileId ?? null],
-  } satisfies Record<string, readonly [string | null, string | null]>;
+    permissionMode: [sent.permissionMode, current.permissionMode],
+    reasoningEffort: [sent.reasoningEffort, current.reasoningEffort],
+    serviceTier: [sent.serviceTier, current.serviceTier],
+    agentMode: [sent.agentMode, current.agentMode],
+    profileId: [sent.profileId ?? null, current.profileId ?? null],
+    // Billing rides alongside the run settings rather than inside them, so it
+    // is named in the key type explicitly to stay under the same force.
+    accountContext: [
+      sentAccount === null ? null : describeAccount(sentAccount),
+      currentAccount === null ? null : describeAccount(currentAccount),
+    ],
+  };
   // `null` is a VALUE - "use the default" - not an absence. Dropping a field
-  // because its SENT value was null hid the drift that matters most: a send
-  // dispatched on the default and resent under an explicit pick behaves
-  // differently. Only genuinely EQUAL values are dropped, and a null is named.
-  const named = Object.entries(fields).flatMap(([label, [was, now]]) =>
-    was === now ? [] : [`${label} ${describeSetting(was)}`],
+  // because its SENT value was null hid the drift that matters most.
+  const named = Object.entries(values).flatMap(([key, [was, now]]) =>
+    was === now
+      ? []
+      : [`${DRIFT_LABELS[key as keyof typeof values]} ${describeSetting(was)}`],
   );
   if (named.length === 0) return "";
   return ` It was going to run with ${named.join(", ")}; the chat uses different settings now, so a resend will not match unless you set them back.`;
+}
+
+function describeAccount(context: AccountContext): string {
+  return context.type === "TEAM"
+    ? `team ${context.teamId}`
+    : "your personal account";
 }
 
 function describeSetting(value: string | null): string {
@@ -535,6 +577,8 @@ export function reconcileSnapshotChange(
               worktreeIntent: pending.restoreWorktreeIntent,
               sentSettings: pending.settings,
               currentSettings: input.currentSettings,
+              sentAccountContext: pending.accountContext,
+              currentAccountContext: input.currentAccountContext,
             }),
           ],
         };
@@ -574,6 +618,8 @@ export type ReconcileTurnSettledInput = {
   readonly failedSendRestoration: FailedSendRestorationState | null;
   /** See {@link ReconcileSnapshotInput.currentSettings}. */
   readonly currentSettings: ChatRunSettings | null;
+  /** See {@link ReconcileSnapshotInput.currentAccountContext}. */
+  readonly currentAccountContext: AccountContext | null;
 };
 
 export type ReconcileTurnSettledPatch = {
@@ -710,6 +756,8 @@ export function reconcileTurnSettled(
           worktreeIntent: message.restoreWorktreeIntent,
           sentSettings: message.settings,
           currentSettings: input.currentSettings,
+          sentAccountContext: message.accountContext,
+          currentAccountContext: input.currentAccountContext,
         }),
       ),
   };
@@ -832,6 +880,7 @@ function pendingUserMessageFromPendingAction(
     content: action.restoreContent,
     sender: action.sender,
     settings: action.settings,
+    accountContext: { type: "PERSONAL" },
     timestamp: action.createdAt,
     restoreWorktreeIntent: action.restoreWorktreeIntent,
   };

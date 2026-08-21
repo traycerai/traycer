@@ -59,6 +59,7 @@ function createPendingAction(
     sender: isSendOrEdit ? SENDER : null,
     settings: isSendOrEdit ? SETTINGS : null,
     restoreWorktreeIntent: null,
+    accountContext: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -89,6 +90,7 @@ function createPendingUserMessage(
     content: CONTENT,
     sender: SENDER,
     settings: SETTINGS,
+    accountContext: { type: "PERSONAL" },
     timestamp: 1000,
     restoreWorktreeIntent: null,
   };
@@ -188,6 +190,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        accountContext: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -198,6 +201,7 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT_2,
         sender: SENDER,
         settings: SETTINGS,
+        accountContext: { type: "PERSONAL" },
         timestamp: 1000,
         restoreWorktreeIntent: null,
       };
@@ -246,6 +250,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        accountContext: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -264,6 +269,7 @@ describe("chat-queue-reconciler", () => {
             content: CONTENT_2,
             sender: SENDER,
             settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
             timestamp: 1000,
             restoreWorktreeIntent: null,
           },
@@ -305,6 +311,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -328,6 +335,7 @@ describe("chat-queue-reconciler", () => {
         },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -348,6 +356,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -374,6 +383,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: existingRestore,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -405,6 +415,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -427,6 +438,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         nowMs: 5000,
       };
@@ -458,6 +470,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 0,
         nowMs: 5000,
       };
@@ -478,6 +491,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -499,6 +513,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        accountContext: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -523,6 +538,7 @@ describe("chat-queue-reconciler", () => {
             content: CONTENT_2,
             sender: SENDER,
             settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
             timestamp: 1000,
             restoreWorktreeIntent: null,
           },
@@ -531,6 +547,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -568,6 +585,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -588,6 +606,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        accountContext: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -598,6 +617,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -629,6 +649,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -693,6 +714,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "running", items: [managedItem] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         connectionEpoch: 1,
         nowMs: 5000,
       };
@@ -883,6 +905,7 @@ describe("chat-queue-reconciler", () => {
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
         currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
         ...overrides,
       };
     }
@@ -954,6 +977,7 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT_2,
         sender: SENDER,
         settings: SETTINGS,
+        accountContext: { type: "PERSONAL" },
         timestamp: 1000,
         restoreWorktreeIntent: null,
       };

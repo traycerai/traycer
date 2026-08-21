@@ -63,6 +63,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { interviewDraftKey } from "@/lib/persist";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   readInterviewDraftSnapshot,
   useInterviewDraftStore,
@@ -2015,6 +2016,48 @@ describe("createChatSessionStore", () => {
         worktreeStagingKeyString(key)
       ],
     ).toEqual(sendIntent);
+  });
+
+  // R12 `-A8bF`: billing context is stamped at dispatch and dies with the
+  // action, so a resend bills whatever the picker holds now. Unlike a model
+  // change it leaves no trace in the conversation.
+  it("states that a resend would bill a different account", () => {
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    // Settings must be seeded: the drift clause needs BOTH tuples, and a
+    // snapshot with `settings: null` short-circuits it before billing is
+    // ever compared.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    sendTwo(harness, CONTENT, SECOND_CONTENT);
+    const second = harness.sent[1];
+    if (second.kind !== "send") throw new Error("Expected a send frame");
+
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-9" },
+    });
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    const notice = noticeFor(harness, second.clientActionId);
+    // Billing sits in the same drift table as the run settings now, so it
+    // reads with them rather than as a separate sentence.
+    expect(notice.message).toContain("billing your personal account");
+    expect(notice.message).toContain("different settings now");
   });
 
   // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
