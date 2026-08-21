@@ -1034,10 +1034,42 @@ function appendWorktreeGoneToRestoration(
   );
 }
 
+/**
+ * Whether the restoration slot is already promised to a DIFFERENT action's
+ * prompt.
+ *
+ * The prompt slot and the staging slot are one pair, and a binding may only be
+ * handed back to sit under its OWN prompt. Every individual hand-back rule
+ * here is about a single action's right to its own pick; this is the rule
+ * about the pair, and it is the one two locally-correct decisions can violate
+ * between them.
+ *
+ * Deliberately NOT expressed as a terminal claim on the staging slot by
+ * whichever prompt wins. Closing the slot would also close it for the
+ * legitimate later pairing - once the composer consumes the restored prompt
+ * the slot frees, and a subsequent restore of the OTHER send's prompt should
+ * still bring its own binding with it - and a terminal claim that outlived the
+ * prompt would block the winner's own sweep hand-back, which is the
+ * cross-owner staging hazard arriving from the other side. Asking the question
+ * at hand-back time costs nothing and keeps both doors open.
+ */
+function restorationSlotHeldByOther(
+  restoration: FailedSendRestorationState | null,
+  clientActionId: string,
+): boolean {
+  return restoration !== null && restoration.clientActionId !== clientActionId;
+}
+
 function restoreOneWorktreeIntent(
   restoredPrompt: StagedWorktreeIntentSource | null,
   sweptClaimants: ReadonlyArray<SweptWorktreeClaimant | undefined>,
   stagingKey: WorktreeStagingKey,
+  /**
+   * Who the restoration slot is promised to right now. A prompt handed back by
+   * THIS pass is already it, so only the swept-claimant fallback below has to
+   * ask - see {@link restorationSlotHeldByOther}.
+   */
+  restoration: FailedSendRestorationState | null,
 ): boolean {
   if (restoredPrompt !== null) {
     restoreStagedWorktreeIntent(restoredPrompt, stagingKey);
@@ -1061,9 +1093,16 @@ function restoreOneWorktreeIntent(
   // Handing its pick back there stages a binding over one an accepted send
   // already ran against, which is the silent-local-run this restore exists to
   // prevent, arriving by the other door.
+  //
+  // And the slot must not already be promised to somebody else's prompt. This
+  // fallback defers to a prompt handed back by its OWN pass, but a prompt
+  // handed back by an earlier one is still sitting there unconsumed, and
+  // staging a swept action's binding underneath it is the same mismatch the
+  // rejection path had.
   const owed = sweptClaimants.find(
     (claimant) =>
       claimant !== undefined &&
+      !restorationSlotHeldByOther(restoration, claimant.clientActionId) &&
       claimant.restoreWorktreeIntent !== null &&
       stagedWorktreeIntentAwaitsDispatchFrom(
         stagingKey,
@@ -1649,6 +1688,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             ownerKind: "chat",
             ownerId: options.chatId,
           },
+          // Read AFTER the reconcile `set`, so this is who holds the slot now -
+          // this pass's own restored prompt, or an earlier pass's still waiting
+          // to be consumed.
+          get().failedSendRestoration,
         );
         // A deferred session stop that survived the sweep (its turn stop was
         // accepted before the connection dropped) may never see another
@@ -1730,7 +1773,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         // one. The restoration paths deliberately do NOT match on owner - they
         // hand back a prompt, and round 10 proved the last consumer is not
         // necessarily the one whose prompt returns.
-        if (rejectedPending !== null && rejectionOwnsSlot) {
+        //
+        // Owning the mark is necessary but NOT sufficient, because the two
+        // slots have to move together. Two rejections can each decide
+        // correctly on their own terms and still combine into a mismatch: the
+        // first wins the PROMPT slot without owning the mark, the second owns
+        // the mark but has its prompt displaced, and the composer ends up
+        // holding one send's text over another send's worktree - a resend that
+        // looks right and runs somewhere else.
+        if (
+          rejectedPending !== null &&
+          rejectionOwnsSlot &&
+          !restorationSlotHeldByOther(
+            get().failedSendRestoration,
+            rejectedPending.clientActionId,
+          )
+        ) {
           restoreStagedWorktreeIntent(rejectedPending, rejectionStagingKey);
         }
         // Third surface, same rule. This path refuses the hand-back exactly as
@@ -1989,13 +2047,18 @@ export function createChatSessionStoreWithNotificationDependencies(
         // is the fact this path was settling without.
         appendWorktreeGoneToRestoration(
           set,
-          restoreOneWorktreeIntent(restoredWorktreeIntentForTurnState, [], {
-            surface: "owner",
-            hostId: options.hostId,
-            epicId: options.epicId,
-            ownerKind: "chat",
-            ownerId: options.chatId,
-          }),
+          restoreOneWorktreeIntent(
+            restoredWorktreeIntentForTurnState,
+            [],
+            {
+              surface: "owner",
+              hostId: options.hostId,
+              epicId: options.epicId,
+              ownerKind: "chat",
+              ownerId: options.chatId,
+            },
+            get().failedSendRestoration,
+          ),
         );
         maybeDispatchPendingBackgroundSessionStop(set, get);
       },

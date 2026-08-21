@@ -1801,6 +1801,159 @@ describe("createChatSessionStore", () => {
     ).toEqual(intent);
   });
 
+  // `-H9e2`: the two slots have to move TOGETHER.
+  //
+  // Two sends in flight, A then B, B's pick consumed last so the mark is B's.
+  // A's rejection lands first: it wins the prompt slot, but its worktree
+  // hand-back is refused because the mark is not its own - correct on its own
+  // terms. B's rejection lands second: it DOES own the mark, so it staged B's
+  // pick, while B's prompt was displaced into a statement. Net effect, from
+  // two individually-correct decisions: the composer holds A's prompt paired
+  // with B's worktree, and resending runs A's text in B's checkout.
+  it("never pairs one rejection's prompt with another's worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intentA = worktreeIntentFor("feat/a");
+    const intentB = worktreeIntentFor("feat/b");
+
+    useWorktreeIntentStagingStore.getState().setIntent(key, intentA);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    // B stages its own pick and consumes it, so the outstanding mark is B's.
+    useWorktreeIntentStagingStore.getState().setIntent(key, intentB);
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const [first, second] = harness.sent;
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+
+    const reject = (clientActionId: string, reason: string): void => {
+      callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId,
+        action: "send",
+        status: "rejected",
+        reason,
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    };
+
+    // A first: wins the prompt slot, does not own the mark.
+    reject(first.clientActionId, "Host refused A.");
+    // B second: owns the mark, but its prompt is displaced.
+    reject(second.clientActionId, "Host refused B.");
+
+    const state = harness.handle.store.getState();
+    // A's prompt is what came back...
+    expect(state.failedSendRestoration?.content).toEqual(CONTENT);
+    // ...so B's worktree must NOT be sitting under it.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+    // B loses nothing by the refusal: its displaced statement carries its text
+    // AND names the worktree it was staged for, so it can be re-picked.
+    const statement = noticeFor(harness, second.clientActionId);
+    expect(statement.message).toContain("World");
+    expect(statement.message).toContain("feat/b");
+  });
+
+  // The same pairing rule, reached through the OTHER door. The sweep's
+  // fallback defers to a prompt handed back by its own pass - but a prompt
+  // handed back by an EARLIER pass is still sitting in the slot, and staging a
+  // swept action's binding under it is the identical mismatch.
+  it("never pairs an earlier restored prompt with a swept action's worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+
+    // A rejected send claims the restoration slot; the composer has not
+    // consumed it yet.
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    rejectLastAction(harness, "Host refused the send.");
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+
+    // An edit then stages and consumes its own pick, and never gets its ack.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, worktreeIntentFor("feat/edit"));
+    expect(
+      harness.handle.store.getState().editUserMessage({
+        targetMessageId: "msg-original",
+        content: SECOND_CONTENT,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+
+    // The reconnect sweeps the edit. No prompt is handed back by THIS pass, so
+    // the sweep's fallback would otherwise stage the edit's pick - underneath
+    // the send's prompt that is still waiting in the slot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
   it("does not restore a rejected worktree intent after a newer explicit clear", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     const harness = createHarness();
