@@ -164,6 +164,58 @@ function ConfirmClaimCard(props: {
 }
 
 /**
+ * This surface answered second. The server takes a repeat of the SAME
+ * decision as idempotent and the OPPOSITE one as a conflict, so
+ * `already-decided` always means the other answer won — and which one that
+ * was is the inverse of the button just pressed.
+ *
+ * Stated plainly because the two outcomes differ in what happened to the
+ * phone: an approval elsewhere signed it in, a rejection elsewhere did not.
+ * Reporting either as this window's own success would be a false
+ * confirmation on a security-sensitive decision.
+ */
+function DecidedElsewhereCard(props: {
+  readonly decision: "approved" | "rejected";
+  readonly retrying: boolean;
+  readonly onShowNew: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col items-center gap-3 text-center"
+      data-testid="link-phone-decided-elsewhere"
+      data-decision={props.decision}
+    >
+      <Smartphone aria-hidden="true" className="text-muted-foreground" />
+      <p className="text-ui-sm text-foreground">
+        {props.decision === "approved"
+          ? "This request was already approved on another device or browser."
+          : "This request was already rejected on another device or browser."}
+      </p>
+      <p className="text-ui-xs text-muted-foreground">
+        {props.decision === "approved"
+          ? "That phone is signed in. Your answer here was not applied."
+          : "No phone was signed in. Your answer here was not applied."}
+      </p>
+      <Button
+        variant="outline"
+        disabled={props.retrying}
+        data-testid="link-phone-decided-elsewhere-new"
+        onClick={props.onShowNew}
+      >
+        Show a new code
+        {props.retrying ? (
+          <AgentSpinningDots
+            variant="dots"
+            className="ml-1.5"
+            testId={undefined}
+          />
+        ) : null}
+      </Button>
+    </div>
+  );
+}
+
+/**
  * A claim is live somewhere, but not on this panel's code: minting came back
  * `claim-pending`, meaning another surface (portal, CLI, second window) owns
  * the claim awaiting this user's decision. A state, not an error — and no
@@ -432,8 +484,28 @@ function MintErrorCard(props: {
 export function LinkPhonePanel() {
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const [approvedDone, setApprovedDone] = useState(false);
-  /** A decision that never landed: retryable, and not a reason to re-mint. */
-  const [respondFailed, setRespondFailed] = useState(false);
+  /**
+   * The code whose decision never landed, or `null`. Stored by CODE rather
+   * than as a flag: a bare boolean survives the claim it described, so the
+   * next phone's confirmation card would open already complaining about a
+   * failure that belonged to the previous one.
+   */
+  const [respondFailedCode, setRespondFailedCode] = useState<string | null>(
+    null,
+  );
+  /**
+   * What the OTHER surface decided, when this one's answer arrived second.
+   *
+   * The server is idempotent per DIRECTION: repeating a decision is 200, and
+   * the opposite decision is 409 `already_decided` (authn's respond route).
+   * So `already-decided` never means "your answer was applied" - it means the
+   * other answer won, and which one it was is the inverse of what was just
+   * clicked. Approving a claim the CLI already rejected must not report a
+   * phone signed in.
+   */
+  const [decidedElsewhere, setDecidedElsewhere] = useState<
+    "approved" | "rejected" | null
+  >(null);
   const respond = useRespondLinkLoginMutation();
   const {
     claim: watchedClaim,
@@ -441,6 +513,7 @@ export function LinkPhonePanel() {
     deadKind,
     restart: restartCode,
   } = useLinkLoginWatch(signedIn && !approvedDone);
+
   /**
    * A code this panel has already answered for.
    *
@@ -479,14 +552,24 @@ export function LinkPhonePanel() {
     if (claim === null) {
       return;
     }
-    setRespondFailed(false);
+    setRespondFailedCode(null);
+    setDecidedElsewhere(null);
     const decidedOn = claim.code;
     respond.mutate(
       { code: decidedOn, approve },
       {
         onSuccess: (outcome) => {
-          if (approve && (outcome === "ok" || outcome === "already-decided")) {
+          if (approve && outcome === "ok") {
             setApprovedDone(true);
+            return;
+          }
+          if (outcome === "already-decided") {
+            // The opposite decision reached the server first. Report what
+            // actually happened to the phone - the inverse of this click -
+            // and retire the code; it is spent either way.
+            setDecidedElsewhere(approve ? "rejected" : "approved");
+            setDecidedCode(decidedOn);
+            restartCode();
             return;
           }
           if (outcome === "failed") {
@@ -495,7 +578,7 @@ export function LinkPhonePanel() {
             // network problem by silently replacing the QR - the user tapped
             // Approve and got a different code back, with nothing said. Keep
             // the card, say what happened, let them tap again.
-            setRespondFailed(true);
+            setRespondFailedCode(decidedOn);
             return;
           }
           // Rejected (or the record vanished): resume with a fresh code.
@@ -507,7 +590,7 @@ export function LinkPhonePanel() {
           restartCode();
         },
         onError: () => {
-          setRespondFailed(true);
+          setRespondFailedCode(decidedOn);
         },
       },
     );
@@ -526,7 +609,8 @@ export function LinkPhonePanel() {
           awaitingElsewhere={awaitingElsewhere}
           deadKind={deadKind}
           minted={minted}
-          respondFailed={respondFailed}
+          respondFailed={claim !== null && claim.code === respondFailedCode}
+          decidedElsewhere={decidedElsewhere}
           code={{
             isError: code.isError,
             isRefetching: code.isRefetching,
@@ -566,6 +650,8 @@ function LinkPhonePanelBody(props: {
   readonly respondVerdict: PendingVerdict;
   /** A decision the transport lost; the claim is still live and retryable. */
   readonly respondFailed: boolean;
+  /** What another surface decided, when this one's answer arrived second. */
+  readonly decidedElsewhere: "approved" | "rejected" | null;
   readonly onDecide: (approve: boolean) => void;
   readonly onRestart: () => void;
   /** The evicting restart — the ONLY way a dead code is replaced. */
@@ -580,6 +666,19 @@ function LinkPhonePanelBody(props: {
   }
   if (props.approvedDone) {
     return <ApprovedCard onRestart={props.onRestart} />;
+  }
+  // Ahead of the claim card and of `approvedDone`: this outcome means the
+  // decision on screen was NOT the one that took effect, so continuing to
+  // offer it - or reporting success for it - would be describing something
+  // that did not happen.
+  if (props.decidedElsewhere !== null) {
+    return (
+      <DecidedElsewhereCard
+        decision={props.decidedElsewhere}
+        retrying={props.code.isRefetching}
+        onShowNew={props.onShowNew}
+      />
+    );
   }
   if (props.claim !== null) {
     return (

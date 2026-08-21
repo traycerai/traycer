@@ -437,6 +437,132 @@ describe("LinkPhonePanel", () => {
     expect(mocks.evictLinkLoginCode).not.toHaveBeenCalled();
   });
 
+  it("does NOT report approval when the other surface already rejected", () => {
+    // authn is idempotent per direction: the SAME decision replays as 200,
+    // the OPPOSITE one is 409 `already_decided`. So Approve coming back
+    // already-decided means a denial won - the phone was refused. Reporting
+    // "signed in" here would be a false confirmation on the one decision in
+    // this flow that is security-sensitive.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
+    );
+    const respond = {
+      isPending: false,
+      mutate: vi.fn(
+        (
+          _variables: { code: string; approve: boolean },
+          options: { onSuccess: (outcome: string) => void },
+        ) => {
+          options.onSuccess("already-decided");
+        },
+      ),
+    };
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    render(<LinkPhonePanel />);
+    act(() => {
+      screen.getByTestId("link-phone-approve").click();
+    });
+
+    expect(screen.queryByTestId("link-phone-approved")).toBeNull();
+    const card = screen.getByTestId("link-phone-decided-elsewhere");
+    expect(card.getAttribute("data-decision")).toBe("rejected");
+    expect(card.textContent).toContain("No phone was signed in");
+    // The code is spent whichever way it went, so it is retired.
+    expect(mocks.evictLinkLoginCode).toHaveBeenCalled();
+  });
+
+  it("reports an approval that landed elsewhere as exactly that", () => {
+    // The mirror: Reject answered second means an approval already won, and
+    // that phone IS signed in. Saying "rejected" would be equally false.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
+    );
+    const respond = {
+      isPending: false,
+      mutate: vi.fn(
+        (
+          _variables: { code: string; approve: boolean },
+          options: { onSuccess: (outcome: string) => void },
+        ) => {
+          options.onSuccess("already-decided");
+        },
+      ),
+    };
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    render(<LinkPhonePanel />);
+    act(() => {
+      screen.getByTestId("link-phone-reject").click();
+    });
+
+    const card = screen.getByTestId("link-phone-decided-elsewhere");
+    expect(card.getAttribute("data-decision")).toBe("approved");
+    expect(card.textContent).toContain("That phone is signed in");
+  });
+
+  it("does not carry a failed decision's warning onto the next claim", () => {
+    // The notice belongs to the code it happened on. A bare flag outlives
+    // that claim, so the next phone's card would open already complaining
+    // about a failure that was not its own.
+    mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
+    );
+    const respond = {
+      isPending: false,
+      mutate: vi.fn(
+        (
+          _variables: { code: string; approve: boolean },
+          options: { onSuccess: (outcome: string) => void },
+        ) => {
+          options.onSuccess("failed");
+        },
+      ),
+    };
+    mocks.useRespondLinkLoginMutation.mockReturnValue(respond);
+    const view = render(<LinkPhonePanel />);
+    act(() => {
+      screen.getByTestId("link-phone-approve").click();
+    });
+    expect(screen.getByTestId("link-phone-respond-failed")).toBeTruthy();
+
+    // Claim A goes away — decided elsewhere, or expired. Only with no claim
+    // on screen does the watch hook follow a fresh mint, which is exactly the
+    // real sequence: the card clears, a new code is shown, a new phone scans.
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult({ status: "unclaimed", claimant: null }),
+    );
+    act(() => {
+      view.rerender(<LinkPhonePanel />);
+      vi.advanceTimersByTime(2_100);
+    });
+
+    // A DIFFERENT phone claims a DIFFERENT code.
+    mocks.useAuthLinkLoginCode.mockReturnValue({
+      ...queryResultWithCode(Date.now()),
+      data: {
+        code: "22222-33333",
+        expires_in: 60,
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+    act(() => {
+      view.rerender(<LinkPhonePanel />);
+      vi.advanceTimersByTime(2_100);
+    });
+    mocks.useAuthLinkLoginStatus.mockReturnValue(
+      statusResult(claimedStatus(Date.now(), "TraycerMobile/1.0 (iPhone)")),
+    );
+    act(() => {
+      view.rerender(<LinkPhonePanel />);
+      vi.advanceTimersByTime(2_100);
+    });
+
+    expect(screen.getByTestId("link-phone-confirm")).toBeTruthy();
+    expect(screen.queryByTestId("link-phone-respond-failed")).toBeNull();
+  });
+
   it("a self-reported device name renders verbatim on the card", () => {
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     mocks.useAuthLinkLoginStatus.mockReturnValue(
