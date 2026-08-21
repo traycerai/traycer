@@ -8,7 +8,7 @@ import {
 import { runLinkPhoneFlow } from "../link-phone-flow";
 import { validateStoredCredentials } from "../validate";
 import { noopLogger } from "../../logger";
-import { CliError } from "../../runner/errors";
+import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
 
@@ -185,6 +185,30 @@ async function runWithPolls(
   }
   const [result] = await settled;
   return result;
+}
+
+/**
+ * A terminal branch's whole contract: the run rejects, and it rejects with a
+ * `CliError` carrying the machine-readable code and exit status a script will
+ * branch on. Asserting only the prose would let the type or the code drift -
+ * and the prose is the one part no caller depends on.
+ */
+function expectCliError(
+  result: PromiseSettledResult<unknown>,
+  code: string,
+  exitCode: number,
+  messageFragment: string,
+): void {
+  expect(result.status).toBe("rejected");
+  const reason = result.status === "rejected" ? result.reason : null;
+  // Narrowed rather than cast: a non-`CliError` rejection should fail here
+  // saying so, not read `.code` off whatever it happens to be.
+  if (!(reason instanceof CliError)) {
+    throw new Error(`expected a CliError, got ${String(reason)}`);
+  }
+  expect(reason.code).toBe(code);
+  expect(reason.exitCode).toBe(exitCode);
+  expect(reason.message).toContain(messageFragment);
 }
 
 describe("runLinkPhoneFlow", () => {
@@ -396,10 +420,7 @@ describe("runLinkPhoneFlow", () => {
 
     const result = await runWithPolls(interactiveCtx(), 1);
 
-    expect(result.status).toBe("rejected");
-    expect(
-      (result.status === "rejected" ? result.reason : new Error("")).message,
-    ).toContain("re-authenticate");
+    expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, "re-authenticate");
     expect(respondMock).not.toHaveBeenCalled();
   });
 
@@ -417,10 +438,12 @@ describe("runLinkPhoneFlow", () => {
 
       const result = await runWithPolls(interactiveCtx(), 1);
 
-      expect(result.status).toBe("rejected");
-      expect(
-        (result.status === "rejected" ? result.reason : new Error("")).message,
-      ).toContain("already decided somewhere else");
+      expectCliError(
+        result,
+        CLI_ERROR_CODES.AUTH_REJECTED,
+        1,
+        "already decided somewhere else",
+      );
       expect(respondMock).not.toHaveBeenCalled();
     }
   });
@@ -434,10 +457,7 @@ describe("runLinkPhoneFlow", () => {
 
     const result = await runWithPolls(interactiveCtx(), 1);
 
-    expect(result.status).toBe("rejected");
-    expect(
-      (result.status === "rejected" ? result.reason : new Error("")).message,
-    ).toContain("already decided");
+    expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, "already decided");
   });
 
   it("reports a decision the server refused to accept", async () => {
@@ -449,10 +469,7 @@ describe("runLinkPhoneFlow", () => {
 
     const result = await runWithPolls(interactiveCtx(), 1);
 
-    expect(result.status).toBe("rejected");
-    expect(
-      (result.status === "rejected" ? result.reason : new Error("")).message,
-    ).toContain("re-authenticate");
+    expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, "re-authenticate");
   });
 
   it("denies when stdin closes without an answer", async () => {
