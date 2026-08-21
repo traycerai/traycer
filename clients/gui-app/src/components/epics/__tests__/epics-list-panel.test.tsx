@@ -269,6 +269,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     updatedBucket: "today",
     linkedRepos: [],
     linkedWorkspaces: [],
+    chatHostIds: null,
     pullRequestNumbers: [],
     worktreeBranches: [],
     worktreePaths: [],

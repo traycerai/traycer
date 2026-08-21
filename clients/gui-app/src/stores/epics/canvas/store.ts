@@ -98,6 +98,7 @@ import {
   createEmptyCanvas,
 } from "@/stores/epics/canvas/canvas-state";
 import {
+  collectPanes,
   findPaneById,
   paneRemovalDissolveHandoffTargets,
   resolveActivePaneTab,
@@ -610,6 +611,11 @@ export interface EpicCanvasStore {
     targetPaneId: string,
   ) => string | null;
   closeCanvasTab: (tabId: string, paneId: string, tileTabId: string) => void;
+  closeConfirmedDeletedChatTiles: (
+    epicId: string,
+    chatId: string,
+    hostId: string,
+  ) => void;
   prepareCloseCanvasTabFocusTarget: (
     tabId: string,
     paneId: string,
@@ -2423,6 +2429,40 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               : { ...updated, pendingCreateArtifactIds: pendingNext };
           });
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
+        },
+
+        closeConfirmedDeletedChatTiles: (epicId, chatId, hostId) => {
+          // Snapshot every matching instance before closing any of them: a
+          // close can dissolve its pane and rewrite the surrounding tree.
+          // The host is part of chat identity, so a same-id peer on another
+          // machine must remain open.
+          const targets: Array<{
+            readonly tabId: string;
+            readonly paneId: string;
+            readonly instanceId: string;
+          }> = [];
+          const state = get();
+          Object.entries(state.tabsById).forEach(([tabId, tab]) => {
+            if (tab?.epicId !== epicId) return;
+            const canvas = state.canvasByTabId[tabId];
+            if (canvas === undefined) return;
+            collectPanes(canvas.root).forEach((pane) => {
+              pane.tabInstanceIds.forEach((instanceId) => {
+                const tile = canvas.tilesByInstanceId[instanceId];
+                if (
+                  tile?.type === "chat" &&
+                  tile.id === chatId &&
+                  tile.hostId === hostId
+                ) {
+                  targets.push({ tabId, paneId: pane.id, instanceId });
+                }
+              });
+            });
+          });
+
+          targets.forEach(({ tabId, paneId, instanceId }) => {
+            get().closeCanvasTab(tabId, paneId, instanceId);
+          });
         },
 
         prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {

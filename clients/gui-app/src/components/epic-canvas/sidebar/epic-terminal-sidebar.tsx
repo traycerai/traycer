@@ -310,11 +310,11 @@ function TerminalsPanelBodyLive(props: {
             tabId={tabId}
             hostId={activeHostId}
             onOpen={openExisting}
-            closeCapability={durableAuthority.capability.status}
-            closeCanMutate={durableAuthority.canMutate}
+            capability={durableAuthority.capability.status}
+            canMutate={durableAuthority.canMutate}
             closePending={durableMutations.close.isPending}
             onDurableClose={requestDurableClose}
-            durableRenameTerminalIds={Object.keys(
+            durableTerminalIds={Object.keys(
               durableAuthority.collection?.terminalsById ?? {},
             )}
             durableRenamePending={durableMutations.rename.isPending}
@@ -361,11 +361,11 @@ interface TerminalSidebarBodyProps {
   readonly tabId: string;
   readonly hostId: string;
   readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
-  readonly closeCapability: "unknown" | "legacy" | "capable";
-  readonly closeCanMutate: boolean;
+  readonly capability: "unknown" | "legacy" | "capable";
+  readonly canMutate: boolean;
   readonly closePending: boolean;
   readonly onDurableClose: (terminalId: string) => void;
-  readonly durableRenameTerminalIds: readonly string[];
+  readonly durableTerminalIds: readonly string[];
   readonly durableRenamePending: boolean;
   readonly onDurableRename: (
     terminalId: string,
@@ -374,19 +374,33 @@ interface TerminalSidebarBodyProps {
   ) => void;
 }
 
-type TerminalSidebarRenameMode = "disabled" | "legacy" | "capable";
+type TerminalSidebarMutationMode = "disabled" | "legacy" | "capable";
 
-function resolveTerminalSidebarRenameMode(args: {
+/**
+ * Which lifetime authority owns a row's rename/close, resolved PER ROW.
+ * `capability` and `canMutate` are host-wide, but the sidebar merges two
+ * sources: durable projection rows (plain-terminal registry) and
+ * `terminal.list` compatibility rows for host-created setup / provider-login
+ * shells, which deliberately never enter the durable collection.
+ *
+ * `canMutate` is only true against a settled, fresh collection snapshot, so
+ * checking it BEFORE the projection is what makes a missing projection mean
+ * "not durable-backed" rather than "not loaded yet". Unknown capability and a
+ * stale capable authority both stay fail-closed.
+ */
+function resolveTerminalSidebarMutationMode(args: {
   readonly capability: "unknown" | "legacy" | "capable";
   readonly canMutate: boolean;
   readonly hasProjection: boolean;
-}): TerminalSidebarRenameMode {
+}): TerminalSidebarMutationMode {
   if (args.capability === "legacy") return "legacy";
   if (args.capability !== "capable") return "disabled";
   if (!args.canMutate) return "disabled";
   // A row with no durable projection is a `terminal.list` compatibility row
   // (setup / provider-login shell). The host still serves `terminal.rename`
-  // for it, so keep the legacy path instead of disabling rename.
+  // and `terminal.kill` for it - and only those: the durable resolvers require
+  // an authorized persistent record and would answer terminal-not-found. So
+  // keep the legacy path instead of disabling the action.
   if (!args.hasProjection) return "legacy";
   return "capable";
 }
@@ -455,34 +469,40 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
       />
     );
   }
-  const durableRenameTerminalIds = new Set(props.durableRenameTerminalIds);
+  const durableTerminalIds = new Set(props.durableTerminalIds);
   return (
     <ul
       aria-label="Epic terminals"
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
     >
-      {props.sessions.map((session) => (
-        <TerminalRow
-          key={session.sessionId}
-          epicId={props.epicId}
-          tabId={props.tabId}
-          hostId={props.hostId}
-          session={session}
-          onOpen={props.onOpen}
-          closeCapability={props.closeCapability}
-          closeCanMutate={props.closeCanMutate}
-          closePending={props.closePending}
-          onDurableClose={props.onDurableClose}
-          renameMode={resolveTerminalSidebarRenameMode({
-            capability: props.closeCapability,
-            canMutate: props.closeCanMutate,
-            hasProjection: durableRenameTerminalIds.has(session.sessionId),
-          })}
-          durableRenamePending={props.durableRenamePending}
-          onDurableRename={props.onDurableRename}
-        />
-      ))}
+      {props.sessions.map((session) => {
+        // One resolution per row, shared by rename and close: both actions
+        // follow the same lifetime authority, and letting them disagree is
+        // exactly how a compatibility row ended up renaming through
+        // `terminal.rename` while closing through `terminal.plain.close`.
+        const mutationMode = resolveTerminalSidebarMutationMode({
+          capability: props.capability,
+          canMutate: props.canMutate,
+          hasProjection: durableTerminalIds.has(session.sessionId),
+        });
+        return (
+          <TerminalRow
+            key={session.sessionId}
+            epicId={props.epicId}
+            tabId={props.tabId}
+            hostId={props.hostId}
+            session={session}
+            onOpen={props.onOpen}
+            closeMode={mutationMode}
+            closePending={props.closePending}
+            onDurableClose={props.onDurableClose}
+            renameMode={mutationMode}
+            durableRenamePending={props.durableRenamePending}
+            onDurableRename={props.onDurableRename}
+          />
+        );
+      })}
     </ul>
   );
 }
@@ -493,11 +513,10 @@ interface TerminalRowProps {
   readonly hostId: string;
   readonly session: CanonicalTerminalSessionInfo;
   readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
-  readonly closeCapability: "unknown" | "legacy" | "capable";
-  readonly closeCanMutate: boolean;
+  readonly closeMode: TerminalSidebarMutationMode;
   readonly closePending: boolean;
   readonly onDurableClose: (terminalId: string) => void;
-  readonly renameMode: TerminalSidebarRenameMode;
+  readonly renameMode: TerminalSidebarMutationMode;
   readonly durableRenamePending: boolean;
   readonly onDurableRename: (
     terminalId: string,
@@ -508,8 +527,6 @@ interface TerminalRowProps {
 
 function TerminalRow(props: TerminalRowProps) {
   const {
-    closeCapability,
-    closeCanMutate,
     closePending,
     durableRenamePending,
     epicId,
@@ -558,6 +575,11 @@ function TerminalRow(props: TerminalRowProps) {
   if (renameMode === "capable") renamePending = durableRenamePending;
   if (renameMode === "legacy") renamePending = legacyRename.isPending;
   const canRename = renameMode !== "disabled" && !renamePending;
+  const closeMode = hasUnsupportedFutureRef ? "disabled" : props.closeMode;
+  let closeActionPending = false;
+  if (closeMode === "capable") closeActionPending = closePending;
+  if (closeMode === "legacy") closeActionPending = kill.isPending;
+  const canClose = closeMode !== "disabled" && !closeActionPending;
 
   const label = terminalSessionLabel(session);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -638,19 +660,19 @@ function TerminalRow(props: TerminalRowProps) {
   // immediate and mount-independent. `findOpenArtifactInTab` returns null when
   // no tab is open for this session, so a sidebar-only session just gets killed.
   const requestClose = () => {
-    if (hasUnsupportedFutureRef) return;
-    if (closeCapability === "capable") {
-      if (!closeCanMutate || closePending) return;
+    if (!canClose) return;
+    if (closeMode === "capable") {
       onDurableClose(session.sessionId);
       return;
     }
-    if (closeCapability === "unknown" || kill.isPending) return;
     const found = findOpenArtifactInTab(tabId, session.sessionId);
     if (found !== null) {
-      // This branch is reachable only after the manifest positively identifies
-      // an old host. Register that evidence for the synchronous store boundary
-      // so it preserves the legacy local-close behavior without weakening the
-      // coordinator's fail-closed default for unregistered refs.
+      // This branch is reachable only for a row whose lifetime the legacy
+      // session manager owns - a positively-known old host, or a capable
+      // host's compatibility row with no durable projection. Register that
+      // evidence for the synchronous store boundary so it preserves the legacy
+      // local-close behavior without weakening the coordinator's fail-closed
+      // default for unregistered refs.
       withLegacyTerminalCloseAuthority(
         {
           instanceId: found.instanceId,
@@ -682,12 +704,7 @@ function TerminalRow(props: TerminalRowProps) {
     sessionId: session.sessionId,
     // Not a pending flag: it also encodes "not permitted" (unsupported future
     // ref, unknown capability, no mutation authority).
-    closeDisabled:
-      hasUnsupportedFutureRef ||
-      closeCapability === "unknown" ||
-      (closeCapability === "capable"
-        ? !closeCanMutate || closePending
-        : kill.isPending),
+    closeDisabled: !canClose,
     onStartRename: startRename,
     renameDisabled: !canRename,
     onRequestClose: requestClose,

@@ -13,7 +13,7 @@ import {
   OutboundChunkSource,
 } from "@traycer/protocol/host-transport/chunking";
 import { InboundCreditTracker, PriorityScheduler } from "../scheduler";
-import { INBOUND_CREDIT_GRANT_BATCH } from "../config";
+import { FINE_INBOUND_CREDIT_GRANT_BATCH } from "@traycer/protocol/host-transport/mux";
 
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -34,6 +34,7 @@ function messageSource(
       binary: null,
     },
     () => seq++,
+    false,
   );
 }
 
@@ -64,6 +65,7 @@ function chunkedSource(
       binary: null,
     },
     () => seq++,
+    false,
   );
 }
 
@@ -143,6 +145,7 @@ describe("PriorityScheduler", () => {
         binary: null,
       },
       nextSeq,
+      false,
     );
     const interactiveAfter = new OutboundChunkSource(
       {
@@ -153,6 +156,7 @@ describe("PriorityScheduler", () => {
         binary: null,
       },
       nextSeq,
+      false,
     );
     scheduler.enqueue(bulkFirst);
     scheduler.enqueue(interactiveAfter);
@@ -295,6 +299,7 @@ describe("PriorityScheduler", () => {
           binary: null,
         },
         nextSeqA,
+        false,
       );
       expect(first.chunked).toBe(true);
       const totalFramesFirst = Math.ceil(
@@ -335,6 +340,7 @@ describe("PriorityScheduler", () => {
           binary: null,
         },
         nextSeqA,
+        false,
       );
       scheduler.enqueue(second);
       scheduler.enqueue(messageSource(streamB, QosClass.INTERACTIVE));
@@ -472,10 +478,10 @@ describe("PriorityScheduler", () => {
 describe("InboundCreditTracker", () => {
   it("grants a batch of credits back after enough bulk frames are consumed", () => {
     const tracker = new InboundCreditTracker();
-    for (let i = 0; i < INBOUND_CREDIT_GRANT_BATCH - 1; i += 1) {
+    for (let i = 0; i < FINE_INBOUND_CREDIT_GRANT_BATCH - 1; i += 1) {
       expect(tracker.onBulkFrameConsumed()).toBe(0);
     }
-    expect(tracker.onBulkFrameConsumed()).toBe(INBOUND_CREDIT_GRANT_BATCH);
+    expect(tracker.onBulkFrameConsumed()).toBe(FINE_INBOUND_CREDIT_GRANT_BATCH);
     expect(tracker.onBulkFrameConsumed()).toBe(0);
   });
 });

@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { FolderPlus, RotateCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -34,6 +35,9 @@ export function WorkspaceFolderRows(props: {
   readonly onEditEnvironment: (workspacePath: string) => void;
   readonly readOnly: boolean;
   readonly bindingResolved: boolean;
+  /** Recent tier; null for read-only and terminal-agent binding surfaces. */
+  readonly recentWorkspaces: ReactNode;
+  readonly moveToRecent: boolean;
   // True only when the rows live inside a popover (in-epic): nested popovers
   // (branch form + its source dropdown) then portal into — and are collision-
   // bounded by — this container so they stay inside the parent popover and a
@@ -107,27 +111,40 @@ export function WorkspaceFolderRows(props: {
       />
     );
 
+  const workspaceActions = (
+    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+      {addFolder}
+      {props.recentWorkspaces}
+      {updateButton === null ? null : (
+        <div className="ml-auto shrink-0">{updateButton}</div>
+      )}
+    </div>
+  );
+
   if (items.length === 0) {
     return (
       <div
         className="flex w-full min-w-0 items-start gap-3"
         data-testid="workspace-folder-rows"
       >
-        <div className="flex min-w-0 flex-col items-start gap-1.5">
+        <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
           {props.bindingResolved ? (
-            addFolder
+            workspaceActions
           ) : (
-            <span
-              className="inline-flex items-center gap-2 text-ui-sm text-muted-foreground"
-              data-testid="workspace-folder-rows-linking"
-            >
-              <AgentSpinningDots
-                className="size-4 shrink-0 text-current"
-                testId={undefined}
-                variant="dots"
-              />
-              Linking workspace…
-            </span>
+            <>
+              <span
+                className="inline-flex items-center gap-2 text-ui-sm text-muted-foreground"
+                data-testid="workspace-folder-rows-linking"
+              >
+                <AgentSpinningDots
+                  className="size-4 shrink-0 text-current"
+                  testId={undefined}
+                  variant="dots"
+                />
+                Linking folder…
+              </span>
+              {props.recentWorkspaces}
+            </>
           )}
         </div>
         {trailing}
@@ -141,9 +158,9 @@ export function WorkspaceFolderRows(props: {
       className="flex w-full min-w-0 items-start gap-3"
       data-testid="workspace-folder-rows"
     >
-      <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
+      <div className="@container flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
         <div
-          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-center gap-x-1.5 gap-y-1.5"
+          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1.35fr)_minmax(0,0.85fr)_minmax(0,1.1fr)_auto] items-center gap-x-1.5 gap-y-1.5 @max-[28rem]:grid-cols-[1.5rem_minmax(0,1fr)_auto]"
           data-testid="workspace-folder-grid"
         >
           {items.map((item) => (
@@ -154,17 +171,11 @@ export function WorkspaceFolderRows(props: {
               uncommittedByPath={uncommittedByPath}
               boundaryEl={nestedBoundaryEl}
               readOnly={props.readOnly}
+              moveToRecent={props.moveToRecent}
             />
           ))}
         </div>
-        {updateButton === null ? (
-          addFolder
-        ) : (
-          <div className="flex w-full items-center justify-between gap-3">
-            {addFolder}
-            {updateButton}
-          </div>
-        )}
+        {workspaceActions}
       </div>
       {trailing}
     </div>
@@ -178,18 +189,16 @@ export function AddFolderButton(props: {
   readonly disabledReason: string | null;
 }) {
   const button = (
-    <button
+    <Button
       type="button"
+      size="sm"
+      variant="ghost"
+      className="rounded-lg text-muted-foreground"
       data-testid="folder-add"
       disabled={props.pending || props.disabled}
       onClick={() => {
         void props.onAddFolder();
       }}
-      className={cn(
-        // Stays muted in every surface (a secondary action), independent of the
-        // `--fc-*` brightening the folder rows use in the fork / terminal panels.
-        "inline-flex w-fit items-center gap-2 rounded-md px-1.5 py-1 text-ui-sm text-muted-foreground opacity-70 outline-none transition-[background-color,color,opacity] hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
-      )}
     >
       {props.pending ? (
         <AgentSpinningDots
@@ -198,10 +207,10 @@ export function AddFolderButton(props: {
           variant="dots"
         />
       ) : (
-        <FolderPlus className="size-4" />
+        <FolderPlus data-icon="inline-start" />
       )}
       <span className="truncate">Add folder</span>
-    </button>
+    </Button>
   );
   if (props.disabled && props.disabledReason !== null) {
     return (

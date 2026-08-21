@@ -61,11 +61,17 @@ export interface TerminalDeadTileBannerProps {
   /**
    * WHY the bound host cannot be reached, from `useHostReachability`.
    *
-   * `plan-restricted` is the reason this is a prop rather than one string. That
-   * host is running perfectly well; the account's plan simply has no remote
-   * route to it. Telling its owner the terminal is "permanently closed" is
-   * false about a session that is very probably still alive on the other side,
-   * and it names a remedy (there is none) instead of the one that exists.
+   * `plan-restricted` is the reason this is a prop rather than one string. The
+   * account's plan has no remote route to that host — the machine itself is
+   * not the problem, and is very probably running. Telling its owner the
+   * terminal is "permanently closed" is false about a session that is likely
+   * still alive on the other side, and it names a remedy (there is none)
+   * instead of the one that exists.
+   *
+   * Since connectivity became pure liveness, this verdict is reached ONLY for
+   * a host the cloud reports `connectable` or could not read. A plan-gated
+   * host the cloud reports `offline` is `offline` here, and gets the
+   * unreachable copy — which is the honest one for a machine that is off.
    *
    * `indeterminate` never arrives here: the hook reports it as reachable.
    */
@@ -310,8 +316,9 @@ export function ChatHostStartingBanner(
  *
  * - `host-offline` - the bound host is genuinely unreachable. Nothing was
  *   asked and nothing answered, so the host is what has to come back.
- * - `host-plan-restricted` - the host is running perfectly well and the
- *   account's plan simply has no remote route to it. It exists because the
+ * - `host-plan-restricted` - the account's plan has no remote route to the
+ *   host, which is otherwise alive (or at least not known to be dead - a
+ *   plan-gated host the cloud reports `offline` reads `host-offline`). It exists because the
  *   reason had a producer (`useHostReachability`) and no consumer: every
  *   unreachable result was rendered as `host-offline`, so a free-tier account
  *   with a persisted remote chat was told a healthy machine was off, and

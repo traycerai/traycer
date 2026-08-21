@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import {
+  CLI_RECONCILE_PROBE_TIMEOUT_MS,
   cliBinariesDiffer,
   compareSemver,
   discoverCli,
@@ -13,6 +14,7 @@ import {
   stageBundledCliForUpgrade,
   writeCliManifestPendingUpgrade,
   writeDesktopReconcileState,
+  type BundledCliInstallResult,
   type CliDiscoveryResult,
   type CliInstallManifest,
 } from "./cli-discovery";
@@ -155,7 +157,7 @@ export interface ReconcileCliDeps {
     readonly bundledCliPath: string;
     readonly version: string;
     readonly source: CliInstallManifest["source"];
-  }) => Promise<string>;
+  }) => Promise<BundledCliInstallResult>;
   readonly stableCliBinaryPath: () => string;
   readonly stageBundledCliForUpgrade: (opts: {
     readonly bundledCliPath: string;
@@ -188,8 +190,25 @@ export function defaultReconcileCliDeps(): ReconcileCliDeps {
     readCliManifest,
     resolveBundledCliPath,
     readBundledCliVersion,
-    discoverCli,
-    probeCliVersion,
+    // The PATIENT deadline on both probing deps, and the reason is the same
+    // for each: this pass is detached, runs once per launch, and is the
+    // only prober whose verdict decides who OWNS the slot. A real CLI busy
+    // copying ~100 MB into the well-known slot is precisely the binary this
+    // pass must not misread, and each killed probe abandons that copy for
+    // the next one to start over. See `CLI_RECONCILE_PROBE_TIMEOUT_MS`.
+    discoverCli: () => discoverCli(CLI_RECONCILE_PROBE_TIMEOUT_MS),
+    // The reconcile's contract is version-or-null; the probe's third state
+    // (timeout) collapses to null here on purpose. Both reconcile call
+    // sites treat null as "could not determine", never as "not a CLI" -
+    // the adopt/condemn distinction that made the timeout worth a state of
+    // its own lives in `vetPathCliCandidate`.
+    probeCliVersion: async (binaryPath: string): Promise<string | null> => {
+      const probed = await probeCliVersion(
+        binaryPath,
+        CLI_RECONCILE_PROBE_TIMEOUT_MS,
+      );
+      return probed.kind === "version" ? probed.version : null;
+    },
     installBundledCli,
     stableCliBinaryPath,
     stageBundledCliForUpgrade,
@@ -290,23 +309,54 @@ export async function reconcileCli(
     ) {
       // Fresh install: no manifest, and either no `traycer` on PATH or only
       // a probe-failed imposter under that name, but the app ships a bundled
-      // CLI. Stage it into the Desktop-owned slot (a symlink on
-      // POSIX) so the bundle-blind host has a deterministic, space-free
-      // `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for the monitor /
-      // title hooks / terminal agents. Nothing else self-heals this slot.
-      const installedPath = await deps.installBundledCli({
+      // CLI.
+      //
+      // "Probe-failed" here includes a candidate that answered nothing at
+      // all within `CLI_RECONCILE_PROBE_TIMEOUT_MS`, and that arm is a
+      // deliberate policy call rather than an oversight: staging writes a
+      // Desktop-owned manifest that outranks PATH from then on, so it is
+      // the expensive direction - but deferring instead would re-open oss
+      // #872, where a `traycer` that never answers left the slot unstaged
+      // and first launch bricked. A binary that cannot say what it is
+      // inside fifteen seconds is not serving the host either. Patience is
+      // where this is fought; refusal is not.
+      //
+      // Stage it into the Desktop-owned slot - a COPY on every platform, see
+      // `installBundledCli` - so the bundle-blind host has a deterministic,
+      // space-free `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for
+      // the monitor / title hooks / terminal agents. Nothing else self-heals
+      // this slot.
+      //
+      // Said "a symlink on POSIX" until now, which is what it was before the
+      // pre-copy era ended and is no longer true of any platform. Left
+      // uncorrected it reads as a live design note rather than history, and
+      // it has already been cited that way in review - the link is exactly
+      // what was removed, because a bundle remove/replace left it DANGLING
+      // with no healer but the next successful app launch.
+      const installed = await deps.installBundledCli({
         bundledCliPath: bundledPath,
         version: bundledVersion,
         source: "desktop",
       });
+      if (!installed.published) {
+        // Deferred behind the CLI lock. Reporting `installed-bundled` here
+        // would claim a version that was never written, so say nothing was
+        // installed and let the next reconcile try again - the writer holding
+        // the lock is itself publishing a CLI.
+        deps.logger.warn(
+          "[cli-reconcile] fresh install deferred - the CLI lock is held by another writer",
+          { binaryPath: installed.path, version: bundledVersion },
+        );
+        return { kind: "no-installed-cli" };
+      }
       deps.logger.info(
         "[cli-reconcile] fresh install - staged bundled CLI into Desktop slot",
-        { binaryPath: installedPath, version: bundledVersion },
+        { binaryPath: installed.path, version: bundledVersion },
       );
       return {
         kind: "installed-bundled",
         version: bundledVersion,
-        binaryPath: installedPath,
+        binaryPath: installed.path,
       };
     }
     if (discovery.kind === "bundled") {
@@ -329,19 +379,29 @@ export async function reconcileCli(
     bundledPath !== null &&
     !(await deps.stagedFileExists(manifest.binaryPath))
   ) {
-    const installedPath = await deps.installBundledCli({
+    const installed = await deps.installBundledCli({
       bundledCliPath: bundledPath,
       version: bundledVersion,
       source: "desktop",
     });
+    if (!installed.published) {
+      // The heal did not run. Claiming `installed-bundled` would record a
+      // version behind a slot this call never wrote; the next reconcile
+      // re-enters this same branch and heals then.
+      deps.logger.warn(
+        "[cli-reconcile] slot heal deferred - the CLI lock is held by another writer",
+        { binaryPath: installed.path, version: bundledVersion },
+      );
+      return { kind: "no-installed-cli" };
+    }
     deps.logger.info(
       "[cli-reconcile] slot symlink missing - re-staged bundled CLI to heal it",
-      { binaryPath: installedPath, version: bundledVersion },
+      { binaryPath: installed.path, version: bundledVersion },
     );
     return {
       kind: "installed-bundled",
       version: bundledVersion,
-      binaryPath: installedPath,
+      binaryPath: installed.path,
     };
   }
 
@@ -473,21 +533,45 @@ export async function reconcileCli(
   }
 
   try {
-    const installedPath = await deps.installBundledCli({
+    const installed = await deps.installBundledCli({
       bundledCliPath: bundledPath,
       version: bundledVersion,
       source: manifest.source === "desktop" ? "desktop" : manifest.source,
     });
+    if (!installed.published) {
+      // The upgrade was deferred behind the CLI lock - most likely a
+      // `traycer cli upgrade` holding it across its download. Deliberately
+      // NOT staged and NOT persisted as `pendingUpgrade`: the lock holder is
+      // mid-mutation of the very manifest a persist would write, and no
+      // renderer affordance consumes this outcome anyway - nothing beyond a
+      // debug log reads `CliReconcileOutcome`, and the one real "restart to
+      // finalize" surface keys on `manifest.pendingUpgrade`, which correctly
+      // stays null here. The retry is the next launch's reconcile, which
+      // recomputes the version gap and re-enters the install. The user keeps
+      // the CLI they already had.
+      deps.logger.warn(
+        "[cli-reconcile] upgrade deferred - the CLI lock is held by another writer",
+        { from: installedVersion, to: bundledVersion, path: installed.path },
+      );
+      return {
+        kind: "upgrade-blocked",
+        reason: "binary-locked",
+        stagedVersion: bundledVersion,
+        installedVersion,
+        errorMessage:
+          "another writer holds the CLI lock; the upgrade will be retried",
+      };
+    }
     deps.logger.info("[cli-reconcile] upgraded desktop-owned CLI", {
       from: installedVersion,
       to: bundledVersion,
-      path: installedPath,
+      path: installed.path,
     });
     return {
       kind: "upgraded",
       previousVersion: installedVersion,
       newVersion: bundledVersion,
-      binaryPath: installedPath,
+      binaryPath: installed.path,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -598,8 +682,12 @@ async function persistPendingUpgrade(
       existing,
     );
     if (written === null) {
+      // Two causes share this null - no manifest to attach to, or the CLI
+      // lock was held past the wait - and cli-discovery already logged
+      // which. Kept deliberately cause-neutral here so this line cannot
+      // assert the wrong one.
       deps.logger.warn(
-        "[cli-reconcile] cannot record pendingUpgrade - manifest unreadable",
+        "[cli-reconcile] pendingUpgrade not recorded - see the cli log line above for the cause",
         { pending },
       );
     } else {

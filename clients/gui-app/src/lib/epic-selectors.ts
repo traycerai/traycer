@@ -194,6 +194,19 @@ export function useEpicSyncPillState(): EpicSyncPillState {
   );
 }
 
+/**
+ * Input 3 of the sync-pill derivation on its own: `true` only after a genuine
+ * `cloudSyncStatus` frame in the CURRENT subscription cycle (reset atomically
+ * with the transport reaching `open`). The pill's escalation clock reads it
+ * directly because recovery is this evidence, not a state label - a legacy
+ * host that never sends the dirty snapshot derives `connected` even for a
+ * fully evidenced recovery, and the label alone cannot tell that apart from a
+ * handshake-only `connected` with no evidence behind it.
+ */
+export function useEpicHasFreshCloudSyncStatus(): boolean {
+  return useEpicStore((s) => s.hasFreshCloudSyncStatus);
+}
+
 export function useEpicPermissionRole(): PermissionRole | null {
   return useEpicStore((s) => s.permissionRole);
 }

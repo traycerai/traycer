@@ -61,6 +61,7 @@ function makeWsStreamClient(
     bearer: () => null,
     auth: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     webSocketFactory: {
       create: () => {
         throw new Error("unexpected WebSocket creation");

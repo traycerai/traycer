@@ -205,8 +205,8 @@ picker is NOT permanently on screen. The rail is a single `overflow-y-auto`
 anything else in it. The argument for removing the readout is
 non-duplication, not permanent visibility. `settings-host-select.tsx` and `use-settings-host-scope.ts`
 are deleted; `useHostScope` is the only host scope in Settings.
-`settings-host-labels.ts` survives solely for the composer's
-`host-workspace-selector`.
+The composer uses the shared `HostSwitcher`; it does not keep a parallel
+Settings label formatter.
 
 **Two host relationships, kept apart by grammar.** Merging them is the defect
 the whole surface guards against:

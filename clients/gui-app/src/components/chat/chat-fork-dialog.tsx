@@ -136,6 +136,15 @@ export interface ChatForkDialogTarget {
    * carried-question behavior ride the dedicated fields above.
    */
   readonly forkMode: ChatForkMode;
+  /**
+   * The host the picker starts on when the dialog opens: the host the user
+   * picked in the gesture that opened it (the composer's host switcher), or
+   * `null` to start on the source chat's own (tab) host — every per-message
+   * fork entry point. A preselection is a starting point only; the user can
+   * still retarget inside the dialog, and every cross-host gate (build
+   * version, publication) applies to it exactly as to a hand-picked host.
+   */
+  readonly initialHostId: string | null;
 }
 
 interface ChatForkDialogProps {
@@ -206,12 +215,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   // Opening resets BOTH the title and the target host: a dialog reopened on a
   // different message must not inherit the last fork's machine any more than it
-  // inherits the last fork's name.
+  // inherits the last fork's name. A target carrying an `initialHostId` (the
+  // host-switch gesture) starts on that host instead of the tab's.
   if (open !== dialogState.open) {
     setDialogState({
       open,
       title: open && target !== null ? defaultTitle : dialogState.title,
-      hostId: open ? tabHostId : dialogState.hostId,
+      hostId: open ? (target?.initialHostId ?? tabHostId) : dialogState.hostId,
     });
   }
   const title = dialogState.title;
@@ -358,9 +368,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // selected one.
   //
   // A refused row is `aria-disabled` (`isHostOptionSelectable` requires an
-  // `available` surface state), so it can never BECOME `selectedHostId`. A probe
-  // gated on the selected host's refusal is therefore unreachable for the row it
-  // is about: it could only ever re-ask about the source host, while the target
+  // `available` surface state), so picking it is not a way it becomes
+  // `selectedHostId` — the one way in is a host-switch preselection
+  // (`initialHostId`), which this probe set covers just the same. A probe
+  // gated on the selected host's refusal would still be wrong for the picked
+  // case: it could only ever re-ask about the source host, while the target
   // wearing the "needs update" word is precisely the one it never touches.
   // Updating that host in place would leave its verdict stale indefinitely,
   // because the reads that would re-handshake are the ones its own refusal

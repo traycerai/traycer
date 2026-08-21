@@ -36,6 +36,7 @@ function frame(overrides: Partial<EncodeMuxFrameInput>): MuxFrame {
     chunked: true,
     chunkFirst: false,
     chunkLast: false,
+    compressed: false,
     json: null,
     binary: new Uint8Array([1]),
     ...overrides,
@@ -124,6 +125,7 @@ export function runChunkReassemblerConformanceSpec(
           binary: null,
         },
         () => seq++,
+        false,
       );
       let out: ReassembledMessage | null = null;
       while (!source.done) {

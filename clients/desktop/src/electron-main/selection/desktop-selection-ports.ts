@@ -691,7 +691,9 @@ export function createDesktopLocalHostEnsurePort(
 ): LocalHostEnsurePort {
   return {
     ensureReady: async () => {
-      const outcome = await hostController.convergeReady(false);
+      const outcome = await hostController.convergeReady(false, {
+        kind: "background",
+      });
       if (outcome.kind === "ok") {
         // `ok` ALONE IS NOT PROOF OF LIFE, and the engine reads this answer as
         // exactly that (`onHostProvedAlive`: it clears the refusal streak and

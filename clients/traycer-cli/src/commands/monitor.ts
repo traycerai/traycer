@@ -154,7 +154,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   // land a `commit-failed` spend while the monitor keeps running - disposed in
   // the `finally` below.
   const store = createCliCredentialsStore();
-  const revalidator = createStoreBackedRevalidator({ store, lease });
+  // `signal: null`: the monitor's revalidator lives as long as the command
+  // itself - there is no earlier deadline to cancel a rotation against.
+  const revalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
   // refreshes the cached endpoint is the CLI's equivalent of the renderer's
@@ -214,7 +220,14 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       authnBaseUrl: auth.authnBaseUrl,
       bearer: () => readLeaseBearer(lease),
       diag: (message) => diag(message),
+      signal: null,
+      unavailableNote:
+        "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
     }),
+    // The monitor provisions opportunistically and never verifies adoption -
+    // the next connection's ack settles it.
+    onHostCredentialState: null,
     // The CLI has no selection authority to feed: it holds no lease
     // state and never fails a window over.
     evidence: NO_TRANSPORT_EVIDENCE,

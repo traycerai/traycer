@@ -18,7 +18,9 @@ import {
   workspaceListFileTreeResponseSchema,
   workspacePathMentionSuggestionsRequestSchema,
   workspacePrepareFoldersRequestSchemaV11,
+  workspacePrepareFoldersRequestSchemaV12,
   workspacePrepareFoldersResponseSchemaV11,
+  workspacePrepareFoldersResponseSchemaV12,
   workspaceReadFileRequestSchema,
   workspaceReadFileResponseSchema,
   workspaceWriteFileRequestSchema,
@@ -48,6 +50,13 @@ export const workspacePrepareFoldersV11 = defineRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: workspacePrepareFoldersRequestSchemaV11,
   responseSchema: workspacePrepareFoldersResponseSchemaV11,
+});
+
+export const workspacePrepareFoldersV12 = defineRpcContract({
+  method: "workspace.prepareFolders",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: workspacePrepareFoldersRequestSchemaV12,
+  responseSchema: workspacePrepareFoldersResponseSchemaV12,
 });
 
 export const workspaceMentionFilesV10 = defineRpcContract({

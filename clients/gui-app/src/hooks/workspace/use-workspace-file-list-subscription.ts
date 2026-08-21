@@ -465,7 +465,20 @@ function notifyConsumers(shared: SharedSubscription): void {
   for (const consumer of shared.consumers.values()) consumer();
 }
 
-function describeStreamClose(reason: StreamCloseReason | null): string {
+function describeStreamClose(reason: StreamCloseReason | null): string | null {
+  // A RETRYABLE close is the transport reconnecting, not a failure the user
+  // has to see: the client re-subscribes on its own backoff and the next
+  // snapshot repopulates this surface. Returning `null` keeps the panel in
+  // its pending state - "visibly retrying" - instead of flashing an error
+  // that resolves itself, which is what an overnight sleep used to do to
+  // every open panel at once.
+  if (
+    reason !== null &&
+    reason.kind === "fatalError" &&
+    reason.details.retryable === true
+  ) {
+    return null;
+  }
   if (reason === null || reason.kind === "caller") {
     return "The workspace files stream closed unexpectedly.";
   }

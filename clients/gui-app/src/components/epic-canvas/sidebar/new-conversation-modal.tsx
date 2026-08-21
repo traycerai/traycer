@@ -70,11 +70,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicConversationPlacement } from "@/hooks/host/use-composer-placement";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
+import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
-import {
-  ComposerHostNotice,
-  type ComposerHostNoticeState,
-} from "@/components/home/composer/composer-host-notice";
+import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
 import {
@@ -139,6 +138,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import {
+  anyHostHasStagedWorktreeIntent,
   newConversationModalStagingKey,
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -507,6 +507,7 @@ export function NewConversationModalBody(props: {
   const hostClient = composerPlacement.target.client;
   const submitTarget = composerPlacement.submitTarget;
   const composerFollowsEffective = composerPlacement.followsEffective;
+  const hostLabelFor = composerPlacement.hostLabelFor;
   // "Last created chat's host": every create in this modal writes the Epic's
   // placement memory with the host it resolved, at SUBMIT (beside the settings
   // memory) rather than on the create's success - the model picker's memory
@@ -769,14 +770,14 @@ export function NewConversationModalBody(props: {
     />
   );
   const header = <NewConversationModalHeader switcher={switcher} />;
-  // §54 refusal copy and the G4 re-point notice share one slot, as on the
-  // landing composer.
-  const [hostNotice, setHostNotice] = useState<ComposerHostNoticeState | null>(
-    null,
-  );
-  const dismissHostNotice = useCallback(() => {
-    setHostNotice(null);
-  }, []);
+  // §54 refusal copy, as on the landing composer. The G4 re-point used to
+  // share this slot; it narrates as a toast now, and only when it actually
+  // reset staged intent.
+  const {
+    notice: hostNotice,
+    raise: raiseHostNotice,
+    dismiss: dismissHostNotice,
+  } = useComposerHostNotice(resolvedHostId);
   // G4: this modal FOLLOWS the effective host only when nothing else answered
   // its placement - no named host, no per-Epic pin in force, no session host
   // in force - and only then does a derivation move re-point it. Its staged
@@ -784,13 +785,22 @@ export function NewConversationModalBody(props: {
   // and must not travel; the §51 folder set stays, per the orchestrator's
   // ruling on the landing row. A modal resting on its pin or on the Epic's
   // host is not moved by the derivation and must not narrate a move (D6).
+  // A move that reset nothing stays silent: the switch itself is
+  // `toastSelectionSwitched`'s to tell.
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
       if (!composerFollowsEffective) return;
+      // Asked at `clearForAllHosts`'s breadth, not the resolved bucket's: this
+      // modal's slot can hold an intent staged while it was pinned elsewhere,
+      // and the clear below deletes that too. A narrower check would report
+      // "nothing staged" for a choice the user just lost.
+      const hadStagedIntent = anyHostHasStagedWorktreeIntent(stagingKey);
       clearStagedIntent(stagingKey);
-      setHostNotice({ kind: "repointed", hostId: nextEffectiveHostId });
+      if (hadStagedIntent) {
+        toastRepointedStagingReset(hostLabelFor(nextEffectiveHostId));
+      }
     });
-  }, [clearStagedIntent, composerFollowsEffective, stagingKey]);
+  }, [clearStagedIntent, composerFollowsEffective, hostLabelFor, stagingKey]);
   const cleanupAfterSubmit = useCallback((): void => {
     clearDraft(epicId);
     clearStagedIntent(stagingKey);
@@ -832,7 +842,7 @@ export function NewConversationModalBody(props: {
     // modal exactly as the user left them, with the reason inline.
     const placementVerdict = resolveLandingPlacement(submitTarget);
     if (placementVerdict.kind === "refused") {
-      setHostNotice({ kind: "refused", message: placementVerdict.message });
+      raiseHostNotice({ kind: "refused", message: placementVerdict.message });
       return;
     }
     // No render-vs-live drift check needed here (main's #1231 added one for
@@ -892,8 +902,26 @@ export function NewConversationModalBody(props: {
     if (initialMessage !== null) {
       useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
     }
-    createChat.mutate(
-      {
+    // `mutateAsync` + a promise chain, NOT `mutate`'s per-call callbacks, for
+    // the reason `use-epic-route-synchronization.ts` records for the sidebar's
+    // delete: TanStack Query v5 gates `mutateOptions` on the observer still
+    // having listeners, and `cleanupAfterSubmit()` below closes this modal
+    // SYNCHRONOUSLY - the dialog renders its body behind `props.open`, so the
+    // component holding this mutation is gone before any answer arrives. Both
+    // callbacks were therefore dead code, and the failure one is what took the
+    // eager-opened tab back down: without `markFailed` the handoff stayed
+    // non-terminal, `pendingCreateArtifactIds` kept the tile exempt from the
+    // record sweep, and a create the host had DEFINITIVELY rejected left an
+    // "Untitled agent" tab that spun for 15s and then told the user "that host
+    // hasn't answered" - about a host that had answered, with a refusal. Only
+    // `useInitialChatHandoff`'s 60s orphan deadline eventually cleared it, a
+    // backstop written for a host that says NOTHING.
+    //
+    // The landing composer already submits this way (`use-landing-composer-
+    // actions.ts`), and for the same reason: a surface that closes itself on
+    // submit cannot own its own completion through the observer.
+    void createChat
+      .mutateAsync({
         epicId,
         // The host the modal resolved its own client for, checked non-null
         // just above - the machine the user picked, not the app-wide active
@@ -906,29 +934,36 @@ export function NewConversationModalBody(props: {
         workspaceMode,
         worktreeIntent,
         initialMessage,
-      },
-      {
-        onSuccess: (response) => {
-          if (response.initialTurnStarted === true) {
-            useInitialChatHandoffStore
-              .getState()
-              .markInitialTurnStarted(
-                { hostId: activeHostId, userId, epicId },
-                chatId,
-              );
-          }
-        },
-        onError: () => {
-          useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+      })
+      .then((response) => {
+        if (response.initialTurnStarted === true) {
           useInitialChatHandoffStore
             .getState()
-            .markFailed(
+            .markInitialTurnStarted(
               { hostId: activeHostId, userId, epicId },
-              "Couldn't create the agent.",
+              chatId,
             );
-        },
-      },
-    );
+        }
+      })
+      .catch(() => {
+        useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+        // `markFailedByAction`, not `markFailed`: the handoff key is
+        // {user, epic} only, so a SECOND create in this epic replaces the
+        // entry while the first is still in flight - and now that this arm
+        // actually runs, an unguarded `markFailed` would close the second
+        // agent's tab when the first one's rejection landed. The by-action
+        // variant fails only the handoff still carrying these exact ids.
+        useInitialChatHandoffStore
+          .getState()
+          .markFailedByAction(
+            { hostId: activeHostId, userId, epicId },
+            chatId,
+            clientActionId,
+            "Couldn't create the agent.",
+          );
+      });
+    // The toast (with the host's reason) is the shared create hook's, which
+    // is mutation-level and so survives this close.
     cleanupAfterSubmit();
   }, [
     canSubmit,
@@ -942,6 +977,7 @@ export function NewConversationModalBody(props: {
     epicId,
     parentId,
     placement,
+    raiseHostNotice,
     recordPlacement,
     rememberEpicIntent,
     setEpicRunSettings,
@@ -958,7 +994,7 @@ export function NewConversationModalBody(props: {
       // anything reports the failure.
       const placementVerdict = resolveLandingPlacement(submitTarget);
       if (placementVerdict.kind === "refused") {
-        setHostNotice({ kind: "refused", message: placementVerdict.message });
+        raiseHostNotice({ kind: "refused", message: placementVerdict.message });
         return;
       }
       // The staged key and this create both derive from the same captured
@@ -1003,6 +1039,7 @@ export function NewConversationModalBody(props: {
       epicId,
       parentId,
       placement,
+      raiseHostNotice,
       recordPlacement,
       rememberEpicIntent,
       tabId,
@@ -1047,11 +1084,7 @@ export function NewConversationModalBody(props: {
       workspaceDisabledHint={composerDisabledHint}
       header={header}
       topBanner={
-        <ComposerHostNotice
-          notice={hostNotice}
-          hostLabelFor={composerPlacement.hostLabelFor}
-          onDismiss={dismissHostNotice}
-        />
+        <ComposerHostNotice notice={hostNotice} onDismiss={dismissHostNotice} />
       }
       stashControl={
         <PromptStashControl

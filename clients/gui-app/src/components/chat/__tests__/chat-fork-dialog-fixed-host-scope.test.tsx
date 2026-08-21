@@ -227,6 +227,7 @@ function forkTarget(): ChatForkDialogTarget {
     seedIntentOverride: null,
     carriedInterviews: "settled",
     forkMode: "plain",
+    initialHostId: null,
   };
 }
 

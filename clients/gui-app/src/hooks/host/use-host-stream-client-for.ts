@@ -266,6 +266,9 @@ export function buildHostStreamClient(params: {
     // that from becoming several OTP dialogs. It resolves `declined` until the
     // provisioning provider is mounted, so dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
+    // The renderer's long-lived clients never verify adoption; the next
+    // connection's ack settles it.
+    onHostCredentialState: null,
     // The LOCAL host's long-lived connection, so this is the leg that hears a
     // restart tombstone from a local host restarted by somebody other than
     // this app - a `traycer host restart` on the box, an update install. The
@@ -414,6 +417,12 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
+            recentHostCheckIn: false,
+            // Same reason `transportDialability` is written coarsely above:
+            // the plan gate ran upstream against the real directory entry, and
+            // re-asserting a refusal here would contradict a dial this effect
+            // has already been cleared to make.
+            planAllowsRemote: true,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,

@@ -13,6 +13,7 @@ import {
 } from "../selection-authority-contract";
 import {
   ATTACH_HANDOVER_CEILING_MS,
+  COLD_START_LOCAL_RESTART_HOLD_CEILING_MS,
   CONFIRMED_DEATH_REFUSAL_STREAK,
   EFFECTIVE_HOST_POST_SESSION_CEILING_MS,
   SESSION_ORDINAL_WINDOW,
@@ -36,11 +37,15 @@ import {
 } from "../in-process-selection-authority";
 import {
   createFakeAuthorityClock,
+  createRecordingAuthorityLog,
   createTestAuthority,
   fleetHost,
   findLease,
   recordEngineEvents,
+  type FakeAuthorityClock,
+  type RecordedAuthorityLog,
   type RecordedEngineEvent,
+  type RecordingAuthorityLog,
 } from "./selection-authority-harness";
 
 // ---------------------------------------------------------------- builders
@@ -181,6 +186,24 @@ const EMPTY_FLEET_SEED = {
  */
 function readyLocalHostEnsurePort(): LocalHostEnsurePort {
   return { ensureReady: () => Promise.resolve({ ok: true }) };
+}
+
+/**
+ * A local `ensure` port whose promise NEVER settles - a hung provisioning
+ * lane (the same shape the B2 suite drives via `createDeferredEnsure()` with
+ * its `resolve` never called, made a named one-liner here because the P1 fix
+ * pins need it at the point a host FIRST becomes effective, not only at its
+ * own B2 ceiling).
+ *
+ * This is the exact mechanism behind the P1 regression: `deriveLease`'s
+ * in-flight-ensure arm reports the local host `connecting` - usable - for as
+ * long as this promise is outstanding, which is proof of NOTHING (no dial,
+ * no session, no announcement has ever reached the host). Only the engine's
+ * own {@link LOCAL_EXPECTED_OUTAGE_CEILING_MS}-equal B2 ceiling ever moves a
+ * lease held by a port like this one; the port itself never will.
+ */
+function neverResolvingLocalHostEnsurePort(): LocalHostEnsurePort {
+  return { ensureReady: () => new Promise(() => undefined) };
 }
 
 // -------------------------------------------------------------------- tests
@@ -4839,6 +4862,1085 @@ describe("SelectionAuthorityEngineImpl - compat anchor must displace, not merely
       compatIncompatible("H", "s1", INCOMPAT_DETAIL),
     );
     expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
+
+    authority.dispose();
+  });
+});
+
+/**
+ * The dial-evidence path's instrumentation.
+ *
+ * These exist because "a pinned host stopped answering and its lease never
+ * reached `dead`" was not diagnosable from a production log. Six of
+ * `ingestDial`'s seven exits were indistinguishable from outside - two logged
+ * at `debug` (which the renderer drops in production, where the level defaults
+ * to `info`) and four logged nothing - so a refusal that was dropped,
+ * deduplicated or classified inert left exactly the same trace as a dial that
+ * never happened. Those two have opposite fixes, so the instrument's whole job
+ * is telling them apart.
+ *
+ * Every disposition gets its own arm deliberately: an instrument asserted only
+ * on its happy path is the one that reports "nothing found" when the truth is
+ * "nothing ran".
+ */
+describe("selection authority dial-evidence instrumentation", () => {
+  function dialLogs(records: ReadonlyArray<RecordedAuthorityLog>) {
+    return records.filter(
+      (record) => record.message === "[selection-authority] dial evidence",
+    );
+  }
+
+  function stallWarnings(records: ReadonlyArray<RecordedAuthorityLog>) {
+    return records.filter((record) => record.level === "warn");
+  }
+
+  function attachedAuthority(log: RecordingAuthorityLog) {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("H", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      log,
+    });
+    const seq = authority.engine.allocateAttachSeq("A");
+    const attach = authority.engine.attach("A", attachRequest(seq, []));
+    if (!attach.ok) throw new Error("expected attach to succeed");
+    return { authority, incarnationId: attach.incarnationId };
+  }
+
+  it("reports a disposition for EVERY dial exit, including the silent ones", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // 1. counted
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", null, 0));
+    // 2. dropped-duplicate-attempt (same attempt id)
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", null, 1));
+    // 3. inert-indeterminate
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a2", "indeterminate", 2),
+    );
+    // 4. cleared-by-success
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a3", "success", 3),
+    );
+    // 5. suppressed-live-session
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 4),
+    );
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a4", null, 5));
+    // 6. dropped-outside-fleet
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialRefusal("GONE", "a5", null, 6),
+    );
+
+    expect(
+      dialLogs(log.records).map((record) => record.detail.disposition),
+    ).toEqual([
+      "counted",
+      "dropped-duplicate-attempt",
+      "inert-indeterminate",
+      "cleared-by-success",
+      "suppressed-live-session",
+      "dropped-outside-fleet",
+    ]);
+
+    authority.dispose();
+  });
+
+  it("names the death crossing distinctly from an ordinary counted refusal", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      authority.engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    const dispositions = dialLogs(log.records).map(
+      (record) => record.detail.disposition,
+    );
+    // Only the crossing is distinguished; everything before it is progress.
+    expect(dispositions[dispositions.length - 1]).toBe("counted-reached-death");
+    expect(dispositions.slice(0, -1).every((d) => d === "counted")).toBe(true);
+    // The streak is reported as it stands AFTER the decision, so a reader can
+    // see it advance rather than having to count the lines.
+    expect(
+      dialLogs(log.records).map((record) => record.detail.refusalStreak),
+    ).toEqual(
+      Array.from({ length: CONFIRMED_DEATH_REFUSAL_STREAK }, (_, i) => i + 1),
+    );
+    expect(findLease(authority.engine.snapshot().leases, "H")?.status).toBe(
+      "dead",
+    );
+
+    authority.dispose();
+  });
+
+  it("warns once dial failures stop advancing the streak - the reported pathology", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // A live session suppresses every refusal (invariant 5), so the host fails
+    // repeatedly while its lease can never move. This is the shape that
+    // strands a pinned surface, and it is silent in production today.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    const warnings = stallWarnings(log.records);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].detail).toMatchObject({
+      hostId: "H",
+      disposition: "suppressed-live-session",
+      consecutiveNonCounting: CONFIRMED_DEATH_REFUSAL_STREAK,
+      refusalStreak: 0,
+    });
+
+    authority.dispose();
+  });
+
+  it("warns ONCE per stall episode, not once per dial past the threshold", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // The test above stops exactly AT the threshold, so it cannot tell "fire
+    // at the crossing" from "fire at or above it". This one runs well past it:
+    // a prolonged outage is when this warn fires and also when dials are most
+    // frequent, so warning on every subsequent report would bury the
+    // transition under its own repetitions, in the logs of the very incident
+    // it exists to mark.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    const dials = CONFIRMED_DEATH_REFUSAL_STREAK * 4;
+    for (let i = 0; i < dials; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(1);
+    // Every report is still individually recorded - the `debug` channel keeps
+    // the full history, so quieting the warn costs no evidence.
+    expect(dialLogs(log.records)).toHaveLength(dials);
+
+    authority.dispose();
+  });
+
+  it("names the crossing ONCE - later refusals stay ordinary `counted`", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    const dials = CONFIRMED_DEATH_REFUSAL_STREAK + 3;
+    for (let i = 0; i < dials; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("H", `attempt-${i}`, null, i),
+      );
+    }
+
+    // The lease DECISION stays `>=` - the host is dead and stays dead - but
+    // the label marks the single report that crossed. `>=` here would report a
+    // long outage as an unbroken run of deaths.
+    const dispositions = dialLogs(log.records).map(
+      (record) => record.detail.disposition,
+    );
+    expect(
+      dispositions.filter((d) => d === "counted-reached-death"),
+    ).toHaveLength(1);
+    expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK - 1]).toBe(
+      "counted-reached-death",
+    );
+    expect(dispositions[CONFIRMED_DEATH_REFUSAL_STREAK]).toBe("counted");
+    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
+
+    authority.dispose();
+  });
+
+  it("keeps NO stall state for a host outside the fleet", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Evidence for an unknown host is dropped, so there is no lease to strand
+    // a surface on and nothing to warn about. Accumulating here would grow one
+    // entry per distinct id between fleet snapshots, and an entry recreated
+    // after a prune would be inherited by a durable id that later re-registers.
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal(`GONE-${i}`, `attempt-${i}`, null, i),
+      );
+    }
+    // Same id repeatedly, which is the case a per-host counter would catch.
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 3; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialRefusal("GONE", `gone-${i}`, null, 100 + i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("does not count a REPLAYED success as a stalled failure", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // A duplicate is classified before its outcome is ever read, so a success
+    // arriving twice looks exactly like a refusal that went nowhere. Warning
+    // "dial failures are not advancing" on a run of successes would point the
+    // reader at the opposite of what happened.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "same", "success", 0),
+    );
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK * 2; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", "same", "success", 1 + i),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("clears the stall on proof of life that is not a dial - a session", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // `onHostProvedAlive` is the funnel for every kind of proof, not just a
+    // dial success. Without clearing there, inert reports from BEFORE a
+    // recovery combine with one after it and warn about an episode that ended.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a1", "indeterminate", 0),
+    );
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a2", "indeterminate", 1),
+    );
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 2),
+    );
+    // With the session live every later refusal is suppressed, so this is the
+    // first report after the recovery and must not complete the old episode.
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a3", null, 3));
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("warns again after a host recovers and stalls a SECOND time", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Latching on the host forever would be the wrong cure for the flood: a
+    // machine that recovers and then strands a surface again is a new
+    // incident, and the second one is exactly as worth reporting as the first.
+    engine.ingestEvidence(
+      "A",
+      incarnationId,
+      sessionEvidence("H", "s1", "established", 0),
+    );
+    let seq = 0;
+    for (let episode = 0; episode < 2; episode += 1) {
+      for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+        seq += 1;
+        engine.ingestEvidence(
+          "A",
+          incarnationId,
+          dialRefusal("H", `attempt-${seq}`, null, seq),
+        );
+      }
+      seq += 1;
+      // Proof of life clears the stall.
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `attempt-${seq}`, "success", seq),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(2);
+
+    authority.dispose();
+  });
+
+  it("stays silent on a healthy host - the stall resets on any real evidence", () => {
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+    const { engine } = authority;
+
+    // Two non-counting reports, then proof of life, repeatedly. A warn here
+    // would fire on every ordinary reconnect and the signal would be worthless.
+    for (let round = 0; round < 4; round += 1) {
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `ind-${round}-a`, "indeterminate", round),
+      );
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `ind-${round}-b`, "indeterminate", round),
+      );
+      engine.ingestEvidence(
+        "A",
+        incarnationId,
+        dialOutcome("H", `ok-${round}`, "success", round),
+      );
+    }
+
+    expect(stallWarnings(log.records)).toHaveLength(0);
+
+    authority.dispose();
+  });
+
+  it("does not materialise an evidence record for a host whose dial was dropped", () => {
+    // The instrument reads the streak WITHOUT `hostEvidence()`, because the
+    // evidence map's emptiness is load-bearing ("never dialed" gates the
+    // launch-time ensure). A diagnostic that created records here would change
+    // which hosts get provisioned - observable as a lease that stops being
+    // `connecting` for a host nothing legitimately dialed.
+    const log = createRecordingAuthorityLog();
+    const { authority, incarnationId } = attachedAuthority(log);
+
+    authority.engine.ingestEvidence(
+      "A",
+      incarnationId,
+      dialOutcome("H", "a1", "indeterminate", 0),
+    );
+
+    expect(findLease(authority.engine.snapshot().leases, "H")?.status).toBe(
+      "connecting",
+    );
+    expect(dialLogs(log.records)[0].detail.refusalStreak).toBe(0);
+
+    authority.dispose();
+  });
+});
+
+// ---------------------------------------------------- cold-start hold (M7)
+
+describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL target is waited for, not failed over", () => {
+  /**
+   * Builds an engine with a CONTROLLABLE {@link LocalHostOutageSignal}, seeded
+   * on an EMPTY fleet (`localHostId: null, hosts: []`). `createTestAuthority`
+   * cannot be used here: it hardcodes `inertLocalHostOutageSignal`, and this
+   * suite drives the signal itself - sometimes already `true` before the
+   * fleet ever names a local host (the TARGET-side hold: L is never usable,
+   * never effective, and the hold answers ∅), sometimes flipped `true` only
+   * AFTER a local host has already become effective some other way (the
+   * INCUMBENT-side hold, P1 fix: the per-host proof-of-life gate is what
+   * decides whether that incumbent's restart is bounded or not).
+   *
+   * `initialOutage` and `localHostEnsure` are REQUIRED, not defaulted (this
+   * repo's type-safety rules: no optional/defaulted params) - every caller
+   * states its own premise rather than inheriting one silently. A caller
+   * proving the TARGET-side hold passes `true` (matching the original
+   * fixture); a caller proving the INCUMBENT-side P1 fix passes `false` and
+   * flips it after the incumbent already exists.
+   *
+   * The empty seed matters as much as the signal: the constructor's own
+   * fleet-seed commit runs with `localHostId: null` (no target, no local
+   * host), so it can never touch `mruEffectiveHostIds` or any host's
+   * proof-of-life latch - only the later `fleet.publish` the test drives is
+   * this process's FIRST look at L or R. Publishing L from construction
+   * instead would let the auto-ensure's transient `connecting` (usable,
+   * before the outage signal is even read) serve L on that very first
+   * commit and falsify the cold-start premise before a single assertion
+   * runs.
+   */
+  function coldBootAuthorityWithOutageSignal(
+    clock: FakeAuthorityClock,
+    initialOutage: boolean,
+    localHostEnsure: LocalHostEnsurePort,
+  ): {
+    readonly engine: SelectionAuthorityEngineImpl;
+    readonly fleet: InMemoryHostFleetSource;
+    readonly events: RecordedEngineEvent[];
+    setOutage(inExpectedOutage: boolean): void;
+    dispose(): void;
+  } {
+    const fleet = new InMemoryHostFleetSource({
+      revision: 0,
+      identityGeneration: 0,
+      localHostId: null,
+      hosts: [],
+    });
+    const identity = {
+      current: () => ({ identityKey: "acct-1", generation: 0 }),
+      onChanged: () => ({ dispose: () => undefined }),
+    };
+    let outageState = initialOutage;
+    const outageListeners = new Set<(inExpectedOutage: boolean) => void>();
+    const outage: LocalHostOutageSignal = {
+      inExpectedOutage: () => outageState,
+      onChanged: (listener) => {
+        outageListeners.add(listener);
+        return { dispose: () => outageListeners.delete(listener) };
+      },
+    };
+    const engine = new SelectionAuthorityEngineImpl({
+      fleet,
+      identity,
+      localHostEnsure,
+      localOutage: outage,
+      clock,
+      newIncarnationId: createIncrementingIncarnationIds(),
+      preferredStore: new InMemoryPreferredHostStore(),
+      log: silentAuthorityLog,
+    });
+    const { events } = recordEngineEvents(engine);
+    return {
+      engine,
+      fleet,
+      events,
+      setOutage: (inExpectedOutage) => {
+        outageState = inExpectedOutage;
+        for (const listener of Array.from(outageListeners)) {
+          listener(inExpectedOutage);
+        }
+      },
+      dispose: () => engine.dispose(),
+    };
+  }
+
+  it("COLD START HOLD: a never-served process holds ∅ for a restarting LOCAL target instead of failing over to a usable remote", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    // The mutation lane was ALREADY cycling the local host before the fleet
+    // ever answered - the launch-reconcile-races-boot shape the hold exists
+    // for. Publishing L (local, cycling) + R (remote, an ordinarily fine
+    // failover candidate) is this process's FIRST look at either host.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(findLease(engine.snapshot().leases, "R")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // Still held with no new evidence, comfortably inside the 20s ceiling -
+    // this is what distinguishes a genuine hold from a one-shot ∅ that just
+    // happens to be the first answer.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS / 2);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+    expect(engine.snapshot().effectiveHostId).not.toBe("R");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - ONE WINDOW PER EPISODE: after the ceiling lapses onto R, a later ∅ adopts a newly-usable Q at once instead of re-arming a fresh hold on the still-restarting L", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // 1. The ordinary cold start: L cycling, R a usable remote, hold engaged.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 2. The ceiling lapses and R takes over. The LAPSE ITSELF is what the
+    //    rest of this test is about: L has had its window for this episode.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS + 1);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // 3. R dies with nothing else usable, so the authority genuinely reaches ∅
+    //    - the transition that used to destroy the lapse record, because the
+    //    pass that saw R still effective decided no host was being awaited.
+    killHostWithRefusals(engine, "A", incarnation, "R");
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 4. A usable Q appears while L is STILL cycling under the same intent -
+    //    no new restart episode, just a fleet that now has an answer.
+    clock.advance(1_000);
+    fleet.publish(0, "L", [
+      fleetHost("L", "local"),
+      fleetHost("R", "remote"),
+      fleetHost("Q", "remote"),
+    ]);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+
+    // THE REGRESSION: a second full 20s of ∅ - and this one narrates as the
+    // hard "No host is available" card, not as a launch, because the window
+    // has been served since. Q must be adopted on the spot.
+    expect(engine.snapshot().effectiveHostId).toBe("Q");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - NEVER A FIRST WINDOW AFTER SERVICE: a local restart that begins only after the app has been serving gets no ∅ hold at all, so a newly usable Q is adopted at once", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      false,
+      unavailableLocalHostEnsurePort,
+    );
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // The app works: nothing is cycling, and derivation names a host. R,
+    // because this machine's host cannot be provisioned at all. Which host it
+    // is does not matter - what matters is that ∅ has stopped being a launch
+    // story for this process, because the window narrator renders any later ∅
+    // as the hard "No host is available" card.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    // Settle the construction-time ensure: while it is outstanding L reads
+    // `connecting` (usable) and outranks R as the target, so the premise of
+    // this test - a process serving a REMOTE - only holds once it has come
+    // back unavailable.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // The remote dies too. Real ∅, correctly narrated as a verdict.
+    killHostWithRefusals(engine, "A", incarnation, "R");
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // NOW the local host starts cycling - the first restart episode this
+    // process has seen, so there is no lapsed record to stop a hold arming.
+    // The episode guard cannot help here; only "derivation has named a host
+    // before" can.
+    clock.advance(1_000);
+    authority.setOutage(true);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+
+    // A usable machine appears. Holding ∅ for it would put the ∅ modal in
+    // front of a user who was working a moment ago, for the full ceiling,
+    // with a host right there - the hold buying a modal rather than
+    // preventing a flicker.
+    fleet.publish(0, "L", [
+      fleetHost("L", "local"),
+      fleetHost("R", "remote"),
+      fleetHost("Q", "remote"),
+    ]);
+    expect(engine.snapshot().effectiveHostId).toBe("Q");
+
+    authority.dispose();
+  });
+
+  it("LANDS ON THE TARGET ONCE: ending the outage before the ceiling adopts L directly, with no intermediate hop onto R", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet, events } = authority;
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // Well inside the 20s ceiling - the boot was slow, not hung.
+    clock.advance(5_000);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // The mutation lane finishes; L is now a live candidate again.
+    authority.setOutage(false);
+    expect(findLease(engine.snapshot().leases, "L")?.status).not.toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // The full event log never once pointed a window at R - the hold's whole
+    // job is to make that hop unnecessary when the target lands in time.
+    for (const event of events) {
+      if (event.kind !== "selection") continue;
+      expect(event.change.effectiveHostId).not.toBe("R");
+    }
+
+    // Let the ensure the outage's end just triggered settle before disposing.
+    await Promise.resolve();
+    await Promise.resolve();
+    authority.dispose();
+  });
+
+  it("BOUNDED: the ceiling forces a fallback to R at 20s even with the LOCAL OUTAGE signal (a 15-minute hold) still true - the exact 'stuck on the startup screen' regression this ceiling prevents", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // Just short of the ceiling: still held, and the outage signal has not
+    // moved - the premise that the fall-through below is the CEILING firing,
+    // not the outage lapsing on its own (it will not for another ~14 minutes,
+    // LOCAL_EXPECTED_OUTAGE_CEILING_MS).
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 1);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+
+    // The ceiling itself, reached with NO new evidence - the engine's own
+    // deadline timer, not a report, is what wakes this transition. L's lease
+    // is UNCHANGED (still restarting-expected): the hold decays on ITS OWN
+    // ceiling, not on the underlying episode lapsing.
+    clock.advance(1);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+
+  it("after the ceiling forces R, a later-usable local target recovers only through the ordinary RETURN_TO_TARGET_STABILITY_MS window - no special-casing", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // The outage ends; L becomes usable. The engine is FailedOver now (R is
+    // effective, L is target) - the ORDINARY M6 return-to-target window
+    // applies from here, not the hold (the hold's own ceiling already
+    // lapsed when it forced R, and `holdsForColdStart` never re-arms a
+    // window for the SAME host once its ceiling has lapsed - see the NO
+    // RE-ARM pin below).
+    authority.setOutage(false);
+    expect(findLease(engine.snapshot().leases, "L")?.status).not.toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // Let the ensure the outage's end just triggered settle. Until it does,
+    // `trackUsability`'s in-flight-ensure branch re-stamps L's `usableSince`
+    // to `now` on EVERY commit (F5: a booting host accrues no stability while
+    // its own request is outstanding), which would make the window below a
+    // moving target instead of the fixed 20s check it is meant to be.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    clock.advance(RETURN_TO_TARGET_STABILITY_MS - 1);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    clock.advance(1);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - UNPROVEN INCUMBENT IS BOUNDED: a local host that became effective only because the engine's own ensure is in flight - never proven alive - gets the BOUNDED hold once it starts restarting, not the unbounded D5/M6 one", () => {
+    const clock = createFakeAuthorityClock(0);
+    // An ensure whose promise NEVER settles - the exact shape the review
+    // finding caught `noteEffective` recording: L reads `connecting` (usable)
+    // purely because THIS process's own launch-time ensure is outstanding,
+    // never because anything has actually answered it (arm 2 of
+    // `deriveLease`).
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      false,
+      neverResolvingLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    // First look at L (local) and R (a fine, usable remote). No outage yet,
+    // so the never-dialed local host draws the launch ensure and derives
+    // `connecting` - usable - and is picked as both target and effective.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // The mutation lane starts cycling L a moment later - AFTER the ensure
+    // was already minted. This is exactly the case the module header's
+    // "COMPOSITION" pin protects: the outage signal alone cannot flip L's
+    // lease while this engine's own ensure is still outstanding for it, so
+    // nothing observable changes yet.
+    clock.advance(30_000);
+    authority.setOutage(true);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe("connecting");
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // The ensure's OWN in-flight ceiling (B2) is what finally retires the
+    // token - the outage's independent 15-minute ceiling (started 30s later)
+    // still has comfortable room left, so the freed arm reveals
+    // `restarting-expected`, not `dead`.
+    clock.advance(LOCAL_EXPECTED_OUTAGE_CEILING_MS - 30_000);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    // L is STILL the effective host - the D5/M6 exemption never newly
+    // selects a restarting host, but it does not throw the app off an
+    // already-effective one either. What changed is which ARM is holding
+    // it: the incumbent has never proved itself, so this is the bounded
+    // cold-start hold, not the unbounded one.
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // BOUNDED: comfortably inside the 20s ceiling, still held.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 1);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // At the ceiling, with NO new evidence, the engine's own deadline timer
+    // falls through to the usable remote - the exact regression this pins:
+    // before the fix, `mruEffectiveHostIds` already held L (from the very
+    // first `noteEffective`, the moment L first read `connecting`), so the
+    // OLD gate read "already served" and took the unbounded arm, pinning the
+    // startup screen for the outage's full 15-minute ceiling with R sitting
+    // right there, usable.
+    clock.advance(1);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - PROVEN INCUMBENT STAYS UNBOUNDED: a local host proved alive by its own successful ensure keeps the unbounded D5/M6 hold once it starts restarting", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      false,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // Let the launch ensure settle: a `{ ok: true }` completion is FIRSTHAND
+    // proof of life (`onHostProvedAlive`) - the one thing the previous pin's
+    // incumbent never got.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Now the mutation lane starts cycling L. With the ensure already
+    // settled (no token left to mask arm 3), the outage signal reaches
+    // `deriveLease` directly and L reads `restarting-expected` at once.
+    authority.setOutage(true);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+
+    // UNBOUNDED: well past the 20s cold-start ceiling that bounded the
+    // UNPROVEN incumbent above - this is the D5/M6 hold at full strength,
+    // because `hasProvedAliveAtLeastOnce("L")` is true.
+    clock.advance(60_000);
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - RE-KEY ON HOST REPLACEMENT: a fleet republish that swaps the LOCAL identity mid-hold gives the new host its own full 20s window, not the old host's remaining time", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    // L1 is cycling before the fleet ever answers (the TARGET-side hold,
+    // like the "COLD START HOLD" pin above): ∅ while it is awaited.
+    fleet.publish(0, "L1", [
+      fleetHost("L1", "local"),
+      fleetHost("R", "remote"),
+    ]);
+    expect(findLease(engine.snapshot().leases, "L1")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // Comfortably inside L1's window.
+    clock.advance(15_000);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // The desktop republishes on a local-identity change (PID metadata,
+    // re-enrolment): a DIFFERENT host, L2, is now `localHostId`, and it is
+    // ALSO cycling (the outage signal is a port-level fact, not scoped to
+    // one host id).
+    fleet.publish(0, "L2", [
+      fleetHost("L2", "local"),
+      fleetHost("R", "remote"),
+    ]);
+    expect(findLease(engine.snapshot().leases, "L2")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 10 more seconds - 25s total since L1's window opened, past what WOULD
+    // have been L1's 20s ceiling. Still held: L2 re-keyed the hold to ITS
+    // OWN start (t=15s), not L1's elapsed time.
+    clock.advance(10_000);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // 20s after the SWAP (t=15s + 20s = t=35s), L2's own window lapses.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 10_000);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - NO RE-ARM AFTER LAPSE: once the ceiling has forced a fallback, further passes for the SAME still-restarting host do not re-engage the hold", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+    );
+    const { engine, fleet } = authority;
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+
+    // The ceiling forces R, exactly as in the "BOUNDED" pin above.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // A FURTHER PASS for the SAME host, still restarting: the registry
+    // re-publishes the same membership (a periodic refresh, not a change).
+    // `holdsForColdStart("L", ...)` is invoked again on this pass - via the
+    // LOCAL-TARGET arm, since L is still the target and still
+    // `restarting-expected` - and must not re-arm a fresh window just
+    // because it is being asked about again.
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // More time and more passes - still no re-arm.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+});
+
+describe("SelectionAuthorityEngineImpl - cold-start hold does not apply once the process has served", () => {
+  it("NOT A COLD START: serving remote R once, a later-cycling local L stays on R (the ordinary D8/M6 arms decide, unaffected by the hold)", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("R", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      seedPreferred: "R",
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+    // R is preferred and serves directly at cold boot (never-dialed defaults
+    // to `connecting`, which is usable) - this process's FIRST non-null
+    // effective, which is what empties `mruEffectiveHostIds`' claim of "never
+    // served" for the rest of this identity epoch. L is never even the
+    // target here - the LOCAL-target-only half of the gate is pinned
+    // separately below.
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // The construction-time launch ensure for the never-dialed local L (D14
+    // fires it whichever host is the target) is still in flight, and its
+    // in-flight arm outranks the expected-outage arm - so the tombstone
+    // below needs it settled first, or L would read `connecting` no matter
+    // what the tombstone says.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // L now starts a deliberate restart while R - not L - is the current
+    // effective host. Under the per-host proof-of-life gate the hold's two
+    // arms only ever consider the CURRENT effective host (the incumbent arm)
+    // or the local TARGET (the second arm, gated on
+    // `targetHostId === localHostId`, false here since R is preferred and L
+    // is never the target). L is neither, so this is exactly the shape a
+    // regression in that per-host scoping would show up in first - a
+    // process serving one host entirely unaffected by an UNRELATED host
+    // cycling.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      restartIntent("L", "tomb-cycle", null, clock.now()),
+    );
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+
+  it("P1 FIX - A SERVING FALLBACK IS NEVER DROPPED: with the local host as the TARGET, a later restart intent for it leaves the failed-over R serving instead of holding ∅", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), fleetHost("R", "remote")],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // NO PREFERENCE, so the target IS the local host (M5). That is the whole
+    // difference from the case above - there R was preferred and L was never
+    // the target, so `targetHostId === localHostId` was false and the
+    // target-side arm could not fire whatever it did. Here it is true, which
+    // is the population this pin is about.
+    expect(engine.snapshot().targetHostId).toBe("L");
+
+    // L is unprovisionable (the harness default port answers "unavailable")
+    // and then refuses its dials outright, so the app fails over to R exactly
+    // as D8 says. Settle the construction-time ensure first: its in-flight arm
+    // outranks the expected-outage arm, so a restart intent landing while it
+    // is outstanding would read `connecting` and prove nothing.
+    await Promise.resolve();
+    await Promise.resolve();
+    killHostWithRefusals(engine, "A", incarnation, "L");
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // THE REGRESSION. A restart intent for L - the user relaunching their own
+    // machine's host, or the launch lane reconciling - flips its lease from
+    // `dead` to `restarting-expected`. `restartingIncumbentHostId` is null (R
+    // is the incumbent and R is not restarting), so before the ∅ gate the
+    // target-side arm fired and answered null: a cold-start optimization
+    // taking a WORKING remote away from a user who was mid-sentence on it, for
+    // the whole ceiling. The hold exists to prevent a hop, not to cause an
+    // outage.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      restartIntent("L", "tomb-relaunch", null, clock.now()),
+    );
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    // And it stays R across the span the hold would have covered - the hold
+    // was never armed, rather than armed and immediately lapsed.
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS / 2);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+
+    authority.dispose();
+  });
+});
+
+describe("SelectionAuthorityEngineImpl - cold-start hold is LOCAL-target-only", () => {
+  it("REMOTE TARGET UNAFFECTED: a cold start with a restarting PREFERRED REMOTE still falls through to a usable remote instead of holding ∅", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      seedPreferred: "P",
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    // Speculative evidence fed before the fleet has ever answered
+    // (`hasFleetAnswer` is still false, the empty-seed fleet has zero hosts)
+    // is accepted rather than dropped - the same loophole
+    // `clearPreferredOutsideFleet`'s doc describes for an unanswered port.
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      restartIntent("P", "tomb-remote", null, clock.now()),
+    );
+
+    // First real look at the fleet: P (preferred, remote) is mid-restart, R
+    // is a fine remote, and there is no local host at all.
+    fleet.publish(0, null, [
+      fleetHost("P", "remote"),
+      fleetHost("R", "remote"),
+    ]);
+    expect(engine.snapshot().targetHostId).toBe("P");
+    expect(findLease(engine.snapshot().leases, "P")?.status).toBe(
+      "restarting-expected",
+    );
+    // The hold's `targetHostId === localHostId` conjunct is false here (no
+    // local host exists at all), so derivation falls straight through to a
+    // usable remote instead of holding ∅ for the whole tombstone episode -
+    // the grace card the hold protects exists only where a LOCAL host is
+    // expected.
+    expect(engine.snapshot().effectiveHostId).toBe("R");
 
     authority.dispose();
   });
