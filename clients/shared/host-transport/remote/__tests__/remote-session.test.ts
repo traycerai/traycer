@@ -1558,6 +1558,7 @@ describe("RemoteSession reconnect ladder accounting", () => {
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = buildSession(relay, lease, null);
       const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       try {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
@@ -1566,7 +1567,15 @@ describe("RemoteSession reconnect ladder accounting", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         infoSpy.mockClear();
+        // The ready boundary arms a 30s probation timer, but the rung under
+        // test is 1s. Clear first so this proves the reconnect timer itself,
+        // not a timer left by the preceding recovery.
+        setTimeoutSpy.mockClear();
         relay.sendRelayKill("killed", "host_gone");
+        expect(setTimeoutSpy).toHaveBeenCalledWith(
+          expect.any(Function),
+          RECONNECT_INITIAL_BACKOFF_MS,
+        );
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const line = infoSpy.mock.calls
@@ -1575,11 +1584,19 @@ describe("RemoteSession reconnect ladder accounting", () => {
         expect(line).toBeDefined();
         const total = Number(/reattached in (\d+)ms/.exec(line ?? "")?.[1]);
         const wait = Number(/wait=(\d+)ms/.exec(line ?? "")?.[1]);
-        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+        // `wait` is the difference between integer-millisecond `Date.now()`
+        // stamps, while the real timer may be armed from the event loop's
+        // clock sample taken one tick before the loss handler's stamp. A
+        // genuine 1,000ms timer can therefore log 999ms; one millisecond is
+        // the full possible skew because both printed stamps have 1ms units.
+        // The exact 1,000ms arm is asserted above, independently of this
+        // observation boundary.
+        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS - 1);
         expect(total).toBeGreaterThanOrEqual(wait);
       } finally {
         session.close();
         infoSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
       }
     },
     TEST_BUDGET_MS,
