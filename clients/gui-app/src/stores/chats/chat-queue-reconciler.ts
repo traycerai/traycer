@@ -154,7 +154,7 @@ export type ReconcileSnapshotPatch = {
  * sourced quotes - because each was fixed as itself; driving the clauses off
  * one classification is what makes a fourth a test failure instead.
  */
-interface UnrecoverableSend {
+export interface UnrecoverableSend {
   readonly clientActionId: string;
   readonly content: JsonContent;
   /** How this send died, phrased to open the statement. */
@@ -167,7 +167,9 @@ interface UnrecoverableSend {
   readonly currentAccountContext: AccountContext | null;
 }
 
-function unrecoverableSendNotice(send: UnrecoverableSend): ChatErrorNotice {
+export function unrecoverableSendNotice(
+  send: UnrecoverableSend,
+): ChatErrorNotice {
   const { clientActionId, content, circumstance, worktreeIntent } = send;
   // The quote is VERBATIM; only the branch decision is trimmed. A message of
   // pure whitespace has nothing to hand back, but a code block whose first

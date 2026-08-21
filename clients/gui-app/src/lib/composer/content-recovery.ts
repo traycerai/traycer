@@ -257,7 +257,9 @@ export function recoveryTextFromContent(content: JsonContent): string {
 function prepareForProjection(
   nodes: ReadonlyArray<JsonContent>,
 ): ReadonlyArray<JsonContent> {
-  return nodes.flatMap((node) => {
+  // Links fold across SIBLINGS, so that pass runs over the list rather than
+  // per node - see `foldLinkRuns`.
+  return foldLinkRuns(nodes).flatMap((node) => {
     // A list container contributes nothing itself; its items become siblings
     // so the newline-joining entry point separates them.
     // Both list kinds go through one walk: bullets keep no marker but DO keep
@@ -268,8 +270,6 @@ function prepareForProjection(
     if (node.type === "listItem") {
       return prepareForProjection(node.content ?? []);
     }
-    const linked = linkedTextNode(node);
-    if (linked !== null) return [linked];
     const source = atomSource(node);
     if (source !== null) {
       return [
@@ -409,25 +409,51 @@ function fenced(
 }
 
 /**
- * A link, emitted the way the serializer emits it: `[label](href)`.
+ * Fold consecutive same-href text nodes into ONE `[label](href)`.
  *
- * PARITY again, and this time it removes a loss rather than describing one.
- * The `href` used to be counted beside the quote - but once the row is gone
- * the target exists on NO surface, so counting it told the user something was
- * missing without giving it back. `serializeLink` emits the markdown, so this
- * does, and the target travels with the text.
+ * The same adjacency rule counting uses: Tiptap splits a marked run wherever
+ * another mark interrupts it, so one link across a bold word arrives as three
+ * text nodes. Wrapping each independently emitted three links where the user
+ * wrote one - the identical mistake counting made before `-4IH`, so it takes
+ * the identical rule rather than a second one that could drift from it.
  *
- * That empties the `link` loss category, and an empty category should die: a
- * category is a claim about what this seam cannot carry, not a fixed taxonomy.
- * It is the first the parity rule has removed rather than added.
+ * Non-adjacent runs stay separate, because those are genuinely two links.
  */
-function linkedTextNode(node: JsonContent): JsonContent | null {
+function foldLinkRuns(
+  nodes: ReadonlyArray<JsonContent>,
+): ReadonlyArray<JsonContent> {
+  const out: JsonContent[] = [];
+  let runHref: string | null = null;
+  let runText = "";
+  const flush = (): void => {
+    if (runHref === null) return;
+    out.push({ type: "text", text: `[${runText}](${runHref})` });
+    runHref = null;
+    runText = "";
+  };
+  for (const node of nodes) {
+    const href = linkHrefOf(node);
+    if (href === null) {
+      flush();
+      out.push(node);
+      continue;
+    }
+    if (href !== runHref) flush();
+    runHref = href;
+    runText += node.text ?? "";
+  }
+  flush();
+  return out;
+}
+
+/** The `href` this text node is linked with, if any. */
+function linkHrefOf(node: JsonContent): string | null {
   if (node.type !== "text") return null;
   for (const mark of node.marks ?? []) {
     if (mark.type !== "link") continue;
     const href = mark.attrs?.href;
     if (typeof href !== "string" || href.length === 0) return null;
-    return { type: "text", text: `[${node.text ?? ""}](${href})` };
+    return href;
   }
   return null;
 }

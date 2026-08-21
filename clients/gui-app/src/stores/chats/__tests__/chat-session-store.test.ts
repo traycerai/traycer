@@ -2298,6 +2298,73 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("staged worktree no longer exists");
   });
 
+  // R13 `-B5UX`: the founding invariant's last uncovered surface. Two sends
+  // rejected together - the first claims the restoration slot, the second's
+  // optimistic row is dropped, and the rejection path appended only the host's
+  // REASON. A dead send neither restored nor stated, on the one path that
+  // never learned the obligation the settle passes learned in rounds 1-4.
+  it("states a rejection-displaced send's text, not just the host's reason", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const first = harness.sent[0];
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const second = harness.sent[1];
+    if (first.kind !== "send" || second.kind !== "send") {
+      throw new Error("Expected two send frames");
+    }
+
+    const reject = (clientActionId: string) => {
+      callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "Host refused the send.",
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    };
+    reject(first.clientActionId);
+    reject(second.clientActionId);
+
+    // First writer keeps the slot.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(CONTENT);
+    // The second is DISPLACED, so its text has to be in its statement - the
+    // host's reason alone hands nothing back.
+    const notice = noticeFor(harness, second.clientActionId);
+    expect(notice.code).toBe("SEND_NOT_RECORDED");
+    expect(notice.message).toContain("World");
+    expect(notice.message).toContain("Host refused the send");
+  });
+
   // R13 `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
   // on its pendings while the frame carried the real context - so a
   // Team-billed first message that stranded would report it was going to bill

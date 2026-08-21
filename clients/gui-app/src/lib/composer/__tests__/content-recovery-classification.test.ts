@@ -305,6 +305,70 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
+  // R13 `-B-Wc`: emission inherits `-4IH`'s adjacency rule. One link across a
+  // bold word arrives as three text nodes, so wrapping each independently
+  // recovered three separate links where the user wrote one.
+  it("emits a link split across text nodes as one link", () => {
+    const href = "https://example.test/rb";
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "the ",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+            {
+              type: "text",
+              text: "bold",
+              marks: [{ type: "bold" }, { type: "link", attrs: { href } }],
+            },
+            {
+              type: "text",
+              text: " runbook",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(text).toBe("[the bold runbook](https://example.test/rb)");
+  });
+
+  it("emits two separated links to the same target separately", () => {
+    const href = "https://example.test/rb";
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "see here",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+            { type: "text", text: " and also " },
+            {
+              type: "text",
+              text: "over here",
+              marks: [{ type: "link", attrs: { href } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    // Same rule as counting: not adjacent, so genuinely two links.
+    expect(text).toBe(
+      "[see here](https://example.test/rb) and also [over here](https://example.test/rb)",
+    );
+  });
+
   it("fails closed on an unrecognised slash-chip kind", () => {
     const report = classifyContentRecovery({
       type: "doc",

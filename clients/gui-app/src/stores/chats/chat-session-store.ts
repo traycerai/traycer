@@ -1,6 +1,7 @@
 import {
   addAcceptedAction,
   noticeCarriesOnlyCopy,
+  unrecoverableSendNotice,
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
@@ -925,6 +926,60 @@ function backgroundStopSlices(
  * Only when NO prompt came back do the swept actions get their bindings, which
  * is the case the sweep's own reasoning was written for.
  */
+/**
+ * The statement a rejected action earns.
+ *
+ * A rejected SEND that could not claim the restoration slot is a dead send
+ * neither restored nor stated - the same hole the settle passes closed in
+ * rounds 1-4, on the one surface that kept a reason-only notice. It routes
+ * through the SAME builder they use rather than a parallel one, so it inherits
+ * the inlined text and every qualification clause automatically; a second
+ * notice shape here would drift from those the moment either changed.
+ *
+ * Everything else - a non-send, a send that DID claim the slot, an action with
+ * no content - keeps the host's reason, which is the whole story for it.
+ */
+function rejectionNotice(input: {
+  readonly frame: {
+    readonly reason: string | null;
+    readonly code: string | null;
+    readonly clientActionId: string;
+  };
+  readonly pending: PendingChatAction | null;
+  readonly displaced: boolean;
+  readonly worktreeGone: boolean;
+  readonly currentSettings: ChatRunSettings | null;
+}): ChatErrorNotice {
+  const reason = input.frame.reason ?? "Action rejected.";
+  const pending = input.pending;
+  if (
+    input.displaced &&
+    pending !== null &&
+    pending.action === "send" &&
+    pending.restoreContent !== null
+  ) {
+    return unrecoverableSendNotice({
+      clientActionId: input.frame.clientActionId,
+      content: pending.restoreContent,
+      circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
+      worktreeIntent: pending.restoreWorktreeIntent,
+      sentSettings: pending.settings,
+      currentSettings: input.currentSettings,
+      sentAccountContext: pending.accountContext,
+      currentAccountContext: useAccountContextStore.getState().accountContext,
+      sentDeliveryPolicy: pending.deliveryPolicy,
+    });
+  }
+  return {
+    code: input.frame.code ?? "ACTION_REJECTED",
+    message: input.worktreeGone
+      ? `${reason} Its staged worktree no longer exists, so it was not restored.`
+      : reason,
+    severity: "warning",
+    clientActionId: input.frame.clientActionId,
+  };
+}
+
 function restoreOneWorktreeIntent(
   restoredPrompt: StagedWorktreeIntentSource | null,
   sweptClaimants: ReadonlyArray<StagedWorktreeIntentSource | undefined>,
@@ -1685,14 +1740,18 @@ export function createChatSessionStoreWithNotificationDependencies(
                     reason: frame.reason ?? "Message was not accepted.",
                   }
                 : state.failedSendRestoration,
-            errorNotices: appendErrorNotice(state.errorNotices, {
-              code: frame.code ?? "ACTION_REJECTED",
-              message: worktreeGoneForRejection
-                ? `${frame.reason ?? "Action rejected."} Its staged worktree no longer exists, so it was not restored.`
-                : (frame.reason ?? "Action rejected."),
-              severity: "warning",
-              clientActionId: frame.clientActionId,
-            }),
+            errorNotices: appendErrorNotice(
+              state.errorNotices,
+              rejectionNotice({
+                frame,
+                pending,
+                // Displaced: the slot was already taken when this rejection
+                // landed, so first-writer-wins gave this prompt nothing.
+                displaced: state.failedSendRestoration !== null,
+                worktreeGone: worktreeGoneForRejection,
+                currentSettings: state.currentComposerSettings,
+              }),
+            ),
           };
         });
         maybeDispatchPendingBackgroundSessionStop(set, get);
