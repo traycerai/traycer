@@ -132,7 +132,7 @@ export function usePrListSubscription(args: {
     [queryClient, activeArgs],
   );
 
-  const { subscription, sendRefresh } = useSharedStreamSubscription({
+  const { lastEvent, sendRefresh } = useSharedStreamSubscription({
     registry: subscriptions,
     sessionKey,
     enabled: stableArgs.enabled,
@@ -157,7 +157,6 @@ export function usePrListSubscription(args: {
     enabled: false,
   });
 
-  const lastEvent = subscription?.lastEvent ?? null;
   const errorEvent = lastEvent?.kind === "error" ? lastEvent : null;
   const data = queryData ?? null;
 

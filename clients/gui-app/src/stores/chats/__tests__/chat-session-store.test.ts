@@ -1472,6 +1472,79 @@ describe("createChatSessionStore", () => {
     });
   });
 
+  it("keeps an in-flight send pending when a same-connection refresh snapshot omits it", () => {
+    // The host broadcasts snapshots on a live connection for unrelated
+    // reasons (a turn finishing, a pump-backlog backfill). One built before
+    // the host processed this send naturally lacks the message - that is not
+    // evidence the send was lost, and restoring it would re-fill the composer
+    // with a prompt that then lands in the transcript anyway.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+
+    // No connection-status transition: this snapshot rides the same epoch
+    // the send was dispatched on.
+    emitSnapshot(callbacks, "owner");
+
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toMatchObject({ action: "send", messageId: frame.messageId });
+    expect(
+      harness.handle.store
+        .getState()
+        .pendingUserMessages.map((message) => message.messageId),
+    ).toEqual([frame.messageId]);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+
+    // The ack and the durable message then settle it normally.
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: { kind: "user", content: CONTENT },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().pendingActions).toEqual({});
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+    expect(
+      harness.handle.store
+        .getState()
+        .messages.some((message) => message.messageId === frame.messageId),
+    ).toBe(true);
+  });
+
   it("clears a pending send when reconnect snapshot contains the accepted message", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();

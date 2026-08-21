@@ -43,6 +43,13 @@ export type ReconcileSnapshotInput = {
   readonly queue: ChatQueueState;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly nowMs: number;
+  /**
+   * The connection the snapshot arrived on (the store's live epoch). A pending
+   * send stamped with an OLDER epoch was dispatched on a connection that is
+   * gone, so this snapshot is authoritative on its fate; one stamped with this
+   * epoch is still in flight and its ack is still coming.
+   */
+  readonly connectionEpoch: number;
 };
 
 /**
@@ -104,6 +111,18 @@ export function reconcileQueueChange(
  * Reconcile pending actions against a snapshot. Clears pending actions whose
  * messages have been confirmed in the snapshot or are in the queue.
  *
+ * A send the snapshot does NOT show is only declared lost (dropped, with its
+ * content restored to the composer) when it was dispatched on an EARLIER
+ * connection than the snapshot's - its ack died with that connection, so the
+ * snapshot is the authority on whether it landed. A send from the CURRENT
+ * connection stays pending: the host broadcasts snapshots on a live connection
+ * for many unrelated reasons (a turn finishing, a pump-backlog backfill), and
+ * one built before the host processed the send frame naturally lacks the
+ * message without that send being lost. Its ack (or `messageAccepted`) is still
+ * coming; if the connection drops first, the epoch bumps and the next snapshot
+ * settles it. Restoring here would re-fill the composer with a prompt that then
+ * lands in the transcript anyway.
+ *
  * Pure function - all timing inputs must be passed explicitly.
  */
 export function reconcileSnapshotChange(
@@ -153,6 +172,7 @@ export function reconcileSnapshotChange(
         };
       }
       if (
+        pending.connectionEpoch >= input.connectionEpoch ||
         pending.restoreContent === null ||
         next.failedSendRestoration !== null
       ) {
