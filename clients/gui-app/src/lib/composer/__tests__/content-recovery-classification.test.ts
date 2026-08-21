@@ -153,8 +153,8 @@ describe("content recovery classification", () => {
       ],
     });
 
-    // "the runbook" pastes back as prose; the URL it pointed at is nowhere.
-    expect(report.get("link")).toBe(1);
+    // Retired category: the target now travels IN the text.
+    expect(report.size).toBe(0);
   });
 
   it("counts a link split across text nodes once", () => {
@@ -185,9 +185,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    // Tiptap split ONE link into three text nodes; it is still one thing to
-    // re-add, and "Its 3 links" would be a lie about the user's message.
-    expect(report.get("link")).toBe(1);
+    expect(report.size).toBe(0);
   });
 
   it("counts two separated links to the same target separately", () => {
@@ -214,8 +212,7 @@ describe("content recovery classification", () => {
       ],
     });
 
-    // Not adjacent, so they are two separate things the user has to re-add.
-    expect(report.get("link")).toBe(2);
+    expect(report.size).toBe(0);
   });
 
   it("reports nothing for a link whose label IS its target", () => {
@@ -288,7 +285,7 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  it("reports nothing for a native command chip", () => {
+  it("reports nothing for a native slash-command chip", () => {
     const report = classifyContentRecovery({
       type: "doc",
       content: [
@@ -297,7 +294,7 @@ describe("content recovery classification", () => {
           content: [
             {
               type: "slashCommand",
-              attrs: { kind: "command", name: "compact" },
+              attrs: { kind: "slash-command", name: "compact" },
             },
           ],
         },
@@ -306,6 +303,45 @@ describe("content recovery classification", () => {
 
     // The leading-only guard still holds for native commands.
     expect(report.size).toBe(0);
+  });
+
+  it("fails closed on an unrecognised slash-chip kind", () => {
+    const report = classifyContentRecovery({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "slashCommand", attrs: { name: "mystery" } }],
+        },
+      ],
+    });
+
+    // No kind, no assumption that it round-trips.
+    expect(report.get("command")).toBe(1);
+  });
+
+  it("emits a link's target into the recovery text", () => {
+    const text = recoveryTextFromContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "the runbook",
+              marks: [
+                { type: "link", attrs: { href: "https://example.test/rb" } },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    // Parity with `serializeLink`, which is also what makes the loss category
+    // unnecessary: the target comes back WITH the text.
+    expect(text).toBe("[the runbook](https://example.test/rb)");
   });
 
   it("reports nothing for visible formatting marks", () => {
@@ -597,16 +633,16 @@ describe("content recovery classification", () => {
   // R10 `-AdAI`: content ending in a newline plus the join's own newline made
   // a blank code line the user never wrote. The serializer strips exactly one
   // terminal newline; match it byte for byte.
-  it("does not double an atom block's terminal newline either", () => {
+  it("preserves an atom block's terminal newline, matching its serializer", () => {
     const text = recoveryTextFromContent({
       type: "doc",
       content: [{ type: "mermaidBlock", attrs: { code: "graph TD;\n" } }],
     });
 
-    // The serializer does NOT strip here (only its code-block arm does), and
-    // that divergence is deliberate: this text is for a human to copy, and
-    // reproducing a blank line they never wrote is the defect `-AdAI` fixed.
-    expect(text).toBe("```mermaid\ngraph TD;\n```");
+    // PARITY: the atom serializers keep a terminal newline, so this does. The
+    // source attrs are byte-exact user data the agent received; trimming them
+    // for tidiness would be mutating content to improve its looks.
+    expect(text).toBe("```mermaid\ngraph TD;\n\n```");
   });
 
   it("does not double a code block's terminal newline", () => {

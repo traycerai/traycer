@@ -778,6 +778,10 @@ describe("createChatSessionStore", () => {
   // Interview drafts share the same module-global risk across lifecycle tests.
   afterEach(() => {
     useWorktreeIntentStagingStore.getState().resetForTests();
+    // In-memory zustand state, so `localStorage.clear()` below does not touch
+    // it - a TEAM context set by a billing-drift test would otherwise leak
+    // into every case after it.
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     useInterviewDraftStore.setState({ draftsByChat: {} });
     __resetAppLocalNotificationsStoreForTests();
     window.localStorage.clear();

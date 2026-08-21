@@ -202,13 +202,6 @@ function unrecoverableSendNotice(send: UnrecoverableSend): ChatErrorNotice {
         verbPhrase: "will paste as plain text from where they sit - re-pick",
         tail: "so they run again",
       }),
-      countedClause({
-        count: losses.get("link") ?? 0,
-        singular: "link",
-        plural: "links",
-        verbPhrase: "paste as their label only - re-add",
-        tail: "so the target comes back",
-      }),
       (losses.get("unknown") ?? 0) > 0
         ? " Some of its content will not survive as plain text and has to be rebuilt in the composer."
         : "",

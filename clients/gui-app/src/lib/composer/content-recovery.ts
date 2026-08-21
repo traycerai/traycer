@@ -19,8 +19,6 @@ export type ContentRecoveryLoss =
   | "mention"
   /** A sourced quote's `sourceType` / `sourceId` / `sourceEpicId`. */
   | "quote"
-  /** A link mark whose label is not its `href`, so the target is nowhere. */
-  | "link"
   /** A slash chip whose `/name` will not round-trip from where it sits. */
   | "command"
   /** A node kind nothing has classified - see the fail-closed rule below. */
@@ -83,10 +81,10 @@ const LOSSY_NODE_TYPES: ReadonlyMap<string, ContentRecoveryLoss> = new Map([
 ]);
 
 /**
- * Marks are invisible to a `node.type` walk, and one of them carries data.
- * A `link`'s `href` survives only when the label already IS the href; any
- * other label pastes back as prose with the target gone. The rest are visible
- * formatting the user can see is missing and retype.
+ * Marks are invisible to a `node.type` walk. These are visible formatting the
+ * user can see is missing and retype. `link` is not listed here but is not a
+ * loss either - {@link linkedTextNode} emits its target into the text, so it
+ * is text-complete via the seam.
  */
 const TEXT_COMPLETE_MARK_TYPES: ReadonlySet<string> = new Set([
   "bold",
@@ -136,7 +134,6 @@ function visitSiblings(
   counts: Map<ContentRecoveryLoss, number>,
   leadingNode: JsonContent | null,
 ): void {
-  let previousLinkHref: string | null = null;
   for (const node of nodes) {
     const loss = lossForNodeType(node.type);
     if (loss !== null) {
@@ -145,11 +142,6 @@ function visitSiblings(
     if (lostSlashChip(node, leadingNode)) {
       counts.set("command", (counts.get("command") ?? 0) + 1);
     }
-    const linkHref = lostLinkHref(node);
-    if (linkHref !== null && linkHref !== previousLinkHref) {
-      counts.set("link", (counts.get("link") ?? 0) + 1);
-    }
-    previousLinkHref = linkHref;
     for (const mark of node.marks ?? []) {
       if (mark.type === "link") continue;
       if (TEXT_COMPLETE_MARK_TYPES.has(mark.type)) continue;
@@ -175,8 +167,18 @@ function lostSlashChip(
   leadingNode: JsonContent | null,
 ): boolean {
   if (node.type !== "slashCommand") return false;
-  if (node.attrs?.kind !== "skill") return false;
-  return node !== leadingNode;
+  const kind = node.attrs?.kind;
+  // A native command cannot BE anywhere but leading - the editor's guard holds
+  // it there - so its `/name` always round-trips.
+  if (kind === "slash-command") return false;
+  // A skill is legal anywhere (`isLegalSlashChip` exempts it), and only a
+  // LEADING one is rebuilt by `parseLeadingSlashCommand`.
+  if (kind === "skill") return node !== leadingNode;
+  // FAIL CLOSED. An unrecognised or missing kind gets no assumption of
+  // round-tripping: the same rule the node and mark classifications follow,
+  // and the one that would have caught `"command"` - a kind this module once
+  // tested against and the protocol never had.
+  return true;
 }
 
 /** The document's first inline node - the only position that round-trips. */
@@ -185,17 +187,6 @@ function firstInlineNode(content: JsonContent): JsonContent | null {
   if (children.length === 0) return null;
   const first = children[0];
   return (first.content ?? []).length === 0 ? first : firstInlineNode(first);
-}
-
-/** The `href` this node loses, or `null` when it loses none. */
-function lostLinkHref(node: JsonContent): string | null {
-  for (const mark of node.marks ?? []) {
-    if (mark.type !== "link") continue;
-    const href = mark.attrs?.href;
-    if (typeof href !== "string" || href.length === 0) return null;
-    return href === (node.text ?? "") ? null : href;
-  }
-  return null;
 }
 
 function lossForNodeType(type: string | undefined): ContentRecoveryLoss | null {
@@ -218,6 +209,8 @@ export const CLASSIFIED_LABELS_FOR_TESTS: ReadonlySet<string> = new Set([
   ...TRANSPARENT_NODE_TYPES,
   ...LOSSY_NODE_TYPES.keys(),
   ...TEXT_COMPLETE_MARK_TYPES,
+  // Text-complete VIA THE SEAM, like the atoms: `linkedTextNode` emits the
+  // serializer's `[label](href)`, so nothing about a link is lost.
   "link",
   // Classified per node by `lostSlashChip` rather than by type.
   "slashCommand",
@@ -275,13 +268,21 @@ function prepareForProjection(
     if (node.type === "listItem") {
       return prepareForProjection(node.content ?? []);
     }
+    const linked = linkedTextNode(node);
+    if (linked !== null) return [linked];
     const source = atomSource(node);
     if (source !== null) {
       return [
         {
           type: "paragraph",
           content: [
-            { type: "text", text: fenced(atomFenceLabel(node), source) },
+            {
+              type: "text",
+              // The atom serializers preserve a terminal newline, so this
+              // does too: `attrs.code` / `attrs.htmlContent` are byte-exact
+              // user data, and the agent received them unchanged.
+              text: fenced(atomFenceLabel(node), source, false),
+            },
           ],
         },
       ];
@@ -376,28 +377,59 @@ function fencedCodeBlock(node: JsonContent): string {
     type: "doc",
     content: [...(node.content ?? [])],
   });
-  // Exactly the serializer's rule (`json-content-serializer`): ONE terminal
-  // newline is dropped before the closing fence. Without it the join's own
-  // newline doubles, producing a blank code line the user never wrote.
-  return fenced(info, projected);
+  // `serializeCodeBlock` drops one terminal newline before the closing fence,
+  // so this does too - parity, not preference.
+  return fenced(info, projected, true);
 }
 
 /**
- * One fence, one newline rule, for code blocks and atoms alike.
+ * Fence a block the way its own serializer does.
  *
- * The label matches `json-content-serializer`'s own (`mermaid`, `wireframe`,
- * or a code block's `language`), so the recovered text says what the block was
- * - raw HTML with no fence reads as pasted prose - and round-trips closer to
- * what the agent received.
+ * The label matches `json-content-serializer`'s (`mermaid`, `wireframe`, or a
+ * code block's `language`), so the recovered text says what the block was -
+ * raw HTML with no fence reads as pasted prose.
  *
- * ONE terminal newline is dropped. The serializer does that only in its
- * code-block arm, and diverging from it for atoms is deliberate: this text is
- * handed to a person to copy, and reproducing a blank line they never wrote is
- * the same defect the code-block arm already avoids.
+ * PARITY is the rule for the terminal newline, and it differs per block
+ * because the serializers differ: `serializeCodeBlock` drops one before the
+ * closing fence, so we drop one; the atom arms do NOT, so we keep it. An
+ * earlier version stripped everywhere on the grounds that a trailing blank
+ * line is untidy for someone copying - but the source attrs are byte-exact
+ * user data the agent actually received, and trimming them for tidiness is
+ * mutating content to improve its looks. Parity says what the agent got;
+ * cosmetics were never the standard this text is held to.
  */
-function fenced(label: string, body: string): string {
-  const inner = body.endsWith("\n") ? body.slice(0, -1) : body;
+function fenced(
+  label: string,
+  body: string,
+  stripTerminalNewline: boolean,
+): string {
+  const inner =
+    stripTerminalNewline && body.endsWith("\n") ? body.slice(0, -1) : body;
   return ["```" + label, inner, "```"].join("\n");
+}
+
+/**
+ * A link, emitted the way the serializer emits it: `[label](href)`.
+ *
+ * PARITY again, and this time it removes a loss rather than describing one.
+ * The `href` used to be counted beside the quote - but once the row is gone
+ * the target exists on NO surface, so counting it told the user something was
+ * missing without giving it back. `serializeLink` emits the markdown, so this
+ * does, and the target travels with the text.
+ *
+ * That empties the `link` loss category, and an empty category should die: a
+ * category is a claim about what this seam cannot carry, not a fixed taxonomy.
+ * It is the first the parity rule has removed rather than added.
+ */
+function linkedTextNode(node: JsonContent): JsonContent | null {
+  if (node.type !== "text") return null;
+  for (const mark of node.marks ?? []) {
+    if (mark.type !== "link") continue;
+    const href = mark.attrs?.href;
+    if (typeof href !== "string" || href.length === 0) return null;
+    return { type: "text", text: `[${node.text ?? ""}](${href})` };
+  }
+  return null;
 }
 
 function atomFenceLabel(node: JsonContent): string {
