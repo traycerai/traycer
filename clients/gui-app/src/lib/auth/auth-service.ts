@@ -89,17 +89,34 @@ const LEGACY_REFRESH_TOKEN_KEY = "traycer.refresh-token";
  * covers expired, claimed-elsewhere, and never-existed codes
  * indistinguishably (the server does not say which); `denied` is the desktop
  * explicitly rejecting the claim; `timed-out` means the approval window
- * elapsed with no decision; `failed` is a local failure after an approved
- * poll (validation, persistence, or a superseding transition).
+ * elapsed with no decision. A superseding transition is NOT a failure and
+ * reports `superseded` instead - see that member.
  */
+/**
+ * The kinds a surface actually renders - every terminal outcome except the two
+ * that speak for themselves (a completed sign-in) or must stay silent (a
+ * superseded attempt).
+ */
+export type LinkLoginFailureKind = Exclude<
+  LinkLoginSignInResult["kind"],
+  "signed-in" | "superseded"
+>;
+
 export type LinkLoginSignInResult =
   | { readonly kind: "signed-in" }
+  /**
+   * The attempt stopped being ours - a newer sign-in superseded it, or the
+   * service was disposed. NOT a failure, and deliberately not presentable:
+   * whoever superseded this attempt owns the surface now, and reporting a
+   * result from a discarded attempt would put its complaint under the
+   * successor's progress. Callers must render nothing for this kind.
+   */
+  | { readonly kind: "superseded" }
   | { readonly kind: "invalid-code" }
   | { readonly kind: "denied" }
   | { readonly kind: "timed-out" }
   | { readonly kind: "rate-limited" }
-  | { readonly kind: "network-error" }
-  | { readonly kind: "failed" };
+  | { readonly kind: "network-error" };
 
 /**
  * How long the phone keeps polling for the desktop's decision before giving
@@ -649,7 +666,10 @@ export class AuthService {
         return;
       }
       if (useAuthStore.getState().status !== "signing-in") {
-        useAuthStore.getState().setSigningIn();
+        // A snapshot projected from elsewhere carries no attempt kind. Naming
+        // the device flow keeps the escape hatch this path has always offered:
+        // no attempt of OURS is running, so `signIn()` supersedes nothing here.
+        useAuthStore.getState().setSigningIn("device");
       }
       return;
     }
@@ -1270,7 +1290,7 @@ export class AuthService {
     this.settleSessionRecovery("interactive-attempt");
     this.setLastError(null);
     const attempt = this.beginAttempt();
-    useAuthStore.getState().setSigningIn();
+    useAuthStore.getState().setSigningIn("device");
     this.runnerHost.beginAuthAttempt();
     let session: DeviceFlowSession | null;
     try {
@@ -1465,7 +1485,8 @@ export class AuthService {
       return;
     }
     if (session.status === "signing-in") {
-      useAuthStore.getState().setSigningIn();
+      // As above: an external session's attempt kind is not carried.
+      useAuthStore.getState().setSigningIn("device");
       return;
     }
     if (session.status === "signed-out") {
@@ -2790,15 +2811,18 @@ export class AuthService {
    */
   async signInWithLinkCode(code: string): Promise<LinkLoginSignInResult> {
     if (this.disposed) {
-      return { kind: "failed" };
+      return { kind: "superseded" };
     }
     this.identityGeneration += 1;
     this.settleSessionRecovery("interactive-attempt");
     this.setLastError(null);
     const attempt = this.beginAttempt();
-    // Global signing-in projection: disables the sibling device sign-in
-    // action while this attempt runs (defense in depth on top of the fence).
-    useAuthStore.getState().setSigningIn();
+    // Global signing-in projection, tagged as a LINK attempt: it disables the
+    // sibling device sign-in action while this claim runs (defense in depth on
+    // top of the fence), and it withholds the device flow's retry escape
+    // hatch, which here would supersede a claim the user is at that moment
+    // being asked to approve on their desktop.
+    useAuthStore.getState().setSigningIn("link");
 
     const authnBaseUrl = this.runnerHost.authnBaseUrl;
     // Device identity for the approver's prompt, best first: the shell's
@@ -2814,7 +2838,7 @@ export class AuthService {
       described ?? navigator.userAgent,
     );
     if (this.isDisposed() || this.activeAttempt !== attempt) {
-      return { kind: "failed" };
+      return { kind: "superseded" };
     }
     if (claimed.kind !== "claimed") {
       this.clearActiveAttempt();
@@ -2867,12 +2891,12 @@ export class AuthService {
         this.activeAttempt !== attempt ||
         attempt.abortController.signal.aborted
       ) {
-        return { kind: "failed" };
+        return { kind: "superseded" };
       }
       this.setLinkLoginProgress({ nextPollAtMs, phase: "checking" });
       const polled = await linkLoginTokenViaHttp(authnBaseUrl, secret);
       if (this.isDisposed() || this.activeAttempt !== attempt) {
-        return { kind: "failed" };
+        return { kind: "superseded" };
       }
       switch (polled.kind) {
         case "authorized": {
@@ -2884,7 +2908,9 @@ export class AuthService {
             polled.response.refreshToken,
             attempt.epoch,
           );
-          return applied ? { kind: "signed-in" } : { kind: "failed" };
+          // `applied === false` means the finalization itself was
+          // superseded mid-persist - the same silence, for the same reason.
+          return applied ? { kind: "signed-in" } : { kind: "superseded" };
         }
         case "authorization-pending":
           transportFailures = 0;

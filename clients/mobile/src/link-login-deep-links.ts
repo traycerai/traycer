@@ -26,7 +26,10 @@
  */
 import type { PluginListenerHandle } from "@capacitor/core";
 import { parseLinkLoginInput } from "@traycer-clients/shared/auth/link-login";
-import type { ILinkLoginDeepLinkSource } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  ILinkLoginDeepLinkSource,
+  LinkLoginDeepLinkDelivery,
+} from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 
 /**
@@ -52,8 +55,11 @@ const DUPLICATE_DELIVERY_WINDOW_MS = 5_000;
 
 export class MobileLinkLoginDeepLinks implements ILinkLoginDeepLinkSource {
   private started = false;
-  private handler: ((code: string) => void) | null = null;
-  private pendingCode: string | null = null;
+  private handler: ((delivery: LinkLoginDeepLinkDelivery) => void) | null =
+    null;
+  private pending: LinkLoginDeepLinkDelivery | null = null;
+  /** Identity for each accepted arrival; see `LinkLoginDeepLinkDelivery`. */
+  private nextDeliveryId = 1;
   /** The last code taken off a URL, with when it arrived. */
   private lastDelivery: {
     readonly code: string;
@@ -93,11 +99,13 @@ export class MobileLinkLoginDeepLinks implements ILinkLoginDeepLinkSource {
       });
   }
 
-  onLinkLoginCode(handler: (code: string) => void): Disposable {
+  onLinkLoginCode(
+    handler: (delivery: LinkLoginDeepLinkDelivery) => void,
+  ): Disposable {
     this.handler = handler;
-    const pending = this.pendingCode;
+    const pending = this.pending;
     if (pending !== null) {
-      this.pendingCode = null;
+      this.pending = null;
       handler(pending);
     }
     return {
@@ -140,13 +148,18 @@ export class MobileLinkLoginDeepLinks implements ILinkLoginDeepLinkSource {
       return;
     }
     this.lastDelivery = { code, atMs: Date.now() };
+    const delivery: LinkLoginDeepLinkDelivery = {
+      code,
+      deliveryId: this.nextDeliveryId,
+    };
+    this.nextDeliveryId += 1;
     if (this.handler !== null) {
-      this.handler(code);
+      this.handler(delivery);
       return;
     }
     // Only the newest survives. An older code is already dead or about to be:
     // the server keeps one live unclaimed code per account, so a second scan
     // superseded the first anyway.
-    this.pendingCode = code;
+    this.pending = delivery;
   }
 }

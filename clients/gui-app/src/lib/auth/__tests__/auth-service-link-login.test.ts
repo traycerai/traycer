@@ -174,7 +174,7 @@ describe("link-login attempt fence", () => {
         );
       await vi.advanceTimersByTimeAsync(2_500);
       const result = await linkResult;
-      expect(result.kind).toBe("failed");
+      expect(result.kind).toBe("superseded");
 
       const stored = service.getCurrentSessionSnapshot();
       expect(stored.token).not.toBe("stolen-token");
@@ -198,7 +198,7 @@ describe("link-login attempt fence", () => {
       await vi.advanceTimersByTimeAsync(2_500);
       const result = await linkResult;
       // Silent no-op: no error surfaced, the superseding flow owns the state.
-      expect(result.kind).toBe("failed");
+      expect(result.kind).toBe("superseded");
       expect(service.getLastError()).toBeNull();
       expect(useAuthStore.getState().status).toBe(statusAfterSupersede);
       await deviceSignIn;
@@ -296,7 +296,7 @@ describe("link-login attempt fence", () => {
       // A's paused write now lands — and must be undone, not persisted.
       releaseSave();
       const result = await linkResult;
-      expect(result.kind).toBe("failed");
+      expect(result.kind).toBe("superseded");
       const stored: StoredCredentials | null = await realStore.get();
       expect(stored).toBeNull();
       expect(useAuthStore.getState().status).not.toBe("signed-in");
@@ -347,7 +347,7 @@ describe("link-login attempt fence", () => {
 
       releaseSave();
       const result = await linkResult;
-      expect(result.kind).toBe("failed");
+      expect(result.kind).toBe("superseded");
       // Observable: the store-unavailable projection is the surfaced error,
       // and the stale pair is indeed still durable.
       expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
@@ -413,7 +413,7 @@ describe("link-login attempt fence", () => {
 
       releaseSave();
       const result = await linkResult;
-      expect(result.kind).toBe("failed");
+      expect(result.kind).toBe("superseded");
       // The write's change notification has fired and the reconcile has had
       // every chance to run — with the undo still failing, it must adopt
       // NOTHING, even though the stale token would validate (stubbed 200).
@@ -528,8 +528,8 @@ describe("link-login attempt fence", () => {
       // settle used to null the record of B's STILL-FAILING delete.
       slotFor("attempt-a-token").release();
       slotFor("attempt-b-token").release();
-      expect((await linkA).kind).toBe("failed");
-      expect((await linkB).kind).toBe("failed");
+      expect((await linkA).kind).toBe("superseded");
+      expect((await linkB).kind).toBe("superseded");
 
       // B is durable and its delete keeps failing: nothing may be adopted,
       // even though the token validates (stubbed 200).
@@ -591,7 +591,7 @@ describe("link-login attempt fence", () => {
       await deviceSignIn;
 
       releaseSave();
-      expect((await linkResult).kind).toBe("failed");
+      expect((await linkResult).kind).toBe("superseded");
 
       // The write's fan-out reached BOTH windows. The raw entry is durable,
       // but the store serves it to NO reader — so neither window adopts,

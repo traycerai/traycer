@@ -9,6 +9,7 @@
  * across that gap the launch that caused the sign-in is the one that loses it.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { LinkLoginDeepLinkDelivery } from "@traycer-clients/shared/platform/runner-host";
 import {
   MobileLinkLoginDeepLinks,
   type AppPluginSlice,
@@ -66,7 +67,7 @@ describe("MobileLinkLoginDeepLinks", () => {
 
     // The GUI mounts only now - after the host runtime has booted.
     const received: string[] = [];
-    deepLinks.onLinkLoginCode((code) => received.push(code));
+    deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));
 
     expect(received).toEqual([NORMALIZED]);
   });
@@ -77,7 +78,7 @@ describe("MobileLinkLoginDeepLinks", () => {
     deepLinks.start();
     await flush();
     const received: string[] = [];
-    deepLinks.onLinkLoginCode((code) => received.push(code));
+    deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));
 
     app.open(PAYLOAD);
 
@@ -90,7 +91,7 @@ describe("MobileLinkLoginDeepLinks", () => {
     deepLinks.start();
     await flush();
     const received: string[] = [];
-    deepLinks.onLinkLoginCode((code) => received.push(code));
+    deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));
 
     expect(received).toEqual([NORMALIZED]);
   });
@@ -104,7 +105,7 @@ describe("MobileLinkLoginDeepLinks", () => {
     deepLinks.start();
     await flush();
     const received: string[] = [];
-    deepLinks.onLinkLoginCode((code) => received.push(code));
+    deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));
 
     app.open(PAYLOAD);
 
@@ -117,7 +118,7 @@ describe("MobileLinkLoginDeepLinks", () => {
     deepLinks.start();
     await flush();
     const received: string[] = [];
-    deepLinks.onLinkLoginCode((code) => received.push(code));
+    deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));
 
     // The device-approval page's return link, which fires on every browser
     // sign-in and carries no payload at all.
@@ -139,7 +140,7 @@ describe("MobileLinkLoginDeepLinks", () => {
     app.open("https://platform.traycer.ai/link?code=22222-33333");
 
     const received: string[] = [];
-    deepLinks.onLinkLoginCode((code) => received.push(code));
+    deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));
 
     // The account holds one live unclaimed code, so the first was already dead
     // by the time the second was minted.
@@ -159,7 +160,7 @@ describe("MobileLinkLoginDeepLinks", () => {
       deepLinks.start();
       await flush();
       const received: string[] = [];
-      deepLinks.onLinkLoginCode((code) => received.push(code));
+      deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));
 
       app.open(PAYLOAD);
       // Long enough to be a person deciding, not the OS repeating itself.
@@ -167,6 +168,33 @@ describe("MobileLinkLoginDeepLinks", () => {
       app.open(PAYLOAD);
 
       expect(received).toEqual([NORMALIZED, NORMALIZED]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives every accepted arrival its own identity, repeats included", async () => {
+    // The consumer must be able to ask "have I acted on THIS arrival" without
+    // using the code as its own identity - two arrivals of one code are a
+    // rescan the second time, and a value-keyed guard cannot tell them apart.
+    vi.useFakeTimers();
+    try {
+      const app = fakeApp(undefined);
+      const deepLinks = new MobileLinkLoginDeepLinks(app.plugin);
+      deepLinks.start();
+      await flush();
+      const received: LinkLoginDeepLinkDelivery[] = [];
+      deepLinks.onLinkLoginCode((delivery) => received.push(delivery));
+
+      app.open(PAYLOAD);
+      vi.advanceTimersByTime(6_000);
+      app.open(PAYLOAD);
+
+      expect(received.map((delivery) => delivery.code)).toEqual([
+        NORMALIZED,
+        NORMALIZED,
+      ]);
+      expect(received[0]?.deliveryId).not.toBe(received[1]?.deliveryId);
     } finally {
       vi.useRealTimers();
     }

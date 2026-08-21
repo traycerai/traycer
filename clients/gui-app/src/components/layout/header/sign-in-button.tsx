@@ -31,8 +31,18 @@ export interface SignInButtonProps {
 function SignInActions(props: {
   readonly isHero: boolean;
   readonly isSigningIn: boolean;
+  /**
+   * Whether the running attempt is one `signIn()` may replace. A link claim is
+   * not: `signIn()` is re-entrant and its `beginAttempt()` discards whatever
+   * is in flight, so offering Retry mid-claim offers to throw away a request
+   * the user's desktop is prompting them to approve.
+   */
+  readonly canRetry: boolean;
   readonly deviceProgress: DeviceFlowProgress | null;
 }) {
+  // Computed here rather than inline: `RetrySignInButton` reads this as "show
+  // yourself", and a link claim is an attempt `signIn()` must not replace.
+  const showRetry = props.isSigningIn && props.canRetry;
   if (props.deviceProgress !== null) {
     return (
       <DeviceCodeProgress
@@ -50,10 +60,7 @@ function SignInActions(props: {
           isSigningIn={props.isSigningIn}
           emphasis="secondary"
         />
-        <RetrySignInButton
-          isHero={props.isHero}
-          isSigningIn={props.isSigningIn}
-        />
+        <RetrySignInButton isHero={props.isHero} isSigningIn={showRetry} />
       </>
     );
   }
@@ -64,10 +71,7 @@ function SignInActions(props: {
         isSigningIn={props.isSigningIn}
         emphasis="primary"
       />
-      <RetrySignInButton
-        isHero={props.isHero}
-        isSigningIn={props.isSigningIn}
-      />
+      <RetrySignInButton isHero={props.isHero} isSigningIn={showRetry} />
       {isMobileApp() ? (
         <LinkCodeSignIn isHero={props.isHero} presentation="link" />
       ) : null}
@@ -95,10 +99,13 @@ function SignInActions(props: {
 export function SignInButton(props: SignInButtonProps) {
   const auth = useAuthService();
   const status = useAuthStore((state) => state.status);
+  const signingInAttempt = useAuthStore((state) => state.signingInAttempt);
   const lastError = useAuthServiceError(auth);
   const deviceProgress = useAuthDeviceProgress(auth);
   const isHero = props.layout === "hero";
   const isSigningIn = status === "signing-in";
+  // Only the device flow's own stalled round trip gets the retry escape hatch.
+  const canRetry = signingInAttempt !== "link";
 
   if (status === "signed-in") {
     return null;
@@ -127,6 +134,7 @@ export function SignInButton(props: SignInButtonProps) {
       <SignInActions
         isHero={isHero}
         isSigningIn={isSigningIn}
+        canRetry={canRetry}
         deviceProgress={deviceProgress}
       />
     </div>

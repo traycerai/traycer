@@ -11,12 +11,17 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  IRunnerHost,
+  LinkLoginDeepLinkDelivery,
+} from "@traycer-clients/shared/platform/runner-host";
 import { useEffect } from "react";
 
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
+    // The bridge's "already signed in" notice rides the info channel.
+    info: vi.fn(),
   },
 }));
 
@@ -309,9 +314,10 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   } {
     // A holder, not a bare `let`: the assignment happens inside a callback,
     // where narrowing would otherwise keep the binding at its initial `null`.
-    const sink: { subscriber: ((code: string) => void) | null } = {
-      subscriber: null,
-    };
+    const sink: {
+      subscriber: ((delivery: LinkLoginDeepLinkDelivery) => void) | null;
+      nextDeliveryId: number;
+    } = { subscriber: null, nextDeliveryId: 1 };
     const host = createFakeRunnerHost({
       authnBaseUrl: "http://localhost:5005",
       linkLoginDeepLinks: {
@@ -323,12 +329,16 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     });
     return {
       host,
+      // Each call is a distinct arrival, exactly as the shell reports them -
+      // including a repeat of a code already delivered, which is what a
+      // deliberate rescan looks like from here.
       emitCode: (code: string) => {
         const subscriber = sink.subscriber;
         if (subscriber === null) {
           throw new Error("the bridge never subscribed");
         }
-        subscriber(code);
+        subscriber({ code, deliveryId: sink.nextDeliveryId });
+        sink.nextDeliveryId += 1;
       },
     };
   }
@@ -359,7 +369,99 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
       ).toBe(true);
     });
     expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
+    // Retry is the device flow's escape hatch from a stalled browser round
+    // trip. Offering it here offers to throw away a claim the user's desktop
+    // is prompting them to approve: `signIn()` is re-entrant, so tapping it
+    // would supersede the camera-launched attempt.
+    expect(screen.queryByTestId("signin-retry-link")).toBeNull();
     outstanding();
+    mobile.cleanupClient();
+  });
+
+  it("keeps a superseded camera claim silent under whatever replaced it", async () => {
+    // The claim settles only AFTER a newer attempt has taken the surface. Its
+    // result is `superseded`, not a failure, and must not surface at all - a
+    // discarded attempt's complaint under the successor's progress describes a
+    // request nobody is waiting on.
+    setMobileApp(true);
+    const claimSettles: { resolve: (() => void) | null } = { resolve: null };
+    const gated = installFetch(
+      () =>
+        new Promise<Response>((resolveResponse) => {
+          claimSettles.resolve = () => {
+            resolveResponse(new Response(null, { status: 401 }));
+          };
+        }),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    const auth = await mobile.waitForAuthService();
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
+    });
+
+    // A newer attempt takes over, discarding the link attempt's fence.
+    await act(async () => {
+      await auth.signIn();
+    });
+    await act(async () => {
+      claimSettles.resolve?.();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("link-code-signin-notice")).toBeNull();
+    gated();
+    mobile.cleanupClient();
+  });
+
+  it("claims a rescan of the same code the shell chose to redeliver", async () => {
+    // Scan while signed in (refused with a notice), sign out, rescan the same
+    // still-live QR. The shell judged that second arrival intentional; a guard
+    // here keyed on the code value would silently swallow it.
+    setMobileApp(true);
+    const claimed: string[] = [];
+    const observing = installFetch((url) => {
+      if (url.includes("/link/claim")) {
+        claimed.push(url);
+      }
+      return Promise.resolve(new Response(null, { status: 401 }));
+    });
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+
+    act(() => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "u1",
+          userName: "U",
+          email: "u@example.test",
+          avatarUrl: null,
+        },
+        { userId: "u1", username: "U" },
+        [],
+      );
+    });
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+    expect(claimed.length).toBe(0);
+
+    act(() => {
+      useAuthStore.getState().setSignedOut();
+    });
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(claimed.length).toBe(1);
+    });
+    observing();
     mobile.cleanupClient();
   });
 
@@ -399,7 +501,7 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     expect(screen.getByTestId("link-code-signin-notice")).toBeTruthy();
 
     act(() => {
-      useAuthStore.getState().setSigningIn();
+      useAuthStore.getState().setSigningIn("device");
     });
 
     await waitFor(() => {
@@ -544,7 +646,7 @@ describe("<SignInButton />", () => {
     expect(screen.queryByTestId("signin-retry-link")).toBeNull();
 
     act(() => {
-      useAuthStore.getState().setSigningIn();
+      useAuthStore.getState().setSigningIn("device");
     });
 
     expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();

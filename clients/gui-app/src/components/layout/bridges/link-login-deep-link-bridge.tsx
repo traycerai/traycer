@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { LinkLoginDeepLinkDelivery } from "@traycer-clients/shared/platform/runner-host";
 import { decideDeepLinkRouting } from "@/lib/auth/link-login-deep-link-routing";
 import { useAuthService } from "@/lib/host";
 import { linkLoginAlreadySignedInToast } from "@/lib/toast/channels";
@@ -23,6 +24,11 @@ import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-
  * surface's own mutation calls, so everything downstream — the supersede
  * fence, the approval poll, the progress the wait UI renders — is identical
  * whichever way the code arrived.
+ *
+ * Nothing here dedupes by CODE. The shell already decided which arrivals are
+ * intentional, and it is the only layer that can (see
+ * `ILinkLoginDeepLinkSource`); a second value-keyed guard at this layer would
+ * silently discard the deliberate rescan the shell just took care to pass on.
  */
 export function LinkLoginDeepLinkBridge(): null {
   const auth = useAuthService();
@@ -32,21 +38,23 @@ export function LinkLoginDeepLinkBridge(): null {
     (state) => state.report,
   );
   const clearOutcome = useLinkLoginDeepLinkOutcomeStore((state) => state.clear);
-  const [pendingCode, setPendingCode] = useState<string | null>(null);
+  const [delivery, setDelivery] = useState<LinkLoginDeepLinkDelivery | null>(
+    null,
+  );
   /**
-   * The last code this bridge has already acted on. A ref, not state: it
-   * records what was DONE rather than anything rendered, and re-rendering on
-   * it would be the cascade it exists to prevent.
+   * The arrival this bridge has already acted on, by delivery identity. A ref,
+   * not state: it records what was DONE rather than anything rendered, and
+   * re-rendering on it would be the cascade it exists to prevent.
    */
-  const actedOnCode = useRef<string | null>(null);
+  const actedOnDeliveryId = useRef<number | null>(null);
   const deepLinks = runnerHost === null ? null : runnerHost.linkLoginDeepLinks;
 
   useEffect(() => {
     if (deepLinks === null) {
       return;
     }
-    const subscription = deepLinks.onLinkLoginCode((code) => {
-      setPendingCode(code);
+    const subscription = deepLinks.onLinkLoginCode((next) => {
+      setDelivery(next);
     });
     return () => {
       subscription.dispose();
@@ -54,7 +62,10 @@ export function LinkLoginDeepLinkBridge(): null {
   }, [deepLinks]);
 
   useEffect(() => {
-    if (pendingCode === null || actedOnCode.current === pendingCode) {
+    if (
+      delivery === null ||
+      actedOnDeliveryId.current === delivery.deliveryId
+    ) {
       return;
     }
     const routing = decideDeepLinkRouting(status);
@@ -63,28 +74,32 @@ export function LinkLoginDeepLinkBridge(): null {
       // pending. This effect runs again when the status settles.
       return;
     }
-    actedOnCode.current = pendingCode;
+    actedOnDeliveryId.current = delivery.deliveryId;
     if (routing === "already-signed-in") {
       linkLoginAlreadySignedInToast.info(
         "Already signed in on this phone — nothing to approve.",
       );
       return;
     }
+    // A fresh claim retires the previous one's verdict, so a second scan does
+    // not sit under the first one's complaint while it runs.
+    clearOutcome();
     // The outcome is reported, not swallowed. A scanned code is most often
     // dead rather than wrong - the account holds one live code, so a re-mint
     // kills the QR still on the desktop screen - and "try again" is the one
     // thing that cannot work then. Published from the settled promise, so the
     // sign-in surface can render the real reason whether or not it was even
     // mounted when the claim started.
-    // A fresh claim retires the previous one's verdict, so a second scan does
-    // not sit under the first one's complaint while it runs.
-    clearOutcome();
-    void auth.signInWithLinkCode(pendingCode).then((result) => {
-      if (result.kind !== "signed-in") {
+    //
+    // `superseded` is the one outcome that stays silent: a discarded attempt's
+    // complaint would land under whatever replaced it, describing a request
+    // nobody is waiting on any more.
+    void auth.signInWithLinkCode(delivery.code).then((result) => {
+      if (result.kind !== "signed-in" && result.kind !== "superseded") {
         reportOutcome(result.kind);
       }
     });
-  }, [auth, clearOutcome, pendingCode, reportOutcome, status]);
+  }, [auth, clearOutcome, delivery, reportOutcome, status]);
 
   // The verdict belongs to ONE attempt. Any newer attempt starting, and the
   // identity transition when one succeeds, both retire it — otherwise a notice

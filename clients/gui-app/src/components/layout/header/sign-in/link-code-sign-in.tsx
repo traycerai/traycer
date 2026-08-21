@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuthLinkLoginProgress } from "@/hooks/auth/use-auth-link-login-progress";
 import { useLinkCodeSignInMutation } from "@/hooks/auth/use-link-code-sign-in-mutation";
+import type { LinkLoginSignInResult } from "@/lib/auth/auth-service";
 import { useAuthService } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -62,6 +63,19 @@ function useEntryNotice(local: EntryNotice): EntryNotice {
     (state) => state.notice,
   );
   return local ?? fromDeepLink;
+}
+
+/**
+ * What a settled claim should say, or `null` for the two kinds that say
+ * nothing: a completed sign-in speaks for itself, and a SUPERSEDED attempt
+ * belongs to whoever replaced it — its complaint would land under the
+ * successor's progress and describe a request nobody is waiting on.
+ */
+function noticeForResult(result: LinkLoginSignInResult): EntryNotice {
+  if (result.kind === "signed-in" || result.kind === "superseded") {
+    return null;
+  }
+  return result.kind;
 }
 
 /**
@@ -124,8 +138,9 @@ export function LinkCodeSignIn(props: {
     clearDeepLinkNotice();
     redeem.mutate(code, {
       onSuccess: (result) => {
-        if (result.kind !== "signed-in") {
-          setNotice(result.kind);
+        const outcome = noticeForResult(result);
+        if (outcome !== null) {
+          setNotice(outcome);
         }
       },
       onError: () => {

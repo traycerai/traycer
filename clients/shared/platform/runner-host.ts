@@ -896,9 +896,32 @@ export interface ILinkCodeScanner {
  * link-login payload, including the payload-free `traycer://auth/callback`
  * return link, because there is no surface to show "that wasn't a code" to
  * when the user never asked for a scan.
+ *
+ * DEDUPE IS THE SHELL'S JOB, AND ONLY THE SHELL'S. It alone can tell one
+ * arrival announced twice by the OS from a person scanning twice, because only
+ * it sees how the URL was delivered and when. Every delivery that reaches a
+ * consumer is therefore one the shell has already judged intentional, and the
+ * consumer must act on all of them — including a repeat of a code it has seen
+ * before, which is what a deliberate rescan of a still-live QR looks like.
  */
 export interface ILinkLoginDeepLinkSource {
-  onLinkLoginCode(handler: (code: string) => void): Disposable;
+  onLinkLoginCode(
+    handler: (delivery: LinkLoginDeepLinkDelivery) => void,
+  ): Disposable;
+}
+
+/**
+ * One accepted arrival of a link code.
+ *
+ * `deliveryId` exists so a consumer can say "have I acted on THIS arrival"
+ * without using the code as its own identity. The distinction is the whole
+ * point: two arrivals of one code are a rescan the second time, and a
+ * value-keyed guard cannot see the difference. Unique and increasing within a
+ * shell's lifetime; carries no meaning beyond identity.
+ */
+export interface LinkLoginDeepLinkDelivery {
+  readonly code: string;
+  readonly deliveryId: number;
 }
 
 /**

@@ -1,11 +1,8 @@
 import { create } from "zustand";
-import type { LinkLoginSignInResult } from "@/lib/auth/auth-service";
+import type { LinkLoginFailureKind } from "@/lib/auth/auth-service";
 
-/** Every terminal outcome except the one that needs no explaining. */
-export type LinkLoginDeepLinkNotice = Exclude<
-  LinkLoginSignInResult["kind"],
-  "signed-in"
->;
+/** Every terminal outcome a person needs told about. */
+export type LinkLoginDeepLinkNotice = LinkLoginFailureKind;
 
 /**
  * How a claim the OS started actually ended, parked for the sign-in surface to
