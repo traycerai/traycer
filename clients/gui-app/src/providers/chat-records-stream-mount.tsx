@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import {
   ChatRecordsStreamClient,
-  type ChatRecordDelta,
+  type ChatRecordsStreamDelta,
 } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import {
   useStreamMethodSupport,
@@ -59,9 +59,17 @@ export function ChatRecordsStreamMount(): ReactNode {
     ) {
       return;
     }
-    const applyDelta = (delta: ChatRecordDelta): void => {
+    const applyDelta = (delta: ChatRecordsStreamDelta): void => {
+      // Peek, not acquire, for every delta kind - a record change must never
+      // construct an epic session or reorder the MRU (see the doc above).
       const handle = getOpenEpicRegistry().peek(delta.epicId);
       if (handle === null) return;
+      // One stream, two record tables: the @1.1 terminal-agent kinds go to
+      // the terminal-agent reducer, everything else to the chat reducer.
+      if (delta.kind === "tuiUpsert" || delta.kind === "tuiRemove") {
+        handle.store.getState().applyTuiAgentRecordDelta(delta);
+        return;
+      }
       handle.store.getState().applyChatRecordDelta(delta);
     };
     const stream = new ChatRecordsStreamClient({

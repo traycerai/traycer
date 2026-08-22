@@ -15,7 +15,11 @@ import type {
   ChatRecordRemovalReason,
   ChatRecordSummary,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type {
+  ChatRecordDelta,
+  TuiAgentRecordDelta,
+} from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicSubscribeClientSeedOffer } from "@traycer/protocol/host/epic/subscribe";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
@@ -50,11 +54,15 @@ import {
   EMPTY_ARTIFACT_ROOMS_SLICE,
   EMPTY_CHATS_SLICE,
   EMPTY_PROJECTED_SLICES,
+  EMPTY_TERMINAL_AGENTS_SLICE,
 } from "./types";
 import {
   chatRecordsSlice,
   chatSlicesEq,
   isChatVisibleToUser,
+  isTerminalAgentVisibleToUser,
+  terminalAgentSlicesEq,
+  tuiAgentRecordsSlice,
   getArtifactEntry,
   getArtifactsMap,
   getChatEntry,
@@ -348,6 +356,34 @@ export interface OpenEpicState {
    */
   readonly chatRetractions: Readonly<Record<string, ChatRecordRemovalReason>>;
   readonly chats: ChatsSlice;
+  /**
+   * The Y.Doc's own terminal-agent entries - the projector's working state,
+   * NOT a component-facing slice. Read {@link OpenEpicState.tuiAgents}, which
+   * is this unioned with the host's registry rows. Kept separate for the same
+   * reason as {@link OpenEpicState.docChats}: a doc-side removal (a migrated
+   * host sweeping its own entries) must reconcile against the doc's history,
+   * not against the union, or it would take a live registry row with it.
+   */
+  readonly docTuiAgents: TerminalAgentsSlice;
+  /**
+   * The host's registry-backed terminal-agent rows (`epic.listTuiAgents`), as
+   * last served. Empty in doc-only mode: an older host that lacks the method
+   * (and therefore still writes the doc's `tuiAgents` map), or before the
+   * first response lands.
+   */
+  readonly tuiAgentRecords: TerminalAgentsSlice;
+  /**
+   * Terminal agents the record plane RETRACTED while this session was open,
+   * and why - the terminal twin of {@link OpenEpicState.chatRetractions},
+   * written only by {@link OpenEpicState.applyTuiAgentRecordDelta}'s
+   * `tuiRemove` arm and ABSORBING for the session's life for the same reason:
+   * an in-flight `epic.listTuiAgents` answer issued before the retraction must
+   * not resurrect the row seconds after its tab said it was gone.
+   */
+  readonly tuiAgentRetractions: Readonly<
+    Record<string, ChatRecordRemovalReason>
+  >;
+  /** Doc entries unioned with the host's registry rows. Components read THIS. */
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
@@ -515,14 +551,33 @@ export interface OpenEpicState {
    */
   applyChatRecordDelta: (delta: ChatRecordDelta) => void;
   /**
-   * Rebuilds the record slice for the CURRENTLY signed-in user from the raw
-   * rows this session has retained.
+   * Publishes the host's `epic.listTuiAgents` answer into the terminal-agent
+   * record table - the terminal twin of {@link OpenEpicState.applyChatRecords},
+   * with the same contract: idempotent, change-gated, and never called in
+   * doc-only mode (an older host answers `E_HOST_UNSUPPORTED`, the record
+   * slice stays empty, and `tuiAgents` is the doc projection by reference).
+   */
+  applyTuiAgentRecords: (records: readonly TuiAgentRecordSummary[]) => void;
+  /**
+   * Applies ONE `host.chatRecords.subscribe@1.1` terminal-agent delta - the
+   * push half of the table {@link OpenEpicState.applyTuiAgentRecords} fills
+   * from the poll, with {@link OpenEpicState.applyChatRecordDelta}'s exact
+   * rules: `tuiUpsert` is revision-guarded (strictly-exceeds or dropped),
+   * `tuiRemove` is unconditional, idempotent and remembered in
+   * {@link OpenEpicState.tuiAgentRetractions}. Callers route by `delta.epicId`
+   * first; the subscription is host-scoped.
+   */
+  applyTuiAgentRecordDelta: (delta: TuiAgentRecordDelta) => void;
+  /**
+   * Rebuilds the record slices for the CURRENTLY signed-in user from the raw
+   * rows this session has retained - both tables, chats and terminal agents,
+   * since each is built for one owner at ingest.
    *
    * Internal, and driven by exactly one caller: the auth subscription, on a
-   * user switch. The slice is keyed on `chatId` alone and so can only ever
-   * represent one owner's rows, which means a user switch has to REBUILD it -
-   * re-projecting alone would keep serving the previous identity's selection.
-   * Retained rows make that lossless; see `applyChatRecords`.
+   * user switch. The slice is keyed on the record id alone and so can only
+   * ever represent one owner's rows, which means a user switch has to REBUILD
+   * it - re-projecting alone would keep serving the previous identity's
+   * selection. Retained rows make that lossless; see `applyChatRecords`.
    */
   republishChatRecordsForCurrentUser: () => void;
   /**
@@ -1826,6 +1881,22 @@ export function createOpenEpicStore(
     return dropped;
   };
 
+  /**
+   * The terminal-agent halves of the same record layer, mirroring the three
+   * chat structures above. The raw-row table is keyed by `tuiAgentId` ALONE,
+   * unlike `chatRecordRows`: the host serves the CALLER'S OWN rows only
+   * (terminal agents are structurally owner-private, per the
+   * `epic.listTuiAgents` contract), so within one viewer's answer the id is
+   * unambiguous. Rows are still retained regardless of owner - a delta could
+   * in principle carry another identity's row after an account switch - and
+   * the publish below re-selects for the current user, so the keying only has
+   * to be safe for what the host actually serves.
+   */
+  let tuiAgentRecords: TerminalAgentsSlice = EMPTY_TERMINAL_AGENTS_SLICE;
+  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummary>();
+  /** See `OpenEpicState.tuiAgentRetractions` - absorbing for the session. */
+  const tuiAgentRetractions = new Map<string, ChatRecordRemovalReason>();
+
   // The projector hides chats owned by a different signed-in user. The owner
   // id is the canonical `profile.userId`, read LIVE rather than off the
   // store's `userId` option: that option is the same canonical id today (it
@@ -1835,6 +1906,7 @@ export function createOpenEpicStore(
   const projector: EpicProjector = createEpicProjector(
     getCurrentChatProjectionUserId,
     () => chatRecords,
+    () => tuiAgentRecords,
   );
 
   const handleDocUpdate = (updateBytes: Uint8Array, origin: unknown) => {
@@ -2085,6 +2157,48 @@ export function createOpenEpicStore(
                 // attach-time projection folds them in through the same
                 // getter. Writing EMPTY slices here would erase the store.
                 { chatRecords: nextSlice, ...extra },
+          );
+        };
+
+        /**
+         * The terminal-agent twin of {@link publishChatRecords}: the ONE
+         * writer of the terminal-agent record slice, shared by the poll
+         * (`applyTuiAgentRecords`) and the push (`applyTuiAgentRecordDelta`),
+         * with the same ingest-time owner selection (retained rows make a user
+         * switch lossless), the same {@link terminalAgentSlicesEq} change gate,
+         * the same retraction-driven gate bypass, and the same full
+         * re-projection - `tuiAgents` feeds the tree and role-claim slices
+         * exactly as `chats` does.
+         */
+        const publishTuiAgentRecords = (
+          extra: Pick<OpenEpicState, "tuiAgentRetractions"> | null,
+        ): void => {
+          const currentUserId = getCurrentChatProjectionUserId();
+          const visible: TuiAgentRecordSummary[] = [];
+          for (const row of tuiAgentRecordRows.values()) {
+            if (!isTerminalAgentVisibleToUser(row.ownerUserId, currentUserId)) {
+              continue;
+            }
+            visible.push(row);
+          }
+          const next = tuiAgentRecordsSlice(visible);
+          const nextSlice =
+            next.allIds.length === 0 ? EMPTY_TERMINAL_AGENTS_SLICE : next;
+          if (
+            extra === null &&
+            terminalAgentSlicesEq(tuiAgentRecords, nextSlice)
+          ) {
+            return;
+          }
+          tuiAgentRecords = nextSlice;
+          set(
+            projector.isAttached()
+              ? {
+                  tuiAgentRecords: nextSlice,
+                  ...extra,
+                  ...projector.projectFull(),
+                }
+              : { tuiAgentRecords: nextSlice, ...extra },
           );
         };
 
@@ -3073,6 +3187,11 @@ export function createOpenEpicStore(
           chatRecords: EMPTY_CHATS_SLICE,
           chatRecordListAuthoritative: false,
           chatRetractions: EMPTY_CHAT_RETRACTIONS,
+          tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+          // The same shared "nothing retracted" identity as the chats': one
+          // frozen empty object serves both, so neither table's quiet state
+          // ever hands subscribers a fresh reference.
+          tuiAgentRetractions: EMPTY_CHAT_RETRACTIONS,
           artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
           artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
           rootDirty: null,
@@ -3271,9 +3390,61 @@ export function createOpenEpicStore(
             publishChatRecords(null);
           },
 
+          applyTuiAgentRecords: (records) => {
+            if (disposed) return;
+            tuiAgentRecordRows.clear();
+            for (const row of records) {
+              // A retracted agent never comes back through the poll: the list
+              // read is a snapshot of the host's registry and the host applies
+              // a removal before it emits one, so a response still carrying
+              // the row was issued before the retraction. See
+              // `OpenEpicState.tuiAgentRetractions`.
+              if (tuiAgentRetractions.has(row.tuiAgentId)) continue;
+              tuiAgentRecordRows.set(row.tuiAgentId, row);
+            }
+            publishTuiAgentRecords(null);
+          },
+
+          applyTuiAgentRecordDelta: (delta) => {
+            if (disposed) return;
+            if (delta.kind === "tuiRemove") {
+              const hadRow = tuiAgentRecordRows.delete(delta.tuiAgentId);
+              // Idempotent: a redelivered removal for the same reason is not a
+              // state change, and re-publishing on it would re-project the
+              // epic for nothing.
+              if (
+                tuiAgentRetractions.get(delta.tuiAgentId) === delta.reason &&
+                !hadRow
+              ) {
+                return;
+              }
+              tuiAgentRetractions.set(delta.tuiAgentId, delta.reason);
+              // The retraction map bypasses the change gate for the same
+              // reason the chats' does: a removal that changes no slice (a row
+              // this session never held) still has to reach an open tab that
+              // is rendering the agent.
+              publishTuiAgentRecords({
+                tuiAgentRetractions: Object.fromEntries(tuiAgentRetractions),
+              });
+              return;
+            }
+            const { record } = delta;
+            // Removal is TERMINAL AND ABSORBING - no later upsert resurrects
+            // the row here.
+            if (tuiAgentRetractions.has(record.tuiAgentId)) return;
+            const held = tuiAgentRecordRows.get(record.tuiAgentId);
+            // The staleness test: `revision` is per-record monotonic and the
+            // only ordering fact on a row, so a delta that does not strictly
+            // exceed what is held is a replay, a reorder or a duplicate.
+            if (held !== undefined && record.revision <= held.revision) return;
+            tuiAgentRecordRows.set(record.tuiAgentId, record);
+            publishTuiAgentRecords(null);
+          },
+
           republishChatRecordsForCurrentUser: () => {
             if (disposed) return;
             publishChatRecords(null);
+            publishTuiAgentRecords(null);
           },
 
           beginPendingChatCreation: (pending) => {
