@@ -119,7 +119,10 @@ import {
   agentInboxSubscribeV12,
   agentInboxSubscribeV13,
 } from "@traycer/protocol/host/agent/inbox";
-import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
+import {
+  agentActivitySubscribeV10,
+  agentActivitySubscribeV11,
+} from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
   agentRolesClaimV10,
@@ -401,14 +404,35 @@ import {
   terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  terminalPlainCloseDowngradeV21ToV10,
+  terminalPlainCloseUpgradeV10ToV21,
+  terminalPlainCloseV10,
   terminalPlainCloseV21,
+  terminalPlainCreateDowngradeV21ToV10,
+  terminalPlainCreateUpgradeV10ToV21,
+  terminalPlainCreateV10,
   terminalPlainCreateV21,
+  terminalPlainEnsureRunningDowngradeV21ToV10,
+  terminalPlainEnsureRunningUpgradeV10ToV21,
+  terminalPlainEnsureRunningV10,
   terminalPlainEnsureRunningV21,
+  terminalPlainImportLegacyDowngradeV21ToV10,
+  terminalPlainImportLegacyUpgradeV10ToV21,
+  terminalPlainImportLegacyV10,
   terminalPlainImportLegacyV21,
+  terminalPlainListDowngradeV21ToV10,
+  terminalPlainListUpgradeV10ToV21,
+  terminalPlainListV10,
   terminalPlainListV21,
+  terminalPlainRenameDowngradeV21ToV10,
+  terminalPlainRenameUpgradeV10ToV21,
+  terminalPlainRenameV10,
   terminalPlainRenameV21,
 } from "@traycer/protocol/host/terminal/plain-contracts";
-import { terminalPlainSubscribeListV21 } from "@traycer/protocol/host/terminal/plain-subscribe-list";
+import {
+  terminalPlainSubscribeListV10,
+  terminalPlainSubscribeListV21,
+} from "@traycer/protocol/host/terminal/plain-subscribe-list";
 import {
   hostNotificationHooksSave,
   hostNotificationHooksStatus,
@@ -513,6 +537,8 @@ import {
   worktreeListAllForHostResponseSchemaV14,
   worktreeListAllForHostRequestSchemaV15,
   worktreeListAllForHostResponseSchemaV15,
+  worktreeListAllForHostRequestSchemaV16,
+  worktreeListAllForHostResponseSchemaV16,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -1177,6 +1203,29 @@ export const worktreeListAllForHostUpgradeV14ToV15 = defineUpgradePath<
     worktrees: response.worktrees.map((worktree) => ({
       ...worktree,
       presence: "present" as const,
+    })),
+  }),
+});
+
+export const worktreeListAllForHostV16 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV16,
+  responseSchema: worktreeListAllForHostResponseSchemaV16,
+});
+
+export const worktreeListAllForHostUpgradeV15ToV16 = defineUpgradePath<
+  typeof worktreeListAllForHostV15,
+  typeof worktreeListAllForHostV16
+>({
+  from: worktreeListAllForHostV15.schemaVersion,
+  to: worktreeListAllForHostV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    worktrees: response.worktrees.map((worktree) => ({
+      ...worktree,
+      gitUnreadable: false,
     })),
   }),
 });
@@ -6229,86 +6278,154 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Durable plain terminals use their own optional v2.1 family. The released
-  // generic terminal methods also carry terminal-agent sessions and remain
-  // frozen; a peer without this family continues on the legacy client-owned
-  // lifecycle. Mixed v1/v2 is unsupported; the family moves together.
+  // v1.0 is the frozen local-only RC family; v2.1 is the fleet family. They
+  // negotiate as a whole so callers never compose incompatible topologies.
   "terminal.plain.create": {
     degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainCreateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
     2: {
       latestMinor: 1,
       versions: {
         1: {
           contract: terminalPlainCreateV21,
+          upgradeFromPreviousVersion: terminalPlainCreateUpgradeV10ToV21,
+          semanticMajorBreakFromPreviousMajor: true,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalPlainCreateDowngradeV21ToV10 },
+    },
+  },
+  "terminal.plain.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainListV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
     },
-  },
-  "terminal.plain.list": {
-    degrade: { kind: "unsupported" },
     2: {
       latestMinor: 1,
       versions: {
         1: {
           contract: terminalPlainListV21,
+          upgradeFromPreviousVersion: terminalPlainListUpgradeV10ToV21,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalPlainListDowngradeV21ToV10 },
+    },
+  },
+  "terminal.plain.rename": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainRenameV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
     },
-  },
-  "terminal.plain.rename": {
-    degrade: { kind: "unsupported" },
     2: {
       latestMinor: 1,
       versions: {
         1: {
           contract: terminalPlainRenameV21,
+          upgradeFromPreviousVersion: terminalPlainRenameUpgradeV10ToV21,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalPlainRenameDowngradeV21ToV10 },
+    },
+  },
+  "terminal.plain.ensureRunning": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainEnsureRunningV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
     },
-  },
-  "terminal.plain.ensureRunning": {
-    degrade: { kind: "unsupported" },
     2: {
       latestMinor: 1,
       versions: {
         1: {
           contract: terminalPlainEnsureRunningV21,
+          upgradeFromPreviousVersion:
+            terminalPlainEnsureRunningUpgradeV10ToV21,
+          semanticMajorBreakFromPreviousMajor: true,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: terminalPlainEnsureRunningDowngradeV21ToV10,
+      },
+    },
+  },
+  "terminal.plain.close": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainCloseV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
     },
-  },
-  "terminal.plain.close": {
-    degrade: { kind: "unsupported" },
     2: {
       latestMinor: 1,
       versions: {
         1: {
           contract: terminalPlainCloseV21,
+          upgradeFromPreviousVersion: terminalPlainCloseUpgradeV10ToV21,
+          semanticMajorBreakFromPreviousMajor: true,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalPlainCloseDowngradeV21ToV10 },
+    },
+  },
+  "terminal.plain.importLegacy": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainImportLegacyV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
     },
-  },
-  "terminal.plain.importLegacy": {
-    degrade: { kind: "unsupported" },
     2: {
       latestMinor: 1,
       versions: {
         1: {
           contract: terminalPlainImportLegacyV21,
-          upgradeFromPreviousVersion: null,
+          upgradeFromPreviousVersion:
+            terminalPlainImportLegacyUpgradeV10ToV21,
+          semanticMajorBreakFromPreviousMajor: true,
         },
       },
-      downgradePathsFromLatest: {},
+      downgradePathsFromLatest: {
+        1: terminalPlainImportLegacyDowngradeV21ToV10,
+      },
     },
   },
   "worktree.listByWorkspacePaths": {
@@ -6449,7 +6566,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -6474,6 +6591,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: {
           contract: worktreeListAllForHostV15,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV14ToV15,
+        },
+        6: {
+          contract: worktreeListAllForHostV16,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV15ToV16,
         },
       },
       downgradePathsFromLatest: {},
@@ -7722,9 +7843,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Replacement-state durable plain-terminal collection. Unsupported on older
-  // hosts, where the capability-gated client keeps its legacy local model.
+  // Frozen v1 snapshot/increment stream and v2 replacement-state fleet stream.
   "terminal.plain.subscribeList": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalPlainSubscribeListV10,
+        },
+      },
+    },
     2: {
       latestMinor: 1,
       versions: {
@@ -7875,12 +8003,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // production wiring selects cloud everywhere; local remains dormant until an
   // explicit host mode exists. State frames report the selected plane, while
   // renderers never choose a different RPC from entitlement state.
+  // `1.1` stamps `cloudSyncStatus` on cloud-served `state` frames. `1.0` stays
+  // registered verbatim so a `1.1` client bridges down to a `1.0` host.
   "agent.activity.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentActivitySubscribeV10,
+        },
+        1: {
+          contract: agentActivitySubscribeV11,
         },
       },
     },

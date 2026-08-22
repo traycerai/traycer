@@ -7,6 +7,7 @@ import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -741,7 +742,11 @@ export class WsStreamClient<
     subscribedMethod: string,
     subscribedMethodSupport: "supported" | "unsupported",
   ): void {
-    const myManifest = buildStreamManifest(this.options.registry);
+    const myManifest = selectConnectionManifestForPeer(
+      this.options.registry,
+      buildStreamManifest(this.options.registry),
+      theirManifest,
+    );
     let changed = false;
     for (const method of Object.keys(myManifest)) {
       if (method === subscribedMethod) {
@@ -1644,8 +1649,12 @@ class StreamSession<
     );
     const hostCredentialState = ackParse.data.hostCredentialState;
 
-    const myManifest = buildStreamManifest(this.config.registry);
     const theirManifest = ackParse.data.manifest;
+    const myManifest = selectConnectionManifestForPeer(
+      this.config.registry,
+      buildStreamManifest(this.config.registry),
+      theirManifest,
+    );
     const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,

@@ -78,7 +78,9 @@ import {
   isManagedCommandOutputTileRef,
   isPrDetailTileRef,
   isPrDiffTileRef,
+  isWorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
+import { requestFileTreeReveal } from "@/stores/file-tree/file-tree-reveal-store";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
 import { surfaceOwnerFor } from "@/components/epic-canvas/surface-host/surface-owner";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
@@ -333,8 +335,20 @@ export const TabGroupView = memo(function TabGroupView(
 
   const handleRevealInSidebar = useCallback(
     (tileTabId: string) => {
-      const tabType = tabs.find((tab) => tab.instanceId === tileTabId)?.type;
-      setActivePanelIdAndExpand(tabId, panelIdForTabType(tabType));
+      const tab = tabs.find((t) => t.instanceId === tileTabId);
+      // The Chats / Artifacts trees light their active row on their own; the
+      // workspace file tree cannot - its rows are lazily covered and the
+      // panel may be showing another workspace - so it is TOLD which file to
+      // show. Written BEFORE the panel switch so a panel that mounts on the
+      // switch reads the request on its first render.
+      if (tab !== undefined && isWorkspaceFileRef(tab)) {
+        requestFileTreeReveal(tabId, {
+          hostId: tab.hostId,
+          workspacePath: tab.workspacePath,
+          filePath: tab.filePath,
+        });
+      }
+      setActivePanelIdAndExpand(tabId, panelIdForTabType(tab?.type));
     },
     [tabs, setActivePanelIdAndExpand, tabId],
   );

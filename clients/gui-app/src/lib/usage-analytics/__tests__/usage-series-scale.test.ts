@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildUsageSeriesScale,
-  harnessIdsByFirstAppearance,
   USAGE_SERIES_OTHER_KEY,
 } from "@/lib/usage-analytics/usage-series-scale";
 
@@ -14,9 +13,27 @@ describe("buildUsageSeriesScale", () => {
     expect(scale.colorVar("opencode")).toBe("var(--usage-series-3)");
   });
 
-  it("caps at eight slots and folds the rest into Other, never generating a 9th hue", () => {
-    const nineHarnesses = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
-    const scale = buildUsageSeriesScale(nineHarnesses);
+  it("caps at sixteen slots and folds the rest into Other, never generating a 17th hue", () => {
+    const seventeenKeys = [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+      "h",
+      "i",
+      "j",
+      "k",
+      "l",
+      "m",
+      "n",
+      "o",
+      "p",
+      "q",
+    ];
+    const scale = buildUsageSeriesScale(seventeenKeys);
     expect(scale.order).toEqual([
       "a",
       "b",
@@ -26,16 +43,42 @@ describe("buildUsageSeriesScale", () => {
       "f",
       "g",
       "h",
+      "i",
+      "j",
+      "k",
+      "l",
+      "m",
+      "n",
+      "o",
+      "p",
       USAGE_SERIES_OTHER_KEY,
     ]);
-    expect(scale.colorVar("i")).toBe("var(--usage-series-other)");
+    expect(scale.colorVar("p")).toBe("var(--usage-series-16)");
+    expect(scale.colorVar("q")).toBe("var(--usage-series-other)");
     expect(scale.labelFor(USAGE_SERIES_OTHER_KEY)).toBe("Other");
   });
 
-  it("does not fold when there are exactly eight harnesses", () => {
-    const eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
-    const scale = buildUsageSeriesScale(eight);
-    expect(scale.order).toEqual(eight);
+  it("does not fold when there are exactly sixteen keys", () => {
+    const sixteen = [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+      "h",
+      "i",
+      "j",
+      "k",
+      "l",
+      "m",
+      "n",
+      "o",
+      "p",
+    ];
+    const scale = buildUsageSeriesScale(sixteen);
+    expect(scale.order).toEqual(sixteen);
     expect(scale.order).not.toContain(USAGE_SERIES_OTHER_KEY);
   });
 
@@ -47,25 +90,5 @@ describe("buildUsageSeriesScale", () => {
   it("an unrecognized key (not in the built order) falls back to the Other color", () => {
     const scale = buildUsageSeriesScale(["claude"]);
     expect(scale.colorVar("some-unknown-id")).toBe("var(--usage-series-other)");
-  });
-});
-
-describe("harnessIdsByFirstAppearance", () => {
-  it("orders harnesses by their earliest day, not alphabetically or by input order", () => {
-    const order = harnessIdsByFirstAppearance([
-      { day: "2026-08-03", harnessId: "codex" },
-      { day: "2026-08-01", harnessId: "claude" },
-      { day: "2026-08-02", harnessId: "opencode" },
-      { day: "2026-08-01", harnessId: "codex" },
-    ]);
-    expect(order).toEqual(["claude", "codex", "opencode"]);
-  });
-
-  it("de-duplicates repeated harnesses", () => {
-    const order = harnessIdsByFirstAppearance([
-      { day: "2026-08-01", harnessId: "claude" },
-      { day: "2026-08-02", harnessId: "claude" },
-    ]);
-    expect(order).toEqual(["claude"]);
   });
 });

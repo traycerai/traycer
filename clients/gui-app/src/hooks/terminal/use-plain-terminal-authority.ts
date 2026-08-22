@@ -20,7 +20,7 @@ import type {
   PlainTerminalProjection,
   PlainTerminalScope,
 } from "@traycer/protocol/host/terminal/plain-schemas";
-import { PLAIN_TERMINAL_FAMILY_VERSION } from "@traycer/protocol/host/terminal/plain-contracts";
+import { PLAIN_TERMINAL_LOCAL_FAMILY_VERSION } from "@traycer/protocol/host/terminal/plain-contracts";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
@@ -326,11 +326,13 @@ export interface PlainTerminalAuthorityResult {
 
 function plainTerminalStreamVersionCompatible(
   version: SchemaVersion | null,
+  capability: PlainTerminalCapability,
 ): boolean {
+  if (version === null) return true;
   return (
-    version === null ||
-    (version.major === PLAIN_TERMINAL_FAMILY_VERSION.major &&
-      version.minor === PLAIN_TERMINAL_FAMILY_VERSION.minor)
+    capability.status === "capable" &&
+    version.major === capability.schemaVersion.major &&
+    version.minor === capability.schemaVersion.minor
   );
 }
 
@@ -411,8 +413,10 @@ export function usePlainTerminalAuthority(args: {
     args.streamClient,
     PLAIN_TERMINAL_STREAM_METHOD,
   );
-  const streamVersionCompatible =
-    plainTerminalStreamVersionCompatible(streamVersion);
+  const streamVersionCompatible = plainTerminalStreamVersionCompatible(
+    streamVersion,
+    unaryCapability,
+  );
   const queryKey = useMemo(
     () => hostQueryKeys.plainTerminals(args.hostId, stableScope),
     [args.hostId, stableScope],
@@ -444,12 +448,34 @@ export function usePlainTerminalAuthority(args: {
       queryClient: cache,
       queryKey: mappedKey,
       requestContext,
-    }) =>
-      seedPlainTerminalList(
+    }) => {
+      let normalizedResponse = response;
+      if (
+        unaryCapability.status === "capable" &&
+        unaryCapability.schemaVersion.major ===
+          PLAIN_TERMINAL_LOCAL_FAMILY_VERSION.major
+      ) {
+        normalizedResponse =
+          stableScope.kind === "independent"
+            ? {
+                ...response,
+                coverage: "complete-local",
+                scope: stableScope,
+              }
+            : {
+                ...response,
+                coverage: "partial-serving-host",
+                scope: stableScope,
+                servingHostId: args.hostId,
+              };
+      }
+
+      return seedPlainTerminalList(
         cache.getQueryData<PlainTerminalCollection>(mappedKey),
-        response,
+        normalizedResponse,
         requestContext ?? capturePlainTerminalProjectionBarrier(undefined),
-      ),
+      );
+    },
   });
 
   // Base transport identity owns unmount/host/client/scope teardown.
@@ -567,6 +593,7 @@ export function usePlainTerminalAuthority(args: {
         };
         return new PlainTerminalListStreamClient({
           wsStreamClient: streamClient,
+          servingHostId: args.hostId,
           scope: stableScope,
           callbacks: {
             onState: (frame) => {

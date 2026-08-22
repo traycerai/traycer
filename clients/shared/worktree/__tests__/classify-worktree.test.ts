@@ -5,6 +5,7 @@ import type {
   WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 import {
+  GIT_UNREADABLE_REASON,
   WORKTREE_TIER_ORDER,
   classifyWorktree,
   classifyWorktreeTier,
@@ -45,7 +46,11 @@ function subFact(
   };
 }
 
-function entry(over: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
+function entry(
+  over: Partial<WorktreeHostEntryV12> & {
+    readonly gitUnreadable?: boolean;
+  },
+): WorktreeHostEntryV12 {
   return {
     worktreePath: "/wt/x",
     repoLabel: "acme/app",
@@ -92,12 +97,35 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       tier: "in-use",
     },
     {
+      name: "gitUnreadable outranks orphaned even when gitRemovable is false",
+      entry: entry({
+        gitRemovable: false,
+        branch: null,
+        gitUnreadable: true,
+      }),
+      tier: "review",
+    },
+    {
+      name: "inUse still outranks gitUnreadable",
+      entry: entry({
+        inUse: true,
+        gitRemovable: false,
+        gitUnreadable: true,
+      }),
+      tier: "in-use",
+    },
+    {
       name: "orphan (gitRemovable:false) is checked BEFORE the greens, even when merged",
       entry: entry({
         gitRemovable: false,
         prState: "merged",
         mergedHeadShaMatches: true,
       }),
+      tier: "orphaned",
+    },
+    {
+      name: "omitted gitUnreadable (older host) still classifies gitRemovable:false as orphaned",
+      entry: entry({ gitRemovable: false, branch: null }),
       tier: "orphaned",
     },
     {
@@ -815,5 +843,18 @@ describe("describeReviewReasons", () => {
         entry({ prState: "merged", mergedHeadShaMatches: true }),
       ),
     ).toEqual([]);
+  });
+
+  it("names a gitUnreadable row instead of Detached HEAD or an invented orphan", () => {
+    expect(
+      describeReviewReasons(
+        entry({
+          gitRemovable: false,
+          branch: null,
+          prState: "none",
+          gitUnreadable: true,
+        }),
+      ),
+    ).toEqual([GIT_UNREADABLE_REASON]);
   });
 });

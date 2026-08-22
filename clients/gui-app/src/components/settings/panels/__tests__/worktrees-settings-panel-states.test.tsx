@@ -18,7 +18,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV15 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/index";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -46,7 +46,7 @@ const state = vi.hoisted(() => ({
   // gate's non-usable states.
   scopeStatus: null as "unreachable" | null,
   enrichment: {
-    enrichedByPath: new Map<string, WorktreeHostEntryV15>(),
+    enrichedByPath: new Map<string, WorktreeHostEntryV16>(),
     erroredPaths: new Set<string>(),
     seededPaths: new Set<string>(),
     reportVisiblePaths: vi.fn(),
@@ -345,7 +345,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       atBaseCommit: false,
       resolvedAt: 1,
       presence: "present",
-    } satisfies WorktreeHostEntryV15;
+      gitUnreadable: false,
+    } satisfies WorktreeHostEntryV16;
     let call = 0;
     state.client = clientWithHandler(() => {
       call += 1;
@@ -426,7 +427,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       atBaseCommit: false,
       resolvedAt: 1,
       presence: "present",
-    } satisfies WorktreeHostEntryV15;
+      gitUnreadable: false,
+    } satisfies WorktreeHostEntryV16;
     let call = 0;
     state.client = clientWithHandler(() => {
       call += 1;
@@ -498,7 +500,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       atBaseCommit: false,
       resolvedAt: 1,
       presence: "present",
-    } satisfies WorktreeHostEntryV15;
+      gitUnreadable: false,
+    } satisfies WorktreeHostEntryV16;
     state.client = clientWithHandler(() => ({
       worktrees: [cleanWorktree],
       nextCursor: null,

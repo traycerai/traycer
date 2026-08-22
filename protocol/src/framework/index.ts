@@ -21,6 +21,8 @@ export type {
   AnyRpcContract,
   AnyUpgradePath,
   AnyVersionEntry,
+  ContextlessUpgradePath,
+  ContextualUpgradePath,
   ContractForInstalledVersion,
   DowngradePath,
   DowngradeResult,
@@ -38,6 +40,7 @@ export type {
   RpcErrorFor,
   RpcRequestFor,
   RpcResultFor,
+  RpcResponseUpgradeContext,
   RpcSuccessFor,
   SchemaVersion,
   UncheckedMethodVersionRegistry,
@@ -61,6 +64,7 @@ export type {
 } from "./versioned-rpc";
 
 export {
+  defineContextualUpgradePath,
   defineDowngradePath,
   defineFallbackMethodDegrade,
   defineFloorAwareVersionedRpcRegistry,
@@ -73,6 +77,7 @@ export {
   toJsonSchemas,
   upgradeRequestToVersion,
   upgradeResponseToVersion,
+  upgradeResponseToVersionWithContext,
   validateVersionedRpcRegistryDegrades,
   validateVersionedRpcRegistry,
 } from "./versioned-rpc";
@@ -176,6 +181,7 @@ export type {
 export {
   buildConnectionManifest,
   mergeConnectionManifests,
+  selectConnectionManifestForPeer,
   splitConnectionManifest,
 } from "./capability-manifest";
 
