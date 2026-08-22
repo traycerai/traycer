@@ -556,6 +556,12 @@ export interface OpenEpicState {
    * with the same contract: idempotent, change-gated, and never called in
    * doc-only mode (an older host answers `E_HOST_UNSUPPORTED`, the record
    * slice stays empty, and `tuiAgents` is the doc projection by reference).
+   *
+   * MERGED against what the push has already delivered, not clear-and-replace:
+   * a served row is revision-guarded exactly as a `tuiUpsert` is, and a row the
+   * answer omits is retracted only once a later answer could have carried it.
+   * A list read issued before an agent was committed would otherwise delete the
+   * `tuiUpsert` that announced it.
    */
   applyTuiAgentRecords: (records: readonly TuiAgentRecordSummary[]) => void;
   /**
@@ -1896,6 +1902,31 @@ export function createOpenEpicStore(
   const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummary>();
   /** See `OpenEpicState.tuiAgentRetractions` - absorbing for the session. */
   const tuiAgentRetractions = new Map<string, ChatRecordRemovalReason>();
+  /**
+   * Local ingest order for the terminal-agent rows, and the watermark the last
+   * `epic.listTuiAgents` answer left behind.
+   *
+   * `revision` orders two versions of ONE row; it says nothing about a row the
+   * snapshot simply does not contain. That omission is the ambiguous case: a
+   * list read issued before an agent was committed cannot carry it, and the
+   * `tuiUpsert` that announced it can land while that read is still in flight.
+   * Applying such a snapshot as clear-and-replace deletes the row it never had
+   * a chance to see - precisely the A2A-created agent this whole channel exists
+   * to surface - until the next 20s poll.
+   *
+   * So an omission is only allowed to retract a row that was already settled
+   * when the answer was issued. `tuiAgentRowSeq` stamps every accepted write
+   * with a monotonic counter, `tuiAgentSnapshotFence` records where the counter
+   * stood after the previous snapshot, and a row ingested past that fence
+   * survives exactly one snapshot. The following read is necessarily issued
+   * after that fence moved - and therefore after the host committed the row -
+   * so a genuine deletion is still collected on the next pass rather than
+   * lingering for the session. Retractions are unaffected: `tuiRemove` is the
+   * explicit signal and stays absorbing.
+   */
+  const tuiAgentRowSeq = new Map<string, number>();
+  let tuiAgentIngestSeq = 0;
+  let tuiAgentSnapshotFence = 0;
 
   // The projector hides chats owned by a different signed-in user. The owner
   // id is the canonical `profile.userId`, read LIVE rather than off the
@@ -3392,7 +3423,7 @@ export function createOpenEpicStore(
 
           applyTuiAgentRecords: (records) => {
             if (disposed) return;
-            tuiAgentRecordRows.clear();
+            const served = new Map<string, TuiAgentRecordSummary>();
             for (const row of records) {
               // A retracted agent never comes back through the poll: the list
               // read is a snapshot of the host's registry and the host applies
@@ -3400,8 +3431,33 @@ export function createOpenEpicStore(
               // the row was issued before the retraction. See
               // `OpenEpicState.tuiAgentRetractions`.
               if (tuiAgentRetractions.has(row.tuiAgentId)) continue;
-              tuiAgentRecordRows.set(row.tuiAgentId, row);
+              served.set(row.tuiAgentId, row);
             }
+            // Omissions first, against the PREVIOUS fence - see
+            // `tuiAgentRowSeq`. A row this answer does not carry is dropped
+            // only if it was already settled when the answer was issued;
+            // anything ingested since then is newer than the snapshot by
+            // construction and is held for one more pass.
+            const fence = tuiAgentSnapshotFence;
+            for (const id of [...tuiAgentRecordRows.keys()]) {
+              if (served.has(id)) continue;
+              if ((tuiAgentRowSeq.get(id) ?? 0) > fence) continue;
+              tuiAgentRecordRows.delete(id);
+              tuiAgentRowSeq.delete(id);
+            }
+            for (const [id, row] of served) {
+              const held = tuiAgentRecordRows.get(id);
+              // The same monotonic-`revision` test the delta path applies, for
+              // the same reason and in the same direction: a snapshot row that
+              // does not strictly exceed what is held is an older version of
+              // that row, and overwriting with it would regress a push the
+              // client has already shown.
+              if (held !== undefined && row.revision <= held.revision) continue;
+              tuiAgentRecordRows.set(id, row);
+              tuiAgentIngestSeq += 1;
+              tuiAgentRowSeq.set(id, tuiAgentIngestSeq);
+            }
+            tuiAgentSnapshotFence = tuiAgentIngestSeq;
             publishTuiAgentRecords(null);
           },
 
@@ -3409,6 +3465,7 @@ export function createOpenEpicStore(
             if (disposed) return;
             if (delta.kind === "tuiRemove") {
               const hadRow = tuiAgentRecordRows.delete(delta.tuiAgentId);
+              tuiAgentRowSeq.delete(delta.tuiAgentId);
               // Idempotent: a redelivered removal for the same reason is not a
               // state change, and re-publishing on it would re-project the
               // epic for nothing.
@@ -3438,6 +3495,11 @@ export function createOpenEpicStore(
             // exceed what is held is a replay, a reorder or a duplicate.
             if (held !== undefined && record.revision <= held.revision) return;
             tuiAgentRecordRows.set(record.tuiAgentId, record);
+            // Past the fence the last snapshot left: an `epic.listTuiAgents`
+            // answer already in flight cannot carry this row, so its omission
+            // must not delete it. See `tuiAgentRowSeq`.
+            tuiAgentIngestSeq += 1;
+            tuiAgentRowSeq.set(record.tuiAgentId, tuiAgentIngestSeq);
             publishTuiAgentRecords(null);
           },
 

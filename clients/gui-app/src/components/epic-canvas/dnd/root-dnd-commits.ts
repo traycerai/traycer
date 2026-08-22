@@ -59,7 +59,11 @@ import {
   getEpicSessionHandleHostClient,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
-import { canReparentProjected } from "@/lib/reparent-projection-rules";
+import {
+  canReparentProjected,
+  type ProjectedReparentNode,
+} from "@/lib/reparent-projection-rules";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
@@ -581,6 +585,34 @@ export interface SidebarReparentDropInput {
 }
 
 /**
+ * Whether this node's parent pointer still lives in the epic Y.Doc rather than
+ * on the host's record plane.
+ *
+ * Only terminal agents can answer yes. A migrated host serves its own rows
+ * through `epic.listTuiAgents` AND evicts their doc entries, so a terminal
+ * agent that is absent from the record slice is one whose binding host has not
+ * migrated - either it predates `epic.listTuiAgents` entirely, or it is a
+ * foreign binding host whose entries this host only relays. Both keep their
+ * pointer in the doc, and both predate the `epic.reparentChat` terminal-agent
+ * arm, so routing them to the RPC would hand an already-released `@1.0` a
+ * `chatId` naming no chat: a host error where the doc write used to work.
+ *
+ * Chats never answer yes. `epic.reparentChat@1.0` has routed chats since
+ * chats-off-YJS, and the host resolves a pre-migration chat through the same
+ * storage seam, so the RPC is correct for a chat on every host that has the
+ * method at all.
+ */
+function isDocOnlyTerminalAgent(
+  state: OpenEpicState,
+  node: ProjectedReparentNode,
+): boolean {
+  return (
+    node.type === "terminal-agent" &&
+    !Object.hasOwn(state.tuiAgentRecords.byId, node.id)
+  );
+}
+
+/**
  * Imperative reparent commit for a `sidebar-node` released on a reparent
  * target. Resolves the live epic session via the registry (`peek`, never
  * `acquire`), RE-RUNS `canReparent` against the current doc (Decision D: this
@@ -599,9 +631,9 @@ export function commitSidebarReparentDrop(
   // chat or terminal agent has no doc entry, and the doc evaluator would call
   // a row the user is plainly dragging `missing-node`. See
   // `reparent-projection-rules.ts`.
-  const tree = handle.store.getState().tree;
+  const state = handle.store.getState();
   const evaluation = canReparentProjected(
-    tree,
+    state.tree,
     input.sourceNodeId,
     input.newParentId,
   );
@@ -616,7 +648,10 @@ export function commitSidebarReparentDrop(
   ) {
     return;
   }
-  if (evaluation.node.family === "agent") {
+  if (
+    evaluation.node.family === "agent" &&
+    !isDocOnlyTerminalAgent(state, evaluation.node)
+  ) {
     // The agent family's parent pointer lives on the HOST's record (chat
     // registry row, or the terminal agent's tenant row), not on the doc: a
     // doc write would land on an entry that no longer exists or, for a
@@ -641,6 +676,10 @@ export function commitSidebarReparentDrop(
         );
       });
   } else {
+    // Artifacts, whose pointer has always lived in the doc - and the one
+    // agent-family case that still does, a doc-only terminal agent. Both are
+    // the same Y write they were before the record channel existed; see
+    // `isDocOnlyTerminalAgent`.
     handle.store
       .getState()
       .reparentArtifact(input.sourceNodeId, input.newParentId);

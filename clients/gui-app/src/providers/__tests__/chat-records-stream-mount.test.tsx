@@ -22,7 +22,10 @@ import {
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getOpenEpicRegistry,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
 import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 
 interface StreamState {
@@ -109,8 +112,14 @@ const noopStreamFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-function openEpic(epicId: string): OpenEpicStoreHandle {
-  return getOpenEpicRegistry().acquire(epicId, (id) =>
+/**
+ * `hostId` is explicit at every call because it is load-bearing: the mount
+ * applies a delta only to a session stamped with the stream's own host, which
+ * `epic-session-provider.tsx` does for every handle it creates. A helper that
+ * defaulted it would hide the one input the routing gate reads.
+ */
+function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
+  const handle = getOpenEpicRegistry().acquire(epicId, (id) =>
     createOpenEpicStore({
       epicId: id,
       streamClientFactory: noopStreamFactory,
@@ -118,6 +127,8 @@ function openEpic(epicId: string): OpenEpicStoreHandle {
       onAuthError: null,
     }),
   );
+  handleHostIds.set(handle, hostId);
+  return handle;
 }
 
 function emit(delta: ChatRecordDelta): void {
@@ -147,8 +158,8 @@ describe("<ChatRecordsStreamMount />", () => {
   });
 
   it("routes an upsert into the named epic's record table, leaving the other alone", () => {
-    const one = openEpic("epic-1");
-    const two = openEpic("epic-2");
+    const one = openEpic("epic-1", "host-A");
+    const two = openEpic("epic-2", "host-A");
     render(<ChatRecordsStreamMount />);
 
     emit({
@@ -165,7 +176,7 @@ describe("<ChatRecordsStreamMount />", () => {
   });
 
   it("routes a remove, and the retraction reason with it", () => {
-    const handle = openEpic("epic-1");
+    const handle = openEpic("epic-1", "host-A");
     handle.store.getState().applyChatRecords([record({ chatId: "gone" })]);
     render(<ChatRecordsStreamMount />);
 
@@ -180,6 +191,45 @@ describe("<ChatRecordsStreamMount />", () => {
     expect(handle.store.getState().chatRetractions).toEqual({
       gone: "revoked",
     });
+  });
+
+  it("drops a delta for a session bound to a DIFFERENT host than the stream", () => {
+    // The A/B case: this subscription is dialling host-A (`streamState.hostId`)
+    // while the open session is still pinned to host-B - a re-point in flight,
+    // or a tab reopened on its original host. B's session must not ingest A's
+    // rows: the record does not exist on B's plane, and every affordance the
+    // row renders would address the wrong host.
+    //
+    // Ablation: drop the stamp comparison in the mount and both assertions
+    // below flip - the row lands, and the terminal agent with it.
+    const foreign = openEpic("epic-1", "host-B");
+    render(<ChatRecordsStreamMount />);
+
+    emit({
+      kind: "upsert",
+      epicId: "epic-1",
+      record: record({ chatId: "from-host-a" }),
+    });
+
+    expect(foreign.store.getState().chats.allIds).toEqual([]);
+    // Same gate for both tables, not just the terminal-agent arm.
+    expect(foreign.store.getState().tuiAgentRecords.allIds).toEqual([]);
+  });
+
+  it("routes a delta once the session's stamp matches the stream's host", () => {
+    // The positive control for the test above: same epic, same frame, and the
+    // only difference is which host the session is stamped with - so the drop
+    // above is attributable to the stamp and not to some unrelated gate.
+    const bound = openEpic("epic-1", "host-A");
+    render(<ChatRecordsStreamMount />);
+
+    emit({
+      kind: "upsert",
+      epicId: "epic-1",
+      record: record({ chatId: "from-host-a" }),
+    });
+
+    expect(bound.store.getState().chats.allIds).toEqual(["from-host-a"]);
   });
 
   it("drops a delta for an epic with no live session rather than acquiring one", () => {
@@ -207,7 +257,7 @@ describe("<ChatRecordsStreamMount />", () => {
     // Ablation: drop the `support === "unsupported"` arm and the mount dials a
     // method the host will refuse on every reconnect.
     streamState.support = "unsupported";
-    const handle = openEpic("epic-1");
+    const handle = openEpic("epic-1", "host-A");
     handle.store.getState().applyChatRecords([record({ chatId: "polled" })]);
 
     render(<ChatRecordsStreamMount />);
