@@ -1178,7 +1178,7 @@ function parentReferenceStatusClassName(
   unavailable: boolean,
 ): string {
   return cn(
-    "ml-auto flex min-w-0 shrink-0 items-center gap-1",
+    "ml-auto flex min-w-0 shrink items-center gap-1",
     status === "differs" && "font-medium text-muted-foreground",
     (unavailable || status === "conflicted" || status === "unavailable") &&
       "font-medium text-warning",

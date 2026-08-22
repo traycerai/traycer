@@ -418,9 +418,12 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(previewText.match(/Parent reference:/g)).toHaveLength(1);
     expect(screen.queryByText("details unavailable")).toBeNull();
     expect(header.querySelectorAll(".lucide-triangle-alert")).toHaveLength(1);
-    expect(
-      screen.getByTestId("git-module-parent-reference-traycer").className,
-    ).toContain("text-warning");
+    const statusLabel = screen.getByTestId(
+      "git-module-parent-reference-traycer",
+    );
+    expect(statusLabel.className).toContain("text-warning");
+    expect(statusLabel.className.split(/\s+/)).toContain("shrink");
+    expect(statusLabel.className.split(/\s+/)).not.toContain("shrink-0");
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
   });
 
