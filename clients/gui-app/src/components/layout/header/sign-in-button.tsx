@@ -2,17 +2,81 @@ import { useAuthDeviceProgress } from "@/hooks/auth/use-auth-device-progress";
 import { useAuthServiceError } from "@/hooks/auth/use-auth-service-error";
 import { useAuthService } from "@/lib/host";
 import { cn } from "@/lib/utils";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { DeviceCodeProgress } from "./sign-in/device-code-progress";
+import { LinkCodeSignIn } from "./sign-in/link-code-sign-in";
 import {
   PrimarySignInButton,
   RetrySignInButton,
 } from "./sign-in/sign-in-action-buttons";
 import { SignInErrorMessage } from "./sign-in/sign-in-error-message";
 import { type SignInLayout } from "./sign-in/types";
+import type { DeviceFlowProgress } from "@/lib/auth/auth-service";
 
 export interface SignInButtonProps {
   readonly layout: SignInLayout;
+}
+
+/**
+ * The action set below the error/progress area. The mobile app's hero
+ * sign-in leads with the scan-to-link path: a full-width primary "Scan QR
+ * code" with the browser device flow as a same-width secondary beneath it,
+ * and manual code entry as a tertiary link inside the CTA block.
+ * Product-gated, not capability-gated: typing the code is the same flow
+ * where the camera is absent (simulator) or denied. Everywhere else the
+ * device flow stays primary, with the link-code entry as a quiet extra line
+ * on the mobile app's compact header only.
+ */
+function SignInActions(props: {
+  readonly isHero: boolean;
+  readonly isSigningIn: boolean;
+  /**
+   * Whether the running attempt is one `signIn()` may replace. A link claim is
+   * not: `signIn()` is re-entrant and its `beginAttempt()` discards whatever
+   * is in flight, so offering Retry mid-claim offers to throw away a request
+   * the user's desktop is prompting them to approve.
+   */
+  readonly canRetry: boolean;
+  readonly deviceProgress: DeviceFlowProgress | null;
+}) {
+  // Computed here rather than inline: `RetrySignInButton` reads this as "show
+  // yourself", and a link claim is an attempt `signIn()` must not replace.
+  const showRetry = props.isSigningIn && props.canRetry;
+  if (props.deviceProgress !== null) {
+    return (
+      <DeviceCodeProgress
+        progress={props.deviceProgress}
+        isHero={props.isHero}
+      />
+    );
+  }
+  if (isMobileApp() && props.isHero) {
+    return (
+      <>
+        <LinkCodeSignIn isHero={props.isHero} presentation="cta" />
+        <PrimarySignInButton
+          isHero={props.isHero}
+          isSigningIn={props.isSigningIn}
+          emphasis="secondary"
+        />
+        <RetrySignInButton isHero={props.isHero} isSigningIn={showRetry} />
+      </>
+    );
+  }
+  return (
+    <>
+      <PrimarySignInButton
+        isHero={props.isHero}
+        isSigningIn={props.isSigningIn}
+        emphasis="primary"
+      />
+      <RetrySignInButton isHero={props.isHero} isSigningIn={showRetry} />
+      {isMobileApp() ? (
+        <LinkCodeSignIn isHero={props.isHero} presentation="link" />
+      ) : null}
+    </>
+  );
 }
 
 /**
@@ -20,10 +84,12 @@ export interface SignInButtonProps {
  * sign-in flow uses the runner-host browser bridge - never a direct
  * `runnerHost.openExternalLink` call from UI code.
  *
- * The signed-out surface presents the single "Sign in" affordance, which
- * funnels into `AuthService.signIn()` - the OAuth 2.0 Device Authorization
- * Grant. The browser opens to the device-approval page and the in-flight code +
- * "waiting for approval" progress render inline (never a silent spinner).
+ * The signed-out surface presents the sign-in affordances, which funnel into
+ * `AuthService.signIn()` (the OAuth 2.0 Device Authorization Grant) or, on
+ * the mobile app, `AuthService.signInWithLinkCode()` (the confirm-gated QR
+ * link). The browser opens to the device-approval page and the in-flight
+ * code + "waiting for approval" progress render inline (never a silent
+ * spinner).
  *
  * Interactive sign-in failures render a visible failure message next to the
  * button so the user has a stable retry CTA. Stored-session expiry is handled
@@ -33,10 +99,13 @@ export interface SignInButtonProps {
 export function SignInButton(props: SignInButtonProps) {
   const auth = useAuthService();
   const status = useAuthStore((state) => state.status);
+  const signingInAttempt = useAuthStore((state) => state.signingInAttempt);
   const lastError = useAuthServiceError(auth);
   const deviceProgress = useAuthDeviceProgress(auth);
   const isHero = props.layout === "hero";
   const isSigningIn = status === "signing-in";
+  // Only the device flow's own stalled round trip gets the retry escape hatch.
+  const canRetry = signingInAttempt !== "link";
 
   if (status === "signed-in") {
     return null;
@@ -62,14 +131,12 @@ export function SignInButton(props: SignInButtonProps) {
         lastError={lastError}
         isHero={isHero}
       />
-      {deviceProgress !== null ? (
-        <DeviceCodeProgress progress={deviceProgress} isHero={isHero} />
-      ) : (
-        <>
-          <PrimarySignInButton isHero={isHero} isSigningIn={isSigningIn} />
-          <RetrySignInButton isHero={isHero} isSigningIn={isSigningIn} />
-        </>
-      )}
+      <SignInActions
+        isHero={isHero}
+        isSigningIn={isSigningIn}
+        canRetry={canRetry}
+        deviceProgress={deviceProgress}
+      />
     </div>
   );
 }

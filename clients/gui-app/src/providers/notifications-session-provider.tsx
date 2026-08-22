@@ -105,11 +105,11 @@ interface FocusedNotificationScope {
  * does not see the previous user's entries.
  *
  * On a shell that has a local host, notifications always come from that
- * host - never from whichever host happens to be active in a composer/tab
- * elsewhere in the app. A shell with no local host at all falls back to the
- * bound host, because otherwise nothing would ever serve it; that choice
- * lives entirely in `useNotificationsServingHostEntry()`, which is also
- * where the reasoning for the fallback's gate lives.
+ * host (the G8 decision) - never from whichever host happens to be active in
+ * a composer/tab elsewhere in the app. A shell with no local host at all
+ * falls back to the bound host, because otherwise nothing would ever serve
+ * it; that choice lives entirely in `useNotificationsServingHostEntry()`,
+ * which is also where the reasoning for the fallback's gate lives.
  *
  * Every stream here binds to that ONE serving host through a transient,
  * non-rebinding client (`useHostStreamClientBindingFor`), never through the
@@ -751,7 +751,7 @@ export function NotificationsSessionProvider(
   // all (a relay-only shell before a host is bound) or the serving host's
   // channel drops - we teardown so the next reconnect lands on a fresh
   // client. It becomes a NEW object when the serving host respawns at a fresh
-  // endpoint under the SAME `hostId` (`useHostStreamClientFor` rebuilds the
+  // endpoint under the SAME `hostId` (`useHostStreamClientBindingFor` rebuilds the
   // transport on an endpoint move) - that reference change, not a `hostId`
   // comparison, is what drives teardown/reopen here, so a respawn is followed
   // even though the host identity never changed. On a shell WITH a local
@@ -772,7 +772,7 @@ export function NotificationsSessionProvider(
       // signedOut path; no-op here.
       return;
     }
-    // Keyed on the HOST, not the client: `useHostStreamClientFor` returns a
+    // Keyed on the HOST, not the client: `useHostStreamClientBindingFor` returns a
     // client exactly when it is given an entry, so in production these two are
     // the same condition - but the test stream-factory override supplies a
     // stream with no client at all, and gating on the client would make that

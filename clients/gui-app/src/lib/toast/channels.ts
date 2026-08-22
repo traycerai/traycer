@@ -33,3 +33,12 @@ export const epicAccessToast = scopedToastChannel("epic-access");
  */
 export const authSessionExpiredToast =
   scopedToastChannel("auth-session")("expired");
+
+/**
+ * A link-login QR opened while this phone is already signed in. Repeated scans
+ * replace rather than stack: the answer is the same every time, and the second
+ * one is usually the user scanning again because the first appeared to do
+ * nothing.
+ */
+export const linkLoginAlreadySignedInToast =
+  scopedToastChannel("link-login")("already-signed-in");

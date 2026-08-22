@@ -19,6 +19,7 @@ import {
 import {
   createCredentialsMutationStore,
   CredentialsStoreUnavailableError,
+  quarantinePath,
   spentBaseMarkerPath,
   type CredentialsMutationStore,
   type RefreshFn,
@@ -326,6 +327,202 @@ describe("credentials mutation store", () => {
       expect((await readCredentialsFile(credentialsPath))?.refreshToken).toBe(
         "",
       );
+    });
+  });
+
+  describe("signOutIfToken (conditional delete under the file lock)", () => {
+    it("deletes only an exact token match; anything else is kept as superseded", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const kept = await store.signOutIfToken("tok-other", null);
+      expect(kept.outcome).toBe("superseded");
+      expect(kept.credentials?.token).toBe("tok-0");
+      expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
+
+      const deleted = await store.signOutIfToken("tok-0", null);
+      expect(deleted.outcome).toBe("deleted");
+      expect(await readCredentialsFile(credentialsPath)).toBeNull();
+
+      // Absent file: nothing to undo, reported as kept, never an error.
+      const absent = await store.signOutIfToken("tok-0", null);
+      expect(absent.outcome).toBe("superseded");
+      expect(absent.credentials).toBeNull();
+    });
+
+    it("window A's stale undo vs window B's signIn on the shared file: B survives either order", async () => {
+      // Two independent stores on the SAME paths model two windows' main-side
+      // mutations serialized only by the real file lock.
+      const storeA = makeStore(refreshStub(rotateOk).fn);
+      const storeB = makeStore(refreshStub(rotateOk).fn);
+      const bPair: StoredCredentials = {
+        ...CREDS,
+        token: "tok-b",
+        refreshToken: "rt-b",
+      };
+
+      // Order 1: B's sign-in lands first. A's conditional delete compares
+      // INSIDE its own lock acquisition, observes B's pair, and keeps it —
+      // the interleave that a composed get()+delete() would have destroyed.
+      await storeA.signIn(CREDS, false, null);
+      expect((await storeB.signIn(bPair, false, null)).outcome).toBe("applied");
+      const staleUndo = await storeA.signOutIfToken("tok-0", null);
+      expect(staleUndo.outcome).toBe("superseded");
+      expect((await readCredentialsFile(credentialsPath))?.token).toBe("tok-b");
+
+      // Order 2: A's undo lands first (deletes its own stale pair), then B
+      // signs in — B's pair is the end state either way.
+      rmSync(credentialsPath, { force: true });
+      await storeA.signIn(CREDS, false, null);
+      expect((await storeA.signOutIfToken("tok-0", null)).outcome).toBe(
+        "deleted",
+      );
+      expect((await storeB.signIn(bPair, false, null)).outcome).toBe("applied");
+      expect((await readCredentialsFile(credentialsPath))?.token).toBe("tok-b");
+
+      // And concurrently, for good measure: whichever side wins the lock,
+      // the file never ends up without B's pair.
+      rmSync(credentialsPath, { force: true });
+      await storeA.signIn(CREDS, false, null);
+      const [bOut, aOut] = await Promise.all([
+        storeB.signIn(bPair, false, null),
+        storeA.signOutIfToken("tok-0", null),
+      ]);
+      expect(bOut.outcome).toBe("applied");
+      expect(["deleted", "superseded"]).toContain(aOut.outcome);
+      expect((await readCredentialsFile(credentialsPath))?.token).toBe("tok-b");
+    });
+  });
+
+  describe("quarantine (pending conditional deletes, durable)", () => {
+    function digestOf(token: string): string {
+      return createHash("sha256").update(token, "utf8").digest("hex");
+    }
+
+    it("suppresses a quarantined pair from every read — including a fresh store instance — and the drain completes the delete", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const qPath = quarantinePath(credentialsPath);
+      writeFileSync(
+        qPath,
+        JSON.stringify({ tokenDigests: [digestOf(CREDS.token)] }),
+      );
+      // The pair is durable on disk, but no reader is served it.
+      expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
+      expect(await store.read()).toBeNull();
+
+      // RELAUNCH: a brand-new store over the same files (the app restarted
+      // after a failed delete). Suppression holds from the persisted record,
+      // and the startup drain completes the delete before anything adopts.
+      const relaunched = makeStore(refreshStub(rotateOk).fn);
+      expect(await relaunched.read()).toBeNull();
+      expect(await relaunched.drainQuarantine(null)).toBe(true);
+      expect(await readCredentialsFile(credentialsPath)).toBeNull();
+      expect(existsSync(qPath)).toBe(false);
+      expect(await relaunched.read()).toBeNull();
+    });
+
+    it.skipIf(!canForceCommitFailure)(
+      "a failed conditional delete stays quarantined until a drain lands it",
+      async () => {
+        const store = makeStore(refreshStub(rotateOk).fn);
+        await seedSignedIn(store);
+        const qPath = quarantinePath(credentialsPath);
+        // Pre-armed record (exactly as the register-before-attempt leaves
+        // it), then the delete's WAL commit is blocked.
+        writeFileSync(
+          qPath,
+          JSON.stringify({ tokenDigests: [digestOf(CREDS.token)] }),
+        );
+        chmodSync(workDir, 0o500);
+        const failed = await store.signOutIfToken(CREDS.token, null);
+        expect(failed.outcome).toBe("commit-failed");
+        // Still durable, still suppressed, drain still failing.
+        expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
+        expect(await store.read()).toBeNull();
+        expect(await store.drainQuarantine(null)).toBe(false);
+        // Heal: the drain deletes the pair; nothing was ever served it.
+        chmodSync(workDir, 0o700);
+        expect(await store.drainQuarantine(null)).toBe(true);
+        expect(await readCredentialsFile(credentialsPath)).toBeNull();
+        expect(await store.read()).toBeNull();
+      },
+    );
+
+    it("drops residue digests whose pair is no longer durable", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const qPath = quarantinePath(credentialsPath);
+      writeFileSync(
+        qPath,
+        JSON.stringify({ tokenDigests: [digestOf("long-gone-token")] }),
+      );
+      // The durable pair is NOT quarantined: reads serve it untouched.
+      expect((await store.read())?.token).toBe(CREDS.token);
+      expect(await store.drainQuarantine(null)).toBe(true);
+      expect(existsSync(qPath)).toBe(false);
+      expect((await store.read())?.token).toBe(CREDS.token);
+    });
+
+    it("rotate never serves or spends a quarantined pair — exact and mismatched expected", async () => {
+      const refresh = refreshStub(rotateOk);
+      const store = makeStore(refresh.fn);
+      await seedSignedIn(store);
+      const qPath = quarantinePath(credentialsPath);
+      writeFileSync(
+        qPath,
+        JSON.stringify({ tokenDigests: [digestOf(CREDS.token)] }),
+      );
+      // (a) exact match: the quarantined pair must not be refresh-spent into
+      // a successor the quarantine no longer names.
+      const exact = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+      expect(exact.outcome).toBe("deleted");
+      expect(exact.credentials).toBeNull();
+      // (b) mismatched expected: the quarantined pair must not be handed out
+      // as `superseded` for the caller to adopt.
+      const mismatch = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: "tok-older",
+        refreshTokenOverride: null,
+        signal: null,
+      });
+      expect(mismatch.outcome).toBe("deleted");
+      expect(mismatch.credentials).toBeNull();
+      // The refresh transport was never invoked for either case.
+      expect(refresh.calls()).toBe(0);
+      // The pair is still durable — the DRAIN heals it, never a rotate.
+      expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
+    });
+
+    it("the quarantine blocks serving and spending, never the delete that heals it", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const qPath = quarantinePath(credentialsPath);
+      writeFileSync(
+        qPath,
+        JSON.stringify({ tokenDigests: [digestOf(CREDS.token)] }),
+      );
+      expect(await store.read()).toBeNull();
+      // signOutIfToken sees the quarantined pair (it is the heal path) and
+      // completes the delete that every other mutation is blind to.
+      const healed = await store.signOutIfToken(CREDS.token, null);
+      expect(healed.outcome).toBe("deleted");
+      expect(await readCredentialsFile(credentialsPath)).toBeNull();
+      expect(existsSync(qPath)).toBe(false);
+    });
+
+    it("signOutIfToken quarantines before attempting and clears on landing", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const qPath = quarantinePath(credentialsPath);
+      const deleted = await store.signOutIfToken(CREDS.token, null);
+      expect(deleted.outcome).toBe("deleted");
+      // Landed cleanly: no quarantine residue.
+      expect(existsSync(qPath)).toBe(false);
     });
   });
 

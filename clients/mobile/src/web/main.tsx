@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import {
@@ -22,6 +23,9 @@ import {
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 import "./index.css";
 import { MobileRunnerHost } from "../mobile-runner-host";
+import { MobileDeviceDescriber } from "../device-describer";
+import { MobileLinkCodeScanner } from "../link-code-scanner";
+import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import {
   MobilePushRegistration,
   pushRegistrationTarget,
@@ -147,9 +151,14 @@ const remoteFetcher: RemoteHostFetcher | null =
 function bootstrap(): void {
   document.documentElement.classList.add("traycer-mobile-client");
   // PRODUCT flag, not layout: unlocks mobile-app-only UX policy such as the
-  // single-composer draft model. See gui-app's `src/lib/mobile-app.ts` for
-  // how this differs from the viewport signal.
-  setMobileApp(true);
+  // single-composer draft model and the link-code sign-in entry. See gui-app's
+  // `src/lib/mobile-app.ts` for how this differs from the viewport signal.
+  // Platform-derived, not unconditional: this same bundle is ALSO the dev
+  // stack's browser surface (`make dev-gui-app` serves it as the "gui-app"
+  // stream), and a browser tab is not the installed mobile app — it must not
+  // inherit phone-only affordances like "Scan from desktop", which on the
+  // desktop side of that loop is a nonsense offer.
+  setMobileApp(Capacitor.isNativePlatform());
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite
   // `aps-environment` to "production" at export), so only `dev` - the one
@@ -160,6 +169,15 @@ function bootstrap(): void {
     config.authnBaseUrl,
     config.environment === "dev",
   );
+  // Started FIRST, before anything else in bootstrap: a QR scanned by the
+  // system camera launches this app, and that launch URL is readable exactly
+  // once. Native-only for the same reason as the scheme registration below -
+  // a browser tab is never opened by the OS with a `traycer://` or
+  // universal-link URL, and has no plugin to read one from.
+  const linkLoginDeepLinks = Capacitor.isNativePlatform()
+    ? new MobileLinkLoginDeepLinks(App)
+    : null;
+  linkLoginDeepLinks?.start();
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
@@ -185,6 +203,18 @@ function bootstrap(): void {
               ? outcome.entries.map((entry) => entry.hostId)
               : null;
           },
+    // `@capacitor/barcode-scanner` has no web implementation, so the camera
+    // capability exists only on a native install; the browser entry keeps the
+    // manual code-entry path alone.
+    linkCodeScanner: Capacitor.isNativePlatform()
+      ? new MobileLinkCodeScanner()
+      : null,
+    // Same native-only gate: the Device plugin has web fallbacks, but the
+    // browser entry has nothing better than its own UA to report.
+    deviceDescriber: Capacitor.isNativePlatform()
+      ? new MobileDeviceDescriber()
+      : null,
+    linkLoginDeepLinks,
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

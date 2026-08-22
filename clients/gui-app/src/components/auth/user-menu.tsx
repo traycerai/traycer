@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -41,9 +41,7 @@ export function UserMenu(props: UserMenuProps) {
   const settingsChord = useBindingForAction("app.settings.open");
   useTitleBarDragSuppression("user-menu", open);
   const initials = computeInitials(props.userName, props.email);
-  const manageSubscriptionUrl = resolveManageSubscriptionUrl(
-    runnerHost.authnBaseUrl,
-  );
+  const manageSubscriptionUrl = resolvePlatformBaseUrl(runnerHost.signInUrl);
   return (
     <>
       {/* Outside the menu, which Radix unmounts on select - the confirm has to

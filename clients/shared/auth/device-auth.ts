@@ -19,6 +19,10 @@
  * than a second copy of that validation.
  */
 import { readRotatedTokens } from "./auth-validation";
+import {
+  composeRequestAbort,
+  type ComposedRequestAbort,
+} from "./request-abort";
 
 export type DeviceClientId = "cli" | "desktop" | "mobile";
 
@@ -50,21 +54,15 @@ export const DEFAULT_DEVICE_REQUEST_TIMEOUT_MS = 30_000;
  * `signal` (if any) with a fresh per-request timeout. Returns the merged signal
  * plus a `clear` to cancel the pending timeout once the request settles so the
  * timer can't fire (or leak) after the fetch resolves.
+ *
+ * The composition itself lives in `request-abort.ts` because it cannot use
+ * `AbortSignal.any` - that API postdates this app's iOS floor and throws
+ * rather than degrading. See that module.
  */
-function buildRequestSignal(options: DeviceRequestOptions): {
-  readonly signal: AbortSignal;
-  readonly clear: () => void;
-} {
-  const timeoutController = new AbortController();
-  const timer = setTimeout(() => timeoutController.abort(), options.timeoutMs);
-  const clear = (): void => clearTimeout(timer);
-  if (options.signal === undefined) {
-    return { signal: timeoutController.signal, clear };
-  }
-  return {
-    signal: AbortSignal.any([options.signal, timeoutController.signal]),
-    clear,
-  };
+function buildRequestSignal(
+  options: DeviceRequestOptions,
+): ComposedRequestAbort {
+  return composeRequestAbort(options.signal ?? null, options.timeoutMs);
 }
 
 /**
@@ -421,12 +419,17 @@ async function readErrorCode(response: Response): Promise<string | null> {
 }
 
 /**
- * Parses a `Retry-After` header value. The device-token endpoint only ever
- * emits integer seconds, so the HTTP-date form is intentionally not handled;
- * an absent or unparseable value yields `null` and the caller falls back to
- * its own backoff increment.
+ * Parses a `Retry-After` header value. The poll endpoints only ever emit
+ * integer seconds, so the HTTP-date form is intentionally not handled; an
+ * absent or unparseable value yields `null` and the caller falls back to its
+ * own backoff increment. Returning `null` rather than a number is the whole
+ * point: a numeric fallback of zero reads as "retry immediately", which is
+ * the opposite of what a 429 asked for.
+ *
+ * Shared with the link-login poll client, whose 429s come from the same two
+ * sources (a paced record throttle and a request budget).
  */
-function parseRetryAfterSeconds(header: string | null): number | null {
+export function parseRetryAfterSeconds(header: string | null): number | null {
   if (header === null) {
     return null;
   }

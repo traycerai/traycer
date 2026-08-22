@@ -49,6 +49,9 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     authnBaseUrl: "https://authn.test",
+    // The platform origin comes from `signInUrl`, which every shell already
+    // composes from its configured cloud-UI base.
+    signInUrl: "https://platform.test/sign-in",
     openExternalLink: (url: string) => testState.openExternalLink(url),
   }),
 }));
@@ -645,9 +648,10 @@ describe("MobileNavDrawer", () => {
       );
 
       expect(opened.length).toBe(1);
-      // `resolveManageSubscriptionUrl` swaps the `authn.*` label for its
-      // `platform.*` sibling.
-      expect(opened[0]).toContain("platform.test");
+      // `resolvePlatformBaseUrl` takes the origin of the shell's own
+      // `signInUrl`, so this tracks whatever deployment is configured rather
+      // than rewriting a hostname label.
+      expect(opened[0]).toBe("https://platform.test");
       expect(useMobileNavStore.getState().open).toBe(false);
     });
 

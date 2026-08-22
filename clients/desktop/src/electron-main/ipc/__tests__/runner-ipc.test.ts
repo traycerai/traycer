@@ -659,12 +659,14 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.deviceFlowStart,
         RunnerHostInvoke.deviceFlowPollNow,
         RunnerHostInvoke.deviceFlowCancel,
-        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete); §6 adds the
-        // one-time legacy→file migration channel.
+        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete, plus the
+        // atomic conditional delete); §6 adds the one-time legacy→file
+        // migration channel.
         RunnerHostInvoke.authTokenStoreGet,
         RunnerHostInvoke.authTokenStoreSignIn,
         RunnerHostInvoke.authTokenStoreRotate,
         RunnerHostInvoke.authTokenStoreDelete,
+        RunnerHostInvoke.authTokenStoreDeleteIfToken,
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         // Remote Host Support: host-registry read (§7) and version-policy
         // write (§13, T16) run in main for the renderer-origin CORS reason.
